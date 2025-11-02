@@ -1,0 +1,16 @@
+{
+    "name": "@wired-io/client",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {},
+    "dependencies": {
+        "@wired-io/shared": "workspace:*",
+        "phaser": "^3.90.0",
+        "react": "^19.1.1",
+        "socket.io-client": "^4.8.1"
+    },
+    "devDependencies": {
+        "@types/react": "^19.1.16",
+        "typescript": "^5.9.3"
+    }
+}

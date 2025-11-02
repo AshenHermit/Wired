@@ -1,0 +1,17 @@
+{
+  "name": "scriptio2",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm run --parallel dev",
+    "dev:client": "pnpm --filter client dev",
+    "dev:server": "pnpm --filter server dev",
+    "dev:playground": "pnpm --filter playground dev",
+    "build": "pnpm run --recursive build",
+    "clean": "pnpm run --recursive clean"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.2",
+    "typescript": "^5.9.3"
+  }
+}

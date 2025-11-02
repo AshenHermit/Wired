@@ -1,0 +1,12 @@
+{
+    "compilerOptions": {
+        "jsx": "react-jsx",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "paths": {
+            "@wired-io/shared": ["../shared/src"]
+        }
+    },
+    "include": ["src/**/*", "../shared/src/networking/NetworkContext.tsx"],
+    "exclude": ["node_modules", "dist"],
+}

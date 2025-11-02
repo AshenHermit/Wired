@@ -1,0 +1,14 @@
+{
+    "compilerOptions": {
+        "jsx": "react-jsx",
+        "module": "ESNext",
+        "lib": ["es6", "dom", "dom.iterable", "scripthost"],
+        "moduleResolution": "bundler",
+        "strictNullChecks": true,
+        "noImplicitAny": false,
+        "typeRoots": ["./node_modules/phaser/types"],
+        "types": ["Phaser"]
+    },
+    "include": ["src/**/*", "../client/src/networking/ServerAPI.ts"],
+    "exclude": ["node_modules", "dist"],
+}

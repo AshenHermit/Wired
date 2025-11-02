@@ -1,0 +1,14 @@
+{
+    "name": "@wired-io/shared",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {},
+    "dependencies": {
+        "phaser": "^3.90.0",
+        "react": "^19.1.1"
+    },
+    "devDependencies": {
+        "@types/react": "^19.1.16",
+        "typescript": "^5.9.3"
+    }
+}
