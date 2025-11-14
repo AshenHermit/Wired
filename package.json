@@ -7,6 +7,7 @@
     "dev:client": "pnpm --filter client dev",
     "dev:server": "pnpm --filter server dev",
     "dev:playground": "pnpm --filter playground dev",
+    "dev:frontend": "pnpm --filter frontend dev",
     "build": "pnpm run --recursive build",
     "clean": "pnpm run --recursive clean"
   },

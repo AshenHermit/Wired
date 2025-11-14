@@ -1,52 +1,38 @@
-import Phaser from "phaser";
 import "./App.css";
 import React from "react";
-import {
-  GameProvider,
-  NetworkProvider,
-  Node,
-  Player,
-  Sprite,
-} from "@wired-io/shared";
-import { NetworkAPI } from "@wired-io/client";
+import { NetworkAPI, WiredInstance } from "@wired-io/client";
+import { WiredEditor } from "./Editor";
 
 function App() {
   const gameContainerId = "game-container";
-  const gameConfig: Phaser.Types.Core.GameConfig = React.useMemo(
-    () => ({
-      type: Phaser.AUTO,
-      width: 800,
-      height: 600,
-      parent: gameContainerId,
-      backgroundColor: "#000000",
-    }),
-    []
-  );
+  const [state, setState] = React.useState<string>("loading...");
+  const wiredInstanceRef = React.useRef<WiredInstance>(null);
 
-  const api = React.useMemo(() => new NetworkAPI(), []);
   React.useEffect(() => {
-    api.connect();
-    (async () => {
-      const room = await api.connectToRoom(1);
-      console.log(room);
-    })();
+    let wiredInstance: WiredInstance | null = null;
+    const timeout = setTimeout(() => {
+      wiredInstance = new WiredInstance({
+        displayParent: gameContainerId,
+        network: new NetworkAPI(),
+      });
+      wiredInstance.events.addListener("stateChanged", setState);
+      wiredInstance.setup();
+      wiredInstanceRef.current = wiredInstance;
+    }, 10);
     return () => {
-      api.disconnect();
+      clearTimeout(timeout);
+      if (wiredInstance) wiredInstance.destroy();
     };
-  }, [api]);
+  }, [setState]);
 
   return (
     <>
       <div>
-        <div>lol</div>
+        <div>
+          <div>{state}</div>
+        </div>
+        <WiredEditor wiredInstanceRef={wiredInstanceRef} />
         <div id={gameContainerId}></div>
-        <NetworkProvider api={api}>
-          <GameProvider config={gameConfig}>
-            <Node name="root">
-              <Player name="player1" />
-            </Node>
-          </GameProvider>
-        </NetworkProvider>
       </div>
     </>
   );

@@ -5,12 +5,11 @@
     "scripts": {},
     "dependencies": {
         "@wired-io/shared": "workspace:*",
+        "easy-event-emitter": "^1.2.2",
         "phaser": "^3.90.0",
-        "react": "^19.1.1",
         "socket.io-client": "^4.8.1"
     },
     "devDependencies": {
-        "@types/react": "^19.1.16",
         "typescript": "^5.9.3"
     }
 }

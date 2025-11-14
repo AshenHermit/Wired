@@ -1,32 +1,44 @@
 import { io, Socket } from "socket.io-client";
-import { NetworkAPIBase } from "@wired-io/shared";
+import {
+  NetworkAPIBase,
+  NetworkEvents,
+  RPCInfo,
+  Wired,
+} from "@wired-io/shared";
+import EventEmitter from "easy-event-emitter";
 
-export class NetworkAPI implements NetworkAPIBase {
+export class NetworkAPI extends NetworkAPIBase {
   socket: Socket | null = null;
   connected: boolean = false;
   url: string = "http://localhost:3000";
+  events = new EventEmitter<NetworkEvents>();
 
-  constructor() {}
+  constructor() {
+    super();
+    this.isServer = false;
+    this.roomEventHandlers.set("rpc", this.onRpcEvent.bind(this));
+  }
 
-  connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.socket = io(this.url);
+  connect(): void {
+    this.socket = io(this.url);
 
-      this.socket.on("connect", () => {
-        this.connected = true;
-        console.log("Connected to game server");
-        resolve();
-      });
-
-      this.socket.on("disconnect", () => {
-        this.connected = false;
-        console.log("Disconnected from game server");
-      });
-
-      this.socket.on("connect_error", (error) => {
-        reject(error);
-      });
+    this.socket.on("connect", () => {
+      this.connected = true;
+      console.log("Connected to game server");
+      this.events.emit("connected", undefined);
     });
+
+    this.socket.on("disconnect", () => {
+      this.connected = false;
+      console.log("Disconnected from game server");
+      this.events.emit("disconnected", undefined);
+    });
+
+    this.socket.on("room_events", (data) => {
+      this.onRoomEvent(data.event, data.data, "0");
+    });
+
+    this.socket.on("connect_error", (error) => {});
   }
 
   disconnect(): void {
@@ -37,16 +49,22 @@ export class NetworkAPI implements NetworkAPIBase {
     }
   }
 
-  emitAsync<T>(event: string, data: any): Promise<T> {
+  emit<T>(event: string, data: any): Promise<T> {
     return new Promise((resolve, reject) => {
       this.socket?.emit(event, data, (response: T) => {
         resolve(response);
       });
     });
   }
+  emitTo<T>(event: string, data: any, to: string): Promise<T> {
+    return;
+  }
 
-  async connectToRoom(roomId: number): Promise<void> {
-    const room = await this.emitAsync("connectToRoom", { roomId });
-    console.log(room);
+  async onRpcEvent(data: RPCInfo, socketId: string) {
+    const node = Wired().scene().findByPath(data.nodePath);
+    if (node) {
+      return await node.callRpc(node[data.methodName], ...data.args);
+    }
+    return null;
   }
 }
