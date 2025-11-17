@@ -17,6 +17,7 @@ export type WiredInstanceState = "connecting" | "connected" | "disconnected";
 export type WiredInstanceEvents = {
   stateChanged: WiredInstanceState;
   playerConnected: string;
+  playerScriptsReady: string;
   playerDisconnected: string;
   sceneReady: void;
 };
@@ -39,7 +40,7 @@ export abstract class WiredInstanceBase {
 
   setupWiredGlobal() {
     this.wiredGlobal = createWiredGlobal({
-      game: this.game!,
+      game: () => this.game,
       network: this.network,
       scene: () => this.game!.scene.getScene("GameScene") as GameScene,
       events: this.events,

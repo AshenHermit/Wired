@@ -27,6 +27,7 @@
     "@nestjs/platform-socket.io": "^11.1.8",
     "@nestjs/websockets": "^11.1.8",
     "@wired-io/shared": "workspace:*",
+    "@box2d": "file:../box2d",
     "canvas": "^3.2.0",
     "easy-event-emitter": "^1.2.2",
     "jsdom": "^25.0.1",

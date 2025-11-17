@@ -6,7 +6,7 @@ import { WiredEditor } from "./Editor";
 import dynamic from "next/dynamic";
 import { WiredInstanceState } from "@wired-io/shared";
 
-function RoomPageClient({ roomCode }: { roomCode: string }) {
+export function RoomPageClient({ roomCode }: { roomCode: string }) {
   const gameContainerId = "game-container";
   const [state, setState] = React.useState<WiredInstanceState>("connecting");
   const [wiredInstance, setWiredInstance] =
@@ -41,10 +41,3 @@ function RoomPageClient({ roomCode }: { roomCode: string }) {
     </>
   );
 }
-
-export const RoomPageClientNoSSR = dynamic(
-  () => Promise.resolve(RoomPageClient),
-  {
-    ssr: false,
-  }
-);

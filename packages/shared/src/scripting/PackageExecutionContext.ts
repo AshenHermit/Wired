@@ -1,5 +1,5 @@
 import { PackageManagerContext } from "./PackageManagerContext";
-import { ScriptAgent } from "./ScriptAgent";
+import { ScriptAgent, ScriptExports } from "./ScriptAgent";
 
 export type ScriptFile = {
   filepath: string;
@@ -19,6 +19,7 @@ export class PackageExecutionContext {
   scriptAgents: ScriptAgent[] = [];
   package: Package;
   packageManager: PackageManagerContext;
+  lastExports: ScriptExports | null = null;
   constructor(packageManager: PackageManagerContext) {
     this.packageManager = packageManager;
   }
@@ -46,7 +47,10 @@ export class PackageExecutionContext {
   }
   execute() {
     for (const script of this.scriptAgents) {
-      if (script.isMain) return script.exec();
+      if (script.isMain) {
+        this.lastExports = script.exec();
+        return this.lastExports;
+      }
     }
     return null;
   }

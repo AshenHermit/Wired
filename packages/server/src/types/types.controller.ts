@@ -14,4 +14,3 @@ export class TypesController {
     return await this.typesService.getLibsTypings();
   }
 }
-

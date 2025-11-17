@@ -25,7 +25,7 @@ export class SceneReplicator {
 
     const node = new ctor();
     node.setName(payload.path.split("/").pop()!);
-    if (payload.state) node.setNodeState(payload.state, false);
+    if (payload.state) node.setNodeState(payload.state);
     // this.applyTransform(node, payload.transform);
     parent.add(node);
   }
@@ -36,7 +36,7 @@ export class SceneReplicator {
 
     if (payload.state) {
       // choose your policy: full replace or deep merge
-      node.setNodeState({ ...node.getNodeState(), ...payload.state }, false);
+      node.setNodeState({ ...node.getNodeState(), ...payload.state });
     }
     // this.applyTransform(node, payload.transform);
   }

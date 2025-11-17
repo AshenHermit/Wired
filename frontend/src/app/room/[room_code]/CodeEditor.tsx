@@ -17,14 +17,16 @@ export async function registerLibraries(monaco: Monaco) {
     moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
     module: monaco.languages.typescript.ModuleKind.ESNext,
     noEmit: true,
+    experimentalDecorators: true,
+    emitDecoratorMetadata: true,
     esModuleInterop: true,
     jsx: monaco.languages.typescript.JsxEmit.React,
     reactNamespace: "React",
-    allowJs: true,
+    // allowJs: true,
     typeRoots: ["node_modules/@types"],
     paths: {
       "@wired-io": [monaco.Uri.file("node_modules/@types/wired-io").toString()],
-      // "@phaser": [monaco.Uri.file("node_modules/@types/phaser").toString()],
+      "@box2d": [monaco.Uri.file("node_modules/@types/box2d").toString()],
     },
   });
 

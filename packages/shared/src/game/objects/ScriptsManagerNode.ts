@@ -22,14 +22,16 @@ export class ScriptsManagerNode extends Node {
     this.packageManager = new PackageManagerContext();
     this.events = new EventEmitter<ScriptsManagerEvents>();
 
-    Wired().events.addListener("playerConnected", (socketId) => {
+    Wired().events.addListener("playerConnected", async (socketId) => {
       if (!Wired().network.isServer) return;
-      this.rpc(this.recievePackages, this.packageManager.getPackages());
+      const packs = this.packageManager.getPackages();
+      await this.rpcId(this.recieveAndExecAllPackages, socketId, packs);
+      Wired().events.emit("playerScriptsReady", socketId);
     });
   }
 
   @Rpc("server")
-  serverRecievePackage(pack: Package) {
+  serverRecieveAddPackage(pack: Package) {
     pack.id = uuidv4();
     this.packageManager.upsertPackage(pack);
     this.rpc(this.recievePackages, [pack]);
@@ -42,7 +44,7 @@ export class ScriptsManagerNode extends Node {
   }
   requestAddPackage(pack: Package) {
     if (Wired().network.isServer) return;
-    this.rpc(this.serverRecievePackage, pack);
+    this.rpc(this.serverRecieveAddPackage, pack);
   }
 
   @Rpc("server")
@@ -61,18 +63,39 @@ export class ScriptsManagerNode extends Node {
 
   @Rpc("server")
   serverExecPackage(pack: Package) {
-    this.rpc(this.execPackage, pack);
+    this.rpc(this.recieveExecPackage, pack);
+    this.execPackage(pack);
   }
-  @Rpc("callLocal")
+  @Rpc("client")
+  recieveExecPackage(pack: Package) {
+    this.execPackage(pack);
+  }
+  @Rpc("client")
+  recieveAndExecAllPackages(packages: Package[]) {
+    for (const pack of packages) {
+      this.packageManager.upsertPackage(pack);
+    }
+    for (const pack of this.packageManager.getPackages()) {
+      this.execPackage(pack);
+    }
+    return true;
+  }
+
   execPackage(pack: Package) {
     this.packageManager.upsertPackage(pack);
     const packContext = this.packageManager.getPackageById(pack.id);
     if (packContext) {
-      packContext.execute();
-      console.log("exec");
+      if (packContext.lastExports) {
+        if (packContext.lastExports.unload) packContext.lastExports.unload();
+      }
+      const exports = packContext.execute();
+      if (exports) {
+        if (exports.init) exports.init();
+      }
       this.events.emit("packageExecuted", packContext);
     }
   }
+
   requestExecPackage(pack: Package) {
     if (Wired().network.isServer) return;
     this.rpc(this.serverExecPackage, pack);

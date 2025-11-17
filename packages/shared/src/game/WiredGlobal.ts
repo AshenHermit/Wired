@@ -5,7 +5,7 @@ import { fetchTexture, TextureLoadData } from "./utils";
 import { WiredInstanceEvents } from "./WiredInstance";
 
 export interface WiredGlobalBase {
-  game: Phaser.Game;
+  game: () => Phaser.Game | null;
   network: NetworkAPIBase;
   scene: () => GameScene;
   events: EventEmitter<WiredInstanceEvents>;

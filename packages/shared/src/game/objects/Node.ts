@@ -3,6 +3,7 @@ import { Wired, WiredGlobal } from "../WiredGlobal";
 import { RegisteredNode } from "../NodesRegistry";
 import { RPCInfo } from "../../networking";
 import { SceneReplicator } from "../SceneReplicator";
+import { FunctionDeclaration } from "typescript";
 
 export function asNode(obj: any) {
   if (!obj) return null;
@@ -72,18 +73,24 @@ export class Node<S extends Record<string, any> = {}> extends Phaser.GameObjects
     if (!this.getData("state")) this.setData("state", {});
     return this.getData("state") as S;
   }
-  setupNodeState(state: S) {
-    this.setData("state", state);
-  }
-  setNodeState(state: Partial<S>, broadcast: boolean = true) {
+  storeNodeState(state: Partial<S>) {
     this.setData("state", { ...this.getNodeState(), ...state });
-    this.onNodeStateChanged(this.getNodeState());
-    if (broadcast) {
-      this.broadcastSingle();
-    }
+  }
+  setNodeState(state: Partial<S>) {
+    const oldState = this.getNodeState();
+    this.setData("state", { ...oldState, ...state });
+    this.onNodeStateChanged(oldState, this.getNodeState());
+  }
+  broadcastNodeState(state: Partial<S>) {
+    const oldState = this.getNodeState();
+    this.setData("state", { ...oldState, ...state });
+    this.onNodeStateChanged(oldState, this.getNodeState());
+    this.broadcastSingle();
   }
 
-  onNodeStateChanged(state: S) {}
+  preUpdate(time: number, delta: number): void {}
+
+  onNodeStateChanged(oldState: S, state: S) {}
 
   getPath() {
     const parent = this.getParentNode();
@@ -100,7 +107,7 @@ export class Node<S extends Record<string, any> = {}> extends Phaser.GameObjects
       {
         path: this.getPath(),
         name: this.name,
-        class: this.constructor.name,
+        class: this.constructor.prototype.className || this.constructor.name,
         state: this.getNodeState(),
       },
     ];
@@ -115,22 +122,32 @@ export class Node<S extends Record<string, any> = {}> extends Phaser.GameObjects
   addedToScene(): void {
     super.addedToScene();
   }
+  removedFromScene(): void {
+    super.removedFromScene();
+  }
 
-  async rpc(func: Function, ...args: any[]) {
+  async rpc<T extends (...args: any) => any>(func: T, ...args: Parameters<T>) {
     if ((func as any).isRPC) {
       const rpcObj = func.apply(this, args) as RpcObject;
       return await rpcObj.rpc();
     }
     return null;
   }
-  async rpcId(func: Function, id?: string, ...args: any[]) {
+  async rpcId<T extends (...args: any) => any>(
+    func: T,
+    id?: string,
+    ...args: Parameters<T>
+  ) {
     if ((func as any).isRPC) {
       const rpcObj = func.apply(this, args) as RpcObject;
       return await rpcObj.rpcId(id);
     }
     return null;
   }
-  async callRpc(func: Function, ...args: any[]) {
+  async callRpc<T extends (...args: any) => any>(
+    func: T,
+    ...args: Parameters<T>
+  ) {
     if ((func as any).isRPC) {
       const rpcObj = func.apply(this, args) as RpcObject;
       return await rpcObj.originalMethod(...args);
@@ -152,7 +169,7 @@ export class Node<S extends Record<string, any> = {}> extends Phaser.GameObjects
         return await parent.rpc(parent.serverBroadcastSingle, snapshot);
       }
       const snapshot = this.getTreeSnapshot()[0];
-      await parent.rpc(parent.recieveSnapshot, snapshot);
+      await parent.rpc(parent.recieveSnapshot, [snapshot]);
     }
   }
 

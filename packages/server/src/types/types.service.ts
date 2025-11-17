@@ -68,10 +68,19 @@ declare module "${name}" {
       dirname(sharedRequire.resolve('@wired-io/shared/package.json')),
       'node_modules',
     );
+    const packagesPath = join(
+      dirname(dirname(sharedRequire.resolve('@wired-io/shared/package.json'))),
+    );
     files.push(
       ...(await this.buildModuleTypesFiles(
         join(nodeModulesPath, 'phaser', 'types'),
         'phaser',
+      )),
+    );
+    files.push(
+      ...(await this.buildModuleTypesFiles(
+        join(packagesPath, 'box2d', 'build'),
+        'box2d',
       )),
     );
     return files;

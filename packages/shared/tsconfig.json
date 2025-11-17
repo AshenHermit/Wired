@@ -1,15 +1,19 @@
 {
-    "compilerOptions": {
-        "jsx": "react-jsx",
-        "module": "ESNext",
-        "lib": ["es6", "dom", "dom.iterable", "scripthost"],
-        "moduleResolution": "bundler",
-        "experimentalDecorators": true,
-        "strictNullChecks": true,
-        "noImplicitAny": false,
-        "typeRoots": ["./node_modules/phaser/types"],
-        "types": ["Phaser"]
-    },
-    "include": ["src/**/*", "../client/src/networking/ServerAPI.ts"],
-    "exclude": ["node_modules", "dist"],
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "lib": ["es6", "dom", "dom.iterable", "scripthost"],
+    "moduleResolution": "bundler",
+    "experimentalDecorators": true,
+    "strictNullChecks": true,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "typeRoots": ["./node_modules/phaser/types"],
+    "types": ["Phaser"]
+  },
+  "include": ["src/**/*", "../client/src/networking/ServerAPI.ts"],
+  "exclude": ["node_modules", "dist"],
+  "paths": {
+      "@flyover/box2d": ["../box2d/src"]
+    }
 }

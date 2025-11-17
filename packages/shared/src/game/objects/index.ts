@@ -1,4 +1,6 @@
-export * from "./Player";
+export * from "./TestPlayer";
+export * from "./PlayerBase";
+export * from "./RigidBody";
 export * from "./Sprite";
 export * from "./Node";
 export * from "./SceneReplicatorNode";

@@ -24,6 +24,7 @@
     "types": ["Phaser"],
     "paths": {
       "@wired-io/shared": ["../shared/src"],
+      "@flyover/box2d": ["../box2d/src"]
     }
   }
 }

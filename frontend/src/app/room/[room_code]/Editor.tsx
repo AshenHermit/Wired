@@ -94,7 +94,7 @@ export function WiredEditor({
         const script = pack.scriptAgents.find(
           (s) => s.filepath == selectedFile?.filepath
         );
-        if (script) {
+        if (script && pack.package.id == selectedPackage?.package.id) {
           openFile(script);
           break;
         }

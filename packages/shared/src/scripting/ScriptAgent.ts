@@ -4,7 +4,8 @@ import * as path from "pathe";
 import { ScriptCompiler } from "./ScriptCompiler";
 
 export interface ScriptExports {
-  initialize?: () => void;
+  init?: () => void;
+  unload?: () => void;
 }
 
 export type ScriptWrapper = (

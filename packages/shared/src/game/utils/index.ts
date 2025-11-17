@@ -1,4 +1,5 @@
 import { serverHost } from "../../networking";
+import { Wired } from "../WiredGlobal";
 
 export interface TextureLoadData {
   key?: string;

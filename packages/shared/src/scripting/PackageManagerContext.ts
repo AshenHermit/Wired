@@ -3,6 +3,7 @@ import * as Game from "../game";
 import * as Phaser from "phaser";
 import { Package, PackageExecutionContext } from "./PackageExecutionContext";
 import { ScriptAgent, ScriptExports } from "./ScriptAgent";
+import * as b2 from "@box2d";
 
 export type PackageManagerEvents = {
   packagesChanged: PackageExecutionContext[];
@@ -47,6 +48,7 @@ export class PackageManagerContext {
     const pack = this.getPackage(name);
     if (name == "@wired-io") return Game;
     if (name == "phaser") return Phaser;
+    if (name == "@box2d") return b2;
     if (pack) return pack.execute();
     return null;
   }
