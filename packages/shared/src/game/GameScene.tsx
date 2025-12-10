@@ -15,6 +15,9 @@ export class GameScene extends Phaser.Scene {
   nextNodeId = 0;
   b2dWorld: World;
 
+  elapsedTime = 0;
+  fixedTimeStep = 1000 / 60;
+
   constructor() {
     super({
       key: "GameScene",
@@ -25,10 +28,16 @@ export class GameScene extends Phaser.Scene {
     const ground = this.b2dWorld.CreateBody(bd);
 
     const shape = new b2.EdgeShape();
-    shape.SetTwoSided(new b2.Vec2(-40.0, 0.0), new b2.Vec2(40.0, 0.0));
+    shape.SetTwoSided(new b2.Vec2(-40.0, 5.0), new b2.Vec2(40.0, 5.0));
     ground.CreateFixture(shape, 0.0);
 
-    shape.SetTwoSided(new b2.Vec2(20.0, 0.0), new b2.Vec2(20.0, 20.0));
+    shape.SetTwoSided(new b2.Vec2(-40.0, -5.0), new b2.Vec2(40.0, -5.0));
+    ground.CreateFixture(shape, 0.0);
+
+    shape.SetTwoSided(new b2.Vec2(5.0, -5.0), new b2.Vec2(5.0, 5.0));
+    ground.CreateFixture(shape, 0.0);
+
+    shape.SetTwoSided(new b2.Vec2(-5.0, -5.0), new b2.Vec2(-5.0, 5.0));
     ground.CreateFixture(shape, 0.0);
   }
 
@@ -81,18 +90,22 @@ export class GameScene extends Phaser.Scene {
       Wired().events.emit("sceneReady", undefined);
       this.isSceneReady = true;
     }
-    this.b2dWorld.Step(
-      1 / 60,
-      8,
-      3,
-      CalculateParticleIterations(10, 0.04, 1 / 60)
-    );
-    this.b2dWorld.Step(
-      1 / 60,
-      8,
-      3,
-      CalculateParticleIterations(10, 0.04, 1 / 60)
-    );
+    this.elapsedTime += delta;
+    while (this.elapsedTime >= this.fixedTimeStep) {
+      this.elapsedTime -= this.fixedTimeStep;
+      this.b2dWorld.Step(
+        1 / 60,
+        8,
+        3,
+        CalculateParticleIterations(10, 0.04, 1 / 60)
+      );
+      this.b2dWorld.Step(
+        1 / 60,
+        8,
+        3,
+        CalculateParticleIterations(10, 0.04, 1 / 60)
+      );
+    }
     super.update(time, delta);
   }
 }

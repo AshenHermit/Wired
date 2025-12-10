@@ -81,11 +81,12 @@ export class Node<S extends Record<string, any> = {}> extends Phaser.GameObjects
     this.setData("state", { ...oldState, ...state });
     this.onNodeStateChanged(oldState, this.getNodeState());
   }
-  broadcastNodeState(state: Partial<S>) {
+  broadcastNodeState(state: Partial<S>, set: boolean = true) {
     const oldState = this.getNodeState();
     this.setData("state", { ...oldState, ...state });
-    this.onNodeStateChanged(oldState, this.getNodeState());
+    if (set) this.onNodeStateChanged(oldState, this.getNodeState());
     this.broadcastSingle();
+    if (!set) this.setData("state", { ...oldState });
   }
 
   preUpdate(time: number, delta: number): void {}

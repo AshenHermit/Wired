@@ -15,6 +15,7 @@ export interface PlayerBaseInterface<
 }
 
 export type PlayerControlsState = {
+  id: number;
   keys: Record<string, boolean>;
 };
 export type PlayerControlsEvents = {
@@ -26,9 +27,11 @@ export class PlayerControlsNode extends Node<PlayerControlsState> {
   keysRegistry: Record<string, Phaser.Input.Keyboard.Key> = {};
   keyboardEvents = new EventEmitter<PlayerControlsEvents>();
   canListen = false;
+  idsCount = -1;
+  lastRecievedId = -1;
   constructor() {
     super();
-    this.setNodeState({ keys: {} });
+    this.setNodeState({ keys: {}, id: -2 });
   }
   listenKey(key: string) {
     const newKey = Wired().scene().input.keyboard?.addKey(key);
@@ -37,12 +40,14 @@ export class PlayerControlsNode extends Node<PlayerControlsState> {
       if (!this.canListen) return;
       this.broadcastNodeState({
         keys: { ...this.getNodeState().keys, [key]: true },
+        id: this.idsCount++,
       });
     });
     newKey?.addListener(Phaser.Input.Keyboard.Events.UP, () => {
       if (!this.canListen) return;
       this.broadcastNodeState({
         keys: { ...this.getNodeState().keys, [key]: false },
+        id: this.idsCount++,
       });
     });
   }
@@ -50,6 +55,7 @@ export class PlayerControlsNode extends Node<PlayerControlsState> {
     oldState: PlayerControlsState,
     state: PlayerControlsState
   ): void {
+    if (state.id <= oldState.id) return;
     for (const key in state.keys) {
       if (!oldState.keys[key] && state.keys[key]) {
         this.keyboardEvents.emit("onKeyDown", key);

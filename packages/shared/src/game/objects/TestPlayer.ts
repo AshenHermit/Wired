@@ -26,6 +26,13 @@ export class TestPlayer extends PlayerBase<TestPlayerState> {
     );
     sprite.setName("sprite");
     this.rigidBody.add(sprite);
+
+    this.controls.onKeyDown("W", () => {
+      this.rigidBody.b2Body.ApplyLinearImpulseToCenter(
+        new b2.Vec2(0, -10),
+        true
+      );
+    });
   }
   onNodeStateChanged(oldState: TestPlayerState, state: TestPlayerState): void {
     if (state.rigidBodyState) {
@@ -36,18 +43,18 @@ export class TestPlayer extends PlayerBase<TestPlayerState> {
     super.preUpdate(time, delta);
     const speed = 100;
     if (true) {
-      if (this.controls.isKeyDown("D")) {
-        this.rigidBody.b2Body.ApplyForceToCenter(new b2.Vec2(speed, 0), true);
-      }
-      if (this.controls.isKeyDown("A")) {
-        this.rigidBody.b2Body.ApplyForceToCenter(new b2.Vec2(-speed, 0), true);
-      }
-      if (this.controls.isKeyDown("W")) {
-        this.rigidBody.b2Body.ApplyForceToCenter(new b2.Vec2(0, -speed), true);
-      }
-      if (this.controls.isKeyDown("S")) {
-        this.rigidBody.b2Body.ApplyForceToCenter(new b2.Vec2(0, speed), true);
-      }
+      // if (this.controls.isKeyDown("D")) {
+      //   this.rigidBody.b2Body.ApplyForceToCenter(new b2.Vec2(speed, 0), true);
+      // }
+      // if (this.controls.isKeyDown("A")) {
+      //   this.rigidBody.b2Body.ApplyForceToCenter(new b2.Vec2(-speed, 0), true);
+      // }
+      // if (this.controls.isKeyDown("W")) {
+      //   this.rigidBody.b2Body.ApplyForceToCenter(new b2.Vec2(0, -speed), true);
+      // }
+      // if (this.controls.isKeyDown("S")) {
+      //   this.rigidBody.b2Body.ApplyForceToCenter(new b2.Vec2(0, speed), true);
+      // }
     }
     this.storeNodeState({ rigidBodyState: this.rigidBody.getNodeState() });
   }
