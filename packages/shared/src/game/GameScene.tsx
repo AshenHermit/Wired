@@ -122,7 +122,7 @@ export class GameScene extends Phaser.Scene {
         this.cameras.main.centerX - this.g_camera.m_width / 2;
       this.g_camera.m_center.y =
         this.cameras.main.centerY - this.g_camera.m_height / 2;
-      this.g_camera.m_zoom = 1 / 50;
+      this.g_camera.m_zoom = 1 / this.cameras.main.zoom;
 
       this.g_camera.m_extent = this.g_camera.m_height / 2;
 
