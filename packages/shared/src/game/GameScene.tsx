@@ -7,6 +7,7 @@ import { ScriptsManagerNode } from "./objects/ScriptsManagerNode";
 import { World, Vec2 } from "@box2d";
 import { CalculateParticleIterations } from "@box2d";
 import * as b2 from "@box2d";
+import { Camera, DebugDraw, g_camera, g_debugDraw } from "./utils/b2DebugDraw";
 export class GameScene extends Phaser.Scene {
   isSceneReady = false;
   worldNode?: Node;
@@ -14,6 +15,8 @@ export class GameScene extends Phaser.Scene {
   scriptsManagerNode?: ScriptsManagerNode;
   nextNodeId = 0;
   b2dWorld: World;
+  g_debugDraw: DebugDraw;
+  g_camera: Camera;
 
   elapsedTime = 0;
   fixedTimeStep = 1000 / 60;
@@ -24,6 +27,11 @@ export class GameScene extends Phaser.Scene {
     });
     // Создаем Box2D мир с гравитацией (0, 0) - можно настроить позже
     this.b2dWorld = new World(new Vec2(0, 10));
+    this.b2dWorld.SetDebugDraw(g_debugDraw);
+    this.g_debugDraw = g_debugDraw;
+    this.g_camera = g_camera;
+    this.g_debugDraw.SetFlags(b2.DrawFlags.e_all);
+
     const bd = new b2.BodyDef();
     const ground = this.b2dWorld.CreateBody(bd);
 
@@ -106,6 +114,47 @@ export class GameScene extends Phaser.Scene {
         CalculateParticleIterations(10, 0.04, 1 / 60)
       );
     }
+
+    if (this.g_debugDraw.m_ctx) {
+      this.g_camera.m_width = this.game.canvas.width;
+      this.g_camera.m_height = this.game.canvas.height;
+      this.g_camera.m_center.x =
+        this.cameras.main.centerX - this.g_camera.m_width / 2;
+      this.g_camera.m_center.y =
+        this.cameras.main.centerY - this.g_camera.m_height / 2;
+      this.g_camera.m_zoom = 1 / 50;
+
+      this.g_camera.m_extent = this.g_camera.m_height / 2;
+
+      let ctx = this.g_debugDraw.m_ctx;
+      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+      // ctx.strokeStyle = "blue";
+      // ctx.strokeRect(this.m_mouse.x - 24, this.m_mouse.y - 24, 48, 48);
+
+      // const mouse_world: b2.Vec2 = g_camera.ConvertScreenToWorld(this.m_mouse, new b2.Vec2());
+
+      ctx.save();
+
+      // 0,0 at center of canvas, x right, y up
+      ctx.translate(0.5 * ctx.canvas.width, 0.5 * ctx.canvas.height);
+      ctx.scale(1, 1);
+      ///ctx.scale(g_camera.m_extent, g_camera.m_extent);
+      ///ctx.lineWidth /= g_camera.m_extent;
+      const s: number = (0.5 * g_camera.m_height) / g_camera.m_extent;
+      ctx.scale(s, s);
+      ctx.lineWidth /= s;
+
+      // apply camera
+      ctx.scale(1 / g_camera.m_zoom, 1 / g_camera.m_zoom);
+      ctx.lineWidth *= g_camera.m_zoom;
+      ///ctx.rotate(-g_camera.m_roll.GetAngle());
+      ctx.translate(-g_camera.m_center.x, -g_camera.m_center.y);
+
+      this.b2dWorld.DebugDraw();
+      ctx.restore();
+    }
+
     super.update(time, delta);
   }
 }

@@ -106,22 +106,25 @@ export class RigidBody extends Node<RigidBodyState> {
       x: this.b2Body.GetPosition().x,
       y: this.b2Body.GetPosition().y,
     };
-    if (Wired().network.isServer) {
+    if (Wired().network.isServer && this.b2Body.IsAwake()) {
       if (this.syncTimer > 0) {
         this.syncTimer -= delta;
       } else {
         this.syncTimer = this.syncTimerTimeout;
-        this.broadcastNodeState({
-          time: new Date().getTime(),
-          x: position.x,
-          y: position.y,
-          linearVelocity: {
-            x: this.b2Body.GetLinearVelocity().x,
-            y: this.b2Body.GetLinearVelocity().y,
+        this.broadcastNodeState(
+          {
+            time: new Date().getTime(),
+            x: position.x,
+            y: position.y,
+            linearVelocity: {
+              x: this.b2Body.GetLinearVelocity().x,
+              y: this.b2Body.GetLinearVelocity().y,
+            },
+            angularVelocity: this.b2Body.GetAngularVelocity(),
+            angle: this.b2Body.GetAngle(),
           },
-          angularVelocity: this.b2Body.GetAngularVelocity(),
-          angle: this.b2Body.GetAngle(),
-        });
+          false
+        );
       }
     } else {
       // const state = this.getStateFromBuffer(new Date().getTime() - 100);
@@ -138,7 +141,7 @@ export class RigidBody extends Node<RigidBodyState> {
         1,
         5
       );
-    smoothness = (40.0 * delta) / 1000;
+    smoothness = (30.0 * delta) / 1000;
     this.setPosition(
       Phaser.Math.Linear(this.x, position.x, smoothness),
       Phaser.Math.Linear(this.y, position.y, smoothness)
