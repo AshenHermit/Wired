@@ -57,13 +57,16 @@ export class NetworkAPI extends NetworkAPIBase {
     });
   }
   emitTo<T>(event: string, data: any, to: string): Promise<T> {
-    return;
+    return Promise.resolve(data as T);
   }
 
   async onRpcEvent(data: RPCInfo, socketId: string) {
     const node = Wired().scene().findByPath(data.nodePath);
     if (node) {
-      return await node.callRpc(node[data.methodName], ...data.args);
+      const method = (node as any)[data.methodName];
+      if (method && typeof method === "function") {
+        return await node.callRpc(method, ...data.args);
+      }
     }
     return null;
   }

@@ -90,10 +90,13 @@ export class Node<S extends Record<string, any> = {}> extends Phaser.GameObjects
   }
 
   preUpdate(time: number, delta: number): void {}
+  update(time: number, delta: number): void {
+    super.update(time, delta);
+  }
 
   onNodeStateChanged(oldState: S, state: S) {}
 
-  getPath() {
+  getPath(): string {
     const parent = this.getParentNode();
     if (parent) {
       return `${parent.getPath()}/${this.name}`;
@@ -207,5 +210,27 @@ export class Node<S extends Record<string, any> = {}> extends Phaser.GameObjects
     for (const item of snapshot) {
       replicator.remove(item);
     }
+  }
+
+  async serverRecreateNode(className?: string): Promise<Node | null> {
+    const snapshot = this.getTreeSnapshot();
+    if (className) {
+      snapshot[0].class = className;
+    }
+    await this.broadcastDestroy();
+
+    const replicator = new SceneReplicator(Wired().scene());
+    const nodes: Node[] = [];
+    for (const item of snapshot) {
+      replicator.upsert(item);
+      const node = Wired().scene().findByPath(item.path);
+      if (node) nodes.push(node);
+    }
+
+    if (nodes.length > 0) {
+      await nodes[0].broadcast();
+      return nodes[0];
+    }
+    return null;
   }
 }

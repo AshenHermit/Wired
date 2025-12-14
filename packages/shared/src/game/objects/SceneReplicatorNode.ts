@@ -1,7 +1,7 @@
 import { RegisteredNode } from "../NodesRegistry";
 import { SceneReplicator } from "../SceneReplicator";
 import { Wired } from "../WiredGlobal";
-import { Node, Rpc } from "./Node";
+import { Node, NodeTreeSnapshotItem, Rpc } from "./Node";
 
 @RegisteredNode("SceneReplicatorNode")
 export class SceneReplicatorNode extends Node {
@@ -21,7 +21,7 @@ export class SceneReplicatorNode extends Node {
   }
 
   @Rpc("client")
-  async recieveSnapshot(snapshot) {
+  async recieveSnapshot(snapshot: NodeTreeSnapshotItem[]) {
     for (const item of snapshot) {
       this.replicator.create(item);
     }

@@ -4,6 +4,10 @@ type Ctor<T> = new (...args: any[]) => T;
 
 export type NodesRegistryType = Map<string, Ctor<Node>>;
 
+declare global {
+  var _nodesRegistry: NodesRegistryType | undefined;
+}
+
 export function getNodeRegistry() {
   if (globalThis._nodesRegistry)
     return globalThis._nodesRegistry as NodesRegistryType;

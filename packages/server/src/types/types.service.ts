@@ -68,6 +68,7 @@ declare module "${name}" {
       dirname(sharedRequire.resolve('@wired-io/shared/package.json')),
       'node_modules',
     );
+    console.log(sharedRequire.resolve('@wired-io/shared/package.json'));
     const packagesPath = join(
       dirname(dirname(sharedRequire.resolve('@wired-io/shared/package.json'))),
     );

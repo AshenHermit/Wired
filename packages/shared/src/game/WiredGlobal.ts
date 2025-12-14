@@ -4,6 +4,10 @@ import { GameScene } from "./GameScene";
 import { fetchTexture, TextureLoadData } from "./utils";
 import { WiredInstanceEvents } from "./WiredInstance";
 
+declare global {
+  var Wired: WiredGlobal | undefined;
+}
+
 export interface WiredGlobalBase {
   game: () => Phaser.Game | null;
   network: NetworkAPIBase;

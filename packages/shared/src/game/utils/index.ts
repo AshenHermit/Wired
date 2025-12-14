@@ -6,6 +6,10 @@ export interface TextureLoadData {
   url?: string;
 }
 
+declare global {
+  var SERVER_ENV: boolean | undefined;
+}
+
 export function fetchTexture(
   scene: Phaser.Scene,
   url: string

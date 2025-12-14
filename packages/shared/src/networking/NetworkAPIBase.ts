@@ -21,8 +21,8 @@ export type BroadcastResultItem = {
 export type BroadcastResult = BroadcastResultItem[];
 
 export class NetworkAPIBase {
-  connected: boolean;
-  url: string;
+  connected: boolean = false;
+  url: string = "";
   roomEventHandlers: Map<string, RoomEventHandler> = new Map();
   isServer = false;
   localId: string = "0";
@@ -63,5 +63,5 @@ export class NetworkAPIBase {
     }
   }
 
-  events: EventEmitter<NetworkEvents>;
+  events!: EventEmitter<NetworkEvents>;
 }

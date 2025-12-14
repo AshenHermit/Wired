@@ -17,7 +17,7 @@ export type Package = {
 
 export class PackageExecutionContext {
   scriptAgents: ScriptAgent[] = [];
-  package: Package;
+  package!: Package;
   packageManager: PackageManagerContext;
   lastExports: ScriptExports | null = null;
   constructor(packageManager: PackageManagerContext) {

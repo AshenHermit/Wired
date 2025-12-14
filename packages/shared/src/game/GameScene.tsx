@@ -47,6 +47,9 @@ export class GameScene extends Phaser.Scene {
 
     shape.SetTwoSided(new b2.Vec2(-5.0, -5.0), new b2.Vec2(-5.0, 5.0));
     ground.CreateFixture(shape, 0.0);
+
+    shape.SetTwoSided(new b2.Vec2(0.0, 5.0), new b2.Vec2(5.0, 3.0));
+    ground.CreateFixture(shape, 0.0);
   }
 
   getNextNodeName() {
@@ -98,22 +101,6 @@ export class GameScene extends Phaser.Scene {
       Wired().events.emit("sceneReady", undefined);
       this.isSceneReady = true;
     }
-    this.elapsedTime += delta;
-    while (this.elapsedTime >= this.fixedTimeStep) {
-      this.elapsedTime -= this.fixedTimeStep;
-      this.b2dWorld.Step(
-        1 / 60,
-        8,
-        3,
-        CalculateParticleIterations(10, 0.04, 1 / 60)
-      );
-      this.b2dWorld.Step(
-        1 / 60,
-        8,
-        3,
-        CalculateParticleIterations(10, 0.04, 1 / 60)
-      );
-    }
 
     if (this.g_debugDraw.m_ctx) {
       this.g_camera.m_width = this.game.canvas.width;
@@ -150,12 +137,33 @@ export class GameScene extends Phaser.Scene {
       ctx.lineWidth *= g_camera.m_zoom;
       ///ctx.rotate(-g_camera.m_roll.GetAngle());
       ctx.translate(-g_camera.m_center.x, -g_camera.m_center.y);
-
-      this.b2dWorld.DebugDraw();
-      ctx.restore();
     }
 
+    this.elapsedTime += delta;
+    while (this.elapsedTime >= this.fixedTimeStep) {
+      this.elapsedTime -= this.fixedTimeStep;
+      this.b2dWorld.Step(
+        1 / 60,
+        8,
+        3,
+        CalculateParticleIterations(10, 0.04, 1 / 60)
+      );
+      this.b2dWorld.Step(
+        1 / 60,
+        8,
+        3,
+        CalculateParticleIterations(10, 0.04, 1 / 60)
+      );
+    }
+    this.b2dWorld.DebugDraw();
     super.update(time, delta);
+    for (const node of this.sys.updateList.getActive()) {
+      node.update(time, delta);
+    }
+
+    if (this.g_debugDraw.m_ctx) {
+      this.g_debugDraw.m_ctx.restore();
+    }
   }
 }
 

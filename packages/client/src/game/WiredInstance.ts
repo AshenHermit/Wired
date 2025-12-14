@@ -9,7 +9,7 @@ import {
 } from "@wired-io/shared";
 
 export class WiredInstance extends WiredInstanceBase {
-  wiredGlobal: WiredGlobal;
+  wiredGlobal?: WiredGlobal;
   destroyed = false;
   private displayElement: HTMLElement | null = null;
   private onBlurHandler: (() => void) | null = null;
@@ -63,29 +63,34 @@ export class WiredInstance extends WiredInstanceBase {
 
     // Находим DOM элемент по id
     this.displayElement = game.canvas;
-    if (this.displayElement) {
-      // Добавляем обработчики
-      window.addEventListener("click", (e) => {
-        if (this.game && !this.destroyed) {
-          if (e.target == this.game.canvas) {
-            this.game.input.keyboard.enabled = true;
+    const keyboard = game.input.keyboard;
+    if (game && keyboard) {
+      if (this.displayElement) {
+        // Добавляем обработчики
+        window.addEventListener("click", (e) => {
+          if (e.target == game.canvas) {
+            keyboard.enabled = true;
           } else {
-            this.game.input.keyboard.enabled = false;
+            keyboard.enabled = false;
           }
-        }
-      });
+        });
 
-      // Изначально отключаем ввод
-      game.input.keyboard.enabled = false;
-    } else {
-      // Если элемент не найден, используем стандартное поведение Phaser
-      game.input.keyboard.enabled = false;
-      game.events.on(Phaser.Core.Events.BLUR, () => {
-        game.input.keyboard.enabled = false;
-      });
-      game.events.on(Phaser.Core.Events.FOCUS, () => {
-        game.input.keyboard.enabled = true;
-      });
+        // Изначально отключаем ввод
+        keyboard.enabled = false;
+      } else {
+        // Если элемент не найден, используем стандартное поведение Phaser
+        keyboard.enabled = false;
+        game.events.on(Phaser.Core.Events.BLUR, () => {
+          if (keyboard) {
+            keyboard.enabled = false;
+          }
+        });
+        game.events.on(Phaser.Core.Events.FOCUS, () => {
+          if (keyboard) {
+            keyboard.enabled = true;
+          }
+        });
+      }
     }
   }
   destroyGame(): void {

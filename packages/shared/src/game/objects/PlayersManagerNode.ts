@@ -36,7 +36,8 @@ export class PlayersManagerNode extends Node {
     });
   }
 
-  serverRecreatePlayers() {
+  async serverRecreatePlayers() {
+    if (!Wired().network.isServer) return;
     const newPlayerClass = getNodeCtor(this.playerClass);
     if (newPlayerClass) {
       // this.players = [];
@@ -44,18 +45,13 @@ export class PlayersManagerNode extends Node {
       for (const player of this.getAll()) {
         const node = asNode(player);
         if (node) {
-          node.broadcastDestroy();
+          const newNode = await node.serverRecreateNode(this.playerClass);
+          if (newNode) {
+            newPlayers.push(newNode as PlayerBaseInterface);
+          }
         }
       }
-      for (const player of this.players) {
-        const newPlayer = new newPlayerClass();
-        newPlayer.setNodeState(player.getNodeState());
-        newPlayers.push(newPlayer as PlayerBaseInterface);
-        this.add(newPlayer);
-        newPlayer.broadcast();
-      }
       this.players = newPlayers;
-      console.log(this.players);
     }
   }
 

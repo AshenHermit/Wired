@@ -1,17 +1,17 @@
-import * as Phaser from "phaser";
-import { Wired } from "../WiredGlobal";
-import { Sprite } from "./Sprite";
-import { Node } from "./Node";
-import { RegisteredNode } from "../NodesRegistry";
-import { PlayerBase, PlayerBaseState } from "./PlayerBase";
-import { RigidBody, RigidBodyState } from "./RigidBody";
+import {
+  RegisteredNode,
+  KinematicBody,
+  PlayerBase,
+  PlayerBaseState,
+  Sprite,
+  Wired,
+} from "@wired-io";
 import * as b2 from "@box2d";
-import { KinematicBody } from "./KinematicBody";
 
-export type TestPlayerState = PlayerBaseState & {};
+type PlayerState = PlayerBaseState & {};
 
-@RegisteredNode("TestPlayer")
-export class TestPlayer extends PlayerBase<TestPlayerState> {
+@RegisteredNode("MegaPlayer")
+export class MegaPlayer extends PlayerBase<PlayerState> {
   m_body: KinematicBody;
 
   constructor() {
@@ -21,7 +21,7 @@ export class TestPlayer extends PlayerBase<TestPlayerState> {
     this.m_body.setName("body");
     this.add(this.m_body);
     const sprite = new Sprite(
-      "https://i.pinimg.com/736x/bb/9c/99/bb9c99cbf55ca2042383ad5e7795b2e9.jpg"
+      "https://i.pinimg.com/736x/6d/4a/4e/6d4a4e011676f8cc2678411c30fb4ab2.jpg"
     );
     sprite.setName("sprite");
     this.m_body.add(sprite);
@@ -32,7 +32,6 @@ export class TestPlayer extends PlayerBase<TestPlayerState> {
       );
     });
   }
-  onNodeStateChanged(oldState: TestPlayerState, state: TestPlayerState): void {}
   update(time: number, delta: number): void {
     super.update(time, delta);
     const speed = 2;
@@ -46,4 +45,8 @@ export class TestPlayer extends PlayerBase<TestPlayerState> {
     movement.y = this.m_body.b2Body.GetLinearVelocity().y;
     this.m_body.b2Body.SetLinearVelocity(movement);
   }
+}
+
+export function init() {
+  Wired().scene().registerPlayerClass("MegaPlayer");
 }

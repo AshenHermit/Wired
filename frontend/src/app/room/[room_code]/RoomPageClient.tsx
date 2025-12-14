@@ -45,7 +45,7 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
       const debugCanvas = document.getElementById(
         "debug-canvas"
       ) as HTMLCanvasElement;
-      wiredInstance.wiredGlobal.scene().g_debugDraw.m_ctx =
+      wiredInstance.wiredGlobal!.scene().g_debugDraw.m_ctx =
         debugCanvas.getContext("2d");
       debugCanvas.width = wiredInstance.game?.canvas.width ?? 0;
       debugCanvas.height = wiredInstance.game?.canvas.height ?? 0;

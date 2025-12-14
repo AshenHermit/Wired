@@ -112,9 +112,9 @@ export function WiredEditor({
     if (wiredInstance) {
       if (state == "connected") {
         const packageManager =
-          wiredInstance.wiredGlobal.scene().scriptsManagerNode?.packageManager;
+          wiredInstance.wiredGlobal!.scene().scriptsManagerNode?.packageManager;
         packageManagerNode.current =
-          wiredInstance.wiredGlobal.scene().scriptsManagerNode || null;
+          wiredInstance.wiredGlobal!.scene().scriptsManagerNode || null;
         if (packageManager && packageManagerNode.current) {
           const packageExecuted = (pack: PackageExecutionContext) => {
             toast(`"${pack.package.name}" package executed`, {

@@ -1,0 +1,88 @@
+version: "3.5"
+
+services:
+  db:
+    image: postgres:18.1
+    restart: always
+    environment:
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    container_name: wired_postgres
+    volumes:
+      - wired_db:/var/lib/postgresql/data
+    ports:
+      - "${DB_EXTERNAL_PORT}:5432"
+    networks:
+      - wired
+
+  backend:
+    build:
+      context: ./
+      dockerfile: backend.Dockerfile
+    container_name: wired_backend
+    restart: always
+    environment:
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_SYNC=${DB_SYNC}
+      - AUTH_SECRET=${AUTH_SECRET}
+      - PORT=${PORT}
+      - STORAGE_DIR=${STORAGE_DIR}
+      - GOOGLE_AUTH_CLIENT_ID=${GOOGLE_AUTH_CLIENT_ID}
+      - GOOGLE_AUTH_CLIENT_SECRET=${GOOGLE_AUTH_CLIENT_SECRET}
+      - GOOGLE_AUTH_CALLBACK=${GOOGLE_AUTH_CALLBACK}
+      - SITE_HOST=${SITE_HOST}
+      - COMMON_DOMAIN=${COMMON_DOMAIN}
+      - TZ=${TZ}
+    ports:
+      - "${BACKEND_EXTERNAL_PORT}:3000"
+    depends_on:
+      - db
+    volumes:
+      - wired_storage:${STORAGE_DIR}
+    networks:
+      - wired
+
+  frontend:
+    build:
+      context: ./
+      dockerfile: frontend.Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
+    container_name: wired_frontend
+    restart: always
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL}
+    ports:
+      - "${FRONTEND_EXTERNAL_PORT}:3000"
+    depends_on:
+      - backend
+    networks:
+      - wired
+
+  wired_nginx:
+    image: nginx:stable
+    container_name: wired_nginx
+    restart: always
+    volumes:
+      - ./nginx/conf:/etc/nginx/conf.d
+    ports:
+      - "${NGINX_EXTERNAL_PORT}:8080"
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - wired
+      - shared-net
+
+networks:
+  wired:
+    driver: bridge
+  shared-net:
+    external: true
+
+volumes:
+  wired_db:
+  wired_storage:

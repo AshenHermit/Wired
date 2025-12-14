@@ -26,7 +26,7 @@ export abstract class WiredInstanceBase {
   public game: Phaser.Game | null = null;
   public config: WiredInstanceConfig;
   public network: NetworkAPIBase;
-  public wiredGlobal: WiredGlobal;
+  public wiredGlobal?: WiredGlobal;
 
   public events = new EventEmitter<WiredInstanceEvents>();
 

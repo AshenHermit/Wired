@@ -33,7 +33,7 @@ export class NetworkAPI extends NetworkAPIBase {
   }
 
   async onRpcEvent(data: RPCInfo, socketId: string) {
-    _setupWiredGlobal(this.roomRuntime.wiredInstance.wiredGlobal);
+    _setupWiredGlobal(this.roomRuntime.wiredInstance.wiredGlobal!);
     const node = Wired().scene().findByPath(data.nodePath);
     if (node) {
       return await node.callRpc(node[data.methodName], ...data.args);

@@ -14,11 +14,11 @@ export class WiredInstance extends WiredInstanceBase {
   }
 
   connectPlayer(socketId: string) {
-    _setupWiredGlobal(this.wiredGlobal);
+    _setupWiredGlobal(this.wiredGlobal!);
     this.events.emit('playerConnected', socketId);
   }
   disconnectPlayer(socketId: string) {
-    _setupWiredGlobal(this.wiredGlobal);
+    _setupWiredGlobal(this.wiredGlobal!);
     this.events.emit('playerDisconnected', socketId);
   }
 

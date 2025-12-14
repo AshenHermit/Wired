@@ -1,18 +1,15 @@
-import HTTPClient from "@/api/HTTPClient"
-
-import type { APIMethodsParams, Query } from "./types"
-import { API_URL, NEXT_URL, REVALIDATE_INTERVAL } from "@/utils/variables"
-import { RequestManagerBase } from "./RequestManagerBase"
+import HTTPClient from "@/api/HTTPClient";
+import { RequestManagerBase } from "./RequestManagerBase";
 
 export class RequestManager extends RequestManagerBase {
   constructor() {
-    super()
+    super();
     this.api.nextServer = new HTTPClient({
       baseURL: "/api/",
       cache: "no-store",
-    })
+    });
   }
 }
 
-const requestManager = new RequestManager()
-export default requestManager
+const requestManager = new RequestManager();
+export default requestManager;
