@@ -8,11 +8,13 @@ import { World, Vec2 } from "@box2d";
 import { CalculateParticleIterations } from "@box2d";
 import * as b2 from "@box2d";
 import { Camera, DebugDraw, g_camera, g_debugDraw } from "./utils/b2DebugDraw";
+import { NetworkMetricsNode } from "./objects/NetworkMetrics";
 export class GameScene extends Phaser.Scene {
   isSceneReady = false;
   worldNode?: Node;
   playersManagerNode?: PlayersManagerNode;
   scriptsManagerNode?: ScriptsManagerNode;
+  networkMetricsNode?: NetworkMetricsNode;
   nextNodeId = 0;
   b2dWorld: World;
   g_debugDraw: DebugDraw;
@@ -84,6 +86,10 @@ export class GameScene extends Phaser.Scene {
     this.worldNode = new Node();
     this.worldNode.setName("root");
     this.add.existing(this.worldNode);
+
+    this.networkMetricsNode = new NetworkMetricsNode();
+    this.networkMetricsNode.setName("networkMetrics");
+    this.worldNode.add(this.networkMetricsNode);
 
     this.scriptsManagerNode = new ScriptsManagerNode();
     this.scriptsManagerNode.setName("scripts");

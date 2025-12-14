@@ -6,9 +6,11 @@ WORKDIR /app
 COPY . .
 
 FROM base AS prod-deps
+# Install system dependencies for canvas native module
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --prod --frozen-lockfile
 
 FROM base AS build
+# Install system dependencies for canvas native module
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 RUN pnpm run build:server
 RUN pnpm run build:shared

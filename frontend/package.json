@@ -3,13 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
     "check-types": "tsc --pretty --noEmit"
   },
   "dependencies": {
+    "@box2d": "file:../packages/box2d",
     "@monaco-editor/react": "^4.7.0",
     "@radix-ui/react-collapsible": "^1.1.12",
     "@radix-ui/react-slot": "^1.2.4",

@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2017",
-    "lib": ["dom", "dom.iterable", "esnext"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
@@ -21,9 +25,18 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"],
-      "@wired-io/shared": ["../packages/shared/src"],
-      "@wired-io/client": ["../packages/client/src"]
+      "@/*": [
+        "./src/*"
+      ],
+      "@wired-io/shared": [
+        "../packages/shared/src"
+      ],
+      "@wired-io/client": [
+        "../packages/client/src"
+      ],
+      "@box2d": [
+        "../packages/box2d/src"
+      ]
     }
   },
   "include": [
@@ -34,5 +47,7 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules"
+  ]
 }

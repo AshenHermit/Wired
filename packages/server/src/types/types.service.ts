@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { glob, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
+import { glob } from 'glob';
 
 const sharedRequire = createRequire(__filename);
 
@@ -28,16 +29,22 @@ declare module "${name}" {
   async buildModuleTypesFiles(moduleDir: string, name: string) {
     const files: TypeFile[] = [];
     const viritalDir = `node_modules/@types/${name}`;
-    const searchFiles = await glob('**/*.d.ts', { cwd: moduleDir });
+    
+    try {
+      const searchFiles = await glob('**/*.d.ts', { cwd: moduleDir });
 
-    // Build all type files first
-    for await (const file of searchFiles) {
-      const filepath = file.replace(/\\/g, '/');
-      const script = {
-        filepath: `${viritalDir}/${filepath}`,
-        content: await readFile(join(moduleDir, filepath), 'utf8'),
-      };
-      files.push(script);
+      // Build all type files first
+      for (const file of searchFiles) {
+        const filepath = file.replace(/\\/g, '/');
+        const script = {
+          filepath: `${viritalDir}/${filepath}`,
+          content: await readFile(join(moduleDir, filepath), 'utf8'),
+        };
+        files.push(script);
+      }
+    } catch (error) {
+      console.error(`Error building module types for ${name} in ${moduleDir}:`, error);
+      throw error;
     }
 
     // Create module declaration file

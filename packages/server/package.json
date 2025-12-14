@@ -32,10 +32,10 @@
     "@wired-io/shared": "workspace:*",
     "canvas": "^3.2.0",
     "easy-event-emitter": "^1.2.2",
+    "glob": "^13.0.0",
     "hashids": "^2.3.0",
-    "pathe": "^2.0.3",
-    "uuid": "^13.0.0",
     "jsdom": "^25.0.1",
+    "pathe": "^2.0.3",
     "pg": "^8.16.3",
     "phaser": "^3.90.0",
     "react": "^19.1.1",
@@ -43,7 +43,8 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.1",
-    "typeorm": "^0.3.28"
+    "typeorm": "^0.3.28",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

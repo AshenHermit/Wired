@@ -17,6 +17,11 @@
     "build": "pnpm run --recursive build",
     "clean": "pnpm run --recursive clean"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "canvas"
+    ]
+  },
   "devDependencies": {
     "@types/node": "^24.9.2",
     "typescript": "^5.9.3"

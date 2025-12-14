@@ -8,7 +8,7 @@ services:
       - POSTGRES_PASSWORD=${DB_PASSWORD}
     container_name: wired_postgres
     volumes:
-      - wired_db:/var/lib/postgresql/data
+      - wired_db:/var/lib/postgresql
     ports:
       - "${DB_EXTERNAL_PORT}:5432"
     networks:
@@ -50,11 +50,13 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
         NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
+        NEXT_PUBLIC_WEBSOCKET_URL: ${NEXT_PUBLIC_WEBSOCKET_URL}
     container_name: wired_frontend
     restart: always
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
       - NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL}
+      - NEXT_PUBLIC_WEBSOCKET_URL=${NEXT_PUBLIC_WEBSOCKET_URL}
     ports:
       - "${FRONTEND_EXTERNAL_PORT}:3000"
     depends_on:

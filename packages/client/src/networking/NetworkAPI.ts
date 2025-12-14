@@ -11,20 +11,32 @@ export class NetworkAPI extends NetworkAPIBase {
   socket: Socket | null = null;
   connected: boolean = false;
   url: string = "http://localhost:3000";
+  backendUrl: string = "http://localhost:3000";
   events = new EventEmitter<NetworkEvents>();
 
-  constructor() {
+  constructor(url: string, backendUrl: string) {
     super();
     this.isServer = false;
     this.roomEventHandlers.set("rpc", this.onRpcEvent.bind(this));
+    this.url = url;
+    this.backendUrl = backendUrl;
   }
 
   connect(): void {
-    this.socket = io(this.url);
+    // Socket.IO клиент работает с wss:// URL напрямую
+    // Используем URL как есть, Socket.IO автоматически определит протокол WebSocket
+    this.socket = io(this.url, {
+      transports: ['websocket'],
+      upgrade: false, // Отключаем upgrade, используем только WebSocket
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      forceNew: true,
+    });
 
     this.socket.on("connect", () => {
       this.connected = true;
-      console.log("Connected to game server");
+      console.log("Connected to game server at", this.url);
       this.events.emit("connected", undefined);
     });
 
@@ -38,7 +50,9 @@ export class NetworkAPI extends NetworkAPIBase {
       this.onRoomEvent(data.event, data.data, "0");
     });
 
-    this.socket.on("connect_error", (error) => {});
+    this.socket.on("connect_error", (error) => {
+      console.error("WebSocket connection error:", error);
+    });
   }
 
   disconnect(): void {

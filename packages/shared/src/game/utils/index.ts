@@ -1,4 +1,4 @@
-import { serverHost } from "../../networking";
+import { NetworkAPIBase } from "../../networking";
 import { Wired } from "../WiredGlobal";
 
 export interface TextureLoadData {
@@ -12,7 +12,8 @@ declare global {
 
 export function fetchTexture(
   scene: Phaser.Scene,
-  url: string
+  url: string,
+  api: NetworkAPIBase
 ): Promise<TextureLoadData> {
   return new Promise((resolve, reject) => {
     if (globalThis.SERVER_ENV) {
@@ -25,7 +26,7 @@ export function fetchTexture(
       }
       let loader = new Phaser.Loader.LoaderPlugin(scene);
       // ask the LoaderPlugin to load the texture
-      loader.image(url, `${serverHost}/proxy?url=${url}`);
+      loader.image(url, `${api.backendUrl}/proxy?url=${url}`);
       loader.crossOrigin = "anonymous";
 
       loader.once(Phaser.Loader.Events.COMPLETE, () => {

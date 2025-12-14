@@ -7,3 +7,4 @@ export * from "./Node";
 export * from "./SceneReplicatorNode";
 export * from "./PlayersManagerNode";
 export * from "./ScriptsManagerNode";
+export * from "./NetworkMetrics";

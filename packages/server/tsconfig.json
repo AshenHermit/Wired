@@ -19,12 +19,19 @@
     "noImplicitAny": false,
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false,
-    "lib": ["es6", "dom", "dom.iterable", "scripthost"],
-    "typeRoots": ["./node_modules/phaser/types"],
-    "types": ["Phaser"],
+    "lib": [
+      "es6",
+      "dom",
+      "dom.iterable",
+      "scripthost"
+    ],
     "paths": {
-      "@wired-io/shared": ["../shared/src"],
-      "@flyover/box2d": ["../box2d/src"]
+      "@wired-io/shared": [
+        "../shared/src"
+      ],
+      "@box2d": [
+        "../box2d/src"
+      ]
     }
   }
 }

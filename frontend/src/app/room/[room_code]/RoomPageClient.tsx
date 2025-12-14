@@ -4,7 +4,7 @@ import React from "react";
 import { NetworkAPI, WiredInstance } from "@wired-io/client";
 import { WiredEditor } from "./Editor";
 import dynamic from "next/dynamic";
-import { WiredInstanceState } from "@wired-io/shared";
+import { NetworkMetricsState, WiredInstanceState } from "@wired-io/shared";
 import {
   Popover,
   PopoverClose,
@@ -15,6 +15,7 @@ import { Button } from "@/components/animate-ui/components/buttons/button";
 import { Wrench } from "lucide-react";
 import { Switch } from "@/components/animate-ui/components/radix/switch";
 import { cn } from "@/lib/utils";
+import { BACKEND_URL, WEBSOCKET_URL } from "@/utils/variables";
 
 export function RoomPageClient({ roomCode }: { roomCode: string }) {
   const gameContainerId = "game-container";
@@ -28,7 +29,7 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
     const timeout = setTimeout(() => {
       wiredInstance = new WiredInstance({
         displayParent: gameContainerId,
-        network: new NetworkAPI(),
+        network: new NetworkAPI(WEBSOCKET_URL, BACKEND_URL),
       });
       wiredInstance.events.addListener("stateChanged", setState);
       wiredInstance.setup();
@@ -86,9 +87,41 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
                 </div>
               </PopoverContent>
             </Popover>
+            <NetworkMetrics wiredInstance={wiredInstance} state={state} />
           </div>
         </div>
       </div>
     </>
   );
+}
+
+export function NetworkMetrics({
+  wiredInstance,
+  state,
+}: {
+  wiredInstance: WiredInstance | null;
+  state: WiredInstanceState;
+}){
+  const [networkMetrics, setNetworkMetrics] = React.useState<NetworkMetricsState | null>(null);
+
+  React.useEffect(() => {
+    if (wiredInstance && state == "connected") {
+      const node = wiredInstance.wiredGlobal!.scene().networkMetricsNode
+      const recievedState = (state: NetworkMetricsState) => {
+        setNetworkMetrics(state)
+      }
+      if(node) node.metricsEvents.addListener("recievedState", recievedState)
+      return ()=>{
+        if(node) node.metricsEvents.removeListener(recievedState)
+      }
+    }
+  }, [wiredInstance, state]);
+
+  return (
+    <div>
+      <div>Ping: {networkMetrics?.ping}ms</div>
+      <div>Time To Send: {networkMetrics?.timeToSend}ms</div>
+      <div>Time To Receive: {networkMetrics?.timeToReceive}ms</div>
+    </div>
+  )
 }

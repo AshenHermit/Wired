@@ -35,7 +35,7 @@ export function createWiredGlobal(wired: WiredGlobalBase) {
     url: string,
     cb: (data: TextureLoadData) => void
   ) => {
-    fetchTexture(wiredGlobal.scene(), url).then(cb);
+    fetchTexture(wiredGlobal.scene(), url, wired.network).then(cb);
   };
 
   return wiredGlobal;

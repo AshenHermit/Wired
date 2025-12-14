@@ -23,9 +23,11 @@ export type BroadcastResult = BroadcastResultItem[];
 export class NetworkAPIBase {
   connected: boolean = false;
   url: string = "";
+  backendUrl: string = "";
   roomEventHandlers: Map<string, RoomEventHandler> = new Map();
   isServer = false;
   localId: string = "0";
+  lastRecievedSocketId: string = "";
 
   connect(): void {}
 
