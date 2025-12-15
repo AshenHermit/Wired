@@ -48,12 +48,12 @@ export class KinematicBody extends Node<KinematicBodyState> {
     state: KinematicBodyState
   ): void {
     const newPos = new b2.Vec2(state.x ?? 0, state.y ?? 0);
-    // if (b2.Vec2.DistanceVV(newPos, this.b2Body.GetPosition()) > 1) {
-    // }
-    this.b2Body.SetPosition(new b2.Vec2(state.x ?? 0, state.y ?? 0));
+    if (b2.Vec2.DistanceVV(newPos, this.b2Body.GetPosition()) > 2) {
+    }
     this.b2Body.SetLinearVelocity(
       new b2.Vec2(state.linearVelocity?.x ?? 0, state.linearVelocity?.y ?? 0)
     );
+    this.b2Body.SetPosition(newPos);
     this.b2Body.SetAngle(state.angle ?? 0);
   }
   update(time: number, delta: number): void {
@@ -86,7 +86,7 @@ export class KinematicBody extends Node<KinematicBodyState> {
       new b2.Color(255, 0, 0, 255)
     );
 
-    let smoothness = (30.0 * delta) / 1000;
+    let smoothness = (20.0 * delta) / 1000;
     this.setPosition(
       Phaser.Math.Linear(this.x, this.b2Body.GetPosition().x, smoothness),
       Phaser.Math.Linear(this.y, this.b2Body.GetPosition().y, smoothness)

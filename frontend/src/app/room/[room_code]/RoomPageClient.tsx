@@ -23,6 +23,7 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
   const [wiredInstance, setWiredInstance] =
     React.useState<WiredInstance | null>(null);
   const [showDebug, setShowDebug] = React.useState(false);
+  const [throttling, setThrottling] = React.useState(0);
 
   React.useEffect(() => {
     let wiredInstance: WiredInstance | null = null;
@@ -53,6 +54,15 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
     }
   }, [wiredInstance, state]);
 
+  React.useEffect(() => {
+    if (wiredInstance && state == "connected") {
+      wiredInstance.network.throttling = throttling;
+      return () => {
+        wiredInstance.network.throttling = 0;
+      };
+    }
+  }, [wiredInstance, state, throttling]);
+
   return (
     <>
       <div className="grid grid-cols-2">
@@ -68,7 +78,7 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
               )}
             ></canvas>
           </div>
-          <div className="flex items-center">
+          <div className="flex items-center flex-col gap-2">
             <Popover>
               <PopoverTrigger>
                 <Button variant="outline">
@@ -76,13 +86,20 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
                 </Button>
               </PopoverTrigger>
               <PopoverContent>
-                <div>
+                <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-2">
                     <Switch
                       onCheckedChange={setShowDebug}
                       checked={showDebug}
                     />
                     <div>Show Debug</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      onCheckedChange={(value) => setThrottling(value ? 60 : 0)}
+                      checked={throttling > 0}
+                    />
+                    <div>Use Throttling</div>
                   </div>
                 </div>
               </PopoverContent>
@@ -101,19 +118,20 @@ export function NetworkMetrics({
 }: {
   wiredInstance: WiredInstance | null;
   state: WiredInstanceState;
-}){
-  const [networkMetrics, setNetworkMetrics] = React.useState<NetworkMetricsState | null>(null);
+}) {
+  const [networkMetrics, setNetworkMetrics] =
+    React.useState<NetworkMetricsState | null>(null);
 
   React.useEffect(() => {
     if (wiredInstance && state == "connected") {
-      const node = wiredInstance.wiredGlobal!.scene().networkMetricsNode
+      const node = wiredInstance.wiredGlobal!.scene().networkMetricsNode;
       const recievedState = (state: NetworkMetricsState) => {
-        setNetworkMetrics(state)
-      }
-      if(node) node.metricsEvents.addListener("recievedState", recievedState)
-      return ()=>{
-        if(node) node.metricsEvents.removeListener(recievedState)
-      }
+        setNetworkMetrics(state);
+      };
+      if (node) node.metricsEvents.addListener("recievedState", recievedState);
+      return () => {
+        if (node) node.metricsEvents.removeListener(recievedState);
+      };
     }
   }, [wiredInstance, state]);
 
@@ -123,5 +141,5 @@ export function NetworkMetrics({
       <div>Time To Send: {networkMetrics?.timeToSend}ms</div>
       <div>Time To Receive: {networkMetrics?.timeToReceive}ms</div>
     </div>
-  )
+  );
 }

@@ -33,14 +33,16 @@ export class PlayerControlsNode extends Node<PlayerControlsState> {
   latency = -1;
   stateInQueue: PlayerControlsState | null = null;
   syncTimer = 0.1;
-  syncTimerTimeout = 0.01 * 1000;
+  syncTimerTimeout = 20;
+  keysQueue: { key: string; value: boolean }[] = [];
+  staticState: PlayerControlsState = { keys: {}, id: -2 };
 
   constructor() {
     super();
     this.setNodeState({ keys: {}, id: -2 });
   }
   appendKeysInQueue(keys: Record<string, boolean>) {
-    if (!this.stateInQueue) {
+    if (this.stateInQueue === null) {
       this.stateInQueue = { keys: this.getNodeState().keys, id: this.idsCount };
     }
     this.stateInQueue.keys = { ...this.stateInQueue.keys, ...keys };
@@ -50,43 +52,18 @@ export class PlayerControlsNode extends Node<PlayerControlsState> {
     if (newKey) this.keysRegistry[key] = newKey;
     newKey?.addListener(Phaser.Input.Keyboard.Events.DOWN, () => {
       if (!this.canListen) return;
-      this.appendKeysInQueue({ [key]: true });
-      this.lastStateStat = { id: this.idsCount, time: new Date().getTime() };
-      // this.idsCount += 1;
-      // if (this.latency >= 0) {
-      //   setTimeout(() => {
-      //     this.setNodeState({
-      //       keys: { ...this.getNodeState().keys, [key]: true },
-      //       id: this.getNodeState().id,
-      //     });
-      //   }, this.latency / 2);
-      // }
+      this.keysQueue.push({ key, value: true });
     });
     newKey?.addListener(Phaser.Input.Keyboard.Events.UP, () => {
       if (!this.canListen) return;
-      this.appendKeysInQueue({ [key]: false });
-      this.lastStateStat = { id: this.idsCount, time: new Date().getTime() };
-      // if (this.latency >= 0) {
-      //   setTimeout(() => {
-      //     this.setNodeState({
-      //       keys: { ...this.getNodeState().keys, [key]: false },
-      //       id: this.getNodeState().id,
-      //     });
-      //   }, this.latency / 2);
-      // }
+      this.keysQueue.push({ key, value: false });
     });
   }
   onNodeStateChanged(
     oldState: PlayerControlsState,
     state: PlayerControlsState
   ): void {
-    if (this.lastStateStat.time != 0) {
-      if (state.id == this.lastStateStat.id) {
-        this.latency = new Date().getTime() - this.lastStateStat.time;
-        console.log(this.latency);
-      }
-    }
-    if (state.id <= oldState.id) return;
+    if (this.canListen) return;
     for (const key in state.keys) {
       if (!oldState.keys[key] && state.keys[key]) {
         this.keyboardEvents.emit("onKeyDown", key);
@@ -97,19 +74,22 @@ export class PlayerControlsNode extends Node<PlayerControlsState> {
     }
   }
   update(time: number, delta: number): void {
-    if (this.syncTimer > 0) {
-      this.syncTimer -= delta;
-    } else {
-      this.syncTimer = this.syncTimerTimeout;
-      if (this.stateInQueue && this.canListen) {
-        this.broadcastNodeState(
-          {
-            keys: this.stateInQueue.keys,
-            id: this.idsCount++,
-          },
-          false
-        );
-        this.stateInQueue = null;
+    if (this.canListen) {
+      if (this.keysQueue.length > 0) {
+        const key = this.keysQueue.shift();
+        if (key) {
+          this.staticState.keys[key.key] = key.value;
+          this.staticState.id++;
+          this.broadcastNodeState(
+            { keys: this.staticState.keys, id: this.staticState.id },
+            true
+          );
+          if (key.value) {
+            this.keyboardEvents.emit("onKeyDown", key.key);
+          } else {
+            this.keyboardEvents.emit("onKeyUp", key.key);
+          }
+        }
       }
     }
   }

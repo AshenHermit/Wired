@@ -26,7 +26,7 @@ export class NetworkAPI extends NetworkAPIBase {
     // Socket.IO клиент работает с wss:// URL напрямую
     // Используем URL как есть, Socket.IO автоматически определит протокол WebSocket
     this.socket = io(this.url, {
-      transports: ['websocket'],
+      transports: ["websocket"],
       upgrade: false, // Отключаем upgrade, используем только WebSocket
       reconnection: true,
       reconnectionAttempts: 5,
@@ -46,7 +46,9 @@ export class NetworkAPI extends NetworkAPIBase {
       this.events.emit("disconnected", undefined);
     });
 
-    this.socket.on("room_events", (data) => {
+    this.socket.on("room_events", async (data) => {
+      if (this.throttling > 0)
+        await new Promise((resolve) => setTimeout(resolve, this.throttling));
       this.onRoomEvent(data.event, data.data, "0");
     });
 
@@ -63,14 +65,18 @@ export class NetworkAPI extends NetworkAPIBase {
     }
   }
 
-  emit<T>(event: string, data: any): Promise<T> {
-    return new Promise((resolve, reject) => {
+  async emit<T>(event: string, data: any): Promise<T> {
+    if (this.throttling > 0)
+      await new Promise((resolve) => setTimeout(resolve, this.throttling));
+    return await new Promise((resolve, reject) => {
       this.socket?.emit(event, data, (response: T) => {
         resolve(response);
       });
     });
   }
-  emitTo<T>(event: string, data: any, to: string): Promise<T> {
+  async emitTo<T>(event: string, data: any, to: string): Promise<T> {
+    if (this.throttling > 0)
+      await new Promise((resolve) => setTimeout(resolve, this.throttling));
     return Promise.resolve(data as T);
   }
 

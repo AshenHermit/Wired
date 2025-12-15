@@ -28,6 +28,7 @@ export class NetworkAPIBase {
   isServer = false;
   localId: string = "0";
   lastRecievedSocketId: string = "";
+  throttling: number = 0;
 
   connect(): void {}
 
