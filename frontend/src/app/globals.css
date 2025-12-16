@@ -122,6 +122,12 @@
 }
 
 @layer utilities {
+  .render-pixelated {
+    image-rendering: pixelated;
+  }
+}
+
+@layer utilities {
   *::-webkit-scrollbar {
     width: 6px;
     height: 6px;

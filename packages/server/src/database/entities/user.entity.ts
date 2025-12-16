@@ -47,22 +47,34 @@ export class User {
   @Column({ default: 'email' })
   service: 'email' | 'google' | 'vk' | 'yandex' | 'github';
 
-  @ApiProperty({ description: 'user rooms' })
+  @ApiProperty({ description: 'user rooms', type: () => Room, isArray: true })
   @OneToMany(() => Room, (room) => room.author)
   rooms: Room[];
 
-  @ApiProperty({ description: 'user rooms' })
+  @ApiProperty({
+    description: 'user contributed rooms',
+    type: () => Room,
+    isArray: true,
+  })
   @ManyToMany(() => Room, (room) => room.author)
   contributedRooms: Room[];
 
-  @ApiProperty({ description: 'user scripting packages' })
+  @ApiProperty({
+    description: 'user scripting packages',
+    type: () => ScriptingPackage,
+    isArray: true,
+  })
   @OneToMany(
     () => ScriptingPackage,
     (scriptingPackage) => scriptingPackage.author,
   )
   scriptingPackages: ScriptingPackage[];
 
-  @ApiProperty({ description: 'user scripting packages' })
+  @ApiProperty({
+    description: 'user contributed scripting packages',
+    type: () => ScriptingPackage,
+    isArray: true,
+  })
   @ManyToMany(
     () => ScriptingPackage,
     (scriptingPackage) => scriptingPackage.contributors,

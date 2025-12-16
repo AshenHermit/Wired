@@ -57,5 +57,5 @@ export interface AuthenticatedRequest extends Request {
   user: User;
 }
 export interface SilentAuthRequest extends Request {
-  user: User | undefined;
+  user: User | null;
 }

@@ -9,6 +9,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppConfigService } from './config/config.service';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
+import { RoomsModule } from './rooms/rooms.module';
+import { ScriptingPackagesModule } from './scripting-packages/scripting-packages.module';
 
 @Module({
   imports: [
@@ -18,6 +20,8 @@ import { UsersModule } from './users/users.module';
     AppConfigModule,
     AuthModule,
     UsersModule,
+    RoomsModule,
+    ScriptingPackagesModule,
     TypeOrmModule.forRootAsync({
       imports: [AppConfigModule],
       inject: [AppConfigService],

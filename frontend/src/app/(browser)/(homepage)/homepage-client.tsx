@@ -21,6 +21,7 @@ import {
   TabsTrigger,
 } from "@/components/animate-ui/components/animate/tabs";
 import { RoomsList } from "../_components/rooms";
+import { CurrentUserEditingButton } from "../_components/user";
 
 export function HomepageClient() {
   const user = useUserStore((state) => state);
@@ -32,6 +33,8 @@ export function HomepageClient() {
         <TabsList>
           <TabsTrigger value="rooms">Комнаты</TabsTrigger>
           <TabsTrigger value="controls">Управление</TabsTrigger>
+          <TabsTrigger value="packages">Пакеты</TabsTrigger>
+          <TabsTrigger value="docs">Документация</TabsTrigger>
         </TabsList>
         <Card className="shadow-none py-0 w-full">
           <TabsContents className="py-6 w-full">
@@ -41,7 +44,7 @@ export function HomepageClient() {
                 <CardDescription>Присоединяйтесь!</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-6">
-                <RoomsList />
+                <RoomsList forCurrentUser={false} />
               </CardContent>
             </TabsContent>
             <TabsContent
@@ -54,7 +57,31 @@ export function HomepageClient() {
                   Здесь можно создавать и управлять комнатами
                 </CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-6">asasd</CardContent>
+              <CardContent className="grid gap-6">
+                <RoomsList forCurrentUser={true} />
+              </CardContent>
+            </TabsContent>
+            <TabsContent
+              value="packages"
+              className="flex flex-col gap-6 w-full"
+            >
+              <CardHeader>
+                <CardTitle>Пакеты</CardTitle>
+                <CardDescription>
+                  Здесь будут храниться пакеты скриптов
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-6"></CardContent>
+            </TabsContent>
+            <TabsContent value="docs" className="flex flex-col gap-6 w-full">
+              <CardHeader>
+                <CardTitle>Документация</CardTitle>
+                <CardDescription>
+                  Здесь будет собрано основное api wired-io для разработки
+                  скриптов, чтобы не смотреть постоянно в исходники
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-6"></CardContent>
             </TabsContent>
           </TabsContents>
         </Card>
@@ -73,8 +100,11 @@ export function ClientPanel() {
   return (
     <Card className="min-w-md">
       <CardHeader>
-        <CardTitle>
-          {">"} Привет, {user.name}!
+        <CardTitle className="flex items-center gap-2">
+          <span>
+            {">"} Привет, {user.name}!
+          </span>
+          <CurrentUserEditingButton />
         </CardTitle>
       </CardHeader>
       <CardContent>

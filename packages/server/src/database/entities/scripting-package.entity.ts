@@ -59,27 +59,38 @@ export class ScriptingPackage {
   @Column({ type: 'jsonb', default: [] })
   scripts: ScriptFile[];
 
-  @ApiProperty({ description: 'package author' })
+  @ApiProperty({ description: 'package author', type: () => User })
   @ManyToOne(() => User, (user) => user.scriptingPackages)
   author: User;
 
-  @ApiProperty({ description: 'package contributors' })
+  @ApiProperty({
+    description: 'package contributors',
+    type: () => User,
+    isArray: true,
+  })
   @ManyToMany(() => User, (user) => user.contributedPackages)
   @JoinTable()
   contributors: User[];
 
-  @ApiProperty({ description: 'package rooms' })
+  @ApiProperty({ description: 'package room', type: () => Room })
   @ManyToOne(() => Room, (room) => room.scriptingPackages)
   room: Room;
 
-  @ApiProperty({ description: 'package parent package' })
+  @ApiProperty({
+    description: 'package parent package',
+    type: () => ScriptingPackage,
+  })
   @ManyToOne(
     () => ScriptingPackage,
     (scriptingPackage) => scriptingPackage.childrenPackages,
   )
   parentPackage: ScriptingPackage;
 
-  @ApiProperty({ description: 'package children packages' })
+  @ApiProperty({
+    description: 'package children packages',
+    type: () => ScriptingPackage,
+    isArray: true,
+  })
   @OneToMany(
     () => ScriptingPackage,
     (scriptingPackage) => scriptingPackage.parentPackage,

@@ -51,11 +51,15 @@ export class Room {
   @Column({ default: '' })
   description: string;
 
-  @ApiProperty({ description: 'room author' })
+  @ApiProperty({ description: 'room author', type: () => User, nullable: true })
   @ManyToOne(() => User, (user) => user.rooms)
-  author: User;
+  author?: User;
 
-  @ApiProperty({ description: 'room contributors' })
+  @ApiProperty({
+    description: 'room contributors',
+    type: () => User,
+    isArray: true,
+  })
   @ManyToMany(() => User, (user) => user.contributedRooms)
   @JoinTable()
   contributors: User[];
@@ -66,7 +70,11 @@ export class Room {
   @Column({ nullable: true, default: null })
   parentRoomId: number;
 
-  @ApiProperty({ description: 'room packages' })
+  @ApiProperty({
+    description: 'room packages',
+    type: () => ScriptingPackage,
+    isArray: true,
+  })
   @OneToMany(
     () => ScriptingPackage,
     (scriptingPackage) => scriptingPackage.room,

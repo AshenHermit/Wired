@@ -1,13 +1,10 @@
 import { getProfile } from "@/api/services/profile";
+import { User } from "@/api/services/types";
 import { getFallbackPicture } from "@/utils/user-utils";
 import { create } from "zustand";
 
-export type LocalUser = {
-  id: number;
+export type LocalUser = User & {
   authorized: boolean;
-  name: string;
-  email: string;
-  picture: string;
 };
 
 export type UserState = LocalUser & {
@@ -22,6 +19,7 @@ export const defaultUserObject: LocalUser = {
   authorized: false,
   email: "",
   picture: "",
+  service: "email",
 };
 
 export const useUserStore = create<UserState>()((set, get) => ({

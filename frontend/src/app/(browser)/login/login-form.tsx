@@ -12,10 +12,10 @@ export function LoginForm({
   const googleAuth = useServiceAuthorization("google");
 
   return (
-    <div className={cn("flex flex-col gap-6", className)} {...props}>
-      <Card>
+    <div className={cn("flex flex-col gap-6 w-full", className)} {...props}>
+      <Card className="w-full">
         <CardHeader className="text-center">
-          <CardTitle className="text-xl">нувооот велком</CardTitle>
+          <CardTitle className="text-xl">предлагаю присоединица</CardTitle>
           {/* <CardDescription></CardDescription> */}
         </CardHeader>
         <CardContent>

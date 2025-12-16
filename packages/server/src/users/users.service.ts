@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from 'src/database/entities/user.entity';
 import { Repository } from 'typeorm';
@@ -34,6 +34,16 @@ export class UsersService {
   constructor(
     @InjectRepository(User) private usersRepository: Repository<User>,
   ) {}
+
+  async assertUserEditing(User: User, subUserId: number): Promise<void> {
+    if (User.id !== subUserId) {
+      throw new ForbiddenException('You are not allowed to edit this user');
+    }
+  }
+
+  async findAll(): Promise<User[]> {
+    return this.usersRepository.find();
+  }
 
   async create(createUserDto: CreateUserDTO): Promise<User> {
     const { email, password, name, picture } = createUserDto;
