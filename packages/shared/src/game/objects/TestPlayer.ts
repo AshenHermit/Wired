@@ -28,14 +28,14 @@ export class TestPlayer extends PlayerBase<TestPlayerState> {
 
     this.controls.onKeyDown("W", () => {
       this.m_body.b2Body.SetLinearVelocity(
-        new b2.Vec2(this.m_body.b2Body.GetLinearVelocity().x, -5)
+        new b2.Vec2(this.m_body.b2Body.GetLinearVelocity().x, -15)
       );
     });
   }
   onNodeStateChanged(oldState: TestPlayerState, state: TestPlayerState): void {}
   update(time: number, delta: number): void {
     super.update(time, delta);
-    const speed = 2;
+    const speed = 10;
     const movement = new b2.Vec2(0, 0);
     if (this.controls.isKeyDown("D")) {
       movement.x += speed;

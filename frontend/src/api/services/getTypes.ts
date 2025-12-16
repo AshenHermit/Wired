@@ -1,21 +1,10 @@
-import requestManager from "@/api/ClientRequestManager";
-import { Methods, Query } from "@/api/types";
 import { TypeFile } from "./types";
+import { apiClient } from "../api-client/client-api";
 
 export async function getWiredIoTypes() {
-  const data = await requestManager.makeClientRequest<TypeFile[], Query, null>({
-    method: Methods.GET,
-    path: "types/wired-io",
-  });
-
-  return data;
+  return await apiClient.get<TypeFile[], null>("types/wired-io");
 }
 
 export async function getLibsTypes() {
-  const data = await requestManager.makeClientRequest<TypeFile[], Query, null>({
-    method: Methods.GET,
-    path: "types/libs",
-  });
-
-  return data;
+  return await apiClient.get<TypeFile[], null>("types/libs");
 }

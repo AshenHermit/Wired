@@ -138,8 +138,6 @@ export function NetworkMetrics({
   return (
     <div>
       <div>Ping: {networkMetrics?.ping}ms</div>
-      <div>Time To Send: {networkMetrics?.timeToSend}ms</div>
-      <div>Time To Receive: {networkMetrics?.timeToReceive}ms</div>
     </div>
   );
 }

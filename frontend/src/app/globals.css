@@ -141,4 +141,8 @@
   *::-webkit-scrollbar-thumb:hover {
     background: #6b6b6b;
   }
+
+  .windows [data-slot="card"], .windows [data-slot="tabs-list"] {
+    @apply backdrop-blur-lg bg-black/20;
+  }
 }

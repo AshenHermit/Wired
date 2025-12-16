@@ -17,9 +17,15 @@ export type KinematicBodyState = {
 
 @RegisteredNode("KinematicBody")
 export class KinematicBody extends Node<KinematicBodyState> {
-  syncTimer = 0.1;
-  syncTimerTimeout = 0.05 * 1000;
+  // server snapshot cadence (ms)
+  syncIntervalMs = 50;
+  syncAccumulatorMs = 0;
   b2Body: b2.Body;
+  // client-side smoothing targets
+  targetPos = new b2.Vec2(0, 0);
+  targetVel = new b2.Vec2(0, 0);
+  targetAngle = 0;
+  hasSnapshot = false;
 
   constructor() {
     super();
@@ -47,23 +53,36 @@ export class KinematicBody extends Node<KinematicBodyState> {
     oldState: KinematicBodyState,
     state: KinematicBodyState
   ): void {
-    const newPos = new b2.Vec2(state.x ?? 0, state.y ?? 0);
-    if (b2.Vec2.DistanceVV(newPos, this.b2Body.GetPosition()) > 2) {
-    }
-    this.b2Body.SetLinearVelocity(
-      new b2.Vec2(state.linearVelocity?.x ?? 0, state.linearVelocity?.y ?? 0)
+    // server applies immediately, client only updates targets to avoid snaps
+    const newPos = new b2.Vec2(
+      state.x ?? this.targetPos.x,
+      state.y ?? this.targetPos.y
     );
-    this.b2Body.SetPosition(newPos);
-    this.b2Body.SetAngle(state.angle ?? 0);
+    const newVel = new b2.Vec2(
+      state.linearVelocity?.x ?? this.targetVel.x,
+      state.linearVelocity?.y ?? this.targetVel.y
+    );
+    const newAngle = state.angle ?? this.targetAngle;
+
+    if (Wired().network.isServer) {
+      this.b2Body.SetLinearVelocity(newVel);
+      this.b2Body.SetPosition(newPos);
+      this.b2Body.SetAngle(newAngle);
+      return;
+    }
+
+    this.targetPos = newPos;
+    this.targetVel = newVel;
+    this.targetAngle = newAngle;
+    this.hasSnapshot = true;
   }
   update(time: number, delta: number): void {
     super.update(time, delta);
 
     if (Wired().network.isServer && this.b2Body.IsAwake()) {
-      if (this.syncTimer > 0) {
-        this.syncTimer -= delta;
-      } else {
-        this.syncTimer = this.syncTimerTimeout;
+      this.syncAccumulatorMs += delta;
+      if (this.syncAccumulatorMs >= this.syncIntervalMs) {
+        this.syncAccumulatorMs = 0;
         this.storeNodeState({
           time: new Date().getTime(),
           x: this.b2Body.GetPosition().x,
@@ -77,21 +96,48 @@ export class KinematicBody extends Node<KinematicBodyState> {
         this.broadcastNodeState(this.getNodeState(), false);
       }
     }
-    if (g_debugDraw.m_ctx) {
-      //   g_debugDraw.m_ctx.ellipse(0, 0, 32, 32, 0, 0, 2 * Math.PI);
-    }
     g_debugDraw.DrawCircle(
       new b2.Vec2(this.getNodeState().x, this.getNodeState().y),
       0.5,
       new b2.Color(255, 0, 0, 255)
     );
 
-    let smoothness = (20.0 * delta) / 1000;
+    if (!Wired().network.isServer && this.hasSnapshot) {
+      // soft correction towards last snapshot to reduce jitter
+      const alpha = Math.min(1, (12 * delta) / 1000); // ~12 lerp/sec
+      const curPos = this.b2Body.GetPosition();
+      const err = b2.Vec2.SubVV(this.targetPos, curPos, new b2.Vec2());
+      const errLen = err.Length();
+      const nextPos =
+        errLen < 0.1
+          ? this.targetPos
+          : new b2.Vec2(
+              Phaser.Math.Linear(curPos.x, this.targetPos.x, alpha),
+              Phaser.Math.Linear(curPos.y, this.targetPos.y, alpha)
+            );
+      this.b2Body.SetPosition(nextPos);
+
+      const curVel = this.b2Body.GetLinearVelocity();
+      this.b2Body.SetLinearVelocity(
+        new b2.Vec2(
+          Phaser.Math.Linear(curVel.x, this.targetVel.x, alpha),
+          Phaser.Math.Linear(curVel.y, this.targetVel.y, alpha)
+        )
+      );
+
+      const nextAngle = Phaser.Math.Angle.RotateTo(
+        this.b2Body.GetAngle(),
+        this.targetAngle,
+        alpha
+      );
+      this.b2Body.SetAngle(nextAngle);
+    }
+
+    const smoothness = (20.0 * delta) / 1000;
     this.setPosition(
       Phaser.Math.Linear(this.x, this.b2Body.GetPosition().x, smoothness),
       Phaser.Math.Linear(this.y, this.b2Body.GetPosition().y, smoothness)
     );
-    // this.setPosition(this.b2Body.GetPosition().x, this.b2Body.GetPosition().y);
     this.setAngle(Phaser.Math.RadToDeg(this.b2Body.GetAngle()));
   }
 }

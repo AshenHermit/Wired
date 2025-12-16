@@ -5,7 +5,6 @@ import { Wired } from "./WiredGlobal";
 import { PlayersManagerNode } from "./objects/PlayersManagerNode";
 import { ScriptsManagerNode } from "./objects/ScriptsManagerNode";
 import { World, Vec2 } from "@box2d";
-import { CalculateParticleIterations } from "@box2d";
 import * as b2 from "@box2d";
 import { Camera, DebugDraw, g_camera, g_debugDraw } from "./utils/b2DebugDraw";
 import { NetworkMetricsNode } from "./objects/NetworkMetrics";
@@ -19,6 +18,11 @@ export class GameScene extends Phaser.Scene {
   b2dWorld: World;
   g_debugDraw: DebugDraw;
   g_camera: Camera;
+  // tunable physics params
+  velocityIterations = 6;
+  positionIterations = 2;
+  particleIterations = 0; // set >0 only if particles are used
+  enableDebugDraw = true;
 
   elapsedTime = 0;
   fixedTimeStep = 1000 / 60;
@@ -28,7 +32,7 @@ export class GameScene extends Phaser.Scene {
       key: "GameScene",
     });
     // Создаем Box2D мир с гравитацией (0, 0) - можно настроить позже
-    this.b2dWorld = new World(new Vec2(0, 10));
+    this.b2dWorld = new World(new Vec2(0, 35));
     this.b2dWorld.SetDebugDraw(g_debugDraw);
     this.g_debugDraw = g_debugDraw;
     this.g_camera = g_camera;
@@ -108,7 +112,7 @@ export class GameScene extends Phaser.Scene {
       this.isSceneReady = true;
     }
 
-    if (this.g_debugDraw.m_ctx) {
+    if (this.enableDebugDraw && this.g_debugDraw.m_ctx) {
       this.g_camera.m_width = this.game.canvas.width;
       this.g_camera.m_height = this.game.canvas.height;
       this.g_camera.m_center.x =
@@ -148,26 +152,23 @@ export class GameScene extends Phaser.Scene {
     this.elapsedTime += delta;
     while (this.elapsedTime >= this.fixedTimeStep) {
       this.elapsedTime -= this.fixedTimeStep;
+      // single fixed step (60 Hz) to keep client/server in sync
       this.b2dWorld.Step(
         1 / 60,
-        8,
-        3,
-        CalculateParticleIterations(10, 0.04, 1 / 60)
-      );
-      this.b2dWorld.Step(
-        1 / 60,
-        8,
-        3,
-        CalculateParticleIterations(10, 0.04, 1 / 60)
+        this.velocityIterations,
+        this.positionIterations,
+        this.particleIterations
       );
     }
-    this.b2dWorld.DebugDraw();
+    if (this.enableDebugDraw && this.g_debugDraw.m_ctx) {
+      this.b2dWorld.DebugDraw();
+    }
     super.update(time, delta);
     for (const node of this.sys.updateList.getActive()) {
       node.update(time, delta);
     }
 
-    if (this.g_debugDraw.m_ctx) {
+    if (this.enableDebugDraw && this.g_debugDraw.m_ctx) {
       this.g_debugDraw.m_ctx.restore();
     }
   }
