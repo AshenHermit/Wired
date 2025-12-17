@@ -16,6 +16,7 @@ import { Wrench } from "lucide-react";
 import { Switch } from "@/components/animate-ui/components/radix/switch";
 import { cn } from "@/lib/utils";
 import { BACKEND_URL, WEBSOCKET_URL } from "@/utils/variables";
+import { decodeId } from "@/utils/hash-utils";
 
 export function RoomPageClient({ roomCode }: { roomCode: string }) {
   const gameContainerId = "game-container";
@@ -28,10 +29,13 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
   React.useEffect(() => {
     let wiredInstance: WiredInstance | null = null;
     const timeout = setTimeout(() => {
-      wiredInstance = new WiredInstance({
-        displayParent: gameContainerId,
-        network: new NetworkAPI(WEBSOCKET_URL, BACKEND_URL),
-      });
+      wiredInstance = new WiredInstance(
+        {
+          displayParent: gameContainerId,
+          network: new NetworkAPI(WEBSOCKET_URL, BACKEND_URL),
+        },
+        decodeId("room", roomCode)
+      );
       wiredInstance.events.addListener("stateChanged", setState);
       wiredInstance.setup();
       setWiredInstance(wiredInstance);

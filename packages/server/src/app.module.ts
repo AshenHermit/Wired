@@ -11,9 +11,11 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { RoomsModule } from './rooms/rooms.module';
 import { ScriptingPackagesModule } from './scripting-packages/scripting-packages.module';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 
 @Module({
   imports: [
+    EventEmitterModule.forRoot(),
     ProxyModule,
     WebsocketModule,
     TypesModule,

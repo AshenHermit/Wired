@@ -41,7 +41,7 @@ export class WiredInstance extends WiredInstanceBase {
       width: 800,
       height: 600,
       parent: '',
-      scene: [ServerGameScene],
+      scene: new ServerGameScene(this),
       backgroundColor: '#000000',
     });
     this.game = game;

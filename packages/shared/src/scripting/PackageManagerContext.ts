@@ -1,12 +1,15 @@
+import { ScriptingPackage } from "../api/types";
 import EventEmitter from "easy-event-emitter";
 import * as Game from "../game";
 import * as Phaser from "phaser";
-import { Package, PackageExecutionContext } from "./PackageExecutionContext";
+import { PackageExecutionContext } from "./PackageExecutionContext";
 import { ScriptAgent, ScriptExports } from "./ScriptAgent";
 import * as b2 from "@box2d";
 
 export type PackageManagerEvents = {
   packagesChanged: PackageExecutionContext[];
+  packageUpserted: PackageExecutionContext;
+  packageRemoved: number;
 };
 
 export class PackageManagerContext {
@@ -16,7 +19,7 @@ export class PackageManagerContext {
     this.packages = [];
     this.events = new EventEmitter<PackageManagerEvents>();
   }
-  upsertPackage(pack: Package) {
+  upsertPackage(pack: ScriptingPackage) {
     var packContext = this.getPackageById(pack.id);
     if (!packContext) {
       packContext = new PackageExecutionContext(this);
@@ -26,6 +29,7 @@ export class PackageManagerContext {
     }
     packContext.initFromPackage(pack);
     this.events.emit("packagesChanged", this.packages);
+    this.events.emit("packageUpserted", packContext);
   }
   getPackages() {
     return this.packages.map((p) => p.getPackage());
@@ -41,8 +45,16 @@ export class PackageManagerContext {
   getPackage(name: string) {
     return this.packages.find((p) => p.package.name === name);
   }
-  getPackageById(id: string) {
+  getPackageById(id: number) {
     return this.packages.find((p) => p.package.id === id);
+  }
+  require(filepath) {
+    if (filepath.startsWith("/")) {
+      const packageName = filepath.split("/")[1];
+      const pkg = this.getPackage(packageName);
+      if (pkg) return pkg.requireScript(filepath);
+    }
+    return this.requirePackage(filepath);
   }
   requirePackage(name: string) {
     const pack = this.getPackage(name);
@@ -52,8 +64,9 @@ export class PackageManagerContext {
     if (pack) return pack.execute();
     return null;
   }
-  removePackage(id: string) {
+  removePackage(id: number) {
     this.packages = this.packages.filter((p) => p.package.id !== id);
     this.events.emit("packagesChanged", this.packages);
+    this.events.emit("packageRemoved", id);
   }
 }

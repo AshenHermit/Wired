@@ -1,5 +1,5 @@
+import { CreateUserPayload, UpdateUserPayload, User } from "@wired-io/shared";
 import { apiClient } from "../api-client/client-api";
-import { CreateUserPayload, UpdateUserPayload, User } from "./types";
 
 export async function listUsers() {
   return apiClient.get<User[], void>("users");

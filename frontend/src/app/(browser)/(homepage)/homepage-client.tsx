@@ -86,9 +86,6 @@ export function HomepageClient() {
           </TabsContents>
         </Card>
       </Tabs>
-      <Link href="/room/1">
-        <Button>Join Room 1</Button>
-      </Link>
     </div>
   );
 }

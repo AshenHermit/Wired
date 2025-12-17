@@ -1,9 +1,9 @@
-import { apiClient } from "../api-client/client-api";
 import {
   CreateScriptingPackagePayload,
   ScriptingPackage,
   UpdateScriptingPackagePayload,
-} from "./types";
+} from "@wired-io/shared";
+import { apiClient } from "../api-client/client-api";
 
 export async function listScriptingPackages() {
   return apiClient.get<ScriptingPackage[], void>("scripting-packages");

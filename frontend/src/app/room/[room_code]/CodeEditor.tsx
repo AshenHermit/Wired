@@ -1,16 +1,22 @@
 "use client";
 
 import { getLibsTypes, getWiredIoTypes } from "@/api/services/getTypes";
-import { TypeFile } from "@/api/services/types";
+import { TypeFile } from "@wired-io/shared";
 import { Editor, Monaco, OnChange, OnMount } from "@monaco-editor/react";
 import { ScriptAgent } from "@wired-io/shared";
 import React from "react";
 
 let registeredLibraries = false;
-export async function registerLibraries(monaco: Monaco) {
-  if (registeredLibraries) return;
-
-  // Configure Monaco TypeScript compiler options for better module resolution
+export function updateCompilerOptions(monaco: Monaco, packageNames: string[]) {
+  const paths: Record<string, string[]> = {
+    "@wired-io": [monaco.Uri.file("node_modules/@types/wired-io").toString()],
+    "@box2d": [monaco.Uri.file("node_modules/@types/box2d").toString()],
+  };
+  for (const packageName of packageNames) {
+    paths[`/${packageName}/*`] = [
+      monaco.Uri.file(`/${packageName}`).toString() + "/*",
+    ];
+  }
   monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
     target: monaco.languages.typescript.ScriptTarget.ES2020,
     allowNonTsExtensions: true,
@@ -24,11 +30,14 @@ export async function registerLibraries(monaco: Monaco) {
     reactNamespace: "React",
     // allowJs: true,
     typeRoots: ["node_modules/@types"],
-    paths: {
-      "@wired-io": [monaco.Uri.file("node_modules/@types/wired-io").toString()],
-      "@box2d": [monaco.Uri.file("node_modules/@types/box2d").toString()],
-    },
+    paths: paths,
   });
+}
+export async function registerLibraries(monaco: Monaco) {
+  if (registeredLibraries) return;
+
+  // Configure Monaco TypeScript compiler options for better module resolution
+  updateCompilerOptions(monaco, []);
 
   const extraLibs: TypeFile[] = await getWiredIoTypes();
   extraLibs.push(...(await getLibsTypes()));
@@ -81,34 +90,120 @@ export async function registerLibraries(monaco: Monaco) {
   ];
 
   // Use setExtraLibs to register all files at once in correct order
-  monaco.languages.typescript.typescriptDefaults.setExtraLibs(allLibs);
   console.log(monaco);
 
   registeredLibraries = true;
+  return allLibs;
+}
+
+function normalizeFilepath(filepath: string): string {
+  return filepath.startsWith("/") ? filepath : "/" + filepath;
+}
+
+function getPackageFilePath(packageName: string, filepath: string): string {
+  return `/${packageName}${normalizeFilepath(filepath)}`;
+}
+
+function createPackageExtraLibs(
+  monaco: Monaco,
+  packageName: string,
+  scriptAgents: ScriptAgent[]
+): { content: string; filePath: string }[] {
+  return scriptAgents.map((script) => {
+    const fullPath = getPackageFilePath(packageName, script.filepath);
+    return {
+      content: script.script,
+      filePath: monaco.Uri.file(fullPath).toString(),
+    };
+  });
 }
 
 export function CodeEditor({
   selectedFile,
+  onChange,
 }: {
   selectedFile: ScriptAgent | null;
+  onChange?: (value: string) => void;
 }) {
   const editorRef = React.useRef<Parameters<OnMount>[0] | null>(null);
+  const monacoRef = React.useRef<Parameters<OnMount>[1] | null>(null);
+  const [allLibs, setAllLibs] = React.useState<
+    { content: string; filePath: string }[]
+  >([]);
 
   React.useEffect(() => {
-    setTimeout(() => {
-      if (editorRef.current && selectedFile) {
-        editorRef.current.setValue(selectedFile.script);
-      }
-    }, 100);
-  }, [selectedFile]);
+    if (monacoRef.current && selectedFile && editorRef.current) {
+      const monaco = monacoRef.current;
 
-  const handleEditorDidMount: OnMount = (editor, monaco) => {
+      // Dispose all existing models
+      for (const model of monaco.editor.getModels()) {
+        model.dispose();
+      }
+
+      // Build package file paths with absolute paths (starting with /)
+      const packageName = selectedFile.scriptContext.package.name;
+      const packageFiles = createPackageExtraLibs(
+        monaco,
+        packageName,
+        selectedFile.scriptContext.scriptAgents
+      );
+
+      // Update compiler options to support absolute paths for this package
+      updateCompilerOptions(
+        monaco,
+        selectedFile.scriptContext.packageManager.packages.map(
+          (p) => p.package.name
+        )
+      );
+
+      // Combine type libraries with package files and set all at once
+      const allExtraLibs = [...allLibs, ...packageFiles];
+      monaco.languages.typescript.typescriptDefaults.setExtraLibs(allExtraLibs);
+
+      // Create models for all package files
+      for (const script of selectedFile.scriptContext.scriptAgents) {
+        const fullPath = getPackageFilePath(packageName, script.filepath);
+        const uri = monaco.Uri.file(fullPath);
+        const model = monaco.editor.createModel(
+          script.script,
+          "typescript",
+          uri
+        );
+        if (script === selectedFile) {
+          editorRef.current?.setModel(model);
+        }
+      }
+    }
+  }, [selectedFile, allLibs]);
+
+  const handleEditorDidMount: OnMount = async (editor, monaco) => {
     editorRef.current = editor;
-    registerLibraries(monaco);
+    monacoRef.current = monaco;
+    (window as any).MONACO_EDITOR = editor;
+    (window as any).MONACO = monaco;
+    const libs = await registerLibraries(monaco);
+    if (libs) {
+      setAllLibs(libs);
+      monaco.languages.typescript.typescriptDefaults.setExtraLibs(libs);
+      monaco.languages.typescript.javascriptDefaults.setEagerModelSync(true);
+    }
   };
   const handleEditorValueChange: OnChange = (value, event) => {
-    if (typeof value === "string" && selectedFile) {
+    if (typeof value === "string" && selectedFile && monacoRef.current) {
       selectedFile.script = value;
+      onChange?.(value);
+
+      // Update extraLib for all package files so Monaco can see the changes across files
+      const monaco = monacoRef.current;
+      const packageName = selectedFile.scriptContext.package.name;
+      const packageFiles = createPackageExtraLibs(
+        monaco,
+        packageName,
+        selectedFile.scriptContext.scriptAgents
+      );
+
+      const allExtraLibs = [...allLibs, ...packageFiles];
+      monaco.languages.typescript.typescriptDefaults.setExtraLibs(allExtraLibs);
     }
   };
 

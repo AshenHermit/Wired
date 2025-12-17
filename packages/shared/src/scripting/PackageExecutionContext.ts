@@ -1,33 +1,20 @@
+import { ScriptFile, ScriptingPackage } from "../api/types";
 import { PackageManagerContext } from "./PackageManagerContext";
 import { ScriptAgent, ScriptExports } from "./ScriptAgent";
 
-export type ScriptFile = {
-  filepath: string;
-  script: string;
-};
-
-export type Package = {
-  id: string;
-  name: string;
-  version: string;
-  dependencies: string[];
-  description: string;
-  scripts: ScriptFile[];
-};
-
 export class PackageExecutionContext {
   scriptAgents: ScriptAgent[] = [];
-  package!: Package;
+  package!: ScriptingPackage;
   packageManager: PackageManagerContext;
   lastExports: ScriptExports | null = null;
   constructor(packageManager: PackageManagerContext) {
     this.packageManager = packageManager;
   }
-  initFromPackage(pack: Package) {
+  initFromPackage(pack: ScriptingPackage) {
     this.package = pack;
     this.initialize();
   }
-  getPackage(): Package {
+  getPackage(): ScriptingPackage {
     return {
       ...this.package,
       scripts: this.scriptAgents.map((s) => ({
@@ -35,6 +22,9 @@ export class PackageExecutionContext {
         script: s.script,
       })),
     };
+  }
+  findScriptByFilepath(filepath: string) {
+    return this.scriptAgents.find((s) => s.filepath === filepath);
   }
   initialize() {
     this.scriptAgents = [];
@@ -54,8 +44,15 @@ export class PackageExecutionContext {
     }
     return null;
   }
+  getScriptPathWithoutType(filepath: string) {
+    return filepath.replace(".ts", "");
+  }
   requireScript(filepath: string) {
-    const script = this.scriptAgents.find((s) => s.filepath === filepath);
+    const script = this.scriptAgents.find(
+      (s) =>
+        this.getScriptPathWithoutType(s.filepath) ===
+        this.getScriptPathWithoutType(filepath)
+    );
     if (script) return script.exec();
     return this.packageManager.requirePackage(filepath);
   }

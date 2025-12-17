@@ -1,13 +1,14 @@
 import * as Phaser from "phaser";
 import { asNode, Node, TestPlayer, SceneReplicatorNode } from "./objects";
 import { SceneReplicator } from "./SceneReplicator";
-import { Wired } from "./WiredGlobal";
+import { _setupWiredGlobal, Wired } from "./WiredGlobal";
 import { PlayersManagerNode } from "./objects/PlayersManagerNode";
 import { ScriptsManagerNode } from "./objects/ScriptsManagerNode";
 import { World, Vec2 } from "@box2d";
 import * as b2 from "@box2d";
 import { Camera, DebugDraw, g_camera, g_debugDraw } from "./utils/b2DebugDraw";
 import { NetworkMetricsNode } from "./objects/NetworkMetrics";
+import { WiredInstanceBase } from "./WiredInstance";
 export class GameScene extends Phaser.Scene {
   isSceneReady = false;
   worldNode?: Node;
@@ -26,11 +27,13 @@ export class GameScene extends Phaser.Scene {
 
   elapsedTime = 0;
   fixedTimeStep = 1000 / 60;
+  wiredInstance: WiredInstanceBase;
 
-  constructor() {
+  constructor(wiredInstance: WiredInstanceBase) {
     super({
       key: "GameScene",
     });
+    this.wiredInstance = wiredInstance;
     // Создаем Box2D мир с гравитацией (0, 0) - можно настроить позже
     this.b2dWorld = new World(new Vec2(0, 35));
     this.b2dWorld.SetDebugDraw(g_debugDraw);
@@ -106,6 +109,7 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.zoom = 50;
   }
   update(time: number, delta: number): void {
+    _setupWiredGlobal(this.wiredInstance.wiredGlobal!);
     if (!this.isSceneReady) {
       this.onSceneReady();
       Wired().events.emit("sceneReady", undefined);

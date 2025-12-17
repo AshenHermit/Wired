@@ -1,13 +1,12 @@
+import { ScriptingPackage } from "../../api/types";
 import EventEmitter from "easy-event-emitter";
 import {
   PackageExecutionContext,
   PackageManagerContext,
-  type Package,
 } from "../../scripting";
 import { RegisteredNode } from "../NodesRegistry";
 import { Wired } from "../WiredGlobal";
 import { Node, Rpc } from "./Node";
-import { v4 as uuidv4 } from "uuid";
 
 export type ScriptsManagerEvents = {
   packageExecuted: PackageExecutionContext;
@@ -22,56 +21,66 @@ export class ScriptsManagerNode extends Node {
     this.packageManager = new PackageManagerContext();
     this.events = new EventEmitter<ScriptsManagerEvents>();
 
+    const isServer = Wired().network.isServer;
     Wired().events.addListener("playerConnected", async (socketId) => {
-      if (!Wired().network.isServer) return;
+      if (!isServer) return;
       const packs = this.packageManager.getPackages();
       await this.rpcId(this.recieveAndExecAllPackages, socketId, packs);
       Wired().events.emit("playerScriptsReady", socketId);
     });
+    this.packageManager.events.addListener("packageUpserted", (pack) => {
+      if (isServer) {
+        this.rpc(this.recievePackages, [pack.getPackage()]);
+      }
+    });
+    this.packageManager.events.addListener("packageRemoved", (id) => {
+      if (isServer) {
+        this.rpc(this.removePackage, id);
+      }
+    });
   }
 
   @Rpc("server")
-  serverRecieveAddPackage(pack: Package) {
-    pack.id = uuidv4();
+  serverRecieveAddPackage(pack: ScriptingPackage) {
     this.packageManager.upsertPackage(pack);
     this.rpc(this.recievePackages, [pack]);
   }
   @Rpc("client")
-  recievePackages(packages: Package[]) {
+  recievePackages(packages: ScriptingPackage[]) {
     for (const pack of packages) {
       this.packageManager.upsertPackage(pack);
     }
   }
-  requestAddPackage(pack: Package) {
+  requestAddPackage(pack: ScriptingPackage) {
     if (Wired().network.isServer) return;
     this.rpc(this.serverRecieveAddPackage, pack);
   }
 
   @Rpc("server")
-  serverRemovePackage(pack: Package) {
+  serverRemovePackage(pack: ScriptingPackage) {
     this.packageManager.removePackage(pack.id);
     this.rpc(this.removePackage, pack.id);
   }
   @Rpc("client")
-  removePackage(id: string) {
+  removePackage(id: number) {
     this.packageManager.removePackage(id);
   }
-  requestRemovePackage(pack: Package) {
+  requestRemovePackage(pack: ScriptingPackage) {
     if (Wired().network.isServer) return;
     this.rpc(this.serverRemovePackage, pack);
   }
 
   @Rpc("server")
-  serverExecPackage(pack: Package) {
+  serverExecPackage(pack: ScriptingPackage) {
     this.rpc(this.recieveExecPackage, pack);
     this.execPackage(pack);
   }
   @Rpc("client")
-  recieveExecPackage(pack: Package) {
+  recieveExecPackage(pack: ScriptingPackage) {
     this.execPackage(pack);
   }
   @Rpc("client")
-  recieveAndExecAllPackages(packages: Package[]) {
+  recieveAndExecAllPackages(packages: ScriptingPackage[]) {
     for (const pack of packages) {
       this.packageManager.upsertPackage(pack);
     }
@@ -81,7 +90,7 @@ export class ScriptsManagerNode extends Node {
     return true;
   }
 
-  execPackage(pack: Package) {
+  execPackage(pack: ScriptingPackage) {
     this.packageManager.upsertPackage(pack);
     const packContext = this.packageManager.getPackageById(pack.id);
     if (packContext) {
@@ -96,7 +105,7 @@ export class ScriptsManagerNode extends Node {
     }
   }
 
-  requestExecPackage(pack: Package) {
+  requestExecPackage(pack: ScriptingPackage) {
     if (Wired().network.isServer) return;
     this.rpc(this.serverExecPackage, pack);
   }

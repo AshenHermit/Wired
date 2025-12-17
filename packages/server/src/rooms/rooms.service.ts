@@ -9,6 +9,13 @@ import { Room } from 'src/database/entities/room.entity';
 import { User } from 'src/database/entities/user.entity';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import {
+  RoomCreatedEvent,
+  RoomDeletedEvent,
+  RoomEvents,
+  RoomUpdatedEvent,
+} from 'src/events/room.events';
 
 @Injectable()
 export class RoomsService {
@@ -17,6 +24,7 @@ export class RoomsService {
     private readonly roomsRepository: Repository<Room>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async assertRoomCreation(user: User, room: CreateRoomDto): Promise<void> {
@@ -69,7 +77,13 @@ export class RoomsService {
       room.author = author;
     }
 
-    return this.roomsRepository.save(room);
+    const saved = await this.roomsRepository.save(room);
+    const found = await this.findOne(saved.id);
+    this.eventEmitter.emit(
+      RoomEvents.ROOM_CREATED,
+      new RoomCreatedEvent(found),
+    );
+    return saved;
   }
 
   async update(id: number, dto: UpdateRoomDto): Promise<Room> {
@@ -94,13 +108,21 @@ export class RoomsService {
     if (dto.description !== undefined) room.description = dto.description;
     if (dto.parentRoomId !== undefined) room.parentRoomId = dto.parentRoomId;
 
-    return this.roomsRepository.save(room);
+    const saved = await this.roomsRepository.save(room);
+    const found = await this.findOne(saved.id);
+    this.eventEmitter.emit(
+      RoomEvents.ROOM_UPDATED,
+      new RoomUpdatedEvent(found),
+    );
+    return saved;
   }
 
   async remove(id: number): Promise<void> {
+    const room = await this.findOne(id);
     const result = await this.roomsRepository.delete(id);
     if (!result.affected) {
       throw new NotFoundException(`Room with id=${id} not found`);
     }
+    this.eventEmitter.emit(RoomEvents.ROOM_DELETED, new RoomDeletedEvent(room));
   }
 }

@@ -46,11 +46,15 @@ function LiquidButton({
   className,
   variant,
   size,
+  filled,
   ...props
 }: LiquidButtonProps) {
   return (
     <LiquidButtonPrimitive
-      className={cn(buttonVariants({ variant, size, className }))}
+      className={cn(buttonVariants({ variant, size, className }), {
+        "text-primary-foreground": filled,
+      })}
+      filled={filled}
       {...props}
     />
   );

@@ -44,22 +44,76 @@ import {
   ChevronsUpDownIcon,
   InfoIcon,
   PackageIcon,
+  PencilIcon,
   PlayIcon,
   PlusIcon,
+  TrashIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import React, { useContext } from "react";
 import { toast } from "sonner";
 import { CodeEditor } from "./CodeEditor";
+import { useRequestHandler } from "@/hooks/use-request-handler";
+import {
+  createScriptingPackage,
+  deleteScriptingPackage,
+  updateScriptingPackage,
+} from "@/api/services/scripting-packages";
+import { useUserStore } from "@/store/user-store";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/animate-ui/components/radix/dialog";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  useCreateFile,
+  useCreatePackage,
+  useDeleteFile,
+  useExecPackage,
+  useRemovePackage,
+  useRenameFile,
+  useUpdatePackage,
+  useUpdateScript,
+} from "./editor-hooks";
+import debounce from "just-debounce-it";
+import { LiquidButton } from "@/components/animate-ui/components/buttons/liquid";
+import { Spinner } from "@/components/ui/spinner";
 
 export type EditorContextValue = {
   selectedFile: ScriptAgent | null;
   setSelectedFile: (file: ScriptAgent | null) => void;
+  fileEditDialogRef: React.RefObject<FileEditDialogApi | null>;
+  execPackage: ReturnType<typeof useExecPackage>;
+  updatePackage: ReturnType<typeof useUpdatePackage>;
+  removePackage: ReturnType<typeof useRemovePackage>;
+  createFile: ReturnType<typeof useCreateFile>;
+  deleteFile: ReturnType<typeof useDeleteFile>;
+  renameFile: ReturnType<typeof useRenameFile>;
+  updateScript: ReturnType<typeof useUpdateScript>;
 };
 
 const EditorContext = React.createContext<EditorContextValue>({
   selectedFile: null,
   setSelectedFile: () => {},
+  fileEditDialogRef: React.createRef<FileEditDialogApi>(),
+  execPackage: async () => {},
+  updatePackage: async () => {},
+  removePackage: async () => {},
+  createFile: async () => {},
+  deleteFile: async () => {},
+  renameFile: async () => {},
+  updateScript: async () => {},
 });
 
 export function useEditorContext() {
@@ -73,6 +127,7 @@ export function WiredEditor({
   wiredInstance: WiredInstance | null;
   state: WiredInstanceState;
 }) {
+  const user = useUserStore((state) => state);
   const editorRef = React.useRef<Parameters<OnMount>[0] | null>(null);
   const packageManagerNode = React.useRef<ScriptsManagerNode>(null);
   const [packages, setPackages] = React.useState<PackageExecutionContext[]>([]);
@@ -86,6 +141,8 @@ export function WiredEditor({
     setSelectedPackage(file?.scriptContext ?? null);
     setSelectedFile(file);
   }, []);
+
+  const fileEditDialogRef = React.useRef<FileEditDialogApi>(null);
 
   const updatePackages = React.useCallback(
     (packs: PackageExecutionContext[]) => {
@@ -102,11 +159,6 @@ export function WiredEditor({
     },
     [setPackages, openFile, selectedFile]
   );
-
-  const ctxValue: EditorContextValue = {
-    selectedFile,
-    setSelectedFile: openFile,
-  };
 
   React.useEffect(() => {
     if (wiredInstance) {
@@ -135,35 +187,29 @@ export function WiredEditor({
         }
       }
     }
-  }, [state, updatePackages]);
+  }, [state, updatePackages, wiredInstance, packageManagerNode]);
 
-  const addPackage = React.useCallback(() => {
-    if (packageManagerNode.current) {
-      packageManagerNode.current.requestAddPackage({
-        id: "",
-        dependencies: [],
-        description: "asdada d",
-        name: "new",
-        scripts: [
-          {
-            filepath: "main.ts",
-            script: "//...",
-          },
-        ],
-        version: "1.0.0",
-      });
-    }
-  }, []);
-  const removePackage = React.useCallback((pack: PackageExecutionContext) => {
-    if (packageManagerNode.current) {
-      packageManagerNode.current.requestRemovePackage(pack.getPackage());
-    }
-  }, []);
-  const execPackage = React.useCallback((pack: PackageExecutionContext) => {
-    if (packageManagerNode.current) {
-      packageManagerNode.current.requestExecPackage(pack.getPackage());
-    }
-  }, []);
+  const addPackage = useCreatePackage(wiredInstance);
+  const removePackage = useRemovePackage();
+  const updatePackage = useUpdatePackage();
+  const execPackage = useExecPackage(packageManagerNode);
+  const newFile = useCreateFile(packageManagerNode, openFile);
+  const renameFile = useRenameFile(packageManagerNode, openFile);
+  const deleteFile = useDeleteFile(packageManagerNode, openFile);
+  const updateScript = useUpdateScript(packageManagerNode);
+
+  const ctxValue: EditorContextValue = {
+    selectedFile,
+    setSelectedFile: openFile,
+    fileEditDialogRef,
+    execPackage: execPackage,
+    updatePackage: updatePackage,
+    removePackage: removePackage,
+    createFile: newFile,
+    deleteFile: deleteFile,
+    renameFile: renameFile,
+    updateScript: updateScript,
+  };
 
   const [isInitialMount, setIsInitialMount] = React.useState(true);
   React.useEffect(() => {
@@ -174,6 +220,7 @@ export function WiredEditor({
 
   return (
     <EditorContext.Provider value={ctxValue}>
+      <FileEditDialog ref={fileEditDialogRef} />
       <div className="grid grid-cols-[250px_1fr]">
         <div className="bg-neutral-900">
           <div className="max-h-[100vh] overflow-y-auto">
@@ -188,8 +235,6 @@ export function WiredEditor({
                     pack={pack}
                     index={index}
                     isInitialMount={isInitialMount}
-                    onExec={() => execPackage(pack)}
-                    onRemove={() => removePackage(pack)}
                   />
                 ))}
               </AnimatePresence>
@@ -209,15 +254,26 @@ export function PackageCard({
   pack,
   index,
   isInitialMount,
-  onRemove,
-  onExec,
 }: {
   pack: PackageExecutionContext;
   index: number;
   isInitialMount: boolean;
-  onRemove: () => void;
-  onExec: () => void;
 }) {
+  const { fileEditDialogRef, execPackage, removePackage, updatePackage } =
+    useEditorContext();
+  const [isLoading, setIsLoading] = React.useState(false);
+
+  const exec = React.useCallback(async () => {
+    setIsLoading(true);
+    try {
+      await updatePackage(pack);
+      await execPackage(pack);
+    } catch (e) {
+      console.error(e);
+    }
+    setIsLoading(false);
+  }, [execPackage, updatePackage, pack]);
+
   return (
     <motion.div
       initial="hidden"
@@ -268,9 +324,15 @@ export function PackageCard({
             {pack.package.name}
           </CardTitle>
           <CardAction className="flex items-center gap-2">
-            <Button className="" size={"sm"} onClick={onExec}>
-              <PlayIcon className="w-4 h-4" />
-            </Button>
+            <LiquidButton
+              className=""
+              size={"sm"}
+              onClick={exec}
+              filled={isLoading}
+            >
+              {isLoading ? <Spinner className="w-4 h-4" /> : null}
+              {!isLoading ? <PlayIcon className="w-4 h-4" /> : null}
+            </LiquidButton>
             <Popover>
               <PopoverTrigger asChild>
                 <Button className="" size={"sm"}>
@@ -290,7 +352,7 @@ export function PackageCard({
                       <Button
                         variant={"outline"}
                         className="text-red-500"
-                        onClick={onRemove}
+                        onClick={() => removePackage(pack)}
                       >
                         Remove
                       </Button>
@@ -305,10 +367,25 @@ export function PackageCard({
           <Accordion type="single" collapsible>
             <AccordionItem value="files">
               <AccordionTrigger>files</AccordionTrigger>
-              <AccordionContent className="bg-neutral-800 p-4 rounded-lg flex flex-col gap-2">
-                {pack.scriptAgents.map((script) => (
-                  <FileCard key={script.filepath} file={script} />
-                ))}
+              <AccordionContent>
+                <ContextMenu>
+                  <ContextMenuTrigger>
+                    <div className="bg-neutral-800 p-4 rounded-lg flex flex-col gap-2">
+                      {pack.scriptAgents.map((script) => (
+                        <FileCard key={script.filepath} file={script} />
+                      ))}
+                    </div>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <ContextMenuItem
+                      onClick={() =>
+                        fileEditDialogRef.current?.createFile(pack, "/")
+                      }
+                    >
+                      <PlusIcon /> New File...
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
               </AccordionContent>
             </AccordionItem>
           </Accordion>
@@ -321,17 +398,155 @@ export function PackageCard({
 export function FileCard({ file }: { file: ScriptAgent }) {
   const { selectedFile, setSelectedFile } = useEditorContext();
 
+  const { fileEditDialogRef } = useEditorContext();
+
   const onClick = React.useCallback(() => {
     setSelectedFile(file);
   }, [file, setSelectedFile]);
 
   return (
-    <Button
-      variant={selectedFile === file ? "default" : "outline"}
-      onClick={onClick}
-      className="justify-start"
-    >
-      {file.filepath}
-    </Button>
+    <ContextMenu>
+      <ContextMenuTrigger>
+        <Button
+          variant={selectedFile === file ? "default" : "outline"}
+          onClick={onClick}
+          className="justify-start w-full"
+        >
+          {file.filepath}
+        </Button>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem
+          onClick={() =>
+            fileEditDialogRef.current?.renameFile(
+              file.scriptContext,
+              file.filepath
+            )
+          }
+        >
+          <PencilIcon /> Rename File...
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() =>
+            fileEditDialogRef.current?.deleteFile(
+              file.scriptContext,
+              file.filepath
+            )
+          }
+        >
+          <TrashIcon /> Delete File...
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
+
+export type FileEditDialogApi = {
+  createFile: (pkg: PackageExecutionContext, filepath: string) => void;
+  deleteFile: (pkg: PackageExecutionContext, filepath: string) => void;
+  renameFile: (pkg: PackageExecutionContext, filepath: string) => void;
+  close(): void;
+};
+
+export const FileEditDialog = React.forwardRef<FileEditDialogApi, {}>(
+  (props, ref) => {
+    const [open, setOpen] = React.useState(false);
+    const [filepath, setFilepath] = React.useState("");
+    const [newFilepath, setNewFilepath] = React.useState("");
+    const [pkg, setPkg] = React.useState<PackageExecutionContext | null>(null);
+    const [action, setAction] = React.useState<"create" | "rename" | "delete">(
+      "create"
+    );
+
+    const { createFile, deleteFile, renameFile } = useEditorContext();
+
+    React.useImperativeHandle(ref, () => ({
+      createFile: (pkg: PackageExecutionContext, filepath: string) => {
+        setPkg(pkg);
+        setFilepath(filepath);
+        setAction("create");
+        setOpen(true);
+      },
+      renameFile: (pkg: PackageExecutionContext, filepath: string) => {
+        setPkg(pkg);
+        setFilepath(filepath);
+        setNewFilepath(filepath);
+        setAction("rename");
+        setOpen(true);
+      },
+      deleteFile: (pkg: PackageExecutionContext, filepath: string) => {
+        setPkg(pkg);
+        setFilepath(filepath);
+        setAction("delete");
+        setOpen(true);
+      },
+      close: () => {
+        setOpen(false);
+      },
+    }));
+
+    const submit = React.useCallback(() => {
+      if (action === "create") {
+        createFile(pkg!, filepath, () => setOpen(false));
+      }
+      if (action === "rename") {
+        renameFile(pkg!, filepath, newFilepath, () => setOpen(false));
+      }
+      if (action === "delete") {
+        deleteFile(pkg!, filepath, () => setOpen(false));
+      }
+    }, [action, pkg, filepath, newFilepath]);
+
+    React.useEffect(() => {
+      if (open) {
+        const onKeyDown = (e: KeyboardEvent) => {
+          if (e.key === "Enter") {
+            if (action === "create") {
+              createFile(pkg!, filepath);
+              setOpen(false);
+            }
+          }
+        };
+        document.addEventListener("keydown", onKeyDown);
+        return () => {
+          document.removeEventListener("keydown", onKeyDown);
+        };
+      }
+    }, [action, open, submit]);
+
+    return (
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            {action === "create" && <DialogTitle>New File</DialogTitle>}
+            {action === "rename" && <DialogTitle>Rename File</DialogTitle>}
+            {action === "delete" && <DialogTitle>Delete File</DialogTitle>}
+          </DialogHeader>
+          {action === "create" && (
+            <Field>
+              <FieldLabel>Filepath</FieldLabel>
+              <Input
+                value={filepath}
+                onChange={(e) => setFilepath(e.target.value)}
+              />
+            </Field>
+          )}
+          {action === "rename" && (
+            <Field>
+              <FieldLabel>New Filepath</FieldLabel>
+              <Input
+                value={newFilepath}
+                onChange={(e) => setNewFilepath(e.target.value)}
+              />
+            </Field>
+          )}
+          <DialogFooter>
+            {action === "create" && <Button onClick={submit}>Create</Button>}
+            {action === "rename" && <Button onClick={submit}>Rename</Button>}
+            {action === "delete" && <Button onClick={submit}>Delete</Button>}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+);

@@ -14,8 +14,11 @@ export class WiredInstance extends WiredInstanceBase {
   private displayElement: HTMLElement | null = null;
   private onBlurHandler: (() => void) | null = null;
   private onFocusHandler: (() => void) | null = null;
-  constructor(config: WiredInstanceConfig) {
+  public roomId: number;
+
+  constructor(config: WiredInstanceConfig, roomId: number) {
     super(config);
+    this.roomId = roomId;
   }
 
   setup() {
@@ -36,7 +39,7 @@ export class WiredInstance extends WiredInstanceBase {
       this.setupWiredGlobal();
       const interval = 0;
       this.events.addListener("sceneReady", async () => {
-        const localId = await this.network.connectToRoom(1);
+        const localId = await this.network.connectToRoom(this.roomId);
         this.network.localId = localId;
         this.events.emit("stateChanged", "connected");
       });
@@ -56,7 +59,7 @@ export class WiredInstance extends WiredInstanceBase {
       width: 800,
       height: 600,
       parent: this.config.displayParent,
-      scene: [TestGameScene],
+      scene: new TestGameScene(this),
       backgroundColor: "#000000",
     });
     this.game = game;

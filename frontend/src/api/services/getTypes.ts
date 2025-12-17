@@ -1,4 +1,4 @@
-import { TypeFile } from "./types";
+import { TypeFile } from "@wired-io/shared";
 import { apiClient } from "../api-client/client-api";
 
 export async function getWiredIoTypes() {

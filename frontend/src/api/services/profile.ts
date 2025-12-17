@@ -1,4 +1,4 @@
-import { User } from "./types";
+import { User } from "@wired-io/shared";
 import { apiClient } from "../api-client/client-api";
 
 export async function getProfile(data?: {}) {

@@ -1,4 +1,4 @@
-import { User } from "@/api/services/types";
+import { User } from "@wired-io/shared";
 import { updateUser } from "@/api/services/users";
 import { Button } from "@/components/animate-ui/components/buttons/button";
 import {
@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/animate-ui/components/radix/dialog";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { useRequestHandler } from "@/hooks/use-request-handler";
 import { useUserStore } from "@/store/user-store";
@@ -83,8 +84,14 @@ export const UserEditingPanel = React.forwardRef<
           <DialogTitle>Edit Profile</DialogTitle>
         </DialogHeader>
 
-        <Input {...register("name")} placeholder="Name" />
-
+        <FieldGroup>
+          <FieldSet>
+            <Field>
+              <FieldLabel>Name</FieldLabel>
+              <Input {...register("name")} placeholder="Name" />
+            </Field>
+          </FieldSet>
+        </FieldGroup>
         <DialogFooter className="flex">
           <Button onClick={handleSubmit(updateUserCb)}>Update</Button>
         </DialogFooter>

@@ -10,6 +10,13 @@ import { User } from 'src/database/entities/user.entity';
 import { Room } from 'src/database/entities/room.entity';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import {
+  ScriptingPackageCreatedEvent,
+  ScriptingPackageDeletedEvent,
+  ScriptingPackageEvents,
+  ScriptingPackageUpdatedEvent,
+} from 'src/events/scripting-package.events';
 
 @Injectable()
 export class ScriptingPackagesService {
@@ -20,6 +27,7 @@ export class ScriptingPackagesService {
     private readonly usersRepository: Repository<User>,
     @InjectRepository(Room)
     private readonly roomsRepository: Repository<Room>,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async assertPackageCreation(
@@ -113,7 +121,13 @@ export class ScriptingPackagesService {
       pkg.parentPackage = parent;
     }
 
-    return this.packagesRepository.save(pkg);
+    const saved = await this.packagesRepository.save(pkg);
+    const found = await this.findOne(saved.id);
+    this.eventEmitter.emit(
+      ScriptingPackageEvents.SCRIPTING_PACKAGE_CREATED,
+      new ScriptingPackageCreatedEvent(found),
+    );
+    return saved;
   }
 
   async update(
@@ -160,13 +174,24 @@ export class ScriptingPackagesService {
     if (dto.dependencies !== undefined) pkg.dependencies = dto.dependencies;
     if (dto.scripts !== undefined) pkg.scripts = dto.scripts;
 
-    return this.packagesRepository.save(pkg);
+    const saved = await this.packagesRepository.save(pkg);
+    const found = await this.findOne(id);
+    this.eventEmitter.emit(
+      ScriptingPackageEvents.SCRIPTING_PACKAGE_UPDATED,
+      new ScriptingPackageUpdatedEvent(found),
+    );
+    return saved;
   }
 
   async remove(id: number): Promise<void> {
+    const pkg = await this.findOne(id);
     const result = await this.packagesRepository.delete(id);
     if (!result.affected) {
       throw new NotFoundException(`ScriptingPackage with id=${id} not found`);
     }
+    this.eventEmitter.emit(
+      ScriptingPackageEvents.SCRIPTING_PACKAGE_DELETED,
+      new ScriptingPackageDeletedEvent(pkg),
+    );
   }
 }

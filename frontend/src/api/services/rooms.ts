@@ -1,5 +1,5 @@
+import { CreateRoomPayload, Room, UpdateRoomPayload } from "@wired-io/shared";
 import { apiClient } from "../api-client/client-api";
-import { CreateRoomPayload, Room, UpdateRoomPayload } from "./types";
 
 export async function listRooms() {
   return apiClient.get<Room[], void>("rooms");

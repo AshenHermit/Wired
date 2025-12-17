@@ -14,6 +14,7 @@ type LiquidButtonProps = WithAsChild<
     fillHeight?: string;
     hoverScale?: number;
     tapScale?: number;
+    filled?: boolean;
   }
 >;
 
@@ -23,9 +24,25 @@ function LiquidButton({
   hoverScale = 1.05,
   tapScale = 0.95,
   asChild = false,
+  filled = false,
   ...props
 }: LiquidButtonProps) {
   const Component = asChild ? Slot : motion.button;
+
+  const styleVars = React.useMemo(() => {
+    if (filled) {
+      return {
+        "--liquid-button-fill-width": "100%",
+        "--liquid-button-fill-height": "100%",
+        "--liquid-button-delay": delay,
+      };
+    }
+    return {
+      "--liquid-button-fill-width": "-1%",
+      "--liquid-button-fill-height": fillHeight,
+      "--liquid-button-delay": "0s",
+    };
+  }, [fillHeight, delay, filled]);
 
   return (
     <Component
@@ -43,9 +60,7 @@ function LiquidButton({
       }}
       style={
         {
-          "--liquid-button-fill-width": "-1%",
-          "--liquid-button-fill-height": fillHeight,
-          "--liquid-button-delay": "0s",
+          ...styleVars,
           background:
             "linear-gradient(var(--liquid-button-color) 0 0) no-repeat calc(200% - var(--liquid-button-fill-width, -1%)) 100% / 200% var(--liquid-button-fill-height, 0.2em)",
           backgroundColor: "var(--liquid-button-background-color)",

@@ -1,4 +1,4 @@
-import { OnModuleInit } from '@nestjs/common';
+import { OnApplicationBootstrap, OnModuleInit } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -17,15 +17,15 @@ import { GameRoomsService } from 'src/game/game-rooms.service';
   },
 })
 export class EventsGateway
-  implements OnGatewayConnection, OnGatewayDisconnect, OnModuleInit
+  implements OnGatewayConnection, OnGatewayDisconnect, OnApplicationBootstrap
 {
   @WebSocketServer()
   server: Server;
 
   constructor(private readonly gameRoomsService: GameRoomsService) {}
 
-  onModuleInit() {
-    this.gameRoomsService.createGameRoom(1, this.server);
+  onApplicationBootstrap() {
+    this.gameRoomsService.setupServer(this.server);
   }
 
   handleConnection(client: Socket, ...args: any[]) {

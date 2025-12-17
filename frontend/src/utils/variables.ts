@@ -9,3 +9,7 @@ export const WEBSOCKET_URL = String(
 );
 export const REVALIDATE_INTERVAL =
   Number(process.env.REVALIDATE_INTERVAL) || 180;
+
+export const HASH_ID_SECRET = String(
+  process.env.NEXT_PUBLIC_WEBSOCKET_URL ?? "wired-io-ids"
+);

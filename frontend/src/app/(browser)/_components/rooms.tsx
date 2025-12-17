@@ -6,7 +6,7 @@ import {
   listRooms,
   updateRoom,
 } from "@/api/services/rooms";
-import { Room } from "@/api/services/types";
+import { Room } from "@wired-io/shared";
 import { LiquidButton } from "@/components/animate-ui/components/buttons/liquid";
 import {
   RippleButton,
@@ -46,6 +46,9 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useRequestHandler } from "@/hooks/use-request-handler";
 import { Button } from "@/components/animate-ui/components/buttons/button";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
+import Link from "next/link";
+import { encodeId } from "@/utils/hash-utils";
 
 export function RoomCard({
   room,
@@ -73,8 +76,10 @@ export function RoomCard({
               <RippleButtonRipples />
             </RippleButton>
           ) : null}
-          <LiquidButton>
-            <PlayIcon />
+          <LiquidButton asChild>
+            <Link href={`/room/${encodeId("room", room.id)}`}>
+              <PlayIcon />
+            </Link>
           </LiquidButton>
         </div>
       </CardFooter>
@@ -186,9 +191,21 @@ export const RoomEditingPanel = React.forwardRef<
           </DialogDescription>
         </DialogHeader>
 
-        <Input {...register("name")} placeholder="Room Name" />
-        <Textarea {...register("description")} placeholder="Room Description" />
-
+        <FieldGroup>
+          <FieldSet>
+            <Field>
+              <FieldLabel>Name</FieldLabel>
+              <Input {...register("name")} placeholder="Room Name" />
+            </Field>
+            <Field>
+              <FieldLabel>Description</FieldLabel>
+              <Textarea
+                {...register("description")}
+                placeholder="Room Description"
+              />
+            </Field>
+          </FieldSet>
+        </FieldGroup>
         <DialogFooter className="flex !justify-between">
           {operation === "create" ? (
             <>

@@ -1,5 +1,5 @@
 import { getProfile } from "@/api/services/profile";
-import { User } from "@/api/services/types";
+import { User } from "@wired-io/shared";
 import { getFallbackPicture } from "@/utils/user-utils";
 import { create } from "zustand";
 
