@@ -58,11 +58,17 @@ export class ScriptsManagerNode extends Node {
 
   @Rpc("server")
   serverRemovePackage(pack: ScriptingPackage) {
-    this.packageManager.removePackage(pack.id);
+    this.callRpc(this.removePackage, pack.id);
     this.rpc(this.removePackage, pack.id);
   }
   @Rpc("client")
   removePackage(id: number) {
+    const packContext = this.packageManager.getPackageById(id);
+    if (packContext) {
+      if (packContext.lastExports) {
+        if (packContext.lastExports.unload) packContext.lastExports.unload();
+      }
+    }
     this.packageManager.removePackage(id);
   }
   requestRemovePackage(pack: ScriptingPackage) {
@@ -84,10 +90,14 @@ export class ScriptsManagerNode extends Node {
     for (const pack of packages) {
       this.packageManager.upsertPackage(pack);
     }
+    this.execAllPackages();
+    return true;
+  }
+
+  execAllPackages() {
     for (const pack of this.packageManager.getPackages()) {
       this.execPackage(pack);
     }
-    return true;
   }
 
   execPackage(pack: ScriptingPackage) {

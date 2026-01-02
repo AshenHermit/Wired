@@ -2,6 +2,7 @@ import { PackageExecutionContext } from "./PackageExecutionContext";
 
 import * as path from "pathe";
 import { ScriptCompiler } from "./ScriptCompiler";
+import EventEmitter from "easy-event-emitter";
 
 export interface ScriptExports {
   init?: () => void;
@@ -13,12 +14,16 @@ export type ScriptWrapper = (
   require: (filepath: string) => any
 ) => void;
 
+export type ScriptAgentEvents = {
+  errorOccured: { script: ScriptAgent; error: Error };
+};
+
 export class ScriptAgent {
   filepath: string;
   script: string;
   isMain: boolean;
   scriptContext: PackageExecutionContext;
-
+  events: EventEmitter<ScriptAgentEvents>;
   constructor(
     filepath: string,
     script: string,
@@ -29,13 +34,22 @@ export class ScriptAgent {
     this.script = script;
     this.isMain = isMain;
     this.scriptContext = scriptContext;
+    this.events = new EventEmitter<ScriptAgentEvents>();
+    this.events.addListener("errorOccured", (event) => {
+      this.scriptContext.events.emit("errorOccured", event);
+    });
   }
   exec() {
     const exports: ScriptExports = {};
     const compiler = new ScriptCompiler(this.script);
-    const func = eval(compiler.compile()) as ScriptWrapper;
-    func(exports, this.require.bind(this));
-    return exports;
+    try {
+      const func = eval(compiler.compile()) as ScriptWrapper;
+      func(exports, this.require.bind(this));
+      return exports;
+    } catch (e) {
+      this.events.emit("errorOccured", { script: this, error: e });
+      throw e;
+    }
   }
   require(filepath: string) {
     if (filepath.startsWith(".")) {

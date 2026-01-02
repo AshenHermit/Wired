@@ -106,7 +106,8 @@ export class GameScene extends Phaser.Scene {
     this.playersManagerNode.setName("players");
     this.worldNode.add(this.playersManagerNode);
     this.cameras.main.centerOn(0, 0);
-    this.cameras.main.zoom = 50;
+    this.cameras.main.setZoom(80);
+    this.cameras.main.roundPixels = false;
   }
   update(time: number, delta: number): void {
     _setupWiredGlobal(this.wiredInstance.wiredGlobal!);
@@ -119,13 +120,12 @@ export class GameScene extends Phaser.Scene {
     if (this.enableDebugDraw && this.g_debugDraw.m_ctx) {
       this.g_camera.m_width = this.game.canvas.width;
       this.g_camera.m_height = this.game.canvas.height;
-      this.g_camera.m_center.x =
-        this.cameras.main.centerX - this.g_camera.m_width / 2;
-      this.g_camera.m_center.y =
-        this.cameras.main.centerY - this.g_camera.m_height / 2;
-      this.g_camera.m_zoom = 1 / this.cameras.main.zoom;
-
       this.g_camera.m_extent = this.g_camera.m_height / 2;
+      this.g_camera.m_center.x =
+        this.cameras.main.scrollX + this.cameras.main.centerX;
+      this.g_camera.m_center.y =
+        this.cameras.main.scrollY + this.cameras.main.centerY;
+      this.g_camera.m_zoom = 1 / this.cameras.main.zoom;
 
       let ctx = this.g_debugDraw.m_ctx;
       ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);

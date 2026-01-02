@@ -36,12 +36,18 @@ export class WiredInstance extends WiredInstanceBase {
   destroyNetwork(): void {}
 
   setupGame(): void {
+    this.scene = new ServerGameScene(this);
     const game = new Phaser.Game({
       type: Phaser.HEADLESS,
       width: 800,
       height: 600,
       parent: '',
-      scene: new ServerGameScene(this),
+      pixelArt: true,
+      roundPixels: false,
+      autoRound: false,
+      antialias: false,
+      scene: this.scene,
+      zoom: 1,
       backgroundColor: '#000000',
     });
     this.game = game;

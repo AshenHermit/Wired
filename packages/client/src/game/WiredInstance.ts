@@ -15,6 +15,7 @@ export class WiredInstance extends WiredInstanceBase {
   private onBlurHandler: (() => void) | null = null;
   private onFocusHandler: (() => void) | null = null;
   public roomId: number;
+  public scene: GameScene;
 
   constructor(config: WiredInstanceConfig, roomId: number) {
     super(config);
@@ -54,12 +55,18 @@ export class WiredInstance extends WiredInstanceBase {
   }
 
   setupGame(): void {
+    this.scene = new TestGameScene(this);
     const game = new Phaser.Game({
       type: Phaser.AUTO,
       width: 800,
       height: 600,
       parent: this.config.displayParent,
-      scene: new TestGameScene(this),
+      scene: this.scene,
+      pixelArt: true,
+      roundPixels: false,
+      autoRound: false,
+      antialias: false,
+      zoom: 1,
       backgroundColor: "#000000",
     });
     this.game = game;

@@ -3,4 +3,4 @@ export * from "./WiredInstance";
 export * from "./WiredGlobal";
 export * from "./NodesRegistry";
 export * from "./objects";
-export * from "./utils";
+export * from "./utils/ResourceLoader";

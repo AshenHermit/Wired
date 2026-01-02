@@ -1,14 +1,25 @@
+import EventEmitter from "easy-event-emitter";
 import { ScriptFile, ScriptingPackage } from "../api/types";
 import { PackageManagerContext } from "./PackageManagerContext";
 import { ScriptAgent, ScriptExports } from "./ScriptAgent";
+
+export type PackageExecutionContextEvents = {
+  errorOccured: { script: ScriptAgent; error: Error };
+};
 
 export class PackageExecutionContext {
   scriptAgents: ScriptAgent[] = [];
   package!: ScriptingPackage;
   packageManager: PackageManagerContext;
   lastExports: ScriptExports | null = null;
+  events: EventEmitter<PackageExecutionContextEvents>;
+
   constructor(packageManager: PackageManagerContext) {
     this.packageManager = packageManager;
+    this.events = new EventEmitter<PackageExecutionContextEvents>();
+    this.events.addListener("errorOccured", (event) => {
+      this.packageManager.events.emit("errorOccured", event);
+    });
   }
   initFromPackage(pack: ScriptingPackage) {
     this.package = pack;

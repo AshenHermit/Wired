@@ -40,6 +40,7 @@ import {
   WiredInstanceState,
 } from "@wired-io/shared";
 import {
+  AlertCircleIcon,
   ChevronDown,
   ChevronsUpDownIcon,
   InfoIcon,
@@ -74,8 +75,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/animate-ui/components/radix/dialog";
-import { Field, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input, MaskedInput } from "@/components/ui/input";
 import {
   useCreateFile,
   useCreatePackage,
@@ -89,11 +90,23 @@ import {
 import debounce from "just-debounce-it";
 import { LiquidButton } from "@/components/animate-ui/components/buttons/liquid";
 import { Spinner } from "@/components/ui/spinner";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/animate-ui/components/radix/tooltip";
+import z from "zod";
+import { Controller, useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { Textarea } from "@/components/ui/textarea";
+import { IMaskInput, useIMask } from "react-imask";
 
 export type EditorContextValue = {
   selectedFile: ScriptAgent | null;
   setSelectedFile: (file: ScriptAgent | null) => void;
   fileEditDialogRef: React.RefObject<FileEditDialogApi | null>;
+  packageEditDialogRef: React.RefObject<PackageEditDialogApi | null>;
+  createPackage: ReturnType<typeof useCreatePackage>;
   execPackage: ReturnType<typeof useExecPackage>;
   updatePackage: ReturnType<typeof useUpdatePackage>;
   removePackage: ReturnType<typeof useRemovePackage>;
@@ -107,6 +120,8 @@ const EditorContext = React.createContext<EditorContextValue>({
   selectedFile: null,
   setSelectedFile: () => {},
   fileEditDialogRef: React.createRef<FileEditDialogApi>(),
+  packageEditDialogRef: React.createRef<PackageEditDialogApi>(),
+  createPackage: async () => {},
   execPackage: async () => {},
   updatePackage: async () => {},
   removePackage: async () => {},
@@ -143,6 +158,7 @@ export function WiredEditor({
   }, []);
 
   const fileEditDialogRef = React.useRef<FileEditDialogApi>(null);
+  const packageEditDialogRef = React.useRef<PackageEditDialogApi>(null);
 
   const updatePackages = React.useCallback(
     (packs: PackageExecutionContext[]) => {
@@ -173,6 +189,18 @@ export function WiredEditor({
               icon: <PackageIcon className="w-4 h-4" />,
             });
           };
+          const errorOccured = (event: {
+            script: ScriptAgent;
+            error: Error;
+          }) => {
+            toast.error(
+              `Error in "/${event.script.scriptContext.package.name}${event.script.filepath}": ${event.error.message}, check console for more details`,
+              {
+                icon: <AlertCircleIcon className="w-4 h-4" />,
+              }
+            );
+          };
+          packageManager.events.addListener("errorOccured", errorOccured);
           packageManagerNode.current.events.addListener(
             "packageExecuted",
             packageExecuted
@@ -180,6 +208,7 @@ export function WiredEditor({
           updatePackages(packageManager.packages);
           packageManager.events.addListener("packagesChanged", updatePackages);
           return () => {
+            packageManager.events.removeListener(errorOccured);
             packageManager.events.removeListener(updatePackages);
             if (packageManagerNode.current)
               packageManagerNode.current.events.removeListener(packageExecuted);
@@ -189,7 +218,7 @@ export function WiredEditor({
     }
   }, [state, updatePackages, wiredInstance, packageManagerNode]);
 
-  const addPackage = useCreatePackage(wiredInstance);
+  const createPackage = useCreatePackage(wiredInstance);
   const removePackage = useRemovePackage();
   const updatePackage = useUpdatePackage();
   const execPackage = useExecPackage(packageManagerNode);
@@ -202,6 +231,8 @@ export function WiredEditor({
     selectedFile,
     setSelectedFile: openFile,
     fileEditDialogRef,
+    packageEditDialogRef,
+    createPackage: createPackage,
     execPackage: execPackage,
     updatePackage: updatePackage,
     removePackage: removePackage,
@@ -221,6 +252,7 @@ export function WiredEditor({
   return (
     <EditorContext.Provider value={ctxValue}>
       <FileEditDialog ref={fileEditDialogRef} />
+      <PackageEditDialog ref={packageEditDialogRef} />
       <div className="grid grid-cols-[250px_1fr]">
         <div className="bg-neutral-900">
           <div className="max-h-[100vh] overflow-y-auto">
@@ -238,7 +270,9 @@ export function WiredEditor({
                   />
                 ))}
               </AnimatePresence>
-              <Button onClick={addPackage}>
+              <Button
+                onClick={() => packageEditDialogRef.current?.createPackage()}
+              >
                 <PlusIcon className="w-4 h-4" />
               </Button>
             </motion.div>
@@ -259,14 +293,18 @@ export function PackageCard({
   index: number;
   isInitialMount: boolean;
 }) {
-  const { fileEditDialogRef, execPackage, removePackage, updatePackage } =
-    useEditorContext();
+  const {
+    fileEditDialogRef,
+    packageEditDialogRef,
+    execPackage,
+    updatePackage,
+  } = useEditorContext();
   const [isLoading, setIsLoading] = React.useState(false);
 
   const exec = React.useCallback(async () => {
     setIsLoading(true);
     try {
-      await updatePackage(pack);
+      await updatePackage(pack.package.id, pack.getPackage());
       await execPackage(pack);
     } catch (e) {
       console.error(e);
@@ -324,15 +362,20 @@ export function PackageCard({
             {pack.package.name}
           </CardTitle>
           <CardAction className="flex items-center gap-2">
-            <LiquidButton
-              className=""
-              size={"sm"}
-              onClick={exec}
-              filled={isLoading}
-            >
-              {isLoading ? <Spinner className="w-4 h-4" /> : null}
-              {!isLoading ? <PlayIcon className="w-4 h-4" /> : null}
-            </LiquidButton>
+            <Tooltip>
+              <TooltipTrigger>
+                <LiquidButton
+                  className=""
+                  size={"sm"}
+                  onClick={exec}
+                  filled={isLoading}
+                >
+                  {isLoading ? <Spinner className="w-4 h-4" /> : null}
+                  {!isLoading ? <PlayIcon className="w-4 h-4" /> : null}
+                </LiquidButton>
+              </TooltipTrigger>
+              <TooltipContent>отправить на сервер и запустить</TooltipContent>
+            </Tooltip>
             <Popover>
               <PopoverTrigger asChild>
                 <Button className="" size={"sm"}>
@@ -341,9 +384,20 @@ export function PackageCard({
               </PopoverTrigger>
               <PopoverContent side="right">
                 <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-2">
-                    <PackageIcon className="w-4 h-4" />
-                    {pack.package.name}
+                  <div className="flex items-center gap-2 justify-between">
+                    <div className="flex items-center gap-2">
+                      <PackageIcon className="w-4 h-4" />
+                      {pack.package.name}
+                    </div>
+                    <Button
+                      variant={"outline"}
+                      size={"sm"}
+                      onClick={() =>
+                        packageEditDialogRef.current?.editPackage(pack)
+                      }
+                    >
+                      <PencilIcon className="w-4 h-4" />
+                    </Button>
                   </div>
                   <div className="opacity-50">{pack.package.description}</div>
                   <div className="flex justify-between">
@@ -352,7 +406,9 @@ export function PackageCard({
                       <Button
                         variant={"outline"}
                         className="text-red-500"
-                        onClick={() => removePackage(pack)}
+                        onClick={() =>
+                          packageEditDialogRef.current?.deletePackage(pack)
+                        }
                       >
                         Remove
                       </Button>
@@ -501,10 +557,7 @@ export const FileEditDialog = React.forwardRef<FileEditDialogApi, {}>(
       if (open) {
         const onKeyDown = (e: KeyboardEvent) => {
           if (e.key === "Enter") {
-            if (action === "create") {
-              createFile(pkg!, filepath);
-              setOpen(false);
-            }
+            submit();
           }
         };
         document.addEventListener("keydown", onKeyDown);
@@ -544,6 +597,157 @@ export const FileEditDialog = React.forwardRef<FileEditDialogApi, {}>(
             {action === "create" && <Button onClick={submit}>Create</Button>}
             {action === "rename" && <Button onClick={submit}>Rename</Button>}
             {action === "delete" && <Button onClick={submit}>Delete</Button>}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+);
+
+export type PackageEditDialogApi = {
+  createPackage: () => void;
+  deletePackage: (pkg: PackageExecutionContext) => void;
+  editPackage: (pkg: PackageExecutionContext) => void;
+  close(): void;
+};
+
+export const PackageEditFieldsZ = z.object({
+  name: z.string().min(1),
+  description: z.string(),
+  version: z.string(),
+  dependencies: z.array(z.string()).optional(),
+});
+export type PackageEditFields = z.infer<typeof PackageEditFieldsZ>;
+
+export const PackageEditDialog = React.forwardRef<PackageEditDialogApi, {}>(
+  (props, ref) => {
+    const [open, setOpen] = React.useState(false);
+    const [pkg, setPkg] = React.useState<PackageExecutionContext | null>(null);
+    const [action, setAction] = React.useState<"create" | "edit" | "delete">(
+      "create"
+    );
+
+    const { control, handleSubmit, reset, register } =
+      useForm<PackageEditFields>({
+        resolver: zodResolver(PackageEditFieldsZ),
+        defaultValues: {
+          name: "",
+          description: "",
+          version: "",
+          dependencies: [],
+        },
+      });
+    const [loading, setLoading] = React.useState(false);
+
+    const { createPackage, updatePackage, removePackage } = useEditorContext();
+
+    React.useImperativeHandle(ref, () => ({
+      createPackage: () => {
+        setPkg(pkg);
+        reset();
+        setAction("create");
+        setOpen(true);
+      },
+      editPackage: (pkg: PackageExecutionContext) => {
+        setPkg(pkg);
+        reset({ ...pkg.package });
+        setAction("edit");
+        setOpen(true);
+      },
+      deletePackage: (pkg: PackageExecutionContext) => {
+        setPkg(pkg);
+        reset({ ...pkg.package });
+        setAction("delete");
+        setOpen(true);
+      },
+      close: () => {
+        setOpen(false);
+      },
+    }));
+
+    const submit = React.useCallback(
+      handleSubmit(async (data) => {
+        setLoading(true);
+        if (action === "create") {
+          await createPackage(data, () => setOpen(false));
+        }
+        if (action === "edit") {
+          if (pkg)
+            await updatePackage(pkg.package.id, data, () => setOpen(false));
+        }
+        if (action === "delete") {
+          if (pkg) await removePackage(pkg.package.id, () => setOpen(false));
+        }
+        setLoading(false);
+      }),
+      [action, pkg]
+    );
+
+    React.useEffect(() => {
+      if (open) {
+        const onKeyDown = (e: KeyboardEvent) => {
+          if (e.key === "Enter") {
+            submit();
+          }
+        };
+        document.addEventListener("keydown", onKeyDown);
+        return () => {
+          document.removeEventListener("keydown", onKeyDown);
+        };
+      }
+    }, [action, open, submit]);
+
+    return (
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            {action === "create" && <DialogTitle>New Package</DialogTitle>}
+            {action === "edit" && <DialogTitle>Edit Package</DialogTitle>}
+            {action === "delete" && <DialogTitle>Delete Package</DialogTitle>}
+          </DialogHeader>
+          {action !== "delete" && (
+            <FieldGroup>
+              <Field>
+                <FieldLabel>Name</FieldLabel>
+                <Input {...register("name")} />
+              </Field>
+              <Field>
+                <FieldLabel>Description</FieldLabel>
+                <Textarea {...register("description")} />
+              </Field>
+              <Field>
+                <FieldLabel>Version</FieldLabel>
+                <Controller
+                  control={control}
+                  name="version"
+                  render={({ field }) => (
+                    <MaskedInput
+                      mask={"[000].[000]"}
+                      lazy={false}
+                      className="!text-lg"
+                      {...field}
+                    />
+                  )}
+                />
+              </Field>
+            </FieldGroup>
+          )}
+          <DialogFooter>
+            {loading ? (
+              <Button disabled={loading}>
+                <Spinner className="w-4 h-4" />
+              </Button>
+            ) : (
+              <>
+                {action === "create" && (
+                  <Button onClick={submit}>Create</Button>
+                )}
+                {action === "edit" && <Button onClick={submit}>Confirm</Button>}
+                {action === "delete" && (
+                  <Button onClick={submit}>Delete</Button>
+                )}
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

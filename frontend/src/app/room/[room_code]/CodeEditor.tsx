@@ -185,7 +185,7 @@ export function CodeEditor({
     if (libs) {
       setAllLibs(libs);
       monaco.languages.typescript.typescriptDefaults.setExtraLibs(libs);
-      monaco.languages.typescript.javascriptDefaults.setEagerModelSync(true);
+      monaco.languages.typescript.typescriptDefaults.setEagerModelSync(true);
     }
   };
   const handleEditorValueChange: OnChange = (value, event) => {
@@ -194,16 +194,6 @@ export function CodeEditor({
       onChange?.(value);
 
       // Update extraLib for all package files so Monaco can see the changes across files
-      const monaco = monacoRef.current;
-      const packageName = selectedFile.scriptContext.package.name;
-      const packageFiles = createPackageExtraLibs(
-        monaco,
-        packageName,
-        selectedFile.scriptContext.scriptAgents
-      );
-
-      const allExtraLibs = [...allLibs, ...packageFiles];
-      monaco.languages.typescript.typescriptDefaults.setExtraLibs(allExtraLibs);
     }
   };
 

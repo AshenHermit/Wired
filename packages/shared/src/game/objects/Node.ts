@@ -17,6 +17,7 @@ export interface NodeTreeSnapshotItem {
   class: string;
   state: any;
 }
+export type NodeTreeSnapshot = NodeTreeSnapshotItem[];
 
 export type RpcObject = {
   originalMethod: Function;
@@ -107,7 +108,7 @@ export class Node<S extends Record<string, any> = {}> extends Phaser.GameObjects
     return asNode(this.parentContainer);
   }
   getTreeSnapshot() {
-    const snapshot: NodeTreeSnapshotItem[] = [
+    const snapshot: NodeTreeSnapshot = [
       {
         path: this.getPath(),
         name: this.name,
@@ -197,7 +198,7 @@ export class Node<S extends Record<string, any> = {}> extends Phaser.GameObjects
   }
 
   @Rpc("client")
-  async recieveSnapshot(snapshot: NodeTreeSnapshotItem[]) {
+  async recieveSnapshot(snapshot: NodeTreeSnapshot) {
     const replicator = new SceneReplicator(Wired().scene());
     for (const item of snapshot) {
       replicator.upsert(item);
@@ -205,7 +206,7 @@ export class Node<S extends Record<string, any> = {}> extends Phaser.GameObjects
   }
 
   @Rpc("client")
-  async recieveDestroySnapshot(snapshot: NodeTreeSnapshotItem[]) {
+  async recieveDestroySnapshot(snapshot: NodeTreeSnapshot) {
     const replicator = new SceneReplicator(Wired().scene());
     for (const item of snapshot) {
       replicator.remove(item);

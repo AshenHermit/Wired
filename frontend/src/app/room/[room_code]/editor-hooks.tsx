@@ -7,9 +7,11 @@ import { useRequestHandler } from "@/hooks/use-request-handler";
 import { useUserStore } from "@/store/user-store";
 import { WiredInstance } from "@wired-io/client";
 import {
+  CreateScriptingPackagePayload,
   PackageExecutionContext,
   ScriptAgent,
   ScriptsManagerNode,
+  UpdateScriptingPackagePayload,
 } from "@wired-io/shared";
 import React from "react";
 import { toast } from "sonner";
@@ -20,29 +22,40 @@ export type OpenFileCallback = (file: ScriptAgent | null) => void;
 export function useCreatePackage(wiredInstance: WiredInstance | null) {
   const user = useUserStore((state) => state);
   const { handleRequest } = useRequestHandler({ toastOnError: true });
-  const addPackage = React.useCallback(async () => {
-    await handleRequest(async () => {
-      if (wiredInstance) {
-        await createScriptingPackage({
-          name: "new",
-          version: "0.1",
-          roomId: wiredInstance?.roomId ?? 0,
-          authorId: user.id,
-        });
-        toast.success("Package created successfully");
-      }
-    });
-  }, [user, wiredInstance]);
-  return addPackage;
+  const createPackage = React.useCallback(
+    async (
+      data: CreateScriptingPackagePayload,
+      successCallback?: () => void
+    ) => {
+      await handleRequest(async () => {
+        if (wiredInstance) {
+          await createScriptingPackage({
+            ...data,
+            roomId: wiredInstance?.roomId ?? 0,
+            authorId: user.id,
+          });
+          toast.success("Package created successfully");
+          successCallback?.();
+        }
+      });
+    },
+    [user, wiredInstance]
+  );
+  return createPackage;
 }
 
 export function useUpdatePackage() {
   const { handleRequest } = useRequestHandler({ toastOnError: true });
   const updatePackage = React.useCallback(
-    async (pack: PackageExecutionContext) => {
+    async (
+      id: number,
+      data: UpdateScriptingPackagePayload,
+      successCallback?: () => void
+    ) => {
       await handleRequest(async () => {
-        await updateScriptingPackage(pack.package.id, pack.getPackage());
+        await updateScriptingPackage(id, data);
         toast.success("Package updated successfully");
+        successCallback?.();
       });
     },
     []
@@ -53,10 +66,11 @@ export function useUpdatePackage() {
 export function useRemovePackage() {
   const { handleRequest } = useRequestHandler({ toastOnError: true });
   const removePackage = React.useCallback(
-    async (pack: PackageExecutionContext) => {
+    async (id: number, successCallback?: () => void) => {
       await handleRequest(async () => {
-        await deleteScriptingPackage(pack.package.id);
+        await deleteScriptingPackage(id);
         toast.success("Package removed successfully");
+        successCallback?.();
       });
     },
     []

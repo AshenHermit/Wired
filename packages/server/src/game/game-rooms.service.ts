@@ -201,6 +201,15 @@ export class GameRoomsService {
     }
   }
 
+  async execPackagesInRoom(roomEnt: Room) {
+    const room = await this.getRoom(roomEnt.id);
+    if (room) {
+      room.wiredInstance.wiredGlobal
+        ?.scene()
+        .scriptsManagerNode?.execAllPackages();
+    }
+  }
+
   @OnEvent(ScriptingPackageEvents.SCRIPTING_PACKAGE_CREATED)
   async onPackageCreated(event: ScriptingPackageCreatedEvent) {
     const pkg = event.scriptingPackage;
@@ -240,8 +249,9 @@ export class GameRoomsService {
       new WiredInstance({ network: api, displayParent: '' }),
     );
 
-    roomRuntime.wiredInstance.events.addListener('sceneReady', () => {
-      this.upAllPackages(roomEntity);
+    roomRuntime.wiredInstance.events.addListener('sceneReady', async () => {
+      await this.upAllPackages(roomEntity);
+      await this.execPackagesInRoom(roomEntity);
     });
 
     api.setRoom(roomRuntime);

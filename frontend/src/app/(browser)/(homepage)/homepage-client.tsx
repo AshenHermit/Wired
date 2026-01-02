@@ -112,6 +112,12 @@ export function ClientPanel() {
         <div className="text-[10px]">
           надеюсь голова не закружится от параллакса
         </div>
+        <br />
+        <div>
+          Внимание: Для автора по крайней мере: возможны проблемы с{" "}
+          <span className="text-blue-300">Wired()</span> контекстом, они могут
+          возникнуть если будет больше одной комнаты,
+        </div>
       </CardContent>
     </Card>
   );

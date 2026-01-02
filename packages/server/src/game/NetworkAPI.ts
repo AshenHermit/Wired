@@ -16,6 +16,7 @@ export class NetworkAPI extends NetworkAPIBase {
   socket: Server | null = null;
   connected: boolean = false;
   url: string = 'http://localhost:3000';
+  backendUrl: string = 'http://localhost:3000';
   events = new EventEmitter<NetworkEvents>();
   roomRuntime: GameRoomRuntime;
 

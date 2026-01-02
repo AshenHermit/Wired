@@ -3,6 +3,7 @@ export * from "./PlayerBase";
 export * from "./RigidBody";
 export * from "./KinematicBody";
 export * from "./Sprite";
+export * from "./Camera";
 export * from "./Node";
 export * from "./SceneReplicatorNode";
 export * from "./PlayersManagerNode";

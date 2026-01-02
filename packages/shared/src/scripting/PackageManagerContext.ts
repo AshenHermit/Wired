@@ -10,6 +10,7 @@ export type PackageManagerEvents = {
   packagesChanged: PackageExecutionContext[];
   packageUpserted: PackageExecutionContext;
   packageRemoved: number;
+  errorOccured: { script: ScriptAgent; error: Error };
 };
 
 export class PackageManagerContext {

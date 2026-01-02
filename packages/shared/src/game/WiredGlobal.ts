@@ -1,7 +1,7 @@
 import EventEmitter from "easy-event-emitter";
 import { NetworkAPIBase } from "../networking";
 import { GameScene } from "./GameScene";
-import { fetchTexture, TextureLoadData } from "./utils";
+import { ResourceLoader } from "./utils/ResourceLoader";
 import { WiredInstanceEvents } from "./WiredInstance";
 
 declare global {
@@ -16,7 +16,7 @@ export interface WiredGlobalBase {
 }
 
 export interface WiredGlobal extends WiredGlobalBase {
-  fetchTexture: (url: string, cb: (data: TextureLoadData) => void) => void;
+  resourceLoader: ResourceLoader;
 }
 
 export function Wired(): WiredGlobal {
@@ -31,12 +31,9 @@ export function _setupWiredGlobal(wired: WiredGlobal) {
 export function createWiredGlobal(wired: WiredGlobalBase) {
   const wiredGlobal = wired as WiredGlobal;
 
-  wiredGlobal.fetchTexture = (
-    url: string,
-    cb: (data: TextureLoadData) => void
-  ) => {
-    fetchTexture(wiredGlobal.scene(), url, wired.network).then(cb);
-  };
-
+  wiredGlobal.resourceLoader = new ResourceLoader(
+    wiredGlobal.scene(),
+    wiredGlobal.network
+  );
   return wiredGlobal;
 }

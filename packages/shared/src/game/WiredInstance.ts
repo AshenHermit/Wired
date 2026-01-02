@@ -27,6 +27,7 @@ export abstract class WiredInstanceBase {
   public config: WiredInstanceConfig;
   public network: NetworkAPIBase;
   public wiredGlobal?: WiredGlobal;
+  public scene: GameScene;
 
   public events = new EventEmitter<WiredInstanceEvents>();
 
@@ -42,7 +43,7 @@ export abstract class WiredInstanceBase {
     this.wiredGlobal = createWiredGlobal({
       game: () => this.game,
       network: this.network,
-      scene: () => this.game!.scene.getScene("GameScene") as GameScene,
+      scene: () => this.scene,
       events: this.events,
     });
     _setupWiredGlobal(this.wiredGlobal);

@@ -20,7 +20,6 @@ export class ScriptCompiler {
       ${compiled}
     });
     `;
-    console.log(compiled);
     return compiled;
   }
 }

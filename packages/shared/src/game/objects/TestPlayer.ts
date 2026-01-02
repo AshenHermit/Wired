@@ -16,7 +16,6 @@ export class TestPlayer extends PlayerBase<TestPlayerState> {
 
   constructor() {
     super();
-    super.addedToScene();
     this.m_body = new KinematicBody();
     this.m_body.setName("body");
     this.add(this.m_body);
