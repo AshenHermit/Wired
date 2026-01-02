@@ -17,6 +17,7 @@ RUN pnpm run build:shared
 
 FROM base
 COPY --from=prod-deps /app/node_modules /app/node_modules
+COPY --from=prod-deps /app/packages/server/node_modules /app/packages/server/node_modules
 COPY --from=build /app/packages/server/dist /app/packages/server/dist
 COPY --from=build /app/packages/box2d/build /app/packages/box2d/build
 COPY --from=build /app/packages/shared/dist /app/packages/shared/dist
