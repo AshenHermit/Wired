@@ -15,7 +15,7 @@ export class WiredInstance extends WiredInstanceBase {
   private onBlurHandler: (() => void) | null = null;
   private onFocusHandler: (() => void) | null = null;
   public roomId: number;
-  public scene: GameScene;
+  public scene!: GameScene;
 
   constructor(config: WiredInstanceConfig, roomId: number) {
     super(config);

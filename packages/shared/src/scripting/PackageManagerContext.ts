@@ -49,7 +49,7 @@ export class PackageManagerContext {
   getPackageById(id: number) {
     return this.packages.find((p) => p.package.id === id);
   }
-  require(filepath) {
+  require(filepath: string) {
     if (filepath.startsWith("/")) {
       const packageName = filepath.split("/")[1];
       const pkg = this.getPackage(packageName);

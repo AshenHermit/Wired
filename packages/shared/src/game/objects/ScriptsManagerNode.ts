@@ -1,4 +1,4 @@
-import { ScriptingPackage } from "../../api/types";
+import type { ScriptingPackage } from "../../api/types";
 import EventEmitter from "easy-event-emitter";
 import {
   PackageExecutionContext,

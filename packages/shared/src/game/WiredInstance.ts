@@ -27,7 +27,7 @@ export abstract class WiredInstanceBase {
   public config: WiredInstanceConfig;
   public network: NetworkAPIBase;
   public wiredGlobal?: WiredGlobal;
-  public scene: GameScene;
+  public scene!: GameScene;
 
   public events = new EventEmitter<WiredInstanceEvents>();
 

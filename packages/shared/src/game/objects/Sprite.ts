@@ -22,7 +22,7 @@ export class Sprite extends Phaser.GameObjects.Sprite {
     }
     return this;
   }
-  async loadTexture(url) {
+  async loadTexture(url: string) {
     const data = await Wired().resourceLoader.fetchTexture(url);
     if (!data) return;
     const key = data.key ?? "empty";

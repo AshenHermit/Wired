@@ -47,7 +47,8 @@ export class ScriptAgent {
       func(exports, this.require.bind(this));
       return exports;
     } catch (e) {
-      this.events.emit("errorOccured", { script: this, error: e });
+      const error = e instanceof Error ? e : new Error(String(e));
+      this.events.emit("errorOccured", { script: this, error });
       throw e;
     }
   }

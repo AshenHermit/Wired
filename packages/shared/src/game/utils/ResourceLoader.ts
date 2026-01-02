@@ -31,7 +31,7 @@ export class ResourceLoader {
       loader.once(Phaser.Loader.Events.COMPLETE, () => {
         onComplete();
       });
-      loader.once(Phaser.Loader.Events.FILE_LOAD_ERROR, (e) => {
+      loader.once(Phaser.Loader.Events.FILE_LOAD_ERROR, (e: unknown) => {
         console.error(e);
       });
       loader.start();
