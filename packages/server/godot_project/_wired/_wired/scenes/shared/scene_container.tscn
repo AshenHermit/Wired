@@ -1,0 +1,10 @@
+[gd_scene format=3 uid="uid://dlrsrtrmprtdf"]
+
+[node name="SceneContainer" type="Node"]
+
+[node name="Players" type="Node" parent="."]
+
+[node name="MultiplayerSpawner" type="MultiplayerSpawner" parent="Players"]
+spawn_path = NodePath("..")
+
+[node name="PackagesManager" type="Node" parent="."]

@@ -1,6 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { GAME_ROOMS_TYPES, GameRoomsType } from '@wired-io/shared';
 import {
   IsBoolean,
+  IsEnum,
   IsInt,
   IsOptional,
   IsString,
@@ -46,4 +48,12 @@ export class CreateRoomDto {
   @IsOptional()
   @IsInt()
   parentRoomId?: number;
+
+  @ApiProperty({
+    example: 'ts-game',
+    description: 'Room type',
+    enum: GAME_ROOMS_TYPES,
+  })
+  @IsEnum(GAME_ROOMS_TYPES)
+  type: GameRoomsType;
 }

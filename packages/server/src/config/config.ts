@@ -17,6 +17,14 @@ const config: () => AppConfig = () => ({
   },
   storage: {
     dir: process.env.STORAGE_DIR ?? './storage',
+    packagesFilesDir:
+      (process.env.STORAGE_DIR ?? './storage') +
+      '/' +
+      (process.env.PACKAGES_FILES_DIR ?? 'packages_files'),
+  },
+  godot: {
+    editorPath: process.env.GODOT_EDITOR_PATH ?? './godot_editor',
+    projectPath: process.env.GODOT_PROJECT_PATH ?? './godot_project',
   },
 });
 export default config;

@@ -12,6 +12,7 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { ScriptingPackage } from './scripting-package.entity';
+import { GAME_ROOMS_TYPES, GameRoomsType } from '@wired-io/shared';
 
 @Entity()
 export class Room {
@@ -50,6 +51,13 @@ export class Room {
   })
   @Column({ default: '' })
   description: string;
+
+  @ApiProperty({
+    description: 'room type',
+    enum: GAME_ROOMS_TYPES,
+  })
+  @Column({ type: 'enum', enum: GAME_ROOMS_TYPES, default: 'ts-game' })
+  type: GameRoomsType;
 
   @ApiProperty({ description: 'room author', type: () => User, nullable: true })
   @ManyToOne(() => User, (user) => user.rooms)

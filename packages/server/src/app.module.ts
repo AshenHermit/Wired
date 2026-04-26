@@ -12,11 +12,17 @@ import { UsersModule } from './users/users.module';
 import { RoomsModule } from './rooms/rooms.module';
 import { ScriptingPackagesModule } from './scripting-packages/scripting-packages.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { GameModule } from './ts-game/game.module';
+import { GodotGameModule } from './godot-game/godot-game.module';
+import { GodotEditorProviderModule } from './godot-editor-provider/godot-editor-provider.module';
 
 @Module({
   imports: [
     EventEmitterModule.forRoot(),
     ProxyModule,
+    GodotEditorProviderModule,
+    GodotGameModule,
+    GameModule,
     WebsocketModule,
     TypesModule,
     AppConfigModule,

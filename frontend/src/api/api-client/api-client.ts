@@ -29,6 +29,11 @@ export class ApiClient {
   async get<T, R>(endpoint: string, data?: R) {
     return this.processResponse<T>(this.axios.get(endpoint, { params: data }));
   }
+  async getFile<R>(endpoint: string, data?: R) {
+    return this.processResponse<ArrayBuffer>(
+      this.axios.get(endpoint, { params: data, responseType: "arraybuffer" })
+    );
+  }
   async post<T, R>(endpoint: string, data?: R) {
     return this.processResponse<T>(this.axios.post(endpoint, data));
   }

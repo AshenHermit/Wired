@@ -3,6 +3,24 @@ import path from "path";
 
 const nextConfig: NextConfig = {
   /* config options here */
+  async headers() {
+    return [
+      {
+        // Применяем заголовки для всех страниц с Godot редактором
+        source: "/room/:room_code",
+        headers: [
+          {
+            key: "Cross-Origin-Opener-Policy",
+            value: "same-origin",
+          },
+          {
+            key: "Cross-Origin-Embedder-Policy",
+            value: "require-corp",
+          },
+        ],
+      },
+    ];
+  },
   async rewrites() {
     return {
       beforeFiles: [
@@ -20,13 +38,13 @@ const nextConfig: NextConfig = {
   webpack: (config, { isServer }) => {
     // Настройка resolve для правильного разрешения .js импортов в TypeScript файлах
     config.resolve = config.resolve || {};
-    
+
     // Разрешаем .js импорты как .ts файлы (для box2d)
     config.resolve.extensionAlias = {
       ".js": [".ts", ".tsx", ".js", ".jsx"],
       ".jsx": [".tsx", ".jsx"],
     };
-    
+
     // Убеждаемся, что расширения разрешаются в правильном порядке
     config.resolve.extensions = [
       ".tsx",

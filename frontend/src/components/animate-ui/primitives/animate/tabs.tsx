@@ -187,6 +187,7 @@ function TabsTrigger({
 type TabsContentsProps = HTMLMotionProps<"div"> & {
   children: React.ReactNode;
   transition?: Transition;
+  motionDivProps?: HTMLMotionProps<"div">;
 };
 
 function TabsContents({
@@ -198,6 +199,7 @@ function TabsContents({
     bounce: 0,
     restDelta: 0.01,
   },
+  motionDivProps,
   ...props
 }: TabsContentsProps) {
   const { activeValue } = useTabs();
@@ -288,6 +290,7 @@ function TabsContents({
         className="flex -mx-2"
         animate={{ x: activeIndex * -100 + "%" }}
         transition={transition}
+        {...motionDivProps}
       >
         {childrenArray.map((child, index) => (
           <div

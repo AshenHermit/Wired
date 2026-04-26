@@ -4,10 +4,12 @@ import {
   Delete,
   Get,
   Param,
+  ParseArrayPipe,
   ParseIntPipe,
   Patch,
   Post,
   Req,
+  UploadedFile,
 } from '@nestjs/common';
 import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
@@ -43,6 +45,32 @@ export class ScriptingPackagesController {
   ) {
     await this.packagesService.assertPackageCreation(req.user, dto);
     return await this.packagesService.create(dto);
+  }
+
+  @ApiOkResponse({ type: ScriptingPackage })
+  @Get(':id/files/*path')
+  async getPhysicalFile(
+    @Param('path', ParseArrayPipe) path: string[],
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return await this.packagesService.getPhysicalFile(id, path.join('/'));
+  }
+
+  @UseAuthQuard()
+  @ApiOkResponse({ type: ScriptingPackage })
+  @Post(':id/files/*path')
+  async uploadPhysicalFile(
+    @Param('path', ParseArrayPipe) path: string[],
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    await this.packagesService.assertPackageEditing(req.user, id);
+    return await this.packagesService.uploadPhysicalFile(
+      id,
+      file,
+      path.join('/'),
+    );
   }
 
   @UseAuthQuard()

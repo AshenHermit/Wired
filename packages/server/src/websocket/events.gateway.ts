@@ -9,7 +9,7 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { GameRoomsService } from 'src/game/game-rooms.service';
+import { GameRoomsService } from 'src/ts-game/game-rooms.service';
 
 @WebSocketGateway({
   cors: {

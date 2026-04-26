@@ -13,3 +13,6 @@ export const REVALIDATE_INTERVAL =
 export const HASH_ID_SECRET = String(
   process.env.NEXT_PUBLIC_WEBSOCKET_URL ?? "wired-io-ids"
 );
+
+export const GODOT_EDITOR_URL = `/api/godot-editor`;
+export const GODOT_PROJECT_ZIP_URL = `/api/godot-project.zip`;

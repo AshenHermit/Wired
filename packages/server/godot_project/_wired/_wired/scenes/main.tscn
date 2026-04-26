@@ -1,0 +1,41 @@
+[gd_scene load_steps=4 format=3 uid="uid://b0nt7wjwv3oh7"]
+
+[ext_resource type="Script" uid="uid://bs34lxulatiwc" path="res://_wired/scripts/main_scene.gd" id="1_uvm2a"]
+[ext_resource type="PackedScene" uid="uid://dq33e8ew3x6ev" path="res://_wired/scenes/server.tscn" id="2_p0ul4"]
+[ext_resource type="PackedScene" uid="uid://4hivrp0dic3q" path="res://_wired/scenes/client.tscn" id="3_5mndt"]
+
+[node name="Main" type="Node" node_paths=PackedStringArray("scene_container")]
+script = ExtResource("1_uvm2a")
+server_scene = ExtResource("2_p0ul4")
+client_scene = ExtResource("3_5mndt")
+scene_container = NodePath("UI/SubViewportContainer/SubViewport/Container")
+
+[node name="UI" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="SubViewportContainer" type="SubViewportContainer" parent="UI"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+stretch = true
+
+[node name="SubViewport" type="SubViewport" parent="UI/SubViewportContainer"]
+size = Vector2i(1152, 648)
+
+[node name="Container" type="Node" parent="UI/SubViewportContainer/SubViewport"]
+
+[node name="Control" type="Control" parent="UI"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2

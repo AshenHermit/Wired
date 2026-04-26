@@ -5,9 +5,13 @@ import { User } from 'src/database/entities/user.entity';
 import { Room } from 'src/database/entities/room.entity';
 import { ScriptingPackagesService } from './scripting-packages.service';
 import { ScriptingPackagesController } from './scripting-packages.controller';
+import { AppConfigModule } from 'src/config/config.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ScriptingPackage, User, Room])],
+  imports: [
+    AppConfigModule,
+    TypeOrmModule.forFeature([ScriptingPackage, User, Room]),
+  ],
   providers: [ScriptingPackagesService],
   controllers: [ScriptingPackagesController],
   exports: [ScriptingPackagesService],

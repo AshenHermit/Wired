@@ -1,4 +1,4 @@
-import { RoomPageClientNoSSR } from "./RoomPageClientNoSSr";
+import { RoomPageClient } from "./page-client";
 
 export default async function Page({
   params,
@@ -6,5 +6,5 @@ export default async function Page({
   params: Promise<{ room_code: string }>;
 }) {
   const { room_code } = await params;
-  return <RoomPageClientNoSSR roomCode={room_code} />;
+  return <RoomPageClient roomCode={room_code} />;
 }

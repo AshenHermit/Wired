@@ -15,5 +15,10 @@ export interface AppConfig {
   };
   storage: {
     dir: string;
+    packagesFilesDir: string;
+  };
+  godot: {
+    editorPath: string;
+    projectPath: string;
   };
 }

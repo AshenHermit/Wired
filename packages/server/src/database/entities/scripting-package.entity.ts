@@ -12,6 +12,7 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { Room } from './room.entity';
+import { PhysicalFile } from '@wired-io/shared';
 
 export type ScriptFile = {
   filepath: string;
@@ -58,6 +59,10 @@ export class ScriptingPackage {
   @ApiProperty({ description: 'package scripts' })
   @Column({ type: 'jsonb', default: [] })
   scripts: ScriptFile[];
+
+  @ApiProperty({ description: 'package physical files' })
+  @Column({ type: 'jsonb', default: [] })
+  physicalFiles: PhysicalFile[];
 
   @ApiProperty({ description: 'package author', type: () => User })
   @ManyToOne(() => User, (user) => user.scriptingPackages)

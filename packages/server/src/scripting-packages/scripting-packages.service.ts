@@ -2,6 +2,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  StreamableFile,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -17,6 +18,10 @@ import {
   ScriptingPackageEvents,
   ScriptingPackageUpdatedEvent,
 } from 'src/events/scripting-package.events';
+import path from 'path';
+import { AppConfigService } from 'src/config/config.service';
+import * as fs from 'fs';
+import sha256 from 'crypto-js/sha256';
 
 @Injectable()
 export class ScriptingPackagesService {
@@ -28,6 +33,7 @@ export class ScriptingPackagesService {
     @InjectRepository(Room)
     private readonly roomsRepository: Repository<Room>,
     private readonly eventEmitter: EventEmitter2,
+    private readonly configService: AppConfigService,
   ) {}
 
   async assertPackageCreation(
@@ -173,6 +179,7 @@ export class ScriptingPackagesService {
     if (dto.description !== undefined) pkg.description = dto.description;
     if (dto.dependencies !== undefined) pkg.dependencies = dto.dependencies;
     if (dto.scripts !== undefined) pkg.scripts = dto.scripts;
+    if (dto.physicalFiles !== undefined) pkg.physicalFiles = dto.physicalFiles;
 
     const saved = await this.packagesRepository.save(pkg);
     const found = await this.findOne(id);
@@ -193,5 +200,51 @@ export class ScriptingPackagesService {
       ScriptingPackageEvents.SCRIPTING_PACKAGE_DELETED,
       new ScriptingPackageDeletedEvent(pkg),
     );
+  }
+
+  getPhysicalFileFullPath(pkg: ScriptingPackage, filepath: string): string {
+    return path.join(
+      this.configService.storage.packagesFilesDir,
+      pkg.id.toString(),
+      filepath,
+    );
+  }
+
+  async updatePhysicalFileHash(
+    pkg: ScriptingPackage,
+    filepath: string,
+  ): Promise<void> {
+    const fullPath = this.getPhysicalFileFullPath(pkg, filepath);
+    const hash = sha256(fs.readFileSync(fullPath, 'utf8'));
+    pkg.physicalFiles = pkg.physicalFiles.map((file) =>
+      file.filepath === filepath ? { ...file, hash: hash.toString() } : file,
+    );
+    await this.packagesRepository.save(pkg);
+  }
+
+  async uploadPhysicalFile(
+    id: number,
+    file: Express.Multer.File,
+    filepath: string,
+  ): Promise<boolean> {
+    const pkg = await this.findOne(id);
+    const fullPath = this.getPhysicalFileFullPath(pkg, filepath);
+    if (fs.existsSync(path.dirname(fullPath))) {
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    }
+    fs.writeFileSync(fullPath, file.buffer);
+    await this.updatePhysicalFileHash(pkg, filepath);
+    return true;
+  }
+
+  async getPhysicalFile(id: number, filepath: string): Promise<StreamableFile> {
+    const pkg = await this.findOne(id);
+    const fullPath = this.getPhysicalFileFullPath(pkg, filepath);
+    if (!fs.existsSync(fullPath)) {
+      throw new NotFoundException(
+        `Physical file with filepath=${filepath} not found`,
+      );
+    }
+    return new StreamableFile(fs.createReadStream(fullPath));
   }
 }

@@ -1,0 +1,9 @@
+[gd_scene load_steps=3 format=3 uid="uid://dq33e8ew3x6ev"]
+
+[ext_resource type="Script" uid="uid://gjri0v38hnh0" path="res://_wired/scripts/network/server.gd" id="1_wonu1"]
+[ext_resource type="PackedScene" uid="uid://dlrsrtrmprtdf" path="res://_wired/scenes/shared/scene_container.tscn" id="2_8w3bk"]
+
+[node name="Server" type="Node"]
+script = ExtResource("1_wonu1")
+
+[node name="SceneContainer" parent="." instance=ExtResource("2_8w3bk")]

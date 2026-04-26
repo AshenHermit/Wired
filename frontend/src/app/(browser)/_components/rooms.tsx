@@ -6,7 +6,7 @@ import {
   listRooms,
   updateRoom,
 } from "@/api/services/rooms";
-import { Room } from "@wired-io/shared";
+import { GAME_ROOMS_TYPES, GameRoomsType, Room } from "@wired-io/shared";
 import { LiquidButton } from "@/components/animate-ui/components/buttons/liquid";
 import {
   RippleButton,
@@ -39,7 +39,7 @@ import {
 } from "lucide-react";
 import React from "react";
 import { toast } from "sonner";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Input } from "@/components/ui/input";
@@ -49,6 +49,16 @@ import { Button } from "@/components/animate-ui/components/buttons/button";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
 import Link from "next/link";
 import { encodeId } from "@/utils/hash-utils";
+import {
+  Tabs,
+  TabsContents,
+  TabsList,
+  TabsTrigger,
+} from "@/components/animate-ui/components/animate/tabs";
+import { TabsContent } from "@/components/animate-ui/primitives/animate/tabs";
+import { cn } from "@/lib/utils";
+import { PhaserLogo } from "@/icons/phaser_logo";
+import { GodotLogo } from "@/icons/godot_logo";
 
 export function RoomCard({
   room,
@@ -98,6 +108,7 @@ export type RoomEditingProps = {
 
 export const RoomEditingFields = z.object({
   name: z.string().min(1),
+  type: z.enum(GAME_ROOMS_TYPES),
   description: z.string(),
 });
 export type RoomEditingFieldsInfer = z.infer<typeof RoomEditingFields>;
@@ -119,13 +130,14 @@ export const RoomEditingPanel = React.forwardRef<
       defaultValues: {
         name: "New Room",
         description: "",
+        type: "ts-game",
       },
     });
 
   React.useImperativeHandle(ref, () => ({
     create: () => {
       setRoom(null);
-      reset({});
+      reset({ name: "", description: "", type: "ts-game" });
       setOperation("create");
       setOpen(true);
     },
@@ -198,6 +210,20 @@ export const RoomEditingPanel = React.forwardRef<
               <Input {...register("name")} placeholder="Room Name" />
             </Field>
             <Field>
+              <FieldLabel>Game Type</FieldLabel>
+              <Controller
+                control={control}
+                name="type"
+                render={({ field }) => (
+                  <GameTypeSelect
+                    value={field.value}
+                    onChange={field.onChange}
+                    disabled={operation === "update"}
+                  />
+                )}
+              />
+            </Field>
+            <Field>
               <FieldLabel>Description</FieldLabel>
               <Textarea
                 {...register("description")}
@@ -224,6 +250,45 @@ export const RoomEditingPanel = React.forwardRef<
     </Dialog>
   );
 });
+
+export const GameTypeSelect = ({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: GameRoomsType;
+  onChange: (value: GameRoomsType) => void;
+  disabled?: boolean;
+}) => {
+  return (
+    <div className="relative">
+      <Tabs
+        className={cn("w-44", disabled && "opacity-50 pointer-events-none")}
+        value={value}
+        onValueChange={(value) => {
+          onChange(value as GameRoomsType);
+        }}
+      >
+        <TabsList>
+          <TabsTrigger
+            value={"ts-game"}
+            className="data-[active=false]:opacity-50"
+          >
+            <PhaserLogo height={64} width={100} className="!w-24 !h-6" />
+            ts-game
+          </TabsTrigger>
+          <TabsTrigger
+            value={"godot"}
+            className="data-[active=false]:opacity-50"
+          >
+            <GodotLogo className="!w-6 !h-6" />
+            Godot
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+    </div>
+  );
+};
 
 export function RoomEditing() {}
 

@@ -24,4 +24,9 @@ export class AppConfigService {
       this.configService.get<AppConfig['nodeEnv']>('nodeEnv') == 'production'
     );
   }
+  get godot() {
+    return (
+      this.configService.get<AppConfig['godot']>('godot') ?? config().godot
+    );
+  }
 }
