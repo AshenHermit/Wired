@@ -25,7 +25,7 @@ export function useCreatePackage(wiredInstance: WiredInstance | null) {
   const createPackage = React.useCallback(
     async (
       data: CreateScriptingPackagePayload,
-      successCallback?: () => void
+      successCallback?: () => void,
     ) => {
       await handleRequest(async () => {
         if (wiredInstance) {
@@ -39,7 +39,7 @@ export function useCreatePackage(wiredInstance: WiredInstance | null) {
         }
       });
     },
-    [user, wiredInstance]
+    [user, wiredInstance],
   );
   return createPackage;
 }
@@ -50,7 +50,7 @@ export function useUpdatePackage() {
     async (
       id: number,
       data: UpdateScriptingPackagePayload,
-      successCallback?: () => void
+      successCallback?: () => void,
     ) => {
       await handleRequest(async () => {
         await updateScriptingPackage(id, data);
@@ -58,7 +58,7 @@ export function useUpdatePackage() {
         successCallback?.();
       });
     },
-    []
+    [],
   );
   return updatePackage;
 }
@@ -73,7 +73,7 @@ export function useRemovePackage() {
         successCallback?.();
       });
     },
-    []
+    [],
   );
   return removePackage;
 }
@@ -85,7 +85,7 @@ export function useExecPackage(packageManagerNode: ScriptsManagerNodeRef) {
         await packageManagerNode.current.requestExecPackage(pack.getPackage());
       }
     },
-    []
+    [],
   );
 
   return execPackage;
@@ -93,14 +93,14 @@ export function useExecPackage(packageManagerNode: ScriptsManagerNodeRef) {
 
 export function useCreateFile(
   packageManagerNode: ScriptsManagerNodeRef,
-  openFile: OpenFileCallback
+  openFile: OpenFileCallback,
 ) {
   const { handleRequest } = useRequestHandler({ toastOnError: true });
   const newFile = React.useCallback(
     async (
       pkg: PackageExecutionContext,
       filepath: string,
-      successCallback?: () => void
+      successCallback?: () => void,
     ) => {
       handleRequest(async () => {
         if (packageManagerNode.current) {
@@ -127,7 +127,7 @@ export function useCreateFile(
             openFile(
               pkgManager
                 ?.getPackageById(pkg.package.id)
-                ?.findScriptByFilepath(filepath) ?? null
+                ?.findScriptByFilepath(filepath) ?? null,
             );
           }, 10);
           toast.success("File created successfully");
@@ -135,14 +135,14 @@ export function useCreateFile(
         }
       });
     },
-    [packageManagerNode, openFile]
+    [packageManagerNode, openFile],
   );
   return newFile;
 }
 
 export function useRenameFile(
   packageManagerNode: ScriptsManagerNodeRef,
-  openFile: OpenFileCallback
+  openFile: OpenFileCallback,
 ) {
   const { handleRequest } = useRequestHandler({ toastOnError: true });
   const renameFile = React.useCallback(
@@ -150,7 +150,7 @@ export function useRenameFile(
       pkg: PackageExecutionContext,
       filepath: string,
       newFilepath: string,
-      successCallback?: () => void
+      successCallback?: () => void,
     ) => {
       handleRequest(async () => {
         if (!newFilepath.startsWith("/")) newFilepath = "/" + newFilepath;
@@ -174,7 +174,7 @@ export function useRenameFile(
         successCallback?.();
       });
     },
-    [packageManagerNode, openFile]
+    [packageManagerNode, openFile],
   );
   return renameFile;
 }
@@ -185,7 +185,7 @@ export function useUpdateScript(packageManagerNode: ScriptsManagerNodeRef) {
     async (
       pkg: PackageExecutionContext,
       filepath: string,
-      successCallback?: () => void
+      successCallback?: () => void,
     ) => {
       handleRequest(async () => {
         const file = pkg.findScriptByFilepath(filepath);
@@ -200,21 +200,21 @@ export function useUpdateScript(packageManagerNode: ScriptsManagerNodeRef) {
         successCallback?.();
       });
     },
-    [packageManagerNode]
+    [packageManagerNode],
   );
   return updateFile;
 }
 
 export function useDeleteFile(
   packageManagerNode: ScriptsManagerNodeRef,
-  openFile: OpenFileCallback
+  openFile: OpenFileCallback,
 ) {
   const { handleRequest } = useRequestHandler({ toastOnError: true });
   const deleteFile = React.useCallback(
     async (
       pkg: PackageExecutionContext,
       filepath: string,
-      successCallback?: () => void
+      successCallback?: () => void,
     ) => {
       handleRequest(async () => {
         const file = pkg.findScriptByFilepath(filepath);
@@ -223,7 +223,7 @@ export function useDeleteFile(
         }
         const patch = {
           scripts: pkg.package.scripts.filter(
-            (script) => script.filepath !== filepath
+            (script) => script.filepath !== filepath,
           ),
         };
         await updateScriptingPackage(pkg.package.id, patch);
@@ -232,7 +232,7 @@ export function useDeleteFile(
         successCallback?.();
       });
     },
-    [packageManagerNode, openFile]
+    [packageManagerNode, openFile],
   );
   return deleteFile;
 }

@@ -6,7 +6,8 @@ import {
   listRooms,
   updateRoom,
 } from "@/api/services/rooms";
-import { GAME_ROOMS_TYPES, GameRoomsType, Room } from "@wired-io/shared";
+import { GAME_ROOMS_TYPES } from "@wired-io/shared/api/types";
+import type { GameRoomsType, Room } from "@wired-io/shared/api/types";
 import { LiquidButton } from "@/components/animate-ui/components/buttons/liquid";
 import {
   RippleButton,

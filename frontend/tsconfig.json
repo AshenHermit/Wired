@@ -31,6 +31,9 @@
       "@wired-io/shared": [
         "../packages/shared/src"
       ],
+      "@wired-io/shared/*": [
+        "../packages/shared/src/*"
+      ],
       "@wired-io/client": [
         "../packages/client/src"
       ],
