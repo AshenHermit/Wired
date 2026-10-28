@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { createWriteStream, mkdirSync, WriteStream } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { AppConfigService } from 'src/config/config.service';
 import { GameTicketService } from './game-ticket.service';
 import { RoomRuntimeError } from './room-runtime.errors';
@@ -14,9 +14,40 @@ import {
 } from './room-runtime.types';
 
 const READY_PATTERN = /^WIRED_SERVER_READY room=(\S+) port=(\d+) bind=(\S+)/;
-const AUTH_OK_PATTERN = /^WIRED_AUTH_OK peer=\d+ player=\d+ room=(\S+)/;
-const PLAYER_LEFT_PATTERN = /^WIRED_PLAYER_LEFT peer=\d+ player=\d+/;
+const AUTH_OK_PATTERN = /^WIRED_AUTH_OK peer=(\d+) player=\d+ room=(\S+)/;
+const PLAYER_LEFT_PATTERN = /^WIRED_PLAYER_LEFT peer=(\d+) player=\d+/;
 const FORCE_KILL_WAIT_MS = 2_000;
+const PORT_QUARANTINE_MS = 60_000;
+const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const RUNTIME_ENV_ALLOWLIST = [
+  'PATH',
+  'Path',
+  'PATHEXT',
+  'SystemRoot',
+  'SYSTEMROOT',
+  'WINDIR',
+  'windir',
+  'TEMP',
+  'TMP',
+  'USERPROFILE',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'COMSPEC',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'HOME',
+  'NUMBER_OF_PROCESSORS',
+  'PROCESSOR_ARCHITECTURE',
+  'PROGRAMDATA',
+  'PROGRAMFILES',
+  'PROGRAMFILES(X86)',
+  'LANG',
+  'LC_ALL',
+  'TZ',
+  'XDG_DATA_HOME',
+  'XDG_CONFIG_HOME',
+  'XDG_CACHE_HOME',
+];
 
 interface RuntimeRecord {
   key: string;
@@ -33,6 +64,7 @@ interface RuntimeRecord {
   exitSignal: NodeJS.Signals | null;
   error: string | null;
   activePlayers: number;
+  authenticatedPeers: Set<number>;
   stopRequested: boolean;
   forceKilled: boolean;
   readySettled: boolean;
@@ -62,6 +94,12 @@ export class RoomRuntimeService implements OnModuleDestroy {
   private readonly activeByRoom = new Map<string, RuntimeRecord>();
   private readonly records = new Map<string, RuntimeRecord>();
   private readonly reservedPorts = new Map<number, RuntimeRecord>();
+  /**
+   * Ports that recently failed to bind (for example an unrelated process owns
+   * them). They are skipped for a short time so one occupied port cannot make
+   * every room start fail on the same candidate.
+   */
+  private readonly unavailablePorts = new Map<number, number>();
 
   constructor(
     private readonly configService: AppConfigService,
@@ -78,6 +116,14 @@ export class RoomRuntimeService implements OnModuleDestroy {
     const record = this.ensureRuntime(roomId);
     await record.readyPromise;
 
+    if (record.state === 'stopping') {
+      throw new RoomRuntimeError(
+        'room_stopping',
+        `Room ${roomId} is stopping; retry after it exits`,
+        roomId,
+        record.port,
+      );
+    }
     if (record.state !== 'running') {
       throw new RoomRuntimeError(
         'start_failed',
@@ -85,6 +131,13 @@ export class RoomRuntimeService implements OnModuleDestroy {
         roomId,
         record.port,
       );
+    }
+
+    // Opening the game tab is itself an intent to join: give a room that is
+    // already running without players a full idle window for the handshake.
+    if (record.activePlayers === 0) {
+      this.clearIdleTimer(record);
+      this.scheduleIdleStop(record);
     }
 
     const ticket = this.tickets.mint(roomId);
@@ -155,11 +208,17 @@ export class RoomRuntimeService implements OnModuleDestroy {
   /** Stops every room; used by Nest shutdown hooks so no process is orphaned. */
   async shutdownAll(): Promise<void> {
     const records = [...this.activeByRoom.values()].filter(
-      (record) => record.state === 'starting' || record.state === 'running',
+      (record) =>
+        record.state === 'starting' ||
+        record.state === 'running' ||
+        record.state === 'stopping',
     );
     await Promise.all(
       records.map((record) =>
-        this.stopRoom(record.roomId, 'backend_shutdown').catch((error) => {
+        (record.state === 'stopping' && record.stopPromise
+          ? record.stopPromise
+          : this.stopRoom(record.roomId, 'backend_shutdown')
+        ).catch((error) => {
           this.logger.error(
             `Failed to stop room ${record.roomId}: ${this.errorMessage(error)}`,
           );
@@ -175,8 +234,11 @@ export class RoomRuntimeService implements OnModuleDestroy {
   // --- startup ------------------------------------------------------------
 
   private ensureRuntime(roomId: string): RuntimeRecord {
+    this.validateRoomId(roomId);
     const config = this.configService.godotRuntime;
     this.validateConfig(config);
+    const projectPath = resolve(config.projectPath);
+    const stateDir = resolve(config.stateDir);
 
     const existing = this.activeByRoom.get(roomId);
     if (existing) {
@@ -206,7 +268,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
     this.activeByRoom.set(roomId, record);
     this.records.set(record.key, record);
     this.reservedPorts.set(port, record);
-    this.openLog(record, config);
+    this.openLog(record, stateDir);
     this.appendLog(
       record,
       `[wired] starting room=${roomId} port=${port} key=${record.key}`,
@@ -234,7 +296,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
         args: [
           '--headless',
           '--path',
-          config.projectPath,
+          projectPath,
           '--server',
           '--port',
           String(port),
@@ -242,15 +304,13 @@ export class RoomRuntimeService implements OnModuleDestroy {
           roomId,
           '--bind',
           config.bindAddress,
-          // The Godot project saves room state here before exiting.
+          // The Godot project saves room state here before exiting. Keep it
+          // absolute: --path changes Godot's cwd to the project directory.
           '--state-dir',
-          join(config.stateDir, this.safeName(roomId)),
+          join(stateDir, this.safeName(roomId)),
         ],
-        cwd: config.projectPath,
-        env: {
-          ...process.env,
-          WIRED_GAME_TICKET_SECRET: config.ticketSecret,
-        },
+        cwd: projectPath,
+        env: this.buildRuntimeEnv(config.ticketSecret),
       });
       record.process = child;
       record.pid = child.pid ?? null;
@@ -294,6 +354,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
       exitSignal: null,
       error: null,
       activePlayers: 0,
+      authenticatedPeers: new Set<number>(),
       stopRequested: false,
       forceKilled: false,
       readySettled: false,
@@ -305,6 +366,16 @@ export class RoomRuntimeService implements OnModuleDestroy {
       exitPromise,
       resolveExit,
     };
+  }
+
+  private validateRoomId(roomId: string): void {
+    if (!ROOM_ID_PATTERN.test(roomId)) {
+      throw new RoomRuntimeError(
+        'invalid_room',
+        `Room id ${JSON.stringify(roomId)} is not a safe runtime identifier`,
+        roomId,
+      );
+    }
   }
 
   private validateConfig(config: GodotRuntimeConfig): void {
@@ -332,6 +403,21 @@ export class RoomRuntimeService implements OnModuleDestroy {
         'WIRED_GAME_TICKET_SECRET is not configured; the Godot room server cannot verify game tickets',
       );
     }
+    if (
+      !Number.isFinite(config.shutdownGraceMs) ||
+      config.shutdownGraceMs < 0 ||
+      !Number.isFinite(config.startTimeoutMs) ||
+      config.startTimeoutMs <= 0 ||
+      !Number.isFinite(config.ticketTtlSec) ||
+      config.ticketTtlSec <= 0 ||
+      !Number.isFinite(config.idleTimeoutMs) ||
+      config.idleTimeoutMs < 0
+    ) {
+      throw new RoomRuntimeError(
+        'config',
+        'Invalid Godot room timeouts: start/ticket TTL must be > 0, grace and idle must be >= 0',
+      );
+    }
     if (this.configService.isProduction && !config.publicWsBaseUrl) {
       throw new RoomRuntimeError(
         'config',
@@ -341,12 +427,33 @@ export class RoomRuntimeService implements OnModuleDestroy {
   }
 
   private allocatePort(config: GodotRuntimeConfig): number | null {
+    const now = Date.now();
     for (let port = config.portStart; port <= config.portEnd; port += 1) {
-      if (!this.reservedPorts.has(port)) {
-        return port;
+      if (this.reservedPorts.has(port)) {
+        continue;
       }
+      const unavailableUntil = this.unavailablePorts.get(port);
+      if (unavailableUntil !== undefined) {
+        if (unavailableUntil > now) {
+          continue;
+        }
+        this.unavailablePorts.delete(port);
+      }
+      return port;
     }
     return null;
+  }
+
+  private buildRuntimeEnv(ticketSecret: string): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = {};
+    for (const name of RUNTIME_ENV_ALLOWLIST) {
+      const value = process.env[name];
+      if (value !== undefined) {
+        env[name] = value;
+      }
+    }
+    env.WIRED_GAME_TICKET_SECRET = ticketSecret;
+    return env;
   }
 
   // --- process output -----------------------------------------------------
@@ -388,13 +495,30 @@ export class RoomRuntimeService implements OnModuleDestroy {
 
     const authOk = AUTH_OK_PATTERN.exec(line);
     if (authOk) {
-      record.activePlayers += 1;
+      if (authOk[2] !== record.roomId) {
+        this.appendLog(
+          record,
+          `[wired] ignored auth for foreign room=${authOk[2]}`,
+        );
+        return;
+      }
+      record.authenticatedPeers.add(Number(authOk[1]));
+      record.activePlayers = record.authenticatedPeers.size;
       this.clearIdleTimer(record);
       return;
     }
 
-    if (PLAYER_LEFT_PATTERN.test(line)) {
-      record.activePlayers = Math.max(0, record.activePlayers - 1);
+    const playerLeft = PLAYER_LEFT_PATTERN.exec(line);
+    if (playerLeft) {
+      const peer = Number(playerLeft[1]);
+      if (!record.authenticatedPeers.delete(peer)) {
+        this.appendLog(
+          record,
+          `[wired] ignored departure of unauthenticated peer=${peer}`,
+        );
+        return;
+      }
+      record.activePlayers = record.authenticatedPeers.size;
       if (record.activePlayers === 0) {
         this.scheduleIdleStop(record);
       }
@@ -431,6 +555,10 @@ export class RoomRuntimeService implements OnModuleDestroy {
       record,
       `[wired] running room=${record.roomId} port=${record.port} pid=${record.pid ?? 'unknown'}`,
     );
+    // A room whose client never finishes the handshake must not live forever.
+    if (record.activePlayers === 0) {
+      this.scheduleIdleStop(record);
+    }
   }
 
   private handleExit(
@@ -447,6 +575,11 @@ export class RoomRuntimeService implements OnModuleDestroy {
     record.stoppedAt = new Date().toISOString();
     this.clearTimers(record);
     this.releasePort(record);
+    if (code === 3) {
+      // Remember the occupied port briefly; otherwise every new room would
+      // retry the same lowest port and fail while the rest of the range is free.
+      this.unavailablePorts.set(record.port, Date.now() + PORT_QUARANTINE_MS);
+    }
 
     const wasStarting = record.state === 'starting';
     if (record.state === 'failed') {
@@ -516,7 +649,9 @@ export class RoomRuntimeService implements OnModuleDestroy {
     record.error = error.message;
     record.stoppedAt = new Date().toISOString();
     this.clearTimers(record);
-    this.releasePort(record);
+    // Keep the port reserved until the process really exits. terminate() may
+    // be asynchronous, and handing the same port to the next spawn while the
+    // old process is still bound would make that start fail with code 3.
     this.rejectReady(record, error);
     this.appendLog(
       record,
@@ -741,11 +876,11 @@ export class RoomRuntimeService implements OnModuleDestroy {
 
   // --- logs ---------------------------------------------------------------
 
-  private openLog(record: RuntimeRecord, config: GodotRuntimeConfig): void {
+  private openLog(record: RuntimeRecord, stateDir: string): void {
     try {
-      mkdirSync(config.stateDir, { recursive: true });
+      mkdirSync(stateDir, { recursive: true });
       const path = join(
-        config.stateDir,
+        stateDir,
         `${this.safeName(record.roomId)}-${record.port}.log`,
       );
       record.logStream = createWriteStream(path, { flags: 'a' });

@@ -1,7 +1,7 @@
 import { PassThrough } from 'node:stream';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { AppConfigService } from 'src/config/config.service';
 import { RoomRuntimeError } from './room-runtime.errors';
 import { RoomRuntimeService } from './room-runtime.service';
@@ -9,6 +9,7 @@ import {
   GodotRuntimeConfig,
   RuntimeProcess,
   RuntimeProcessFactory,
+  RuntimeSpawnOptions,
 } from './room-runtime.types';
 import { GameTicketService } from './game-ticket.service';
 
@@ -18,6 +19,7 @@ class FakeRuntimeProcess implements RuntimeProcess {
   readonly stderr = new PassThrough();
   readonly written: string[] = [];
   killed = false;
+  killExits = true;
   killSignal: NodeJS.Signals | undefined;
   private exitCallback?: (
     code: number | null,
@@ -43,7 +45,9 @@ class FakeRuntimeProcess implements RuntimeProcess {
   kill(signal?: NodeJS.Signals): void {
     this.killed = true;
     this.killSignal = signal;
-    this.exit(1, 'SIGKILL');
+    if (this.killExits) {
+      this.exit(1, 'SIGKILL');
+    }
   }
 
   emitLine(line: string, stream: 'stdout' | 'stderr' = 'stdout'): void {
@@ -61,9 +65,11 @@ class FakeRuntimeProcess implements RuntimeProcess {
 
 class FakeRuntimeProcessFactory implements RuntimeProcessFactory {
   readonly processes: FakeRuntimeProcess[] = [];
+  readonly spawnOptions: RuntimeSpawnOptions[] = [];
 
-  spawn(): RuntimeProcess {
+  spawn(options: RuntimeSpawnOptions): RuntimeProcess {
     const process = new FakeRuntimeProcess(1000 + this.processes.length);
+    this.spawnOptions.push(options);
     this.processes.push(process);
     return process;
   }
@@ -385,5 +391,143 @@ describe('RoomRuntimeService', () => {
 
     const logPath = join(stateDir, 'room-1-19100.log');
     expect(readFileSync(logPath, 'utf8')).toContain('persisted line');
+  });
+
+  it('keeps a failed start port reserved until the process exits', async () => {
+    jest.useFakeTimers();
+    const connection = service.getConnection('room-1');
+    await flushAsync();
+    const first = factory.last;
+    first.killExits = false;
+
+    jest.advanceTimersByTime(config.startTimeoutMs);
+    await flushAsync();
+
+    await expect(connection).rejects.toThrow(/WIRED_SERVER_READY/);
+    expect(first.killed).toBe(true);
+
+    const retry = service.getConnection('room-1');
+    await flushAsync();
+    expect(factory.processes).toHaveLength(2);
+    expect(service.getRuntime('room-1')?.port).toBe(19101);
+
+    first.exit(1);
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-1 port=19101 bind=127.0.0.1',
+    );
+    await retry;
+  });
+
+  it('skips a port that failed to bind on the next start', async () => {
+    const first = service.getConnection('room-1');
+    await flushAsync();
+    factory.last.exit(3);
+    await expect(first).rejects.toThrow(/port 19100/);
+
+    const second = service.getConnection('room-2');
+    await flushAsync();
+    expect(service.getRuntime('room-2')?.port).toBe(19101);
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-2 port=19101 bind=127.0.0.1',
+    );
+    await second;
+  });
+
+  it('passes an absolute state directory to Godot for relative config', async () => {
+    service = createService({ stateDir: relative(process.cwd(), stateDir) });
+    const connection = service.getConnection('room-1');
+    await flushAsync();
+
+    const options = factory.spawnOptions.at(-1);
+    const stateIndex = options?.args.indexOf('--state-dir') ?? -1;
+    expect(stateIndex).toBeGreaterThan(-1);
+    expect(isAbsolute(options?.args[stateIndex + 1] ?? '')).toBe(true);
+
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-1 port=19100 bind=127.0.0.1',
+    );
+    await connection;
+  });
+
+  it('idles out a room that never authenticated a player', async () => {
+    jest.useFakeTimers();
+    const { process } = await startRoom('room-1');
+
+    jest.advanceTimersByTime(config.idleTimeoutMs);
+    await flushAsync();
+
+    expect(process.stdinText).toContain('shutdown');
+    process.exit(0);
+    await flushAsync();
+    expect(service.getRuntime('room-1')?.state).toBe('stopped');
+  });
+
+  it('counts each authenticated peer once and ignores unknown departures', async () => {
+    const { process } = await startRoom('room-1');
+
+    process.emitLine('WIRED_AUTH_OK peer=2 player=1 room=room-1');
+    process.emitLine('WIRED_AUTH_OK peer=2 player=1 room=room-1');
+    expect(service.getRuntime('room-1')?.activePlayers).toBe(1);
+
+    process.emitLine('WIRED_PLAYER_LEFT peer=9 player=9');
+    expect(service.getRuntime('room-1')?.activePlayers).toBe(1);
+
+    process.emitLine('WIRED_PLAYER_LEFT peer=2 player=1');
+    expect(service.getRuntime('room-1')?.activePlayers).toBe(0);
+  });
+
+  it('does not forward unrelated backend secrets to the runtime', async () => {
+    const previous = process.env.DB_PASSWORD;
+    process.env.DB_PASSWORD = 'backend-database-secret';
+    try {
+      await startRoom('room-1');
+      const env = factory.spawnOptions.at(-1)?.env ?? {};
+      expect(env.DB_PASSWORD).toBeUndefined();
+      expect(env.WIRED_GAME_TICKET_SECRET).toBe('test-secret');
+      expect(env.PATH ?? env.Path).toBeDefined();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.DB_PASSWORD;
+      } else {
+        process.env.DB_PASSWORD = previous;
+      }
+    }
+  });
+
+  it('rejects a room id that is unsafe as a path segment', async () => {
+    await expect(service.getConnection('..')).rejects.toMatchObject({
+      code: 'invalid_room',
+    });
+    expect(factory.processes).toHaveLength(0);
+  });
+
+  it('waits for an in-flight stop during shutdown', async () => {
+    jest.useFakeTimers();
+    const { process } = await startRoom('room-1');
+    const stopping = service.stopRoom('room-1');
+    await flushAsync();
+
+    let shutdownDone = false;
+    const shutdown = service.shutdownAll().then(() => {
+      shutdownDone = true;
+    });
+    await flushAsync();
+    expect(shutdownDone).toBe(false);
+
+    process.exit(0);
+    await Promise.all([stopping, shutdown]);
+  });
+
+  it('rejects invalid lifecycle timeouts instead of starting', async () => {
+    service = createService({ ticketTtlSec: 0 });
+    const connection = service.getConnection('room-1');
+    await flushAsync();
+    if (factory.processes.length > 0) {
+      factory.last.emitLine(
+        'WIRED_SERVER_READY room=room-1 port=19100 bind=127.0.0.1',
+      );
+    }
+
+    await expect(connection).rejects.toMatchObject({ code: 'config' });
   });
 });

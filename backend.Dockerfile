@@ -14,6 +14,8 @@ RUN pnpm run build:server
 RUN pnpm run build:shared
 
 FROM base
+# Room runtime endpoints must go through the public proxy in the deployed image.
+ENV NODE_ENV=production
 COPY --from=prod-deps /app/node_modules /app/node_modules
 COPY --from=prod-deps /app/packages/server/node_modules /app/packages/server/node_modules
 COPY --from=build /app/packages/server/dist /app/packages/server/dist

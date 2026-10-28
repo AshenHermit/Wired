@@ -4,7 +4,8 @@ export type RoomRuntimeErrorCode =
   | 'room_starting'
   | 'room_stopping'
   | 'start_failed'
-  | 'ticket_secret_missing';
+  | 'ticket_secret_missing'
+  | 'invalid_room';
 
 /**
  * Explicit lifecycle error. The HTTP layer must translate this into a 4xx/5xx
