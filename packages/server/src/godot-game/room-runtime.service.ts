@@ -16,6 +16,7 @@ const READY_PATTERN = /^WIRED_SERVER_READY room=(\S+) port=(\d+) bind=(\S+)/;
 const AUTH_OK_PATTERN = /^WIRED_AUTH_OK peer=(\d+) player=\d+ room=(\S+)/;
 const PLAYER_LEFT_PATTERN = /^WIRED_PLAYER_LEFT peer=(\d+) player=\d+/;
 const FORCE_KILL_WAIT_MS = 2_000;
+const HANDSHAKE_LEASE_SLACK_MS = 5_000;
 
 /**
  * Owns the in-memory registry of Godot room servers.
@@ -65,12 +66,9 @@ export class RoomRuntimeService implements OnModuleDestroy {
       );
     }
 
-    // Opening the game tab is itself an intent to join: give a room that is
-    // already running without players a full idle window for the handshake.
-    if (record.activePlayers === 0) {
-      this.clearIdleTimer(record);
-      this.scheduleIdleStop(record);
-    }
+    // Opening the game tab is itself an intent to join, but only one bounded
+    // lease per peerless runtime: repeated calls must not keep it alive forever.
+    this.renewHandshakeLease(record);
 
     const ticket = this.tickets.mint(roomId);
     return {
@@ -275,6 +273,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
       error: null,
       activePlayers: 0,
       authenticatedPeers: new Set<number>(),
+      handshakeLeaseUntil: 0,
       stopRequested: false,
       forceKilled: false,
       readySettled: false,
@@ -336,6 +335,8 @@ export class RoomRuntimeService implements OnModuleDestroy {
       }
       record.authenticatedPeers.add(Number(authOk[1]));
       record.activePlayers = record.authenticatedPeers.size;
+      // The handshake succeeded; from now on only real peers keep it alive.
+      record.handshakeLeaseUntil = 0;
       this.clearIdleTimer(record);
       return;
     }
@@ -352,6 +353,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
       }
       record.activePlayers = record.authenticatedPeers.size;
       if (record.activePlayers === 0) {
+        record.handshakeLeaseUntil = 0;
         this.scheduleIdleStop(record);
       }
     }
@@ -525,13 +527,21 @@ export class RoomRuntimeService implements OnModuleDestroy {
     ) {
       return;
     }
+    const leaseRemaining = record.handshakeLeaseUntil - Date.now();
+    const delay =
+      leaseRemaining > 0 ? leaseRemaining : config.idleTimeoutMs;
     this.appendLog(
       record,
-      `[wired] no authenticated players; idle stop scheduled in ${config.idleTimeoutMs}ms`,
+      `[wired] no authenticated players; idle stop scheduled in ${delay}ms`,
     );
     record.idleTimer = setTimeout(() => {
       record.idleTimer = undefined;
       if (record.state !== 'running' || record.activePlayers > 0) {
+        return;
+      }
+      if (record.handshakeLeaseUntil > Date.now()) {
+        // A client is still inside its bounded handshake window.
+        this.scheduleIdleStop(record);
         return;
       }
       void this.stopRoom(record.roomId, 'idle_timeout').catch((error) => {
@@ -539,8 +549,32 @@ export class RoomRuntimeService implements OnModuleDestroy {
           `Idle stop failed for room ${record.roomId}: ${this.errorMessage(error)}`,
         );
       });
-    }, config.idleTimeoutMs);
+    }, delay);
     record.idleTimer.unref?.();
+  }
+
+  /**
+   * Grants one bounded handshake window per peerless runtime, sized by the
+   * ticket lifetime and capped by the idle timeout. A second request while the
+   * window is open gets a fresh ticket but does not move the deadline.
+   */
+  private renewHandshakeLease(record: RuntimeRecord): void {
+    if (record.activePlayers > 0) {
+      return;
+    }
+    const now = Date.now();
+    if (record.handshakeLeaseUntil > now) {
+      return;
+    }
+    const config = this.configService.godotRuntime;
+    const leaseMs = config.ticketTtlSec * 1_000 + HANDSHAKE_LEASE_SLACK_MS;
+    const boundedMs =
+      config.idleTimeoutMs > 0
+        ? Math.min(leaseMs, config.idleTimeoutMs)
+        : leaseMs;
+    record.handshakeLeaseUntil = now + boundedMs;
+    this.clearIdleTimer(record);
+    this.scheduleIdleStop(record);
   }
 
   private async performStop(

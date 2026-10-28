@@ -44,6 +44,11 @@ const config: () => AppConfig = () => ({
     startTimeoutMs: intFromEnv('GODOT_ROOM_START_TIMEOUT_MS', 20_000),
     ticketTtlSec: intFromEnv('GODOT_GAME_TICKET_TTL_SEC', 60),
     ticketSecret: process.env.WIRED_GAME_TICKET_SECRET ?? '',
+    ticketRateLimit: intFromEnv('GODOT_GAME_TICKET_RATE_LIMIT', 20),
+    ticketRateLimitWindowMs: intFromEnv(
+      'GODOT_GAME_TICKET_RATE_WINDOW_MS',
+      60_000,
+    ),
     stateDir: process.env.GODOT_ROOM_STATE_DIR ?? './storage/godot_rooms',
     publicWsBaseUrl: process.env.GODOT_ROOM_PUBLIC_WS_BASE ?? '',
     logBufferLines: intFromEnv('GODOT_ROOM_LOG_BUFFER_LINES', 2000),

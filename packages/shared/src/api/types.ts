@@ -101,3 +101,39 @@ export type ProjectInfo = {
   baseUrl: string;
   filepaths: string[];
 };
+
+/**
+ * Lifecycle of the Godot server dedicated to a room, as exposed to clients.
+ * `idle` means the backend has no runtime for the room yet; reading the status
+ * never starts one.
+ */
+export type GameRoomRuntimeState =
+  | "idle"
+  | "starting"
+  | "running"
+  | "stopping"
+  | "stopped"
+  | "failed";
+
+export type GameRoomRuntimeStatus = {
+  roomId: number;
+  state: GameRoomRuntimeState;
+  endpoint: string | null;
+  /** Confirmed Godot peers, not handshake attempts. */
+  activePlayers: number;
+  error: string | null;
+};
+
+/**
+ * One-time connection material for the Godot client. The ticket is
+ * short-lived and single-use: every join or reconnect must request a new one.
+ * It is delivered to the Web build over postMessage, never in a URL.
+ */
+export type GameRoomConnection = {
+  roomId: number;
+  endpoint: string;
+  ticket: string;
+  /** Unix timestamp in seconds. */
+  ticketExpiresAt: number;
+  activePlayers: number;
+};

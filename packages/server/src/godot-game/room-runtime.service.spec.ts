@@ -110,6 +110,8 @@ describe('RoomRuntimeService', () => {
       startTimeoutMs: 10_000,
       ticketTtlSec: 60,
       ticketSecret: 'test-secret',
+      ticketRateLimit: 20,
+      ticketRateLimitWindowMs: 60_000,
       stateDir,
       publicWsBaseUrl: '',
       logBufferLines: 50,
@@ -454,6 +456,24 @@ describe('RoomRuntimeService', () => {
     const { process } = await startRoom('room-1');
 
     jest.advanceTimersByTime(config.idleTimeoutMs);
+    await flushAsync();
+
+    expect(process.stdinText).toContain('shutdown');
+    process.exit(0);
+    await flushAsync();
+    expect(service.getRuntime('room-1')?.state).toBe('stopped');
+  });
+
+  it('does not let repeated connection requests keep a peerless runtime alive', async () => {
+    jest.useFakeTimers();
+    const { process } = await startRoom('room-1');
+
+    jest.advanceTimersByTime(50_000);
+    await expect(service.getConnection('room-1')).resolves.toMatchObject({
+      state: 'running',
+    });
+
+    jest.advanceTimersByTime(11_000);
     await flushAsync();
 
     expect(process.stdinText).toContain('shutdown');

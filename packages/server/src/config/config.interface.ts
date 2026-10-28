@@ -32,6 +32,8 @@ export interface AppConfig {
     startTimeoutMs: number;
     ticketTtlSec: number;
     ticketSecret: string;
+    ticketRateLimit: number;
+    ticketRateLimitWindowMs: number;
     stateDir: string;
     publicWsBaseUrl: string;
     logBufferLines: number;

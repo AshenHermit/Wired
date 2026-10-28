@@ -29,6 +29,9 @@ export interface GodotRuntimeConfig {
   startTimeoutMs: number;
   ticketTtlSec: number;
   ticketSecret: string;
+  /** Ticket issues allowed per user and room inside one window. 0 disables. */
+  ticketRateLimit: number;
+  ticketRateLimitWindowMs: number;
   /** Directory for per-room state and runtime logs. */
   stateDir: string;
   /**

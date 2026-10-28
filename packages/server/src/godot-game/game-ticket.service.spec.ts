@@ -14,6 +14,8 @@ const baseConfig: GodotRuntimeConfig = {
   startTimeoutMs: 1_000,
   ticketTtlSec: 60,
   ticketSecret: 'ticket-secret',
+  ticketRateLimit: 20,
+  ticketRateLimitWindowMs: 60_000,
   stateDir: 'state',
   publicWsBaseUrl: '',
   logBufferLines: 100,

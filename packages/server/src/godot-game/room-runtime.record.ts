@@ -16,6 +16,8 @@ export interface RuntimeRecord {
   error: string | null;
   activePlayers: number;
   authenticatedPeers: Set<number>;
+  /** Epoch ms until which a peerless runtime waits for a first handshake. */
+  handshakeLeaseUntil: number;
   stopRequested: boolean;
   forceKilled: boolean;
   readySettled: boolean;
