@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { GAME_ROOMS_TYPES, GameRoomsType } from '@wired-io/shared';
+import { AVAILABLE_GAME_ROOMS_TYPES, GameRoomsType } from '@wired-io/shared';
 import {
   IsBoolean,
   IsEnum,
@@ -50,10 +50,10 @@ export class CreateRoomDto {
   parentRoomId?: number;
 
   @ApiProperty({
-    example: 'ts-game',
+    example: 'godot',
     description: 'Room type',
-    enum: GAME_ROOMS_TYPES,
+    enum: AVAILABLE_GAME_ROOMS_TYPES,
   })
-  @IsEnum(GAME_ROOMS_TYPES)
+  @IsEnum(AVAILABLE_GAME_ROOMS_TYPES)
   type: GameRoomsType;
 }

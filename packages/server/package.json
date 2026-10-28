@@ -20,8 +20,6 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
-    "@box2d": "file:../box2d",
-    "@geckos.io/phaser-on-nodejs": "^1.3.1",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",
@@ -29,35 +27,25 @@
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.1",
-    "@nestjs/platform-socket.io": "^11.1.8",
     "@nestjs/swagger": "^11.2.3",
     "@nestjs/typeorm": "^11.0.0",
-    "@nestjs/websockets": "^11.1.8",
     "@types/crypto-js": "^4.2.2",
     "@wired-io/shared": "workspace:*",
     "bcrypt": "^6.0.0",
-    "canvas": "^3.2.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
     "content-type-to-ext": "^1.0.0",
     "crypto-js": "^4.2.0",
-    "easy-event-emitter": "^1.2.2",
     "glob": "^13.0.0",
     "hashids": "^2.3.0",
-    "jsdom": "^25.0.1",
     "passport-google-oauth20": "^2.0.0",
     "passport-jwt": "^4.0.1",
     "pathe": "^2.0.3",
     "pg": "^8.16.3",
-    "phaser": "^3.90.0",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "socket.io": "^4.8.1",
     "typeorm": "^0.3.28",
-    "uuid": "^13.0.0",
-    "xmlhttprequest": "^1.8.0"
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
@@ -69,11 +57,8 @@
     "@swc/core": "^1.10.7",
     "@types/express": "^5.0.0",
     "@types/jest": "^29.5.14",
-    "@types/jsdom": "^21.1.7",
     "@types/multer": "^2.0.0",
     "@types/node": "^22.10.7",
-    "@types/react": "^19.1.16",
-    "@types/react-dom": "^19.1.0",
     "@types/supertest": "^6.0.2",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
@@ -100,6 +85,10 @@
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
+    },
+    "moduleNameMapper": {
+      "^@wired-io/shared$": "<rootDir>/../../shared/src/index.ts",
+      "^src/(.*)$": "<rootDir>/$1"
     },
     "collectCoverageFrom": [
       "**/*.(t|j)s"

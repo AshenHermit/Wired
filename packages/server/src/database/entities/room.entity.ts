@@ -56,7 +56,7 @@ export class Room {
     description: 'room type',
     enum: GAME_ROOMS_TYPES,
   })
-  @Column({ type: 'enum', enum: GAME_ROOMS_TYPES, default: 'ts-game' })
+  @Column({ type: 'enum', enum: GAME_ROOMS_TYPES, default: 'godot' })
   type: GameRoomsType;
 
   @ApiProperty({ description: 'room author', type: () => User, nullable: true })

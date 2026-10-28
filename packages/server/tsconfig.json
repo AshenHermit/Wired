@@ -28,9 +28,6 @@
     "paths": {
       "@wired-io/shared": [
         "../shared/src"
-      ],
-      "@box2d": [
-        "../box2d/src"
       ]
     }
   }
