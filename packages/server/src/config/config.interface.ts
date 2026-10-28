@@ -21,4 +21,19 @@ export interface AppConfig {
     editorPath: string;
     projectPath: string;
   };
+  godotRuntime: {
+    executablePath: string;
+    projectPath: string;
+    portStart: number;
+    portEnd: number;
+    bindAddress: string;
+    idleTimeoutMs: number;
+    shutdownGraceMs: number;
+    startTimeoutMs: number;
+    ticketTtlSec: number;
+    ticketSecret: string;
+    stateDir: string;
+    publicWsBaseUrl: string;
+    logBufferLines: number;
+  };
 }

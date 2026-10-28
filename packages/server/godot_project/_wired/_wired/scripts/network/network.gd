@@ -249,6 +249,14 @@ func _player_list() -> Array:
 	return list
 
 
+func get_active_player_count() -> int:
+	return _players.size()
+
+
+func get_server_seq() -> int:
+	return _server_seq
+
+
 # --- client ---------------------------------------------------------------
 
 

@@ -5,6 +5,10 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  // Ensures room runtime processes are stopped when the backend exits
+  // (SIGINT/SIGTERM); RoomRuntimeService also terminates them gracefully.
+  app.enableShutdownHooks();
+
   app.enableCors({
     allowedHeaders: [
       'Content-Type',

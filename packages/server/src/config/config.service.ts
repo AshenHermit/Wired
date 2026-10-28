@@ -29,4 +29,10 @@ export class AppConfigService {
       this.configService.get<AppConfig['godot']>('godot') ?? config().godot
     );
   }
+  get godotRuntime() {
+    return (
+      this.configService.get<AppConfig['godotRuntime']>('godotRuntime') ??
+      config().godotRuntime
+    );
+  }
 }
