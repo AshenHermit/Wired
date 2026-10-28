@@ -1,6 +1,6 @@
 "use client";
 
-import { GODOT_EDITOR_URL, GODOT_PROJECT_ZIP_URL } from "@/utils/variables";
+import { GODOT_EDITOR_URL } from "@/utils/variables";
 import Script from "next/script";
 import React from "react";
 import {
@@ -34,7 +34,7 @@ export const GodotEditor = React.forwardRef<GodotEditorApi, {}>(
         await editor.downloadProject(projectInfo);
         await editor.start();
       },
-      []
+      [],
     );
     const { setEditorApi } = useGodotRoomContext();
 
@@ -42,7 +42,7 @@ export const GodotEditor = React.forwardRef<GodotEditorApi, {}>(
       () => ({
         editorRef: editorInstanceRef,
       }),
-      [editorInstanceRef]
+      [editorInstanceRef],
     );
 
     React.useImperativeHandle(ref, () => editorApi, [editorApi]);
@@ -56,15 +56,15 @@ export const GodotEditor = React.forwardRef<GodotEditorApi, {}>(
         editorInstanceRef.current = new GodotEditorInstance();
         editorInstanceRef.current.events.addListener(
           "onLoadStatusChange",
-          setStatus
+          setStatus,
         );
         editorInstanceRef.current.events.addListener(
           "onProgressStatusChange",
-          setProgressStatus
+          setProgressStatus,
         );
         editorInstanceRef.current.events.addListener(
           "onProgressValueChange",
-          setProgressValue
+          setProgressValue,
         );
         editorInstanceRef.current.setCanvas(canvasRef.current);
         (window as any).editor = editorInstanceRef.current;
@@ -111,5 +111,5 @@ export const GodotEditor = React.forwardRef<GodotEditorApi, {}>(
         )}
       </>
     );
-  }
+  },
 );
