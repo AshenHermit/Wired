@@ -19,6 +19,12 @@ config/icon="res://icon.svg"
 
 Global="*res://_wired/scripts/global/global.gd"
 
+[display]
+
+window/size/viewport_width=960
+window/size/viewport_height=540
+window/stretch/mode="canvas_items"
+
 [rendering]
 
 renderer/rendering_method="gl_compatibility"
