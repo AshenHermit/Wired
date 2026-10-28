@@ -5,8 +5,11 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        // Применяем заголовки для всех страниц с Godot редактором
-        source: "/room/:room_code",
+        // Заголовки нужны всему документу, а не только /room/*: при клиентском
+        // переходе (next/link) документ не перезагружается, поэтому без COOP/COEP
+        // на главной странице crossOriginIsolated остаётся false и SharedArrayBuffer
+        // в Godot-редакторе недоступен.
+        source: "/:path*",
         headers: [
           {
             key: "Cross-Origin-Opener-Policy",
