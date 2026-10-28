@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AppConfigModule } from 'src/config/config.module';
 import { RoomsModule } from 'src/rooms/rooms.module';
+import { GameExportController } from './game-export.controller';
 import { GameRoomController } from './game-room.controller';
 import { GameRoomTicketRateLimiter } from './game-room.rate-limiter';
 import { GameRoomService } from './game-room.service';
@@ -11,7 +12,7 @@ import { RuntimeProcessFactory } from './room-runtime.types';
 
 @Module({
   imports: [AppConfigModule, RoomsModule],
-  controllers: [GameRoomController],
+  controllers: [GameRoomController, GameExportController],
   providers: [
     GameTicketService,
     RoomRuntimeService,
