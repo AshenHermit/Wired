@@ -281,6 +281,10 @@ export function GameTab({ room }: { room: Room }) {
   }, [phase, room.id]);
 
   React.useEffect(() => {
+    // Strict Mode runs setup → cleanup → setup on the same instance in
+    // development. Reset the flag so the second setup is not treated as a
+    // disposed component and every connection request is dropped.
+    disposedRef.current = false;
     return () => {
       disposedRef.current = true;
       if (retryTimerRef.current !== null) {
