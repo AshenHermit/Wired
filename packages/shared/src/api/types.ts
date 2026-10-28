@@ -93,6 +93,9 @@ export type UpdateUserPayload = Partial<Omit<CreateUserPayload, "email">>;
 export type GameRoomsType = "godot" | "ts-game";
 export const GAME_ROOMS_TYPES: GameRoomsType[] = ["godot", "ts-game"];
 
+// ts-game оставлен только для чтения старых комнат.
+export const AVAILABLE_GAME_ROOMS_TYPES = ["godot"] as const;
+
 export type ProjectInfo = {
   name: string;
   baseUrl: string;

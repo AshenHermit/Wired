@@ -15,16 +15,10 @@
     "skipLibCheck": true,
   },
   "include": [
-    "src/**/*",
-    "../client/src/networking/ServerAPI.ts"
+    "src/**/*"
   ],
   "exclude": [
     "node_modules",
     "dist"
-  ],
-  "paths": {
-    "@box2d": [
-      "../box2d/src"
-    ]
-  }
+  ]
 }
