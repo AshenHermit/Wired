@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0">
+		<title>$GODOT_PROJECT_NAME</title>
+		<style>
+			html, body, #canvas {
+				margin: 0;
+				padding: 0;
+				border: 0;
+			}
+
+			body {
+				color: white;
+				background-color: black;
+				overflow: hidden;
+				touch-action: none;
+			}
+
+			#canvas {
+				display: block;
+			}
+
+			#canvas:focus {
+				outline: none;
+			}
+
+			#status {
+				position: absolute;
+				inset: 0;
+				display: flex;
+				flex-direction: column;
+				justify-content: center;
+				align-items: center;
+				gap: 0.75rem;
+				background-color: #242424;
+				font-family: 'Noto Sans', 'Droid Sans', Arial, sans-serif;
+			}
+
+			#status-progress {
+				width: 50%;
+			}
+
+			#status-notice {
+				display: none;
+				max-width: 32rem;
+				margin: 0 2rem;
+				padding: 1rem;
+				border: 1px solid #9b3943;
+				border-radius: 0.5rem;
+				background-color: #5b3943;
+				color: #e0e0e0;
+				line-height: 1.3;
+				text-align: center;
+				white-space: pre-line;
+			}
+		</style>
+		$GODOT_HEAD_INCLUDE
+	</head>
+	<body>
+		<canvas id="canvas">
+			Your browser does not support the canvas tag.
+		</canvas>
+
+		<noscript>
+			Your browser does not support JavaScript.
+		</noscript>
+
+		<div id="status">
+			<progress id="status-progress"></progress>
+			<div id="status-notice"></div>
+		</div>
+
+		<script>
+			/*
+			 * Same-origin bridge between the Wired app (parent frame) and the
+			 * exported Godot build (this frame).
+			 *
+			 * - The parent must be this frame's actual parent, on the same
+			 *   origin; anything else is ignored.
+			 * - The one-time game ticket arrives in a postMessage payload,
+			 *   never in the URL, history, referrer or logs.
+			 * - Godot pulls the configuration exactly once, right after boot.
+			 */
+			(function () {
+				'use strict';
+
+				var HOST_SOURCE = 'wired-host';
+				var GAME_SOURCE = 'wired-game';
+				var state = {
+					config: null,
+					ready: false,
+					stage: 'booting',
+					detail: '',
+				};
+
+				function post(type, payload) {
+					if (window.parent === window) {
+						return;
+					}
+					try {
+						window.parent.postMessage(
+							{ source: GAME_SOURCE, type: type, payload: payload || {} },
+							window.location.origin
+						);
+					} catch (error) {
+						console.error('[wired] cannot post message:', error);
+					}
+				}
+
+				function setNotice(text) {
+					var notice = document.getElementById('status-notice');
+					if (notice) {
+						notice.textContent = text;
+						notice.style.display = 'block';
+					}
+				}
+
+				function hideOverlay() {
+					var status = document.getElementById('status');
+					if (status) {
+						status.remove();
+					}
+				}
+
+				function acceptConfig(data) {
+					var payload = data.payload || {};
+					var endpoint = typeof payload.endpoint === 'string' ? payload.endpoint : '';
+					var ticket = typeof payload.ticket === 'string' ? payload.ticket : '';
+					var room = payload.room;
+
+					if (!/^wss?:\/\/\S+$/.test(endpoint)) {
+						return false;
+					}
+					if (!ticket || ticket.length > 512) {
+						return false;
+					}
+					if (!Number.isInteger(room) || room <= 0) {
+						return false;
+					}
+					// A second configuration needs a fresh engine instance:
+					// tickets are single-use, so silently replacing it would
+					// hide a stale iframe from the host.
+					if (state.config) {
+						return false;
+					}
+
+					state.config = { endpoint: endpoint, ticket: ticket, room: room };
+					post('wired:game-configured', { room: room });
+					return true;
+				}
+
+				window.addEventListener('message', function (event) {
+					if (event.source !== window.parent) {
+						return;
+					}
+					if (event.origin !== window.location.origin) {
+						return;
+					}
+					var data = event.data;
+					if (!data || data.source !== HOST_SOURCE) {
+						return;
+					}
+					if (data.type === 'wired:configure') {
+						acceptConfig(data);
+					} else if (data.type === 'wired:ping') {
+						if (state.ready) {
+							post('wired:game-ready', {});
+						}
+						post('wired:game-status', {
+							stage: state.stage,
+							detail: state.detail,
+						});
+					}
+				});
+
+				window.__wiredGame = {
+					takeConfig: function () {
+						var config = state.config;
+						state.config = null;
+						return config ? JSON.stringify(config) : '';
+					},
+					notifyReady: function () {
+						state.ready = true;
+						state.stage = 'ready';
+						hideOverlay();
+						post('wired:game-ready', {});
+						post('wired:game-status', { stage: 'ready', detail: '' });
+					},
+					notifyStatus: function (stage, detail) {
+						state.stage = String(stage || 'unknown');
+						state.detail = String(detail || '');
+						post('wired:game-status', {
+							stage: state.stage,
+							detail: state.detail,
+						});
+					},
+					notifyEvent: function (payloadJson) {
+						var event = null;
+						try {
+							event = JSON.parse(String(payloadJson));
+						} catch (error) {
+							event = null;
+						}
+						post('wired:game-event', { event: event });
+					},
+					notifyError: function (message) {
+						var text = String(message || 'Game error');
+						state.stage = 'error';
+						state.detail = text;
+						setNotice(text);
+						post('wired:game-error', { message: text });
+					},
+				};
+
+				post('wired:game-booted', {});
+			})();
+		</script>
+		<script src="$GODOT_URL"></script>
+		<script>
+			const GODOT_CONFIG = $GODOT_CONFIG;
+			const GODOT_THREADS_ENABLED = $GODOT_THREADS_ENABLED;
+			const engine = new Engine(GODOT_CONFIG);
+
+			(function () {
+				const statusProgress = document.getElementById('status-progress');
+				const statusNotice = document.getElementById('status-notice');
+
+				function displayFailureNotice(err) {
+					console.error(err);
+					const message =
+						err instanceof Error
+							? err.message
+							: typeof err === 'string'
+								? err
+								: 'An unknown error occurred.';
+					if (statusProgress) statusProgress.style.display = 'none';
+					if (statusNotice) {
+						statusNotice.textContent = message;
+						statusNotice.style.display = 'block';
+					}
+					window.__wiredGame?.notifyError(message);
+				}
+
+				const missing = Engine.getMissingFeatures({
+					threads: GODOT_THREADS_ENABLED,
+				});
+
+				if (missing.length !== 0) {
+					displayFailureNotice(
+						'The following features required to run Godot projects on the Web are missing:\n' +
+							missing.join('\n')
+					);
+					return;
+				}
+
+				engine
+					.startGame({
+						onProgress: function (current, total) {
+							if (!statusProgress) return;
+							if (current > 0 && total > 0) {
+								statusProgress.value = current;
+								statusProgress.max = total;
+							} else {
+								statusProgress.removeAttribute('value');
+								statusProgress.removeAttribute('max');
+							}
+						},
+					})
+					.catch(displayFailureNotice);
+			})();
+		</script>
+	</body>
+</html>

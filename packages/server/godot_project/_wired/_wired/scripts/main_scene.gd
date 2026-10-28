@@ -4,7 +4,8 @@ extends Node
 ##
 ##   server: godot --headless --path . --server --port <p> --room <room>
 ##   client: godot --path . --url ws://host:port --ticket <ticket> --room <room>
-##   web:    index.html?ws=ws://host:port&ticket=<ticket>&room=<room>
+##   web:    loaded inside the Wired Game tab; endpoint, ticket and room arrive
+##           over the same-origin postMessage bridge, never in the URL.
 ##
 ## The server never receives the ticket secret through argv: it is read from
 ## the WIRED_GAME_TICKET_SECRET environment variable set by the backend.
@@ -17,6 +18,8 @@ var _server_port := 0
 var _state_dir := ""
 var _control_thread: Thread = null
 var _shutdown_in_progress := false
+var _authenticated_once := false
+var _auth_error_reported := false
 
 @onready var _net: WiredNetwork = $Net
 @onready var _status: Label = $UI/Margin/VBox/Status
@@ -26,11 +29,18 @@ var _shutdown_in_progress := false
 func _ready() -> void:
 	_net.status_changed.connect(_on_status_changed)
 	_net.log_line.connect(_on_log_line)
+	_net.authenticated.connect(_on_authenticated)
+	_net.auth_failed.connect(_on_auth_failed)
+	_net.connection_failed.connect(_on_connection_failed)
+	_net.disconnected.connect(_on_server_disconnected)
+	_net.server_event.connect(_on_server_event)
+	# The host waits for this before minting a ticket.
+	_bridge_call("notifyReady", [])
 	var cfg := _read_config()
 	if str(cfg.get("mode", "")) == "server":
 		_run_server(cfg)
 	else:
-		_run_client(cfg)
+		await _run_client(cfg)
 
 
 func _read_config() -> Dictionary:
@@ -52,9 +62,12 @@ func _read_config() -> Dictionary:
 		"probe_action": args.has("--probe-action"),
 	}
 	if OS.has_feature("web"):
-		cfg["url"] = _web_param("ws")
-		cfg["ticket"] = _web_param("ticket")
-		cfg["room"] = _web_param("room")
+		cfg = {
+			"mode": "client",
+			"source": "bridge",
+			"no_hello": false,
+			"probe_action": false,
+		}
 	return cfg
 
 
@@ -150,13 +163,23 @@ func _notification(what: int) -> void:
 
 
 func _run_client(cfg: Dictionary) -> void:
+	if str(cfg.get("source", "")) == "bridge":
+		_bridge_status("waiting", "Waiting for the Wired host")
+		var bridge_config: Dictionary = await _wait_for_bridge_config(15.0)
+		if bridge_config.is_empty():
+			_fail("No game configuration received from the Wired host")
+			return
+		cfg["url"] = str(bridge_config.get("endpoint", ""))
+		cfg["ticket"] = str(bridge_config.get("ticket", ""))
+		cfg["room"] = str(bridge_config.get("room", ""))
 	if str(cfg.url).is_empty():
-		_fail("No game endpoint: pass --url or ?ws=…")
+		_fail("No game endpoint: pass --url or open the Game tab")
 		return
 	if str(cfg.ticket).is_empty():
-		_fail("No game ticket: pass --ticket or ?ticket=…")
+		_fail("No game ticket: pass --ticket or open the Game tab")
 		return
 	print("WIRED_CLIENT_STARTING room=%s url=%s" % [cfg.room, cfg.url])
+	_bridge_status("connecting", str(cfg.url))
 	var err := _net.start_client(
 		str(cfg.url),
 		str(cfg.ticket),
@@ -175,15 +198,48 @@ func _arg_value(args: PackedStringArray, name: String, fallback: String) -> Stri
 	return args[idx + 1]
 
 
-func _web_param(name: String) -> String:
+## Pulls the one-time configuration from the shell bridge. The bridge clears
+## it on read, so the ticket lives only in this process afterwards.
+func _wait_for_bridge_config(timeout_sec: float) -> Dictionary:
 	if not OS.has_feature("web"):
-		return ""
-	return str(
-		JavaScriptBridge.eval(
-			"(new URLSearchParams(window.location.search).get('%s') || '')" % name,
-			true,
+		return {}
+	var deadline := Time.get_ticks_msec() + int(timeout_sec * 1000.0)
+	while Time.get_ticks_msec() < deadline:
+		var raw := str(
+			JavaScriptBridge.eval(
+				"(window.__wiredGame && window.__wiredGame.takeConfig()) || ''",
+				true
+			)
 		)
+		if not raw.is_empty():
+			var parsed: Variant = JSON.parse_string(raw)
+			if typeof(parsed) == TYPE_DICTIONARY:
+				return parsed
+			print("WIRED_CLIENT_ERROR malformed bridge configuration")
+			return {}
+		await get_tree().create_timer(0.1).timeout
+	return {}
+
+
+func _bridge_call(method: String, args: Array = []) -> void:
+	if not OS.has_feature("web"):
+		return
+	var encoded := PackedStringArray()
+	for arg in args:
+		encoded.append(JSON.stringify(arg))
+	JavaScriptBridge.eval(
+		"window.__wiredGame && window.__wiredGame.%s(%s)"
+		% [method, ", ".join(encoded)],
+		true
 	)
+
+
+func _bridge_status(stage: String, detail: String) -> void:
+	_bridge_call("notifyStatus", [stage, detail])
+
+
+func _bridge_error(message: String) -> void:
+	_bridge_call("notifyError", [message])
 
 
 func _fail(message: String) -> void:
@@ -191,6 +247,34 @@ func _fail(message: String) -> void:
 	_status.text = message
 	_status.modulate = Color(1.0, 0.45, 0.45)
 	_on_log_line(message)
+	_bridge_error(message)
+
+
+func _on_authenticated(player_id: int) -> void:
+	_authenticated_once = true
+	_bridge_status("authenticated", "player %d" % player_id)
+
+
+func _on_auth_failed(reason: String) -> void:
+	_auth_error_reported = true
+	_bridge_error("Authentication failed: %s" % reason)
+
+
+func _on_connection_failed() -> void:
+	_bridge_status("connection_failed", "Connection failed")
+
+
+func _on_server_disconnected() -> void:
+	if _auth_error_reported:
+		return
+	var stage := "disconnected" if _authenticated_once else "connection_failed"
+	_bridge_status(stage, "Disconnected from server")
+
+
+func _on_server_event(event: Dictionary) -> void:
+	_bridge_call("notifyEvent", [JSON.stringify(event)])
+	if str(event.get("type", "")) == "world_state":
+		_bridge_status("ready", "world_state")
 
 
 func _on_status_changed(text: String) -> void:

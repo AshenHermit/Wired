@@ -17,6 +17,10 @@ class_name WiredNetwork
 signal status_changed(text: String)
 signal log_line(text: String)
 signal server_event(event: Dictionary)
+signal authenticated(player_id: int)
+signal auth_failed(reason: String)
+signal connection_failed()
+signal disconnected()
 
 const PROTOCOL_VERSION := 1
 const AUTH_TIMEOUT_SEC := 10.0
@@ -25,7 +29,7 @@ const SERVER_PEER_ID := 1
 var mode := ""
 var room_code := ""
 var player_id := 0
-var authenticated := false
+var _authenticated := false
 
 var _ticket_secret := ""
 var _ticket := ""
@@ -310,15 +314,17 @@ func _on_connected_to_server() -> void:
 func _on_connection_failed() -> void:
 	print("WIRED_CLIENT_CONNECTION_FAILED")
 	status_changed.emit("Connection failed")
+	connection_failed.emit()
 
 
 func _on_server_disconnected() -> void:
 	print("WIRED_CLIENT_SERVER_DISCONNECTED")
-	authenticated = false
+	_authenticated = false
 	if _auth_error.is_empty():
 		status_changed.emit("Disconnected from server")
 	else:
 		status_changed.emit("Authentication failed: %s" % _auth_error)
+	disconnected.emit()
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -330,12 +336,13 @@ func srv_auth_ok(payload_json: String) -> void:
 		status_changed.emit("Malformed auth response")
 		return
 	player_id = int(payload.get("player_id", 0))
-	authenticated = true
+	_authenticated = true
 	print(
 		"WIRED_CLIENT_AUTH_OK player=%d room=%s"
 		% [player_id, str(payload.get("room", ""))]
 	)
 	status_changed.emit("Authenticated as player %d" % player_id)
+	authenticated.emit(player_id)
 	rpc_id(SERVER_PEER_ID, "cli_ready")
 
 
@@ -346,6 +353,7 @@ func srv_auth_error(reason: String) -> void:
 	print("WIRED_CLIENT_AUTH_ERROR reason=%s" % reason)
 	_auth_error = reason
 	status_changed.emit("Authentication failed: %s" % reason)
+	auth_failed.emit(reason)
 
 
 @rpc("authority", "call_remote", "reliable")

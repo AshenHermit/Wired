@@ -11,6 +11,7 @@ import {
 } from "@/components/animate-ui/components/animate/tabs";
 import { RippleButton } from "@/components/animate-ui/components/buttons/ripple";
 import { GamepadIcon, PackageIcon, WrenchIcon } from "lucide-react";
+import React from "react";
 import {
   Sheet,
   SheetContent,
@@ -18,17 +19,32 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/animate-ui/components/radix/sheet";
-import React from "react";
-import { GodotRoomProvider, useGodotRoomContext } from "./GodotRoomProvider";
+import { GodotRoomProvider } from "./GodotRoomProvider";
+import { GameTab } from "./GameTab";
 
 export function GodotRoomPageClient({ room }: { room: Room }) {
   const [isPackagesOpen, setIsPackagesOpen] = React.useState(false);
+  const [activeTab, setActiveTab] = React.useState("editor");
+  const [gameMounted, setGameMounted] = React.useState(false);
   const editorRef = React.useRef<GodotEditorApi>(null);
+
+  const handleTabChange = React.useCallback((value: string) => {
+    setActiveTab(value);
+    if (value === "game") {
+      // Mount lazily, then keep it mounted: switching to the editor must not
+      // disconnect the player. Removing the iframe is what closes the peer.
+      setGameMounted(true);
+    }
+  }, []);
 
   return (
     <GodotRoomProvider>
       <div className="w-screen h-screen">
-        <Tabs defaultValue="editor" className="w-full h-full !gap-0">
+        <Tabs
+          value={activeTab}
+          onValueChange={handleTabChange}
+          className="w-full h-full !gap-0"
+        >
           <div className="absolute top-0 left-[60%] z-10">
             <TabsList>
               <TabsTrigger value="editor">
@@ -57,8 +73,8 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
             <TabsContent value="editor" className="w-full !h-full">
               <GodotEditor ref={editorRef} />
             </TabsContent>
-            <TabsContent value="game" className="">
-              <div>Game</div>
+            <TabsContent value="game" className="w-full !h-full">
+              {gameMounted && <GameTab room={room} />}
             </TabsContent>
           </TabsContents>
         </Tabs>

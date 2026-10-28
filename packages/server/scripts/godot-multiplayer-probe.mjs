@@ -71,9 +71,18 @@ function isPortFree(port) {
   });
 }
 
+// A free-port check is advisory, especially on Windows where SO_REUSEADDR can
+// let two sockets share a port. Reserve every port this probe hands out so two
+// runtimes in the same run can never pick the same one.
+const reservedPorts = new Set();
+
 async function allocatePort() {
   for (let port = PORT_START; port <= PORT_END; port += 1) {
-    if (await isPortFree(port)) return port;
+    if (reservedPorts.has(port)) continue;
+    if (await isPortFree(port)) {
+      reservedPorts.add(port);
+      return port;
+    }
   }
   throw new Error(`no free port in ${PORT_START}-${PORT_END}`);
 }
@@ -89,7 +98,9 @@ function spawnRuntime(proc, args, env = {}) {
     {
       cwd: PROJECT_PATH,
       env: { ...process.env, ...env },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      // Keep stdin open, like the backend does: a Godot server treats stdin EOF
+      // as a shutdown request, and the NUL device used by 'ignore' reads as EOF.
+      stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     },
   );
@@ -158,6 +169,7 @@ function getRuntime(room) {
     rt.status = 'running';
     return rt;
   })().catch((error) => {
+    if (rt.port) reservedPorts.delete(rt.port);
     runtimes.delete(room);
     throw error;
   });
@@ -188,6 +200,7 @@ async function stop(proc) {
     proc.child.kill();
     await Promise.race([waitForExit(proc), sleep(3000)]);
   }
+  if (proc.port) reservedPorts.delete(proc.port);
 }
 
 function waitForExit(proc) {
