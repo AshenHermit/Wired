@@ -18,6 +18,7 @@ import { RoomsService } from 'src/rooms/rooms.service';
 import { GameRoomTicketRateLimiter } from './game-room.rate-limiter';
 import { RoomRuntimeError, RoomRuntimeErrorCode } from './room-runtime.errors';
 import { RoomRuntimeService } from './room-runtime.service';
+import type { RoomConnection } from './room-runtime.types';
 
 const STATUS_BY_ERROR: Record<RoomRuntimeErrorCode, HttpStatus> = {
   invalid_room: HttpStatus.BAD_REQUEST,
@@ -26,6 +27,7 @@ const STATUS_BY_ERROR: Record<RoomRuntimeErrorCode, HttpStatus> = {
   room_starting: HttpStatus.CONFLICT,
   room_stopping: HttpStatus.CONFLICT,
   room_not_running: HttpStatus.CONFLICT,
+  handshake_window_expired: HttpStatus.CONFLICT,
   start_failed: HttpStatus.BAD_GATEWAY,
 };
 
@@ -40,6 +42,7 @@ const MESSAGE_BY_ERROR: Record<RoomRuntimeErrorCode, string> = {
   room_starting: 'The room runtime is starting; retry shortly',
   room_stopping: 'The room runtime is stopping; retry shortly',
   room_not_running: 'The room runtime is not running',
+  handshake_window_expired: 'The connection window expired; retry to restart the room',
   start_failed: 'The Godot runtime for this room failed to start',
 };
 
@@ -75,7 +78,7 @@ export class GameRoomService {
     }
 
     const runtimeRoomId = String(room.id);
-    let connection;
+    let connection: RoomConnection;
     try {
       connection = await this.runtime.getConnection(runtimeRoomId);
     } catch (error) {

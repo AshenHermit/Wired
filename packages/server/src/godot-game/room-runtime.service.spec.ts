@@ -468,18 +468,43 @@ describe('RoomRuntimeService', () => {
     jest.useFakeTimers();
     const { process } = await startRoom('room-1');
 
-    jest.advanceTimersByTime(50_000);
+    jest.advanceTimersByTime(40_000);
     await expect(service.getConnection('room-1')).resolves.toMatchObject({
       state: 'running',
     });
 
-    jest.advanceTimersByTime(11_000);
+    jest.advanceTimersByTime(21_000);
     await flushAsync();
 
     expect(process.stdinText).toContain('shutdown');
     process.exit(0);
     await flushAsync();
     expect(service.getRuntime('room-1')?.state).toBe('stopped');
+  });
+
+  it('never mints a ticket that outlives the handshake lease', async () => {
+    jest.useFakeTimers();
+    await startRoom('room-1');
+
+    jest.advanceTimersByTime(40_000);
+    const connection = await service.getConnection('room-1');
+    const leaseEndMs = Date.now() + 20_000;
+
+    expect(connection.ticketExpiresAt * 1_000).toBeLessThanOrEqual(leaseEndMs);
+    expect(connection.ticketExpiresAt).toBeLessThanOrEqual(
+      Math.floor(Date.now() / 1_000) + config.ticketTtlSec,
+    );
+  });
+
+  it('refuses a ticket when too little handshake time remains', async () => {
+    jest.useFakeTimers();
+    await startRoom('room-1');
+
+    jest.advanceTimersByTime(55_000);
+
+    await expect(service.getConnection('room-1')).rejects.toMatchObject({
+      code: 'handshake_window_expired',
+    });
   });
 
   it('counts each authenticated peer once and ignores unknown departures', async () => {

@@ -15,6 +15,7 @@ describe('GameExportController', () => {
   const build = async () => {
     const configService = {
       godotRuntime: { projectPath: projectDir },
+      isProduction: false,
     } as unknown as AppConfigService;
     const moduleRef = await Test.createTestingModule({
       controllers: [GameExportController],
@@ -82,6 +83,24 @@ describe('GameExportController', () => {
     expect(response.headers['cache-control']).toBe('no-store');
     expect(response.headers['x-content-type-options']).toBe('nosniff');
     expect(response.headers['content-length']).toBeDefined();
+  });
+
+  it('revalidates engine assets instead of forcing a 36 MB re-download', async () => {
+    const first = await request(app.getHttpServer())
+      .get('/game-export/index.wasm')
+      .expect(200);
+    expect(first.headers['cache-control']).toBe('no-cache');
+    expect(first.headers.etag).toBeDefined();
+
+    await request(app.getHttpServer())
+      .get('/game-export/index.wasm')
+      .set('If-None-Match', first.headers.etag)
+      .expect(304);
+
+    const shell = await request(app.getHttpServer())
+      .get('/game-export/index.html')
+      .expect(200);
+    expect(shell.headers['cache-control']).toBe('no-store');
   });
 
   it('serves index.html at the export root', async () => {

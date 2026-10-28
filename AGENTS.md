@@ -18,7 +18,8 @@ Wired is a browser-based Godot game platform: Next.js frontend + NestJS API/asse
 - Godot editor assets (`packages/server/godot_editor/`, ~80 MB WASM) and the starter project (`godot_project/_wired/`) are committed. `godot-editor-provider.controller.ts` serves them from **cwd-relative** paths, so run the server through pnpm from `packages/server` (root scripts do); `node packages/server/dist/...` from the repo root will 404.
 - COOP/COEP headers (`frontend/next.config.ts` and the editor controller) are required by the WASM editor (SharedArrayBuffer). The `/api/*` rewrite proxies to `NEXT_PUBLIC_BACKEND_URL`; Godot asset URLs depend on it.
 - UI auth is Google OAuth only. Backend also has email/password endpoints. The Google callback sets the cookie on `COMMON_DOMAIN`, then redirects to `SITE_HOST`.
-- The room "Game" tab is a placeholder; there is no game server.
+- The room "Game" tab runs the client-side Godot Web export in a same-origin iframe. `POST /rooms/:id/game/connection` starts/reuses that room's native Godot runtime and mints a single-use ticket; `GET /rooms/:id/game/status` reads state without starting anything. The browser-only client calls both through `/api/*`.
+- The Web export is a **build artifact** (`godot_project/_wired/build/web`, gitignored). Run `pnpm export:game` before opening the Game tab; the backend serves it at `/game-export/*` with COOP/COEP. A clean Docker deploy must mount or build this directory — the image only contains `dist` and `node_modules`, so otherwise the tab correctly reports a missing build.
 
 ## Commands
 
@@ -31,6 +32,7 @@ pnpm --filter server build               # also the server typecheck (no separat
 pnpm --filter frontend build             # next build --webpack
 pnpm --filter frontend lint
 pnpm --filter server lint                # eslint --fix
+pnpm export:game                         # rebuild the Godot Web export into build/web
 pnpm build                               # recursive: server + frontend
 ```
 
@@ -43,6 +45,7 @@ pnpm build                               # recursive: server + frontend
 
 - Three gitignored env files, not one: root `.env` (Docker Compose), `packages/server/.env` (Nest, loaded from the package cwd), and `frontend/.env.local` (Next). Changing a URL or port often means editing more than one. Never commit or echo their contents.
 - The current env points `DB_HOST` at a **remote shared Postgres** with `DB_SYNC=1`. Starting the server auto-mutates the schema; treat entity/DB changes as production-affecting.
+- Game runtime knobs: `GODOT_RUNTIME_PATH`, `GODOT_ROOM_IDLE_TIMEOUT_MS`, `GODOT_GAME_TICKET_RATE_LIMIT`, `GODOT_GAME_TICKET_RATE_WINDOW_MS` (ticket issuance per user+room), and `WIRED_GAME_TICKET_SECRET` (mandatory; never send it to the browser).
 - Docker: `docker compose up --build`. Compose expects an external `shared-net` network (nginx joins it), so create it first. Frontend `NEXT_PUBLIC_*` values are Docker build args — rebuild the frontend image after changing them.
 - Server build emits `packages/server/dist/server/src/main.js`; `start:prod` depends on that path.
 - The editor controller uses `glob` from `node:fs/promises` (Node 22+ API) while the Dockerfiles pin Node 20. Verify in-container behavior before relying on `/godot-project-info/wired` there.

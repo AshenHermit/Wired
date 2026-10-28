@@ -5,6 +5,7 @@ export type RoomRuntimeErrorCode =
   | 'room_stopping'
   | 'start_failed'
   | 'ticket_secret_missing'
+  | 'handshake_window_expired'
   | 'invalid_room';
 
 /**

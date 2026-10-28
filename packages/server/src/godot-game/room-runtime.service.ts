@@ -17,6 +17,8 @@ const AUTH_OK_PATTERN = /^WIRED_AUTH_OK peer=(\d+) player=\d+ room=(\S+)/;
 const PLAYER_LEFT_PATTERN = /^WIRED_PLAYER_LEFT peer=(\d+) player=\d+/;
 const FORCE_KILL_WAIT_MS = 2_000;
 const HANDSHAKE_LEASE_SLACK_MS = 5_000;
+// Keep in sync with AUTH_TIMEOUT_SEC in the Godot network script.
+const AUTH_TIMEOUT_SEC = 10;
 
 /**
  * Owns the in-memory registry of Godot room servers.
@@ -70,7 +72,30 @@ export class RoomRuntimeService implements OnModuleDestroy {
     // lease per peerless runtime: repeated calls must not keep it alive forever.
     this.renewHandshakeLease(record);
 
-    const ticket = this.tickets.mint(roomId);
+    // A ticket minted near the end of the handshake lease would outlive the
+    // runtime. Clamp it to the remaining window (the client has one second to
+    // send hello, then the 10s auth timeout), or fail explicitly when there
+    // is not enough time left for a handshake.
+    let ticketTtlSec: number | undefined;
+    if (record.activePlayers === 0) {
+      const remainingSec = Math.floor(
+        (record.handshakeLeaseUntil - Date.now()) / 1_000,
+      );
+      if (remainingSec <= AUTH_TIMEOUT_SEC + 1) {
+        throw new RoomRuntimeError(
+          'handshake_window_expired',
+          `Room ${roomId} has no time left in its handshake window; retry to restart it`,
+          roomId,
+          record.port,
+        );
+      }
+      ticketTtlSec = Math.min(
+        this.configService.godotRuntime.ticketTtlSec,
+        remainingSec - 1,
+      );
+    }
+
+    const ticket = this.tickets.mint(roomId, ticketTtlSec);
     return {
       ...this.toInfo(record),
       ticket: ticket.ticket,

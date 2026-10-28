@@ -24,7 +24,11 @@ type GamePhase =
 
 const EXPORT_URL = "/api/game-export/index.html";
 const MAX_AUTO_RETRIES = 3;
-const READY_TIMEOUT_MS = 30_000;
+// The engine bundle is ~36 MB, so a cold load on a slow link can take far
+// longer than 30 seconds. Export assets are revalidated with ETags, so this
+// only affects the first load of a build, not reconnects.
+const LOAD_TIMEOUT_MS = 120_000;
+const HANDSHAKE_TIMEOUT_MS = 15_000;
 const STATUS_POLL_MS = 5_000;
 
 /**
@@ -47,6 +51,7 @@ export function GameTab({ room }: { room: Room }) {
   const sentAttemptRef = React.useRef(-1);
   const autoRetriesRef = React.useRef(0);
   const retryTimerRef = React.useRef<number | null>(null);
+  const handshakeTimerRef = React.useRef<number | null>(null);
   const disposedRef = React.useRef(false);
 
   const update = React.useCallback((next: GamePhase, text?: string) => {
@@ -57,15 +62,23 @@ export function GameTab({ room }: { room: Room }) {
     }
   }, []);
 
+  const clearHandshakeTimer = React.useCallback(() => {
+    if (handshakeTimerRef.current !== null) {
+      window.clearTimeout(handshakeTimerRef.current);
+      handshakeTimerRef.current = null;
+    }
+  }, []);
+
   const fail = React.useCallback(
     (text: string) => {
       if (retryTimerRef.current !== null) {
         window.clearTimeout(retryTimerRef.current);
         retryTimerRef.current = null;
       }
+      clearHandshakeTimer();
       update("error", text);
     },
-    [update],
+    [clearHandshakeTimer, update],
   );
 
   const startReconnect = React.useCallback(() => {
@@ -96,7 +109,13 @@ export function GameTab({ room }: { room: Room }) {
     try {
       update("requesting", "Запрашиваем подключение к комнате…");
       const connection = await createGameConnection(room.id);
-      if (disposedRef.current || attemptAtStart !== attempt) {
+      if (
+        disposedRef.current ||
+        attemptAtStart !== attempt ||
+        phaseRef.current === "error"
+      ) {
+        // The frame already gave up (or was replaced) while the request was
+        // in flight: never resurrect an errored frame with a stale ticket.
         return;
       }
       const frame = iframeRef.current;
@@ -110,8 +129,21 @@ export function GameTab({ room }: { room: Room }) {
         ticket: connection.ticket,
         room: connection.roomId,
       });
+      clearHandshakeTimer();
+      handshakeTimerRef.current = window.setTimeout(() => {
+        handshakeTimerRef.current = null;
+        if (
+          !disposedRef.current &&
+          attemptAtStart === attempt &&
+          phaseRef.current === "handshake"
+        ) {
+          fail(
+            "Игра не подтвердила подключение. Нажмите «Повторить», чтобы получить новый тикет.",
+          );
+        }
+      }, HANDSHAKE_TIMEOUT_MS);
     } catch (error) {
-      if (attemptAtStart !== attempt) {
+      if (attemptAtStart !== attempt || disposedRef.current) {
         return;
       }
       fail(
@@ -120,7 +152,7 @@ export function GameTab({ room }: { room: Room }) {
           : "Не удалось получить доступ к игре",
       );
     }
-  }, [attempt, fail, room.id, update]);
+  }, [attempt, clearHandshakeTimer, fail, room.id, update]);
 
   const addEvent = React.useCallback((event: unknown) => {
     if (!event || typeof event !== "object") {
@@ -185,10 +217,10 @@ export function GameTab({ room }: { room: Room }) {
       if (sentAttemptRef.current !== attempt) {
         update(
           "error",
-          "Игра не загрузилась за 30 секунд. Проверьте консоль и нажмите «Повторить».",
+          "Игра не загрузилась за 2 минуты. Проверьте консоль и нажмите «Повторить».",
         );
       }
-    }, READY_TIMEOUT_MS);
+    }, LOAD_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [attempt, exportReady, update]);
 
@@ -213,7 +245,13 @@ export function GameTab({ room }: { room: Room }) {
           }
           break;
         case "wired:game-ready": {
-          if (sentAttemptRef.current === attempt) {
+          // A frame that already errored (for example, its config wait
+          // elapsed) must not mint another ticket during a retry: only the
+          // retry button may replace the frame.
+          if (
+            phaseRef.current === "error" ||
+            sentAttemptRef.current === attempt
+          ) {
             break;
           }
           sentAttemptRef.current = attempt;
@@ -221,16 +259,32 @@ export function GameTab({ room }: { room: Room }) {
           break;
         }
         case "wired:game-configured":
-          update("handshake", "Тикет принят игрой…");
+          if (sentAttemptRef.current === attempt) {
+            clearHandshakeTimer();
+            update("handshake", "Тикет принят игрой…");
+          }
           break;
         case "wired:game-status": {
           const stage = data.payload.stage;
           const detail = data.payload.detail;
-          if (stage === "waiting" || stage === "connecting") {
+          if (stage === "booted") {
+            // The engine script is loaded, but the game is not joined yet.
+            break;
+          } else if (stage === "waiting" || stage === "connecting") {
             update("handshake", "Подключаемся к серверу игры…");
           } else if (stage === "authenticated") {
+            clearHandshakeTimer();
             update("handshake", "Авторизация в комнате…");
           } else if (stage === "ready") {
+            // "ready" means an authenticated, configured peer, never just a
+            // booted engine. Ignore it before the ticket was sent.
+            if (
+              sentAttemptRef.current !== attempt ||
+              phaseRef.current === "error"
+            ) {
+              break;
+            }
+            clearHandshakeTimer();
             autoRetriesRef.current = 0;
             setAutoRetries(0);
             update("ready", "Игра готова");
@@ -238,6 +292,7 @@ export function GameTab({ room }: { room: Room }) {
             stage === "connection_failed" ||
             stage === "disconnected"
           ) {
+            clearHandshakeTimer();
             startReconnect();
           } else if (stage === "error") {
             fail(detail || "Ошибка игры");
@@ -255,7 +310,15 @@ export function GameTab({ room }: { room: Room }) {
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [addEvent, attempt, fail, requestConnection, startReconnect, update]);
+  }, [
+    addEvent,
+    attempt,
+    clearHandshakeTimer,
+    fail,
+    requestConnection,
+    startReconnect,
+    update,
+  ]);
 
   React.useEffect(() => {
     if (phase !== "ready") {
@@ -290,6 +353,9 @@ export function GameTab({ room }: { room: Room }) {
       if (retryTimerRef.current !== null) {
         window.clearTimeout(retryTimerRef.current);
       }
+      if (handshakeTimerRef.current !== null) {
+        window.clearTimeout(handshakeTimerRef.current);
+      }
     };
   }, []);
 
@@ -298,12 +364,13 @@ export function GameTab({ room }: { room: Room }) {
       window.clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
     }
+    clearHandshakeTimer();
     autoRetriesRef.current = 0;
     setAutoRetries(0);
     setEvents([]);
     update("checking", "Проверяем сборку игры…");
     setAttempt((value) => value + 1);
-  }, [update]);
+  }, [clearHandshakeTimer, update]);
 
   return (
     <div className="relative w-full h-full bg-black text-white">

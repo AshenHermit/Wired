@@ -90,6 +90,7 @@
 				var GAME_SOURCE = 'wired-game';
 				var state = {
 					config: null,
+					configured: false,
 					ready: false,
 					stage: 'booting',
 					detail: '',
@@ -141,11 +142,14 @@
 					}
 					// A second configuration needs a fresh engine instance:
 					// tickets are single-use, so silently replacing it would
-					// hide a stale iframe from the host.
-					if (state.config) {
+					// hide a stale iframe from the host. `configured` stays
+					// set after Godot takes the config; `config` alone cannot
+					// guard this because takeConfig() clears it.
+					if (state.configured) {
 						return false;
 					}
 
+					state.configured = true;
 					state.config = { endpoint: endpoint, ticket: ticket, room: room };
 					post('wired:game-configured', { room: room });
 					return true;
@@ -183,10 +187,13 @@
 					},
 					notifyReady: function () {
 						state.ready = true;
-						state.stage = 'ready';
+						// Engine boot is not the same thing as an authenticated
+						// game: only the exchange with the room server may
+						// report `ready`. The host uses this message to ask
+						// for a ticket, so it must stay ticket-free.
+						state.stage = 'booted';
 						hideOverlay();
 						post('wired:game-ready', {});
-						post('wired:game-status', { stage: 'ready', detail: '' });
 					},
 					notifyStatus: function (stage, detail) {
 						state.stage = String(stage || 'unknown');

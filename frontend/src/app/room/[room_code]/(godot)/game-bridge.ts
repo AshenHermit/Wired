@@ -12,6 +12,7 @@ export type GameConfigurePayload = {
 };
 
 export type GameStatusStage =
+  | "booted"
   | "waiting"
   | "connecting"
   | "authenticated"
@@ -19,6 +20,17 @@ export type GameStatusStage =
   | "connection_failed"
   | "disconnected"
   | "error";
+
+const STATUS_STAGES: readonly GameStatusStage[] = [
+  "booted",
+  "waiting",
+  "connecting",
+  "authenticated",
+  "ready",
+  "connection_failed",
+  "disconnected",
+  "error",
+];
 
 export type GameToHostMessage =
   | { source: "wired-game"; type: "wired:game-booted"; payload: Record<string, never> }
@@ -54,16 +66,42 @@ export type HostToGameMessage =
 
 const GAME_SOURCE = "wired-game";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object";
+}
+
+/**
+ * Validates the shape of every message the host dereferences. The bridge is
+ * same-origin, but it is still untrusted input: a malformed payload must be
+ * ignored instead of throwing inside the message listener.
+ */
 export function isGameMessage(data: unknown): data is GameToHostMessage {
-  if (!data || typeof data !== "object") {
+  if (!isRecord(data) || data.source !== GAME_SOURCE) {
     return false;
   }
-  const candidate = data as { source?: unknown; type?: unknown };
-  return (
-    candidate.source === GAME_SOURCE &&
-    typeof candidate.type === "string" &&
-    candidate.type.startsWith("wired:")
-  );
+  if (typeof data.type !== "string" || !isRecord(data.payload)) {
+    return false;
+  }
+  const payload = data.payload;
+  switch (data.type) {
+    case "wired:game-booted":
+    case "wired:game-ready":
+      return true;
+    case "wired:game-configured":
+      return typeof payload.room === "number";
+    case "wired:game-status":
+      return (
+        typeof payload.stage === "string" &&
+        STATUS_STAGES.includes(payload.stage as GameStatusStage) &&
+        (payload.detail === undefined || typeof payload.detail === "string")
+      );
+    case "wired:game-error":
+      return typeof payload.message === "string";
+    case "wired:game-event":
+      return "event" in payload;
+    default:
+      return false;
+  }
 }
 
 export function postToGame(iframe: HTMLIFrameElement, message: HostToGameMessage) {
