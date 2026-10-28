@@ -16,10 +16,7 @@ export type GodotEditorApi = {
   editorRef: React.RefObject<GodotEditorInstance | null>;
 };
 
-export const GodotEditor = React.forwardRef<
-  GodotEditorApi,
-  Record<string, never>
->((_props, ref) => {
+export const GodotEditor = React.forwardRef<GodotEditorApi>((_props, ref) => {
   const editorInstanceRef = React.useRef<GodotEditorInstance | null>(null);
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const [scriptsLoaded, setScriptsLoaded] = React.useState(false);
@@ -66,8 +63,9 @@ export const GodotEditor = React.forwardRef<
         setProgressValue,
       );
       editorInstanceRef.current.setCanvas(canvasRef.current);
-      (window as Window & { editor: GodotEditorInstance }).editor =
-        editorInstanceRef.current;
+      (
+        window as unknown as Window & { editor: GodotEditorInstance }
+      ).editor = editorInstanceRef.current;
 
       loadEditor(editorInstanceRef.current);
 

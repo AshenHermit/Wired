@@ -10,9 +10,7 @@
     "check-types": "tsc --pretty --noEmit"
   },
   "dependencies": {
-    "@box2d": "file:../packages/box2d",
     "@hookform/resolvers": "^5.2.2",
-    "@monaco-editor/react": "^4.7.0",
     "@radix-ui/react-collapsible": "^1.1.12",
     "@radix-ui/react-context-menu": "^2.2.16",
     "@radix-ui/react-label": "^2.1.8",
@@ -23,7 +21,6 @@
     "clsx": "^2.1.1",
     "easy-event-emitter": "^1.2.2",
     "hashids": "^2.3.0",
-    "just-debounce-it": "^3.2.0",
     "lucide-react": "^0.553.0",
     "motion": "^12.23.26",
     "next": "16.0.7",

@@ -10,7 +10,6 @@
 // import { ScriptingPackage } from "@wired-io/shared";
 // import { InfoIcon, PackageIcon, PencilIcon, PlayIcon, PlusIcon } from "lucide-react";
 // import { AnimatePresence, motion } from "motion/react";
-// import { FileCard } from "../(ts-game)/Editor";
 // import React from "react";
 // export function PackagesList() {
 //   return (

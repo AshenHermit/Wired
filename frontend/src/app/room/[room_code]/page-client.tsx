@@ -1,6 +1,5 @@
 "use client";
 import React from "react";
-import { TSRoomPageClientNoSSR } from "./(ts-game)/RoomPageClientNoSSr";
 import { GodotRoomPageClient } from "./(godot)/RoomPageClient";
 import { Room } from "@wired-io/shared";
 import { getRoom } from "@/api/services/rooms";
@@ -27,9 +26,19 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
     );
   }
   if (room.type === "ts-game") {
-    return <TSRoomPageClientNoSSR room={room} />;
+    return (
+      <div className="w-screen h-screen flex items-center justify-center p-8 text-center">
+        <div className="max-w-md space-y-2">
+          <h1 className="text-xl font-semibold">
+            Phaser rooms are no longer supported
+          </h1>
+          <p className="text-muted-foreground">
+            This room uses the retired ts-game mode. Create a new Godot room to
+            continue.
+          </p>
+        </div>
+      </div>
+    );
   }
-  if (room.type === "godot") {
-    return <GodotRoomPageClient room={room} />;
-  }
+  return <GodotRoomPageClient room={room} />;
 }
