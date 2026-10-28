@@ -1,15 +1,14 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { createWriteStream, mkdirSync, WriteStream } from 'node:fs';
-import { join, resolve } from 'node:path';
 import { AppConfigService } from 'src/config/config.service';
 import { GameTicketService } from './game-ticket.service';
+import { RoomRuntimeConfiguration } from './room-runtime.configuration';
 import { RoomRuntimeError } from './room-runtime.errors';
+import { RoomRuntimeLog } from './room-runtime.log';
+import { RoomRuntimeRegistry } from './room-runtime.registry';
+import { RuntimeRecord } from './room-runtime.record';
 import {
-  GodotRuntimeConfig,
   RoomConnection,
   RoomRuntimeInfo,
-  RoomRuntimeState,
-  RuntimeProcess,
   RuntimeProcessFactory,
 } from './room-runtime.types';
 
@@ -17,68 +16,6 @@ const READY_PATTERN = /^WIRED_SERVER_READY room=(\S+) port=(\d+) bind=(\S+)/;
 const AUTH_OK_PATTERN = /^WIRED_AUTH_OK peer=(\d+) player=\d+ room=(\S+)/;
 const PLAYER_LEFT_PATTERN = /^WIRED_PLAYER_LEFT peer=(\d+) player=\d+/;
 const FORCE_KILL_WAIT_MS = 2_000;
-const PORT_QUARANTINE_MS = 60_000;
-const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-const RUNTIME_ENV_ALLOWLIST = [
-  'PATH',
-  'Path',
-  'PATHEXT',
-  'SystemRoot',
-  'SYSTEMROOT',
-  'WINDIR',
-  'windir',
-  'TEMP',
-  'TMP',
-  'USERPROFILE',
-  'APPDATA',
-  'LOCALAPPDATA',
-  'COMSPEC',
-  'HOMEDRIVE',
-  'HOMEPATH',
-  'HOME',
-  'NUMBER_OF_PROCESSORS',
-  'PROCESSOR_ARCHITECTURE',
-  'PROGRAMDATA',
-  'PROGRAMFILES',
-  'PROGRAMFILES(X86)',
-  'LANG',
-  'LC_ALL',
-  'TZ',
-  'XDG_DATA_HOME',
-  'XDG_CONFIG_HOME',
-  'XDG_CACHE_HOME',
-];
-
-interface RuntimeRecord {
-  key: string;
-  roomId: string;
-  port: number;
-  state: RoomRuntimeState;
-  process: RuntimeProcess | null;
-  pid: number | null;
-  logs: string[];
-  logStream: WriteStream | null;
-  startedAt: string | null;
-  stoppedAt: string | null;
-  exitCode: number | null;
-  exitSignal: NodeJS.Signals | null;
-  error: string | null;
-  activePlayers: number;
-  authenticatedPeers: Set<number>;
-  stopRequested: boolean;
-  forceKilled: boolean;
-  readySettled: boolean;
-  exitHandled: boolean;
-  portReleased: boolean;
-  readyPromise: Promise<void>;
-  resolveReady: () => void;
-  rejectReady: (error: Error) => void;
-  exitPromise: Promise<void>;
-  resolveExit: () => void;
-  startTimer?: NodeJS.Timeout;
-  idleTimer?: NodeJS.Timeout;
-  stopPromise?: Promise<void>;
-}
 
 /**
  * Owns the in-memory registry of Godot room servers.
@@ -91,21 +28,16 @@ interface RuntimeRecord {
 @Injectable()
 export class RoomRuntimeService implements OnModuleDestroy {
   private readonly logger = new Logger(RoomRuntimeService.name);
-  private readonly activeByRoom = new Map<string, RuntimeRecord>();
-  private readonly records = new Map<string, RuntimeRecord>();
-  private readonly reservedPorts = new Map<number, RuntimeRecord>();
-  /**
-   * Ports that recently failed to bind (for example an unrelated process owns
-   * them). They are skipped for a short time so one occupied port cannot make
-   * every room start fail on the same candidate.
-   */
-  private readonly unavailablePorts = new Map<number, number>();
+  private readonly registry = new RoomRuntimeRegistry();
+  private readonly runtimeConfiguration: RoomRuntimeConfiguration;
 
   constructor(
     private readonly configService: AppConfigService,
     private readonly processFactory: RuntimeProcessFactory,
     private readonly tickets: GameTicketService,
-  ) {}
+  ) {
+    this.runtimeConfiguration = new RoomRuntimeConfiguration(configService);
+  }
 
   /**
    * Returns a ready runtime for the room, starting the process if needed.
@@ -150,16 +82,16 @@ export class RoomRuntimeService implements OnModuleDestroy {
 
   /** Current runtime status; never starts a process. */
   getRuntime(roomId: string): RoomRuntimeInfo | null {
-    const record = this.activeByRoom.get(roomId);
+    const record = this.registry.get(roomId);
     return record ? this.toInfo(record) : null;
   }
 
   listRuntimes(): RoomRuntimeInfo[] {
-    return [...this.activeByRoom.values()].map((record) => this.toInfo(record));
+    return this.registry.list().map((record) => this.toInfo(record));
   }
 
   getLogs(roomId: string): string[] {
-    return [...(this.activeByRoom.get(roomId)?.logs ?? [])];
+    return this.registry.get(roomId)?.log.getLines() ?? [];
   }
 
   /**
@@ -167,7 +99,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
    * kill only after the configured grace period.
    */
   stopRoom(roomId: string, reason = 'requested'): Promise<void> {
-    const record = this.activeByRoom.get(roomId);
+    const record = this.registry.get(roomId);
     if (!record) {
       return Promise.reject(
         new RoomRuntimeError(
@@ -207,12 +139,14 @@ export class RoomRuntimeService implements OnModuleDestroy {
 
   /** Stops every room; used by Nest shutdown hooks so no process is orphaned. */
   async shutdownAll(): Promise<void> {
-    const records = [...this.activeByRoom.values()].filter(
-      (record) =>
-        record.state === 'starting' ||
-        record.state === 'running' ||
-        record.state === 'stopping',
-    );
+    const records = this.registry
+      .list()
+      .filter(
+        (record) =>
+          record.state === 'starting' ||
+          record.state === 'running' ||
+          record.state === 'stopping',
+      );
     await Promise.all(
       records.map((record) =>
         (record.state === 'stopping' && record.stopPromise
@@ -234,13 +168,12 @@ export class RoomRuntimeService implements OnModuleDestroy {
   // --- startup ------------------------------------------------------------
 
   private ensureRuntime(roomId: string): RuntimeRecord {
-    this.validateRoomId(roomId);
+    this.runtimeConfiguration.validateRoomId(roomId);
     const config = this.configService.godotRuntime;
-    this.validateConfig(config);
-    const projectPath = resolve(config.projectPath);
-    const stateDir = resolve(config.stateDir);
+    this.runtimeConfiguration.validate(config);
+    const { stateDir } = this.runtimeConfiguration.resolvePaths(config);
 
-    const existing = this.activeByRoom.get(roomId);
+    const existing = this.registry.get(roomId);
     if (existing) {
       if (existing.state === 'starting' || existing.state === 'running') {
         return existing;
@@ -255,7 +188,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
       }
     }
 
-    const port = this.allocatePort(config);
+    const port = this.registry.allocatePort(config);
     if (port === null) {
       throw new RoomRuntimeError(
         'start_failed',
@@ -265,10 +198,8 @@ export class RoomRuntimeService implements OnModuleDestroy {
     }
 
     const record = this.createRecord(roomId, port);
-    this.activeByRoom.set(roomId, record);
-    this.records.set(record.key, record);
-    this.reservedPorts.set(port, record);
-    this.openLog(record, stateDir);
+    this.registry.add(record);
+    record.log.open(stateDir);
     this.appendLog(
       record,
       `[wired] starting room=${roomId} port=${port} key=${record.key}`,
@@ -291,27 +222,9 @@ export class RoomRuntimeService implements OnModuleDestroy {
     }, config.startTimeoutMs);
 
     try {
-      const child = this.processFactory.spawn({
-        executablePath: config.executablePath,
-        args: [
-          '--headless',
-          '--path',
-          projectPath,
-          '--server',
-          '--port',
-          String(port),
-          '--room',
-          roomId,
-          '--bind',
-          config.bindAddress,
-          // The Godot project saves room state here before exiting. Keep it
-          // absolute: --path changes Godot's cwd to the project directory.
-          '--state-dir',
-          join(stateDir, this.safeName(roomId)),
-        ],
-        cwd: projectPath,
-        env: this.buildRuntimeEnv(config.ticketSecret),
-      });
+      const child = this.processFactory.spawn(
+        this.runtimeConfiguration.createSpawnOptions(config, roomId, port),
+      );
       record.process = child;
       record.pid = child.pid ?? null;
       child.onExit((code, signal) => this.handleExit(record, code, signal));
@@ -326,6 +239,14 @@ export class RoomRuntimeService implements OnModuleDestroy {
   }
 
   private createRecord(roomId: string, port: number): RuntimeRecord {
+    const key = `${roomId}:${port}`;
+    const log = new RoomRuntimeLog(
+      roomId,
+      key,
+      port,
+      this.configService.godotRuntime.logBufferLines,
+      this.logger,
+    );
     let resolveReady: () => void = () => undefined;
     let rejectReady: (error: Error) => void = () => undefined;
     let resolveExit: () => void = () => undefined;
@@ -340,14 +261,13 @@ export class RoomRuntimeService implements OnModuleDestroy {
     void readyPromise.catch(() => undefined);
 
     return {
-      key: `${roomId}:${port}`,
+      key,
       roomId,
       port,
       state: 'starting',
       process: null,
       pid: null,
-      logs: [],
-      logStream: null,
+      log,
       startedAt: null,
       stoppedAt: null,
       exitCode: null,
@@ -366,94 +286,6 @@ export class RoomRuntimeService implements OnModuleDestroy {
       exitPromise,
       resolveExit,
     };
-  }
-
-  private validateRoomId(roomId: string): void {
-    if (!ROOM_ID_PATTERN.test(roomId)) {
-      throw new RoomRuntimeError(
-        'invalid_room',
-        `Room id ${JSON.stringify(roomId)} is not a safe runtime identifier`,
-        roomId,
-      );
-    }
-  }
-
-  private validateConfig(config: GodotRuntimeConfig): void {
-    if (!config.executablePath || !config.projectPath) {
-      throw new RoomRuntimeError(
-        'config',
-        'GODOT_RUNTIME_PATH and GODOT_RUNTIME_PROJECT_PATH must be configured',
-      );
-    }
-    if (
-      !Number.isInteger(config.portStart) ||
-      !Number.isInteger(config.portEnd) ||
-      config.portStart < 1 ||
-      config.portEnd > 65_535 ||
-      config.portStart > config.portEnd
-    ) {
-      throw new RoomRuntimeError(
-        'config',
-        `Invalid Godot room port range ${config.portStart}-${config.portEnd}`,
-      );
-    }
-    if (!config.ticketSecret) {
-      throw new RoomRuntimeError(
-        'ticket_secret_missing',
-        'WIRED_GAME_TICKET_SECRET is not configured; the Godot room server cannot verify game tickets',
-      );
-    }
-    if (
-      !Number.isFinite(config.shutdownGraceMs) ||
-      config.shutdownGraceMs < 0 ||
-      !Number.isFinite(config.startTimeoutMs) ||
-      config.startTimeoutMs <= 0 ||
-      !Number.isFinite(config.ticketTtlSec) ||
-      config.ticketTtlSec <= 0 ||
-      !Number.isFinite(config.idleTimeoutMs) ||
-      config.idleTimeoutMs < 0
-    ) {
-      throw new RoomRuntimeError(
-        'config',
-        'Invalid Godot room timeouts: start/ticket TTL must be > 0, grace and idle must be >= 0',
-      );
-    }
-    if (this.configService.isProduction && !config.publicWsBaseUrl) {
-      throw new RoomRuntimeError(
-        'config',
-        'GODOT_ROOM_PUBLIC_WS_BASE is required in production; clients must not receive internal ports',
-      );
-    }
-  }
-
-  private allocatePort(config: GodotRuntimeConfig): number | null {
-    const now = Date.now();
-    for (let port = config.portStart; port <= config.portEnd; port += 1) {
-      if (this.reservedPorts.has(port)) {
-        continue;
-      }
-      const unavailableUntil = this.unavailablePorts.get(port);
-      if (unavailableUntil !== undefined) {
-        if (unavailableUntil > now) {
-          continue;
-        }
-        this.unavailablePorts.delete(port);
-      }
-      return port;
-    }
-    return null;
-  }
-
-  private buildRuntimeEnv(ticketSecret: string): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = {};
-    for (const name of RUNTIME_ENV_ALLOWLIST) {
-      const value = process.env[name];
-      if (value !== undefined) {
-        env[name] = value;
-      }
-    }
-    env.WIRED_GAME_TICKET_SECRET = ticketSecret;
-    return env;
   }
 
   // --- process output -----------------------------------------------------
@@ -578,7 +410,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
     if (code === 3) {
       // Remember the occupied port briefly; otherwise every new room would
       // retry the same lowest port and fail while the rest of the range is free.
-      this.unavailablePorts.set(record.port, Date.now() + PORT_QUARANTINE_MS);
+      this.registry.markPortUnavailable(record.port);
     }
 
     const wasStarting = record.state === 'starting';
@@ -610,7 +442,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
       record,
       `[wired] exited room=${record.roomId} port=${record.port} code=${code ?? 'null'} signal=${signal ?? 'none'} state=${record.state}`,
     );
-    this.closeLog(record);
+    record.log.close();
     record.resolveExit();
   }
 
@@ -633,7 +465,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
       ),
     );
     this.appendLog(record, `[wired] ${record.error}`);
-    this.closeLog(record);
+    record.log.close();
     record.resolveExit();
   }
 
@@ -724,7 +556,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
     if (!record.process) {
       record.state = 'stopped';
       this.releasePort(record);
-      this.closeLog(record);
+      record.log.close();
       record.resolveExit();
       return;
     }
@@ -770,7 +602,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
       record.stoppedAt = new Date().toISOString();
       this.releasePort(record);
       this.appendLog(record, `[wired] ${record.error}`);
-      this.closeLog(record);
+      record.log.close();
       record.resolveExit();
     }
   }
@@ -794,13 +626,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
   // --- bookkeeping --------------------------------------------------------
 
   private releasePort(record: RuntimeRecord): void {
-    if (record.portReleased) {
-      return;
-    }
-    record.portReleased = true;
-    if (this.reservedPorts.get(record.port) === record) {
-      this.reservedPorts.delete(record.port);
-    }
+    this.registry.releasePort(record);
   }
 
   private clearTimers(record: RuntimeRecord): void {
@@ -845,7 +671,11 @@ export class RoomRuntimeService implements OnModuleDestroy {
       port: record.port,
       pid: record.pid,
       state: record.state,
-      endpoint: this.buildEndpoint(record),
+      endpoint: this.runtimeConfiguration.buildEndpoint(
+        this.configService.godotRuntime,
+        record.roomId,
+        record.port,
+      ),
       startedAt: record.startedAt,
       stoppedAt: record.stoppedAt,
       activePlayers: record.activePlayers,
@@ -854,71 +684,8 @@ export class RoomRuntimeService implements OnModuleDestroy {
     };
   }
 
-  private buildEndpoint(record: RuntimeRecord): string {
-    const config = this.configService.godotRuntime;
-    const template = config.publicWsBaseUrl;
-    if (template) {
-      return template
-        .split('{room}')
-        .join(encodeURIComponent(record.roomId))
-        .split('{port}')
-        .join(String(record.port));
-    }
-    return `ws://${this.localHost(config)}:${record.port}`;
-  }
-
-  private localHost(config: GodotRuntimeConfig): string {
-    if (!config.bindAddress || config.bindAddress === '0.0.0.0') {
-      return '127.0.0.1';
-    }
-    return config.bindAddress;
-  }
-
-  // --- logs ---------------------------------------------------------------
-
-  private openLog(record: RuntimeRecord, stateDir: string): void {
-    try {
-      mkdirSync(stateDir, { recursive: true });
-      const path = join(
-        stateDir,
-        `${this.safeName(record.roomId)}-${record.port}.log`,
-      );
-      record.logStream = createWriteStream(path, { flags: 'a' });
-      record.logStream.on('error', (error) => {
-        this.logger.warn(
-          `Cannot write runtime log for room ${record.roomId}: ${error.message}`,
-        );
-      });
-      record.logStream.write(
-        `[wired] session key=${record.key} started_at=${new Date().toISOString()}\n`,
-      );
-    } catch (error) {
-      this.logger.warn(
-        `Cannot open runtime log for room ${record.roomId}: ${this.errorMessage(error)}`,
-      );
-    }
-  }
-
   private appendLog(record: RuntimeRecord, line: string): void {
-    record.logs.push(line);
-    const limit = this.configService.godotRuntime.logBufferLines;
-    if (limit > 0 && record.logs.length > limit) {
-      record.logs.splice(0, record.logs.length - limit);
-    }
-    record.logStream?.write(`${line}\n`);
-  }
-
-  private closeLog(record: RuntimeRecord): void {
-    const stream = record.logStream;
-    if (!stream) {
-      return;
-    }
-    record.logStream = null;
-    stream.end();
-  }
-
-  private safeName(roomId: string): string {
-    return roomId.replace(/[^a-zA-Z0-9._-]/g, '_');
+    record.log.append(line);
   }
 
   private toError(error: unknown): Error {
