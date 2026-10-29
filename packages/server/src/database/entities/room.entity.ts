@@ -75,7 +75,9 @@ export class Room {
   @ApiProperty({
     description: 'parent room id',
   })
-  @Column({ nullable: true, default: null })
+  // Explicit type: TypeORM cannot infer a column type from `number | null`
+  // (it sees `Object` and refuses to start).
+  @Column({ type: 'int', nullable: true, default: null })
   parentRoomId: number | null;
 
   @ApiProperty({
