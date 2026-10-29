@@ -12,6 +12,7 @@ async function bootstrap() {
   // (SIGINT/SIGTERM); RoomRuntimeService also terminates them gracefully.
   app.enableShutdownHooks();
 
+  const siteHost = process.env.SITE_HOST;
   app.enableCors({
     allowedHeaders: [
       'Content-Type',
@@ -23,9 +24,11 @@ async function bootstrap() {
       'X-Forwarded-For',
       'X-Forwarded-Proto',
     ],
-    origin: process.env.SITE_HOST ?? '*',
+    // Browsers reject `*` together with credentials. Only send credentials
+    // when the allowed origin is actually configured.
+    origin: siteHost ?? '*',
     crossOriginIsolated: true,
-    credentials: true,
+    credentials: Boolean(siteHost),
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     exposedHeaders: ['Content-Type', 'Content-Length'],
   });

@@ -3,7 +3,9 @@ export interface AppConfig {
   db: {
     host: string;
     port: number;
+    username: string;
     password: string;
+    database: string;
     sync: boolean;
     entities: string[];
   };

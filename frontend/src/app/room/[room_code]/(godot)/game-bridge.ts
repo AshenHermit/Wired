@@ -43,7 +43,7 @@ export type GameToHostMessage =
   | {
       source: "wired-game";
       type: "wired:game-status";
-      payload: { stage: GameStatusStage; detail: string };
+      payload: { stage: GameStatusStage; detail?: string };
     }
   | {
       source: "wired-game";

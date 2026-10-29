@@ -8,22 +8,37 @@ export function useRequestHandler({
 }: { toastOnError?: boolean } = {}) {
   const [loading, setLoading] = React.useState<boolean>(false);
   const [error, setError] = React.useState<string | null>(null);
+  const mounted = React.useRef(true);
+
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   const handleRequest = React.useCallback(
-    async (requestFunc: () => Promise<void>) => {
+    async (requestFunc: () => Promise<void>): Promise<boolean> => {
       setLoading(true);
       setError(null);
       try {
         await requestFunc();
+        return true;
       } catch (e) {
-        if (e instanceof Error) {
-          e.message;
-          setError(e.message);
+        const message =
+          e instanceof Error ? e.message : "Не удалось выполнить запрос";
+        if (mounted.current) {
+          setError(message);
           if (toastOnError) {
-            toast.error(e.message);
+            toast.error(message);
           }
         }
+        return false;
+      } finally {
+        if (mounted.current) {
+          setLoading(false);
+        }
       }
-      setLoading(false);
     },
     [toastOnError]
   );

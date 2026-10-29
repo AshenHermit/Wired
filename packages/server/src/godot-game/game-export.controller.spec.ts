@@ -104,6 +104,11 @@ describe('GameExportController', () => {
       .set('If-None-Match', first.headers.etag)
       .expect(304);
 
+    await request(app.getHttpServer())
+      .get('/game-export/index.wasm')
+      .set('If-None-Match', `W/${first.headers.etag}, "stale"`)
+      .expect(304);
+
     const shell = await request(app.getHttpServer())
       .get('/game-export/index.html')
       .expect(200);

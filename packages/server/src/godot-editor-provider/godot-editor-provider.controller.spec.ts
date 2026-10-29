@@ -26,6 +26,7 @@ describe('GodotEditorProviderController', () => {
       'console.log(1)',
     );
     await writeFile(path.join(workspace, 'secret.txt'), 'secret');
+    await writeFile(path.join(projectPath, '_wired', 'extensionless'), 'x');
   });
 
   beforeEach(() => {
@@ -67,6 +68,11 @@ describe('GodotEditorProviderController', () => {
     await expect(
       controller.getGodotProjectFile('missing.godot'),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('lists extensionless files in the base project', async () => {
+    const info = await controller.getGodotProjectInfo();
+    expect(info.filepaths).toContain('extensionless');
   });
 
   describe('HTTP wildcard routing', () => {

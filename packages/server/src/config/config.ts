@@ -10,9 +10,11 @@ const config: () => AppConfig = () => ({
   db: {
     host: process.env.DB_HOST ?? 'db',
     port: parseInt(process.env.DB_PORT ?? '5432'),
+    username: process.env.DB_USER ?? 'postgres',
     password: process.env.DB_PASSWORD ?? 'postgres',
+    database: process.env.DB_NAME ?? 'postgres',
     entities: [process.env.DB_ENTITIES ?? 'dist/**/*.entity.{ts,js}'],
-    sync: process.env.DB_SYNC == '1',
+    sync: process.env.DB_SYNC === '1',
   },
   site: {
     commonDomain: process.env.COMMON_DOMAIN ?? 'localhost',

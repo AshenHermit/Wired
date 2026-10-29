@@ -59,14 +59,23 @@ export class GodotEditorProviderController {
     return new StreamableFile(createReadStream(file));
   }
   @Get('godot-project-info/wired')
-  async getGodotProjectZip(): Promise<ProjectInfo> {
+  async getGodotProjectInfo(): Promise<ProjectInfo> {
     const projectDir = path.join(
       process.cwd(),
       this.configService.godot.projectPath,
       '_wired',
     );
     const filepaths: string[] = [];
-    for await (const filepath of glob(path.join(projectDir, '**', '*.*'))) {
+    for await (const filepath of glob(path.join(projectDir, '**', '*'))) {
+      let isFile = false;
+      try {
+        isFile = (await stat(filepath)).isFile();
+      } catch {
+        continue;
+      }
+      if (!isFile) {
+        continue;
+      }
       const relative = path.relative(projectDir, filepath).replace(/\\/g, '/');
       // The export and runtime state must never reach the editor FS, even if
       // somebody builds into the base project by mistake.

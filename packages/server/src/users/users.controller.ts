@@ -2,20 +2,31 @@ import {
   Body,
   Controller,
   Delete,
+  Get,
   Param,
   ParseIntPipe,
   Patch,
   Req,
 } from '@nestjs/common';
 import { UsersService, UpdateUserDTO } from './users.service';
-import { ApiTags } from '@nestjs/swagger';
-import { UseAuthGuard } from 'src/auth/jwt-auth.guard';
-import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
+import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { UseAuthGuard, UseSilentAuthGuard } from 'src/auth/jwt-auth.guard';
+import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
+import { User } from 'src/database/entities/user.entity';
 
 @ApiTags('users')
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
+
+  // Declared before the parameterised routes so /users/profile is not
+  // captured by /users/:userId + ParseIntPipe.
+  @UseSilentAuthGuard()
+  @ApiOkResponse({ type: User })
+  @Get('profile')
+  getProfile(@Req() req: SilentAuthRequest) {
+    return req.user;
+  }
 
   @UseAuthGuard()
   @Patch(':userId')

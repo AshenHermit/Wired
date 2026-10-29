@@ -144,14 +144,23 @@ export class GameExportController implements OnModuleInit {
       'Cross-Origin-Resource-Policy': 'same-origin',
     });
 
-    if (req.headers['if-none-match'] === etag) {
+    if (this.matchesEtag(req.headers['if-none-match'], etag)) {
       res.status(304);
       return undefined;
     }
 
-    res.set('Content-Length', String(stat.size));
     return new StreamableFile(createReadStream(target), {
       length: stat.size,
     });
+  }
+
+  private matchesEtag(header: string | undefined, etag: string): boolean {
+    if (!header) {
+      return false;
+    }
+    return header
+      .split(',')
+      .map((value) => value.trim().replace(/^W\//, ''))
+      .some((value) => value === etag);
   }
 }

@@ -1,28 +1,35 @@
-import { createEvent, EventHandler } from "@/lib/event-utils";
 import axios, { AxiosError, AxiosInstance, AxiosResponse } from "axios";
 
 export class APIError extends AxiosError {}
 
+function extractMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const payload = error.response?.data as { message?: unknown } | undefined;
+    const message = payload?.message;
+    if (Array.isArray(message)) {
+      return message.map(String).join("; ");
+    }
+    if (typeof message === "string" && message.length > 0) {
+      return message;
+    }
+    return error.message;
+  }
+  return error instanceof Error ? error.message : "Request failed";
+}
+
 export class ApiClient {
   axios: AxiosInstance;
-  errorCallback: EventHandler<[string]>;
 
   constructor(axiosClient: AxiosInstance) {
     this.axios = axiosClient;
-    this.errorCallback = createEvent();
   }
 
   async processResponse<T>(res: Promise<AxiosResponse<any, any>>) {
     try {
-      let response = await res;
+      const response = await res;
       return response.data as T;
-    } catch (e: any) {
-      let message = e.message;
-      try {
-        message = e.response.data.message;
-      } catch (err) {}
-      this.errorCallback(message);
-      throw new APIError(message);
+    } catch (error) {
+      throw new APIError(extractMessage(error));
     }
   }
 

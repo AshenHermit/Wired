@@ -21,7 +21,7 @@ export class AppConfigService {
   }
   get isProduction() {
     return (
-      this.configService.get<AppConfig['nodeEnv']>('nodeEnv') == 'production'
+      this.configService.get<AppConfig['nodeEnv']>('nodeEnv') === 'production'
     );
   }
   get godot() {

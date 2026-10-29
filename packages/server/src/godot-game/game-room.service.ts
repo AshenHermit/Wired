@@ -61,8 +61,8 @@ export class GameRoomService {
     user: User | undefined,
     roomId: number,
   ): Promise<GameRoomConnection> {
-    const room = await this.assertCanPlay(user, roomId);
-    const limit = this.rateLimiter.consume(user!.id, room.id);
+    const { room, user: player } = await this.assertCanPlay(user, roomId);
+    const limit = this.rateLimiter.consume(player.id, room.id);
     if (!limit.allowed) {
       throw new HttpException(
         {
@@ -96,7 +96,7 @@ export class GameRoomService {
     user: User | undefined,
     roomId: number,
   ): Promise<GameRoomRuntimeStatus> {
-    const room = await this.assertCanPlay(user, roomId);
+    const { room } = await this.assertCanPlay(user, roomId);
     const info = this.runtime.getRuntime(String(room.id));
     return {
       roomId: room.id,
@@ -110,7 +110,7 @@ export class GameRoomService {
   private async assertCanPlay(
     user: User | undefined,
     roomId: number,
-  ): Promise<Room> {
+  ): Promise<{ room: Room; user: User }> {
     if (!user || typeof user.id !== 'number') {
       throw new UnauthorizedException('Sign in to join a game room');
     }
@@ -124,7 +124,7 @@ export class GameRoomService {
     }
 
     if (room.isPublic) {
-      return room;
+      return { room, user };
     }
 
     const isAuthor = room.author?.id === user.id;
@@ -137,12 +137,17 @@ export class GameRoomService {
       );
     }
 
-    return room;
+    return { room, user };
   }
 
-  private toHttpException(error: unknown, roomId: string): unknown {
+  private toHttpException(error: unknown, roomId: string): HttpException {
     if (!(error instanceof RoomRuntimeError)) {
-      return error;
+      return error instanceof HttpException
+        ? error
+        : new HttpException(
+            'Cannot start the room runtime',
+            HttpStatus.INTERNAL_SERVER_ERROR,
+          );
     }
     const status =
       STATUS_BY_ERROR[error.code] ?? HttpStatus.INTERNAL_SERVER_ERROR;

@@ -5,7 +5,6 @@ import {
   Delete,
   Get,
   Param,
-  ParseArrayPipe,
   ParseIntPipe,
   Patch,
   Post,
@@ -109,7 +108,7 @@ export class ScriptingPackagesController {
     @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @Param('revision', ParseIntPipe) revision: number,
-    @Param('path', ParseArrayPipe) path: string[],
+    @Param('path') path: string | string[],
     @UploadedFile() file: Express.Multer.File,
   ) {
     await this.packagesService.assertPackageEditing(req.user, id);
@@ -119,7 +118,7 @@ export class ScriptingPackagesController {
     return await this.revisionsService.uploadFile(
       id,
       revision,
-      path.join('/'),
+      Array.isArray(path) ? path.join('/') : path,
       file.buffer,
     );
   }
@@ -159,12 +158,12 @@ export class ScriptingPackagesController {
   async getRevisionFile(
     @Param('id', ParseIntPipe) id: number,
     @Param('revision', ParseIntPipe) revision: number,
-    @Param('path', ParseArrayPipe) path: string[],
+    @Param('path') path: string | string[],
   ): Promise<StreamableFile> {
     const data = await this.revisionsService.readPublishedFile(
       id,
       revision,
-      path.join('/'),
+      Array.isArray(path) ? path.join('/') : path,
     );
     return new StreamableFile(data, {
       type: 'application/octet-stream',

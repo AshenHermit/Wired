@@ -23,6 +23,7 @@ export function LoginForm({
             <div className="grid gap-6">
               <div className="flex flex-col gap-4">
                 <Button
+                  type="button"
                   variant="outline"
                   className="w-full"
                   onClick={googleAuth}

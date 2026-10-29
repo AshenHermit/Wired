@@ -534,6 +534,7 @@ describe('RoomRuntimeService', () => {
     await expect(service.getConnection('room-1')).rejects.toMatchObject({
       code: 'handshake_window_expired',
     });
+    expect(service.getRuntime('room-1')?.state).toBe('stopping');
   });
 
   it('counts each authenticated peer once and ignores unknown departures', async () => {

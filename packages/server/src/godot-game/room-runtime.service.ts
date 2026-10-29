@@ -82,9 +82,15 @@ export class RoomRuntimeService implements OnModuleDestroy {
         (record.handshakeLeaseUntil - Date.now()) / 1_000,
       );
       if (remainingSec <= AUTH_TIMEOUT_SEC + 1) {
+        // Do not leave a window the client is told to retry into: stop this
+        // runtime so the next attempt starts a fresh one.
+        void this.stopRoom(roomId, 'handshake_window_expired').catch(() => {
+          // The exit handler still finalises the record; a failed stop must
+          // not hide the actionable error below.
+        });
         throw new RoomRuntimeError(
           'handshake_window_expired',
-          `Room ${roomId} has only ${remainingSec}s left in its handshake window; the room will stop when the window closes and the next request will start it again`,
+          `Room ${roomId} has only ${remainingSec}s left in its handshake window; it is restarting, retry in a moment`,
           roomId,
           record.port,
         );
@@ -194,7 +200,8 @@ export class RoomRuntimeService implements OnModuleDestroy {
     this.runtimeConfiguration.validateRoomId(roomId);
     const config = this.configService.godotRuntime;
     this.runtimeConfiguration.validate(config);
-    const { stateDir } = this.runtimeConfiguration.resolvePaths(config);
+    const paths = this.runtimeConfiguration.resolvePaths(config);
+    const { stateDir } = paths;
 
     const existing = this.registry.get(roomId);
     if (existing) {
@@ -246,7 +253,12 @@ export class RoomRuntimeService implements OnModuleDestroy {
 
     try {
       const child = this.processFactory.spawn(
-        this.runtimeConfiguration.createSpawnOptions(config, roomId, port),
+        this.runtimeConfiguration.createSpawnOptions(
+          config,
+          roomId,
+          port,
+          paths,
+        ),
       );
       record.process = child;
       record.pid = child.pid ?? null;

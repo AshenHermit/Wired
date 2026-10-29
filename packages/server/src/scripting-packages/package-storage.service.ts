@@ -196,13 +196,23 @@ export class PackageStorageService {
 
     for (const entry of declared) {
       const fullPath = resolvePackagePath(dir, entry.filepath);
-      const actualSize = (await stat(fullPath)).size;
+      let actualSize: number;
+      let actualHash: string;
+      try {
+        actualSize = (await stat(fullPath)).size;
+        actualHash = await sha256File(fullPath);
+      } catch {
+        // The file can disappear between listing and verification; report a
+        // client error instead of leaking ENOENT as a 500.
+        throw new BadRequestException(
+          `Cannot publish revision, file ${entry.filepath} is no longer available`,
+        );
+      }
       if (actualSize !== entry.size) {
         throw new BadRequestException(
           `Cannot publish revision, size mismatch for ${entry.filepath}: expected ${entry.size}, got ${actualSize}`,
         );
       }
-      const actualHash = await sha256File(fullPath);
       if (actualHash !== entry.sha256.toLowerCase()) {
         throw new BadRequestException(
           `Cannot publish revision, sha256 mismatch for ${entry.filepath}`,

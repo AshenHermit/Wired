@@ -49,15 +49,16 @@ export function validatePackageRevisionFiles(raw: unknown): PackageFileEntry[] {
         `files[${index}] is too large (limit ${MAX_PACKAGE_FILE_SIZE} bytes)`,
       );
     }
+    let normalizedSha256: string;
     try {
-      normalizeSha256(sha256);
+      normalizedSha256 = normalizeSha256(sha256);
     } catch {
       fail(`files[${index}].sha256 must be a sha256 hex digest`);
     }
     return {
       filepath,
       size,
-      sha256: normalizeSha256(sha256),
+      sha256: normalizedSha256,
     };
   });
 

@@ -109,8 +109,11 @@ export class RoomRuntimeConfiguration {
     config: GodotRuntimeConfig,
     roomId: string,
     port: number,
+    paths: { projectPath: string; stateDir: string } = this.resolvePaths(
+      config,
+    ),
   ): RuntimeSpawnOptions {
-    const { projectPath, stateDir } = this.resolvePaths(config);
+    const { projectPath, stateDir } = paths;
     return {
       executablePath: config.executablePath,
       args: [
