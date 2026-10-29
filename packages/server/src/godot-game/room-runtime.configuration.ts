@@ -128,10 +128,10 @@ export class RoomRuntimeConfiguration {
         '--state-dir',
         join(stateDir, this.safeName(roomId)),
         // Package manifests and files are served by the Wired API, not by the
-        // game socket. The runtime runs next to the backend, so it uses the
-        // loopback address of this process; the port is never client input.
+        // game socket. The URL is configuration, not derived from the ambient
+        // PORT, so a proxy or a different backend port cannot break lookups.
         '--api-url',
-        this.buildApiUrl(),
+        config.apiUrl,
       ],
       cwd: projectPath,
       env: this.buildRuntimeEnv(config.ticketSecret),
@@ -158,14 +158,8 @@ export class RoomRuntimeConfiguration {
     return `ws://${host}:${port}`;
   }
 
-  /** Loopback address of this backend process, as seen by the local runtime. */
-  private buildApiUrl(): string {
-    const port = Number(process.env.PORT ?? 3000);
-    const safePort = Number.isInteger(port) && port > 0 ? port : 3000;
-    return `http://127.0.0.1:${safePort}`;
-  }
-
-  private buildRuntimeEnv(ticketSecret: string): NodeJS.ProcessEnv {    const env: NodeJS.ProcessEnv = {};
+  private buildRuntimeEnv(ticketSecret: string): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = {};
     for (const name of RUNTIME_ENV_ALLOWLIST) {
       const value = process.env[name];
       if (value !== undefined) {

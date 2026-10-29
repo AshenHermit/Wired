@@ -1,30 +1,21 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { FindOptionsWhere, Repository } from 'typeorm';
 import { Room } from 'src/database/entities/room.entity';
 import { User } from 'src/database/entities/user.entity';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
-import { EventEmitter2 } from '@nestjs/event-emitter';
-import {
-  RoomCreatedEvent,
-  RoomDeletedEvent,
-  RoomEvents,
-  RoomUpdatedEvent,
-} from 'src/events/room.events';
 
 @Injectable()
 export class RoomsService {
   constructor(
     @InjectRepository(Room)
     private readonly roomsRepository: Repository<Room>,
-    @InjectRepository(User)
-    private readonly usersRepository: Repository<User>,
-    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async assertRoomCreation(user: User, room: CreateRoomDto): Promise<void> {
@@ -44,10 +35,36 @@ export class RoomsService {
     }
   }
 
-  findAll(): Promise<Room[]> {
+  findAll(user?: User | null): Promise<Room[]> {
+    const where: FindOptionsWhere<Room> | FindOptionsWhere<Room>[] = user
+      ? [
+          { isPublic: true },
+          { author: { id: user.id } },
+          { contributors: { id: user.id } },
+        ]
+      : { isPublic: true };
+
     return this.roomsRepository.find({
+      where,
       relations: ['author', 'contributors', 'scriptingPackages'],
+      // A WHERE on a joined relation would otherwise drop the other
+      // contributors of a private room from the hydrated array.
+      relationLoadStrategy: 'query',
     });
+  }
+
+  async findVisibleOne(id: number, user?: User | null): Promise<Room> {
+    const room = await this.findOne(id);
+    const visible =
+      room.isPublic ||
+      room.author?.id === user?.id ||
+      room.contributors?.some((contributor) => contributor.id === user?.id);
+
+    if (!visible) {
+      // 404 rather than 403 so private room ids cannot be probed.
+      throw new NotFoundException(`Room with id=${id} not found`);
+    }
+    return room;
   }
 
   async findOne(id: number): Promise<Room> {
@@ -61,46 +78,29 @@ export class RoomsService {
     return room;
   }
 
-  async create(dto: CreateRoomDto): Promise<Room> {
-    const { authorId, ...data } = dto;
+  async create(dto: CreateRoomDto, author: User): Promise<Room> {
+    // Only whitelisted DTO fields are copied; the author always comes from the
+    // authenticated request, never from the request body.
     const room = this.roomsRepository.create({
-      ...data,
+      name: dto.name,
+      isPublic: dto.isPublic,
+      description: dto.description,
+      type: dto.type,
+      parentRoomId: dto.parentRoomId,
+      author,
     });
 
-    if (authorId) {
-      const author = await this.usersRepository.findOne({
-        where: { id: authorId },
-      });
-      if (!author) {
-        throw new NotFoundException(`Author with id=${authorId} not found`);
-      }
-      room.author = author;
-    }
-
     const saved = await this.roomsRepository.save(room);
-    const found = await this.findOne(saved.id);
-    this.eventEmitter.emit(
-      RoomEvents.ROOM_CREATED,
-      new RoomCreatedEvent(found),
-    );
-    return saved;
+    return this.findOne(saved.id);
   }
 
   async update(id: number, dto: UpdateRoomDto): Promise<Room> {
     const room = await this.findOne(id);
 
-    if (dto.parentRoomId && dto.parentRoomId == id) {
-      throw new ForbiddenException('ARE YOU INSANE?');
-    }
-
-    if (dto.authorId) {
-      const author = await this.usersRepository.findOne({
-        where: { id: dto.authorId },
-      });
-      if (!author) {
-        throw new NotFoundException(`Author with id=${dto.authorId} not found`);
-      }
-      room.author = author;
+    if (dto.parentRoomId && dto.parentRoomId === id) {
+      throw new BadRequestException(
+        'Комната не может быть родителем самой себе',
+      );
     }
 
     if (dto.name !== undefined) room.name = dto.name;
@@ -109,20 +109,14 @@ export class RoomsService {
     if (dto.parentRoomId !== undefined) room.parentRoomId = dto.parentRoomId;
 
     const saved = await this.roomsRepository.save(room);
-    const found = await this.findOne(saved.id);
-    this.eventEmitter.emit(
-      RoomEvents.ROOM_UPDATED,
-      new RoomUpdatedEvent(found),
-    );
-    return saved;
+    return this.findOne(saved.id);
   }
 
   async remove(id: number): Promise<void> {
-    const room = await this.findOne(id);
+    await this.findOne(id);
     const result = await this.roomsRepository.delete(id);
     if (!result.affected) {
       throw new NotFoundException(`Room with id=${id} not found`);
     }
-    this.eventEmitter.emit(RoomEvents.ROOM_DELETED, new RoomDeletedEvent(room));
   }
 }

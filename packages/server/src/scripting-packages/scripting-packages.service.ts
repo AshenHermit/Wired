@@ -2,7 +2,6 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
-  StreamableFile,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -11,36 +10,17 @@ import { User } from 'src/database/entities/user.entity';
 import { Room } from 'src/database/entities/room.entity';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
-import { EventEmitter2 } from '@nestjs/event-emitter';
-import {
-  ScriptingPackageCreatedEvent,
-  ScriptingPackageDeletedEvent,
-  ScriptingPackageEvents,
-  ScriptingPackageUpdatedEvent,
-} from 'src/events/scripting-package.events';
-import path from 'path';
-import { AppConfigService } from 'src/config/config.service';
-import * as fs from 'fs';
-import sha256 from 'crypto-js/sha256';
-import { assertLegacyPackagePath } from './package-path';
 
 @Injectable()
 export class ScriptingPackagesService {
   constructor(
     @InjectRepository(ScriptingPackage)
     private readonly packagesRepository: Repository<ScriptingPackage>,
-    @InjectRepository(User)
-    private readonly usersRepository: Repository<User>,
     @InjectRepository(Room)
     private readonly roomsRepository: Repository<Room>,
-    private readonly eventEmitter: EventEmitter2,
-    private readonly configService: AppConfigService,
   ) {}
 
-  async assertPackageCreation(
-    user: User,
-    dto: CreateScriptingPackageDto,
-  ): Promise<void> {
+  assertPackageCreation(user: User, dto: CreateScriptingPackageDto): void {
     if (dto.authorId !== user.id) {
       throw new ForbiddenException(
         'You are not allowed to create this package',
@@ -48,15 +28,24 @@ export class ScriptingPackagesService {
     }
   }
   async assertPackageEditing(user: User, packageId: number): Promise<void> {
-    const pkg = await this.findOne(packageId);
-    if (pkg.room) {
-      // TODO: rules later
-    } else {
-      if (!pkg.author || pkg.author.id !== user.id) {
-        throw new ForbiddenException(
-          'You are not allowed to edit this package',
-        );
-      }
+    const pkg = await this.packagesRepository.findOne({
+      where: { id: packageId },
+      relations: ['author', 'contributors', 'room', 'room.author'],
+    });
+    if (!pkg) {
+      throw new NotFoundException(
+        `ScriptingPackage with id=${packageId} not found`,
+      );
+    }
+
+    const isAuthor = pkg.author?.id === user.id;
+    const isContributor = pkg.contributors?.some(
+      (contributor) => contributor.id === user.id,
+    );
+    const isRoomAuthor = pkg.room?.author?.id === user.id;
+
+    if (!isAuthor && !isContributor && !isRoomAuthor) {
+      throw new ForbiddenException('You are not allowed to edit this package');
     }
   }
 
@@ -89,29 +78,38 @@ export class ScriptingPackagesService {
     return pkg;
   }
 
-  async create(dto: CreateScriptingPackageDto): Promise<ScriptingPackage> {
+  async create(
+    dto: CreateScriptingPackageDto,
+    user: User,
+  ): Promise<ScriptingPackage> {
     const { authorId, roomId, parentPackageId, ...data } = dto;
 
     const pkg = this.packagesRepository.create({
       ...data,
+      author: user,
     });
 
-    if (authorId) {
-      const author = await this.usersRepository.findOne({
-        where: { id: authorId },
-      });
-      if (!author) {
-        throw new NotFoundException(`Author with id=${authorId} not found`);
-      }
-      pkg.author = author;
+    if (authorId !== undefined && authorId !== user.id) {
+      throw new ForbiddenException(
+        'You are not allowed to create a package for another author',
+      );
     }
 
     if (roomId) {
       const room = await this.roomsRepository.findOne({
         where: { id: roomId },
+        relations: ['author', 'contributors'],
       });
       if (!room) {
         throw new NotFoundException(`Room with id=${roomId} not found`);
+      }
+      const canEditRoom =
+        room.author?.id === user.id ||
+        room.contributors?.some((contributor) => contributor.id === user.id);
+      if (!canEditRoom) {
+        throw new ForbiddenException(
+          'You are not allowed to attach a package to this room',
+        );
       }
       pkg.room = room;
     }
@@ -129,12 +127,7 @@ export class ScriptingPackagesService {
     }
 
     const saved = await this.packagesRepository.save(pkg);
-    const found = await this.findOne(saved.id);
-    this.eventEmitter.emit(
-      ScriptingPackageEvents.SCRIPTING_PACKAGE_CREATED,
-      new ScriptingPackageCreatedEvent(found),
-    );
-    return saved;
+    return this.findOne(saved.id);
   }
 
   async update(
@@ -143,26 +136,8 @@ export class ScriptingPackagesService {
   ): Promise<ScriptingPackage> {
     const pkg = await this.findOne(id);
 
-    if (dto.authorId) {
-      const author = await this.usersRepository.findOne({
-        where: { id: dto.authorId },
-      });
-      if (!author) {
-        throw new NotFoundException(`Author with id=${dto.authorId} not found`);
-      }
-      pkg.author = author;
-    }
-
-    if (dto.roomId) {
-      const room = await this.roomsRepository.findOne({
-        where: { id: dto.roomId },
-      });
-      if (!room) {
-        throw new NotFoundException(`Room with id=${dto.roomId} not found`);
-      }
-      pkg.room = room;
-    }
-
+    // Authorship and room ownership are immutable through PATCH: otherwise a
+    // room author allowed to edit a package could take it over or move it.
     if (dto.parentPackageId) {
       const parent = await this.packagesRepository.findOne({
         where: { id: dto.parentPackageId },
@@ -183,69 +158,14 @@ export class ScriptingPackagesService {
     if (dto.physicalFiles !== undefined) pkg.physicalFiles = dto.physicalFiles;
 
     const saved = await this.packagesRepository.save(pkg);
-    const found = await this.findOne(id);
-    this.eventEmitter.emit(
-      ScriptingPackageEvents.SCRIPTING_PACKAGE_UPDATED,
-      new ScriptingPackageUpdatedEvent(found),
-    );
-    return saved;
+    return this.findOne(saved.id);
   }
 
   async remove(id: number): Promise<void> {
-    const pkg = await this.findOne(id);
+    await this.findOne(id);
     const result = await this.packagesRepository.delete(id);
     if (!result.affected) {
       throw new NotFoundException(`ScriptingPackage with id=${id} not found`);
     }
-    this.eventEmitter.emit(
-      ScriptingPackageEvents.SCRIPTING_PACKAGE_DELETED,
-      new ScriptingPackageDeletedEvent(pkg),
-    );
-  }
-
-  getPhysicalFileFullPath(pkg: ScriptingPackage, filepath: string): string {
-    return path.join(
-      this.configService.storage.packagesFilesDir,
-      pkg.id.toString(),
-      assertLegacyPackagePath(filepath),
-    );
-  }
-
-  async updatePhysicalFileHash(
-    pkg: ScriptingPackage,
-    filepath: string,
-  ): Promise<void> {
-    const fullPath = this.getPhysicalFileFullPath(pkg, filepath);
-    const hash = sha256(fs.readFileSync(fullPath, 'utf8'));
-    pkg.physicalFiles = pkg.physicalFiles.map((file) =>
-      file.filepath === filepath ? { ...file, hash: hash.toString() } : file,
-    );
-    await this.packagesRepository.save(pkg);
-  }
-
-  async uploadPhysicalFile(
-    id: number,
-    file: Express.Multer.File,
-    filepath: string,
-  ): Promise<boolean> {
-    const pkg = await this.findOne(id);
-    const fullPath = this.getPhysicalFileFullPath(pkg, filepath);
-    if (!fs.existsSync(path.dirname(fullPath))) {
-      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-    }
-    fs.writeFileSync(fullPath, file.buffer);
-    await this.updatePhysicalFileHash(pkg, filepath);
-    return true;
-  }
-
-  async getPhysicalFile(id: number, filepath: string): Promise<StreamableFile> {
-    const pkg = await this.findOne(id);
-    const fullPath = this.getPhysicalFileFullPath(pkg, filepath);
-    if (!fs.existsSync(fullPath)) {
-      throw new NotFoundException(
-        `Physical file with filepath=${filepath} not found`,
-      );
-    }
-    return new StreamableFile(fs.createReadStream(fullPath));
   }
 }

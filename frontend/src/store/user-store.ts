@@ -27,17 +27,22 @@ export const useUserStore = create<UserState>()((set, get) => ({
   loaded: false,
   setUser: (user: LocalUser) => set((state) => user),
   loadUser: () => {
-    getProfile().then((profile) => {
-      if (!profile) {
+    getProfile()
+      .then((profile) => {
+        if (!profile) {
+          set((state) => ({ loaded: true, ...defaultUserObject }));
+          return;
+        }
+        get().setUser({
+          authorized: true,
+          ...profile,
+        });
+        set((state) => ({ loaded: true }));
+      })
+      .catch(() => {
+        // A failed profile request must not leave the UI waiting forever.
         set((state) => ({ loaded: true, ...defaultUserObject }));
-        return;
-      }
-      get().setUser({
-        authorized: true,
-        ...profile,
       });
-      set((state) => ({ loaded: true }));
-    });
   },
 }));
 

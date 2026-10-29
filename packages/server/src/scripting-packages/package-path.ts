@@ -111,29 +111,6 @@ export function normalizePackagePaths(rawPaths: unknown[]): string[] {
 }
 
 /**
- * Directory names inside a package directory that belong to revision storage.
- * The legacy "upload a file into the package directory" API must never touch
- * them, otherwise it could read or overwrite draft/published revisions.
- */
-const RESERVED_PACKAGE_SEGMENTS = ['drafts', 'revisions'];
-
-/**
- * Validates a path passed to the legacy physical-file API. On top of ordinary
- * path safety it rejects the revision storage directories, so a published
- * revision stays immutable no matter which endpoint is used.
- */
-export function assertLegacyPackagePath(raw: unknown): string {
-  const normalized = normalizePackagePath(raw);
-  const firstSegment = normalized.split('/')[0].toLowerCase();
-  if (RESERVED_PACKAGE_SEGMENTS.includes(firstSegment)) {
-    throw new PackagePathError(
-      `Package file path uses a reserved directory: ${normalized}`,
-    );
-  }
-  return normalized;
-}
-
-/**
  * Resolves a validated package-relative path under `rootDir` and asserts the
  * result stays inside it (defense in depth on top of `normalizePackagePath`).
  */

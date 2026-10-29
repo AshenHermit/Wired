@@ -4,7 +4,6 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   CreatePackageRevisionPayload,
@@ -14,10 +13,6 @@ import {
 } from '@wired-io/shared';
 import { Repository } from 'typeorm';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
-import {
-  ScriptingPackageRevisionPublishedEvent,
-  ScriptingPackageEvents,
-} from 'src/events/scripting-package.events';
 import {
   SavedDraftFile,
   PackageStorageService,
@@ -42,7 +37,6 @@ export class PackageRevisionsService {
     private readonly revisionsRepository: Repository<ScriptingPackageRevision>,
     private readonly packagesService: ScriptingPackagesService,
     private readonly storage: PackageStorageService,
-    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   /**
@@ -54,6 +48,12 @@ export class PackageRevisionsService {
     packageId: number,
     payload: CreatePackageRevisionPayload,
   ): Promise<PackageRevision> {
+    if (this.publishing.has(packageId)) {
+      throw new ConflictException(
+        `Package ${packageId} is being published, try again in a moment`,
+      );
+    }
+
     const pkg = await this.packagesService.findOne(packageId);
     const files = validatePackageRevisionFiles(payload?.files);
 
@@ -64,16 +64,26 @@ export class PackageRevisionsService {
     });
     const revision = (maxRevision ?? 0) + 1;
 
-    const saved = await this.revisionsRepository.save(
-      this.revisionsRepository.create({
-        package: pkg,
-        revision,
-        status: 'draft',
-        files,
-      }),
-    );
-
-    return toRevision(saved, packageId);
+    try {
+      const saved = await this.revisionsRepository.save(
+        this.revisionsRepository.create({
+          package: pkg,
+          revision,
+          status: 'draft',
+          files,
+        }),
+      );
+      return toRevision(saved, packageId);
+    } catch (error) {
+      // Two concurrent drafts compute the same revision number; the unique
+      // index rejects one of them. Report a retryable conflict, not a 500.
+      if (isUniqueViolation(error)) {
+        throw new ConflictException(
+          `Package ${packageId} received a concurrent draft, try again`,
+        );
+      }
+      throw error;
+    }
   }
 
   async uploadFile(
@@ -129,8 +139,6 @@ export class PackageRevisionsService {
       );
     }
 
-    const pkg = await this.packagesService.findOne(packageId);
-
     // Reject uploads for this package while its bytes are verified and moved.
     this.publishing.add(packageId);
     try {
@@ -148,12 +156,7 @@ export class PackageRevisionsService {
       this.publishing.delete(packageId);
     }
 
-    const published = toRevision(row, packageId);
-    this.eventEmitter.emit(
-      ScriptingPackageEvents.SCRIPTING_PACKAGE_REVISION_PUBLISHED,
-      new ScriptingPackageRevisionPublishedEvent(pkg, published),
-    );
-    return published;
+    return toRevision(row, packageId);
   }
 
   /**
@@ -193,14 +196,7 @@ export class PackageRevisionsService {
       );
     }
 
-    return {
-      packageId,
-      name: pkg.name,
-      revision: row.revision,
-      files: row.files,
-      totalSize: row.files.reduce((sum, entry) => sum + entry.size, 0),
-      publishedAt: row.publishedAt.toISOString(),
-    };
+    return toManifest(row, packageId, pkg.name);
   }
 
   async getManifestForRevision(
@@ -216,14 +212,7 @@ export class PackageRevisionsService {
       );
     }
 
-    return {
-      packageId,
-      name: pkg.name,
-      revision: row.revision,
-      files: row.files,
-      totalSize: row.files.reduce((sum, entry) => sum + entry.size, 0),
-      publishedAt: row.publishedAt.toISOString(),
-    };
+    return toManifest(row, packageId, pkg.name);
   }
 
   async readPublishedFile(
@@ -287,6 +276,21 @@ export class PackageRevisionsService {
   }
 }
 
+function toManifest(
+  row: ScriptingPackageRevision,
+  packageId: number,
+  packageName: string,
+): PackageManifest {
+  return {
+    packageId,
+    name: packageName,
+    revision: row.revision,
+    files: row.files,
+    totalSize: row.files.reduce((sum, entry) => sum + entry.size, 0),
+    publishedAt: row.publishedAt!.toISOString(),
+  };
+}
+
 function toRevision(
   row: ScriptingPackageRevision,
   packageId: number,
@@ -299,4 +303,12 @@ function toRevision(
     createdAt: row.createdAt.toISOString(),
     publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
   };
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: string }).code === '23505'
+  );
 }

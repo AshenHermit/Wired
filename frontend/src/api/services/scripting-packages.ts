@@ -27,33 +27,6 @@ export async function createScriptingPackage(
   );
 }
 
-export async function uploadPhysicalFile(
-  packageId: number,
-  filepath: string,
-  file: File
-) {
-  return apiClient.postFile<ScriptingPackage>(
-    `scripting-packages/${packageId}/files/${filepath}`,
-    file
-  );
-}
-export async function uploadPhysicalFileAsUint8Array(
-  packageId: number,
-  filepath: string,
-  file: Uint8Array
-) {
-  return apiClient.postFile<ScriptingPackage>(
-    `scripting-packages/${packageId}/files/${filepath}`,
-    uint8ArrayToFile(file, filepath, "application/octet-stream")
-  );
-}
-
-export async function getPhysicalFile(packageId: number, filepath: string) {
-  return apiClient.getFile<void>(
-    `scripting-packages/${packageId}/files/${filepath}`
-  );
-}
-
 export async function updateScriptingPackage(
   id: number,
   data: UpdateScriptingPackagePayload

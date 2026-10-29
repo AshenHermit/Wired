@@ -95,9 +95,7 @@ describe('GameRoomController', () => {
     await request(app.getHttpServer())
       .post('/rooms/42/game/connection')
       .expect(401);
-    await request(app.getHttpServer())
-      .get('/rooms/42/game/status')
-      .expect(401);
+    await request(app.getHttpServer()).get('/rooms/42/game/status').expect(401);
     expect(service.connect).not.toHaveBeenCalled();
     expect(service.getStatus).not.toHaveBeenCalled();
   });

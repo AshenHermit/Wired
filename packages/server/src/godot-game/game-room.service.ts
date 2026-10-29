@@ -5,13 +5,9 @@ import {
   HttpStatus,
   Injectable,
   Logger,
-  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import {
-  GameRoomConnection,
-  GameRoomRuntimeStatus,
-} from '@wired-io/shared';
+import { GameRoomConnection, GameRoomRuntimeStatus } from '@wired-io/shared';
 import { Room } from 'src/database/entities/room.entity';
 import { User } from 'src/database/entities/user.entity';
 import { RoomsService } from 'src/rooms/rooms.service';
@@ -42,7 +38,8 @@ const MESSAGE_BY_ERROR: Record<RoomRuntimeErrorCode, string> = {
   room_starting: 'The room runtime is starting; retry shortly',
   room_stopping: 'The room runtime is stopping; retry shortly',
   room_not_running: 'The room runtime is not running',
-  handshake_window_expired: 'The connection window expired; retry to restart the room',
+  handshake_window_expired:
+    'The connection window expired; retry to restart the room',
   start_failed: 'The Godot runtime for this room failed to start',
 };
 
@@ -147,7 +144,8 @@ export class GameRoomService {
     if (!(error instanceof RoomRuntimeError)) {
       return error;
     }
-    const status = STATUS_BY_ERROR[error.code] ?? HttpStatus.INTERNAL_SERVER_ERROR;
+    const status =
+      STATUS_BY_ERROR[error.code] ?? HttpStatus.INTERNAL_SERVER_ERROR;
     this.logger.warn(
       `Game room ${roomId} connection failed with ${error.code}: ${error.message}`,
     );
@@ -155,7 +153,8 @@ export class GameRoomService {
       {
         statusCode: status,
         code: error.code,
-        message: MESSAGE_BY_ERROR[error.code] ?? 'Cannot start the room runtime',
+        message:
+          MESSAGE_BY_ERROR[error.code] ?? 'Cannot start the room runtime',
       },
       status,
     );

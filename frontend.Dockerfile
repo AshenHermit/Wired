@@ -13,9 +13,11 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 ARG NEXT_PUBLIC_API_URL
 ARG NEXT_PUBLIC_BACKEND_URL
 ARG NEXT_PUBLIC_WEBSOCKET_URL
+ARG NEXT_PUBLIC_HASHIDS_SALT
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ENV NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL}
 ENV NEXT_PUBLIC_WEBSOCKET_URL=${NEXT_PUBLIC_WEBSOCKET_URL}
+ENV NEXT_PUBLIC_HASHIDS_SALT=${NEXT_PUBLIC_HASHIDS_SALT}
 RUN pnpm run build:frontend
 
 RUN mkdir -p /app/frontend/.next/cache/images && chown -R node:node /app/frontend/.next

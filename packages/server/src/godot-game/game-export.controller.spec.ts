@@ -30,7 +30,10 @@ describe('GameExportController', () => {
     projectDir = mkdtempSync(join(tmpdir(), 'wired-export-'));
     webDir = join(projectDir, 'game_export', 'web');
     mkdirSync(join(webDir, 'worklets'), { recursive: true });
-    writeFileSync(join(webDir, 'index.html'), '<!doctype html><title>game</title>');
+    writeFileSync(
+      join(webDir, 'index.html'),
+      '<!doctype html><title>game</title>',
+    );
     writeFileSync(join(webDir, 'index.js'), 'console.log("engine");');
     writeFileSync(join(webDir, 'index.wasm'), Buffer.from([0, 97, 115, 109]));
     writeFileSync(join(webDir, 'index.pck'), Buffer.from([1, 2, 3]));
@@ -78,8 +81,12 @@ describe('GameExportController', () => {
       .expect(200);
 
     expect(response.headers['cross-origin-opener-policy']).toBe('same-origin');
-    expect(response.headers['cross-origin-embedder-policy']).toBe('require-corp');
-    expect(response.headers['cross-origin-resource-policy']).toBe('same-origin');
+    expect(response.headers['cross-origin-embedder-policy']).toBe(
+      'require-corp',
+    );
+    expect(response.headers['cross-origin-resource-policy']).toBe(
+      'same-origin',
+    );
     expect(response.headers['cache-control']).toBe('no-store');
     expect(response.headers['x-content-type-options']).toBe('nosniff');
     expect(response.headers['content-length']).toBeDefined();

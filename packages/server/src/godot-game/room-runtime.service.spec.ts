@@ -1,5 +1,5 @@
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 import { AppConfigService } from 'src/config/config.service';
@@ -113,6 +113,7 @@ describe('RoomRuntimeService', () => {
       ticketRateLimit: 20,
       ticketRateLimitWindowMs: 60_000,
       stateDir,
+      apiUrl: 'http://127.0.0.1:3000',
       exportDir: 'C:/wired/game_export/web',
       publicWsBaseUrl: '',
       logBufferLines: 50,
@@ -288,6 +289,31 @@ describe('RoomRuntimeService', () => {
     expect(service.getRuntime('room-1')?.state).toBe('stopped');
   });
 
+  it('keeps the port reserved when a force-killed process refuses to exit', async () => {
+    jest.useFakeTimers();
+    const { process } = await startRoom('room-1');
+    process.killExits = false;
+
+    const stopping = service.stopRoom('room-1');
+    await flushAsync();
+    jest.advanceTimersByTime(config.shutdownGraceMs);
+    await flushAsync();
+    jest.advanceTimersByTime(2_000);
+    await flushAsync();
+    await stopping;
+
+    expect(service.getRuntime('room-1')?.state).toBe('failed');
+
+    const second = service.getConnection('room-2');
+    await flushAsync();
+    expect(service.getRuntime('room-2')?.port).toBe(19101);
+
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-2 port=19101 bind=127.0.0.1',
+    );
+    await second;
+  });
+
   it('starts the idle timer when the last player leaves and cancels it on rejoin', async () => {
     jest.useFakeTimers();
     const { process } = await startRoom('room-1');
@@ -390,9 +416,11 @@ describe('RoomRuntimeService', () => {
     const { process } = await startRoom('room-1');
     process.emitLine('WIRED_LOG persisted line');
     process.exit(0);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
     const logPath = join(stateDir, 'room-1-19100.log');
+    for (let attempt = 0; attempt < 20 && !existsSync(logPath); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
     expect(readFileSync(logPath, 'utf8')).toContain('persisted line');
   });
 

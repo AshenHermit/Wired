@@ -8,16 +8,35 @@ import { Spinner } from "@/components/ui/spinner";
 
 export function RoomPageClient({ roomCode }: { roomCode: string }) {
   const [room, setRoom] = React.useState<Room | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
 
   const loadRoom = React.useCallback(async () => {
-    const room = await getRoom(decodeId("room", roomCode));
-    setRoom(room);
+    setError(null);
+    try {
+      const roomId = decodeId("room", roomCode);
+      if (roomId < 0) {
+        throw new Error("Invalid room code");
+      }
+      setRoom(await getRoom(roomId));
+    } catch {
+      setError("Не удалось загрузить комнату. Проверьте ссылку и попробуйте ещё раз.");
+    }
   }, [roomCode]);
 
   React.useEffect(() => {
     loadRoom();
   }, [loadRoom]);
 
+  if (error != null) {
+    return (
+      <div className="w-screen h-screen flex items-center justify-center p-8 text-center">
+        <div className="max-w-md space-y-2">
+          <h1 className="text-xl font-semibold">Комната недоступна</h1>
+          <p className="text-muted-foreground">{error}</p>
+        </div>
+      </div>
+    );
+  }
   if (room == null) {
     return (
       <div className="w-screen h-screen flex items-center justify-center">
@@ -30,11 +49,11 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
       <div className="w-screen h-screen flex items-center justify-center p-8 text-center">
         <div className="max-w-md space-y-2">
           <h1 className="text-xl font-semibold">
-            Phaser rooms are no longer supported
+            Комнаты Phaser больше не поддерживаются
           </h1>
           <p className="text-muted-foreground">
-            This room uses the retired ts-game mode. Create a new Godot room to
-            continue.
+            Эта комната использует устаревший режим ts-game. Создайте новую
+            комнату Godot, чтобы продолжить.
           </p>
         </div>
       </div>

@@ -211,9 +211,9 @@ describe('GameRoomService', () => {
   });
 
   it('uses the same unauthorized and forbidden exception types as the API', async () => {
-    await expect(service.getStatus(undefined as unknown as User, 42)).rejects.toBeInstanceOf(
-      UnauthorizedException,
-    );
+    await expect(
+      service.getStatus(undefined as unknown as User, 42),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
     rooms.findOne.mockResolvedValue(room({ isPublic: false, author: user(1) }));
     await expect(service.getStatus(user(2), 42)).rejects.toBeInstanceOf(
       ForbiddenException,

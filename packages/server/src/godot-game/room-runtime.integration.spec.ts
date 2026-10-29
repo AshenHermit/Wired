@@ -57,9 +57,13 @@ describeIntegration('RoomRuntimeService with real Godot', () => {
       startTimeoutMs: 20_000,
       ticketTtlSec: 60,
       ticketSecret: secret,
+      ticketRateLimit: 20,
+      ticketRateLimitWindowMs: 60_000,
       stateDir,
+      apiUrl: 'http://127.0.0.1:3000',
       publicWsBaseUrl: '',
       logBufferLines: 2_000,
+      exportDir: join(stateDir, 'export'),
     };
     const configService = {
       godotRuntime: config,

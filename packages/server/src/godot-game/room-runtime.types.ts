@@ -6,11 +6,7 @@
  * rooms must never share a runtime.
  */
 export type RoomRuntimeState =
-  | 'starting'
-  | 'running'
-  | 'stopping'
-  | 'stopped'
-  | 'failed';
+  'starting' | 'running' | 'stopping' | 'stopped' | 'failed';
 
 export interface GodotRuntimeConfig {
   /** Godot executable. Server-side configuration only; never client input. */
@@ -32,6 +28,8 @@ export interface GodotRuntimeConfig {
   /** Ticket issues allowed per user and room inside one window. 0 disables. */
   ticketRateLimit: number;
   ticketRateLimitWindowMs: number;
+  /** Base URL of the Wired API as reachable from the local runtime. */
+  apiUrl: string;
   /** Directory for per-room state and runtime logs. */
   stateDir: string;
   /**

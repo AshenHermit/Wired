@@ -24,10 +24,10 @@ export class JwtSilentAuthGuard extends AuthGuard('jwt-silent') {
   }
 }
 
-export function UseAuthQuard() {
+export function UseAuthGuard() {
   return applyDecorators(UseGuards(JwtAuthGuard), ApiBearerAuth());
 }
 
-export function UseSilentAuthQuard() {
+export function UseSilentAuthGuard() {
   return applyDecorators(UseGuards(JwtSilentAuthGuard), ApiBearerAuth());
 }

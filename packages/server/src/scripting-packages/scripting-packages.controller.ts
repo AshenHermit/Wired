@@ -9,8 +9,10 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Query,
   Req,
   StreamableFile,
+  UnauthorizedException,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -25,8 +27,8 @@ import { ScriptingPackagesService } from './scripting-packages.service';
 import { PackageRevisionsService } from './package-revisions.service';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
-import { UseAuthQuard } from 'src/auth/jwt-auth.guard';
-import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
+import { UseAuthGuard, UseSilentAuthGuard } from 'src/auth/jwt-auth.guard';
+import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 import { MAX_PACKAGE_FILE_SIZE } from './package-manifest';
 
 @ApiTags('scripting-packages')
@@ -49,32 +51,23 @@ export class ScriptingPackagesController {
     return this.packagesService.findOne(id);
   }
 
-  @UseAuthQuard()
+  @UseAuthGuard()
   @ApiOkResponse({ type: ScriptingPackage })
   @Post()
   async create(
     @Body() dto: CreateScriptingPackageDto,
     @Req() req: AuthenticatedRequest,
   ) {
-    await this.packagesService.assertPackageCreation(req.user, dto);
-    return await this.packagesService.create(dto);
-  }
-
-  @ApiOkResponse({ type: ScriptingPackage })
-  @Get(':id/files/*path')
-  async getPhysicalFile(
-    @Param('path', ParseArrayPipe) path: string[],
-    @Param('id', ParseIntPipe) id: number,
-  ) {
-    return await this.packagesService.getPhysicalFile(id, path.join('/'));
+    this.packagesService.assertPackageCreation(req.user, dto);
+    return await this.packagesService.create(dto, req.user);
   }
 
   // --- Package revisions ---------------------------------------------------
   // Draft revisions are written file by file, published revision files are
   // immutable and readable by the Godot server and game clients over HTTP.
 
-  @UseAuthQuard()
-  @ApiOkResponse({ type: ScriptingPackage })
+  @UseAuthGuard()
+  @ApiOkResponse({ description: 'Draft revision' })
   @Post(':id/revisions')
   async createRevision(
     @Req() req: AuthenticatedRequest,
@@ -85,14 +78,29 @@ export class ScriptingPackagesController {
     return await this.revisionsService.createDraft(id, payload);
   }
 
-  @ApiOkResponse({ type: ScriptingPackage })
+  @UseSilentAuthGuard()
+  @ApiOkResponse({ description: 'Package revisions' })
   @Get(':id/revisions')
-  listRevisions(@Param('id', ParseIntPipe) id: number) {
-    return this.revisionsService.list(id);
+  async listRevisions(
+    @Req() req: SilentAuthRequest,
+    @Param('id', ParseIntPipe) id: number,
+    @Query('includeDrafts') includeDraftsParam?: string,
+  ) {
+    const includeDrafts =
+      includeDraftsParam === '1' || includeDraftsParam === 'true';
+    if (includeDrafts) {
+      if (!req.user) {
+        throw new UnauthorizedException(
+          'Authentication is required to list draft revisions',
+        );
+      }
+      await this.packagesService.assertPackageEditing(req.user, id);
+    }
+    return this.revisionsService.list(id, { includeDrafts });
   }
 
-  @UseAuthQuard()
-  @ApiOkResponse({ type: ScriptingPackage })
+  @UseAuthGuard()
+  @ApiOkResponse({ description: 'Updated draft revision' })
   @Post(':id/revisions/:revision/files/*path')
   @UseInterceptors(
     FileInterceptor('file', { limits: { fileSize: MAX_PACKAGE_FILE_SIZE } }),
@@ -116,8 +124,8 @@ export class ScriptingPackagesController {
     );
   }
 
-  @UseAuthQuard()
-  @ApiOkResponse({ type: ScriptingPackage })
+  @UseAuthGuard()
+  @ApiOkResponse({ description: 'Published revision' })
   @Post(':id/revisions/:revision/publish')
   async publishRevision(
     @Req() req: AuthenticatedRequest,
@@ -128,13 +136,13 @@ export class ScriptingPackagesController {
     return await this.revisionsService.publish(id, revision);
   }
 
-  @ApiOkResponse({ type: ScriptingPackage })
+  @ApiOkResponse({ description: 'Latest published manifest' })
   @Get(':id/manifest')
   getManifest(@Param('id', ParseIntPipe) id: number) {
     return this.revisionsService.getManifest(id);
   }
 
-  @ApiOkResponse({ type: ScriptingPackage })
+  @ApiOkResponse({ description: 'Manifest of an explicit revision' })
   @Get(':id/revisions/:revision/manifest')
   getRevisionManifest(
     @Param('id', ParseIntPipe) id: number,
@@ -143,7 +151,10 @@ export class ScriptingPackagesController {
     return this.revisionsService.getManifestForRevision(id, revision);
   }
 
-  @ApiOkResponse({ type: ScriptingPackage })
+  @ApiOkResponse({
+    description: 'Raw contents of a published revision file',
+    schema: { type: 'string', format: 'binary' },
+  })
   @Get(':id/revisions/:revision/files/*path')
   async getRevisionFile(
     @Param('id', ParseIntPipe) id: number,
@@ -161,24 +172,7 @@ export class ScriptingPackagesController {
     });
   }
 
-  @UseAuthQuard()
-  @ApiOkResponse({ type: ScriptingPackage })
-  @Post(':id/files/*path')
-  async uploadPhysicalFile(
-    @Param('path', ParseArrayPipe) path: string[],
-    @Param('id', ParseIntPipe) id: number,
-    @UploadedFile() file: Express.Multer.File,
-    @Req() req: AuthenticatedRequest,
-  ) {
-    await this.packagesService.assertPackageEditing(req.user, id);
-    return await this.packagesService.uploadPhysicalFile(
-      id,
-      file,
-      path.join('/'),
-    );
-  }
-
-  @UseAuthQuard()
+  @UseAuthGuard()
   @ApiOkResponse({ type: ScriptingPackage })
   @Patch(':id')
   async update(
@@ -190,7 +184,7 @@ export class ScriptingPackagesController {
     return await this.packagesService.update(id, dto);
   }
 
-  @UseAuthQuard()
+  @UseAuthGuard()
   @Delete(':id')
   async remove(
     @Param('id', ParseIntPipe) id: number,

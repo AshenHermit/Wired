@@ -1,6 +1,5 @@
 import {
   PackagePathError,
-  assertLegacyPackagePath,
   normalizePackagePath,
   normalizePackagePaths,
   resolvePackagePath,
@@ -8,6 +7,14 @@ import {
 import { BadRequestException } from '@nestjs/common';
 
 const root = process.platform === 'win32' ? 'C:\\root\\pkg' : '/root/pkg';
+
+describe('PackagePathError', () => {
+  it('surfaces as an HTTP 400 so it cannot leak as a server error', () => {
+    expect(new PackagePathError('bad path')).toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+});
 
 describe('normalizePackagePath', () => {
   it('keeps flat and nested relative paths', () => {
@@ -76,39 +83,6 @@ describe('resolvePackagePath', () => {
     );
     expect(() => resolvePackagePath(root, 'a/../../outside.txt')).toThrow(
       PackagePathError,
-    );
-  });
-});
-
-describe('assertLegacyPackagePath', () => {
-  it('normalizes a regular package file path', () => {
-    expect(assertLegacyPackagePath('scripts/hero.gd')).toBe('scripts/hero.gd');
-  });
-
-  it('rejects paths owned by revision storage', () => {
-    expect(() => assertLegacyPackagePath('drafts/1/hero.gd')).toThrow(
-      PackagePathError,
-    );
-    expect(() => assertLegacyPackagePath('revisions/2/hero.gd')).toThrow(
-      PackagePathError,
-    );
-    expect(() => assertLegacyPackagePath('Drafts/1/hero.gd')).toThrow(
-      PackagePathError,
-    );
-  });
-
-  it('rejects traversal and absolute paths', () => {
-    expect(() => assertLegacyPackagePath('../../etc/passwd')).toThrow(
-      PackagePathError,
-    );
-    expect(() => assertLegacyPackagePath('C:/Windows/system32')).toThrow(
-      PackagePathError,
-    );
-  });
-
-  it('surfaces as an HTTP 400 so it cannot leak as a server error', () => {
-    expect(new PackagePathError('bad path')).toBeInstanceOf(
-      BadRequestException,
     );
   });
 });

@@ -8,11 +8,11 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
-import { UseAuthQuard } from 'src/auth/jwt-auth.guard';
+import { UseAuthGuard } from 'src/auth/jwt-auth.guard';
 import { GameRoomService } from './game-room.service';
 
 @ApiTags('game')
-@UseAuthQuard()
+@UseAuthGuard()
 @Controller('rooms/:roomId/game')
 export class GameRoomController {
   constructor(private readonly gameRooms: GameRoomService) {}

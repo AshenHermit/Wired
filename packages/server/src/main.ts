@@ -1,9 +1,12 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { createValidationPipe } from './common/validation';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  app.useGlobalPipes(createValidationPipe());
 
   // Ensures room runtime processes are stopped when the backend exits
   // (SIGINT/SIGTERM); RoomRuntimeService also terminates them gracefully.

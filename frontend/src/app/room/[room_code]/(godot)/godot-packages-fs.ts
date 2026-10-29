@@ -125,10 +125,6 @@ export class PackageFileSystem {
     return this.walk(packageId, "");
   }
 
-  hasFile(packageId: number, filepath: string): boolean {
-    return !isDirectory(this.fs, this.resolve(packageId, filepath));
-  }
-
   readFile(packageId: number, filepath: string): Uint8Array {
     const path = this.resolve(packageId, filepath);
     try {

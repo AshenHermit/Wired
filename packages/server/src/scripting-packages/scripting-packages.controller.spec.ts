@@ -103,9 +103,42 @@ describe('ScriptingPackagesController revisions API', () => {
     expect(revisionsService.publish).toHaveBeenCalledWith(7, 2);
   });
 
-  it('lists revisions without editing rights', async () => {
-    await expect(controller.listRevisions(7)).resolves.toEqual([revision]);
-    expect(revisionsService.list).toHaveBeenCalledWith(7);
+  it('lists published revisions without editing rights', async () => {
+    await expect(
+      controller.listRevisions({ user: null } as never, 7, undefined),
+    ).resolves.toEqual([revision]);
+    expect(packagesService.assertPackageEditing).not.toHaveBeenCalled();
+    expect(revisionsService.list).toHaveBeenCalledWith(7, {
+      includeDrafts: false,
+    });
+  });
+
+  it('treats includeDrafts=0 as a public listing', async () => {
+    await expect(
+      controller.listRevisions({ user: null } as never, 7, '0'),
+    ).resolves.toEqual([revision]);
+    expect(packagesService.assertPackageEditing).not.toHaveBeenCalled();
+    expect(revisionsService.list).toHaveBeenCalledWith(7, {
+      includeDrafts: false,
+    });
+  });
+
+  it('lists drafts only for users with editing rights', async () => {
+    await expect(controller.listRevisions(request, 7, '1')).resolves.toEqual([
+      revision,
+    ]);
+
+    expect(packagesService.assertPackageEditing).toHaveBeenCalledWith(user, 7);
+    expect(revisionsService.list).toHaveBeenCalledWith(7, {
+      includeDrafts: true,
+    });
+  });
+
+  it('refuses drafts for anonymous readers', async () => {
+    await expect(
+      controller.listRevisions({ user: null } as never, 7, '1'),
+    ).rejects.toThrow('Authentication is required');
+    expect(revisionsService.list).not.toHaveBeenCalled();
   });
 
   it('serves the latest published manifest', async () => {

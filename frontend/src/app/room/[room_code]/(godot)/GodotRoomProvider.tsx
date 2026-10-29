@@ -17,13 +17,16 @@ export const GodotRoomContext = React.createContext<GodotRoomContextType>({
 });
 
 export function GodotRoomProvider({ children }: { children: React.ReactNode }) {
-  const [editorApi, setEditorApi] = React.useState<GodotEditorApi>({
+  const [editorApi, setEditorApi] = React.useState<GodotEditorApi>(() => ({
     editorRef: React.createRef<GodotEditorInstance>(),
-  });
-  const ctxValue: GodotRoomContextType = {
-    editorApi,
-    setEditorApi,
-  };
+  }));
+  const ctxValue: GodotRoomContextType = React.useMemo(
+    () => ({
+      editorApi,
+      setEditorApi,
+    }),
+    [editorApi]
+  );
   return (
     <GodotRoomContext.Provider value={ctxValue}>
       {children}

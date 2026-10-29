@@ -49,6 +49,12 @@ const config: () => AppConfig = () => ({
       'GODOT_GAME_TICKET_RATE_WINDOW_MS',
       60_000,
     ),
+    // The runtime fetches package manifests from the backend over loopback.
+    // GODOT_ROOM_API_URL is required when the backend port differs from PORT
+    // (for example behind a proxy) or when it listens on another interface.
+    apiUrl:
+      process.env.GODOT_ROOM_API_URL ??
+      `http://127.0.0.1:${intFromEnv('PORT', 3000)}`,
     stateDir: process.env.GODOT_ROOM_STATE_DIR ?? './storage/godot_rooms',
     publicWsBaseUrl: process.env.GODOT_ROOM_PUBLIC_WS_BASE ?? '',
     logBufferLines: intFromEnv('GODOT_ROOM_LOG_BUFFER_LINES', 2000),

@@ -3,11 +3,9 @@ import {
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PackageFileEntry, PackageRevision } from '@wired-io/shared';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
-import { ScriptingPackageEvents } from 'src/events/scripting-package.events';
 import { sha256Hex } from './package-hash';
 import { PackageRevisionsService } from './package-revisions.service';
 import { PackageStorageService } from './package-storage.service';
@@ -53,7 +51,6 @@ describe('PackageRevisionsService', () => {
     discardDraft: jest.Mock;
     readPublishedFile: jest.Mock;
   };
-  let eventEmitter: { emit: jest.Mock };
   let service: PackageRevisionsService;
 
   beforeEach(() => {
@@ -79,12 +76,10 @@ describe('PackageRevisionsService', () => {
       discardDraft: jest.fn(async () => undefined),
       readPublishedFile: jest.fn(async () => Buffer.from('x')),
     };
-    eventEmitter = { emit: jest.fn() };
     service = new PackageRevisionsService(
       repository as never,
       packagesService as unknown as ScriptingPackagesService,
       storage as unknown as PackageStorageService,
-      eventEmitter as unknown as EventEmitter2,
     );
   });
 
@@ -102,6 +97,35 @@ describe('PackageRevisionsService', () => {
           files: [{ filepath: 'a.txt', size: 1, sha256: 'not-a-hash' }],
         }),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a concurrent draft instead of leaking a unique violation', async () => {
+      repository.save.mockRejectedValueOnce(
+        Object.assign(new Error('duplicate key'), { code: '23505' }),
+      );
+
+      await expect(
+        service.createDraft(7, { files: [file('a.txt', 'a')] }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('refuses to create a draft while the package is being published', async () => {
+      repository.findOne.mockResolvedValue(draftRow(1, [file('a.txt', 'a')]));
+      let publishStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        publishStarted = resolve;
+      });
+      storage.publishRevision.mockImplementation(async () => {
+        publishStarted();
+        await new Promise(() => undefined);
+      });
+
+      void service.publish(7, 1);
+      await started;
+
+      await expect(
+        service.createDraft(7, { files: [file('b.txt', 'b')] }),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('stores a draft with the next revision number', async () => {
@@ -205,13 +229,6 @@ describe('PackageRevisionsService', () => {
       );
       expect(published.status).toBe('published');
       expect(published.publishedAt).toEqual(expect.any(String));
-      expect(eventEmitter.emit).toHaveBeenCalledWith(
-        ScriptingPackageEvents.SCRIPTING_PACKAGE_REVISION_PUBLISHED,
-        expect.objectContaining({
-          scriptingPackage: pkg,
-          revision: expect.objectContaining({ revision: 3 }),
-        }),
-      );
     });
 
     it('is idempotent for an already published revision', async () => {
@@ -235,7 +252,7 @@ describe('PackageRevisionsService', () => {
       );
 
       await expect(service.publish(7, 3)).rejects.toThrow(BadRequestException);
-      expect(eventEmitter.emit).not.toHaveBeenCalled();
+      expect(repository.save).not.toHaveBeenCalled();
     });
   });
 

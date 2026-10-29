@@ -20,20 +20,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/animate-ui/components/radix/dialog";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/animate-ui/components/radix/sheet";
 import { Card, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useUserStore } from "@/store/user-store";
 import {
   PlayIcon,
   PlusIcon,
-  PlusSquareIcon,
   RefreshCcwIcon,
   WrenchIcon,
 } from "lucide-react";
@@ -57,8 +48,9 @@ export function RoomCard({
   room: Room;
   editingApi?: React.RefObject<RoomEditingPanelAPI | null>;
 }) {
-  const user = useUserStore((state) => state);
-  const canEdit = editingApi && user.authorized && user.id === room.author?.id;
+  const authorized = useUserStore((state) => state.authorized);
+  const userId = useUserStore((state) => state.id);
+  const canEdit = editingApi && authorized && userId === room.author?.id;
   return (
     <Card className="min-h-32">
       <CardHeader>
@@ -107,7 +99,7 @@ export const RoomEditingPanel = React.forwardRef<
   RoomEditingProps
 >(({ onChange }, ref) => {
   const [room, setRoom] = React.useState<Room | null>(null);
-  const user = useUserStore((state) => state);
+  const userId = useUserStore((state) => state.id);
   const [open, setOpen] = React.useState(false);
   const [operation, setOperation] = React.useState<"create" | "update">(
     "create"
@@ -145,13 +137,13 @@ export const RoomEditingPanel = React.forwardRef<
   const createRoomCb = React.useCallback(
     async (data: RoomEditingFieldsInfer) => {
       handleRequest(async () => {
-        await createRoom({ ...data, type: "godot", authorId: user.id });
-        toast.success("Room created successfully");
+        await createRoom({ ...data, type: "godot", authorId: userId });
+        toast.success("Комната создана");
         setOpen(false);
         onChange?.();
       });
     },
-    [handleRequest, onChange, user.id]
+    [handleRequest, onChange, userId]
   );
 
   const updateRoomCb = React.useCallback(
@@ -159,7 +151,7 @@ export const RoomEditingPanel = React.forwardRef<
       if (room) {
         handleRequest(async () => {
           await updateRoom(room.id, { ...data });
-          toast.success("Room updated successfully");
+          toast.success("Комната обновлена");
           setOpen(false);
           onChange?.();
         });
@@ -172,7 +164,7 @@ export const RoomEditingPanel = React.forwardRef<
     if (room) {
       handleRequest(async () => {
         await deleteRoom(room.id);
-        toast.success("Room deleted successfully");
+        toast.success("Комната удалена");
         setOpen(false);
         onChange?.();
       });
@@ -229,15 +221,20 @@ export function RoomEditing() {}
 
 export function useRooms(ofUserId?: number) {
   const [rooms, setRooms] = React.useState<Room[]>([]);
+  const [error, setError] = React.useState<string | null>(null);
   const loadRooms = React.useCallback(async () => {
-    const rooms = await listRooms();
-    setRooms(rooms);
+    try {
+      setError(null);
+      setRooms(await listRooms());
+    } catch {
+      setError("Не удалось загрузить список комнат.");
+    }
   }, []);
   let filtered = rooms;
   if (ofUserId) {
     filtered = filtered.filter((room) => room.author?.id === ofUserId);
   }
-  return { items: filtered, load: loadRooms };
+  return { items: filtered, load: loadRooms, error };
 }
 
 export function RoomsList({
@@ -245,8 +242,9 @@ export function RoomsList({
 }: {
   forCurrentUser?: boolean;
 }) {
-  const user = useUserStore((state) => state);
-  const { items, load } = useRooms(forCurrentUser ? user.id : undefined);
+  const userId = useUserStore((state) => state.id);
+  const authorized = useUserStore((state) => state.authorized);
+  const { items, load, error } = useRooms(forCurrentUser ? userId : undefined);
   const editingApi = React.useRef<RoomEditingPanelAPI>(null);
 
   React.useEffect(() => {
@@ -259,12 +257,17 @@ export function RoomsList({
           <RefreshCcwIcon />
         </Button>
       </div>
-      {user.authorized ? (
+      {authorized ? (
         <RoomEditingPanel ref={editingApi} onChange={load} />
       ) : null}
-      {items.length === 0 ? (
+      {error ? (
+        <div className="text-center text-sm text-destructive w-full">
+          {error}
+        </div>
+      ) : null}
+      {items.length === 0 && !error ? (
         <div className="text-center text-sm text-muted-foreground w-full">
-          {forCurrentUser ? "You don't have any rooms" : "No rooms found"}
+          {forCurrentUser ? "У вас пока нет комнат" : "Комнаты не найдены"}
         </div>
       ) : null}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
@@ -272,7 +275,7 @@ export function RoomsList({
           <RoomCard key={room.id} room={room} editingApi={editingApi} />
         ))}
       </div>
-      {forCurrentUser && user.authorized ? (
+      {forCurrentUser && authorized ? (
         <div className="flex justify-center">
           <RippleButton
             variant="default"

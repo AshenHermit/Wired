@@ -19,25 +19,15 @@ const config: GodotRuntimeConfig = {
   publicWsBaseUrl: '',
   logBufferLines: 200,
   exportDir: './game_export/web',
+  apiUrl: 'http://127.0.0.1:4123',
 };
 
 describe('RoomRuntimeConfiguration', () => {
   const configuration = new RoomRuntimeConfiguration(
     {} as unknown as AppConfigService,
   );
-  const originalPort = process.env.PORT;
-
-  afterEach(() => {
-    if (originalPort === undefined) {
-      delete process.env.PORT;
-    } else {
-      process.env.PORT = originalPort;
-    }
-  });
 
   it('tells the runtime where the backend API lives', () => {
-    process.env.PORT = '4123';
-
     const options = configuration.createSpawnOptions(config, 'room-1', 19101);
 
     const index = options.args.indexOf('--api-url');
@@ -45,18 +35,24 @@ describe('RoomRuntimeConfiguration', () => {
     expect(options.args[index + 1]).toBe('http://127.0.0.1:4123');
   });
 
-  it('defaults the API url to the default backend port', () => {
-    delete process.env.PORT;
-
-    const options = configuration.createSpawnOptions(config, 'room-1', 19101);
-
-    const index = options.args.indexOf('--api-url');
-    expect(options.args[index + 1]).toBe('http://127.0.0.1:3000');
+  it('does not read PORT from the environment', () => {
+    const originalPort = process.env.PORT;
+    process.env.PORT = '5999';
+    try {
+      const options = configuration.createSpawnOptions(config, 'room-1', 19101);
+      expect(options.args[options.args.indexOf('--api-url') + 1]).toBe(
+        'http://127.0.0.1:4123',
+      );
+    } finally {
+      if (originalPort === undefined) {
+        delete process.env.PORT;
+      } else {
+        process.env.PORT = originalPort;
+      }
+    }
   });
 
   it('never leaks the ticket secret into the command line', () => {
-    process.env.PORT = '4123';
-
     const options = configuration.createSpawnOptions(config, 'room-1', 19101);
 
     expect(options.args.join(' ')).not.toContain('secret');

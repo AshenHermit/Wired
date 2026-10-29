@@ -84,7 +84,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
       if (remainingSec <= AUTH_TIMEOUT_SEC + 1) {
         throw new RoomRuntimeError(
           'handshake_window_expired',
-          `Room ${roomId} has no time left in its handshake window; retry to restart it`,
+          `Room ${roomId} has only ${remainingSec}s left in its handshake window; the room will stop when the window closes and the next request will start it again`,
           roomId,
           record.port,
         );
@@ -553,8 +553,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
       return;
     }
     const leaseRemaining = record.handshakeLeaseUntil - Date.now();
-    const delay =
-      leaseRemaining > 0 ? leaseRemaining : config.idleTimeoutMs;
+    const delay = leaseRemaining > 0 ? leaseRemaining : config.idleTimeoutMs;
     this.appendLog(
       record,
       `[wired] no authenticated players; idle stop scheduled in ${delay}ms`,
@@ -659,10 +658,10 @@ export class RoomRuntimeService implements OnModuleDestroy {
       record.state = 'failed';
       record.error = `Godot runtime did not exit within ${FORCE_KILL_WAIT_MS}ms after force kill`;
       record.stoppedAt = new Date().toISOString();
-      this.releasePort(record);
+      // The process may still be alive and bound to its port. Keep the port
+      // reserved and the log open; the real exit callback finalizes the record.
+      // A new runtime for the same room will therefore use another free port.
       this.appendLog(record, `[wired] ${record.error}`);
-      record.log.close();
-      record.resolveExit();
     }
   }
 

@@ -9,21 +9,12 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/animate-ui/components/animate/tabs";
-import { RippleButton } from "@/components/animate-ui/components/buttons/ripple";
-import { GamepadIcon, PackageIcon, WrenchIcon } from "lucide-react";
+import { GamepadIcon, WrenchIcon } from "lucide-react";
 import React from "react";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/animate-ui/components/radix/sheet";
 import { GodotRoomProvider } from "./GodotRoomProvider";
 import { GameTab } from "./GameTab";
 
 export function GodotRoomPageClient({ room }: { room: Room }) {
-  const [isPackagesOpen, setIsPackagesOpen] = React.useState(false);
   const [activeTab, setActiveTab] = React.useState("editor");
   const [gameMounted, setGameMounted] = React.useState(false);
   const editorRef = React.useRef<GodotEditorApi>(null);
@@ -50,14 +41,6 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
               <TabsTrigger value="editor">
                 <WrenchIcon /> Editor
               </TabsTrigger>
-              <RippleButton
-                variant="ghost"
-                size="sm"
-                onClick={() => setIsPackagesOpen(true)}
-              >
-                <PackageIcon />
-                Packages
-              </RippleButton>
               <TabsTrigger value="game">
                 <GamepadIcon />
                 Game
@@ -71,23 +54,13 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
             }}
           >
             <TabsContent value="editor" className="w-full !h-full">
-              <GodotEditor ref={editorRef} />
+              <GodotEditor ref={editorRef} roomId={room.id} />
             </TabsContent>
             <TabsContent value="game" className="w-full !h-full">
               {gameMounted && <GameTab room={room} />}
             </TabsContent>
           </TabsContents>
         </Tabs>
-        <Sheet open={isPackagesOpen} onOpenChange={setIsPackagesOpen}>
-          <SheetContent>
-            <SheetHeader>
-              <SheetTitle>Packages</SheetTitle>
-              <SheetDescription>
-                Here you can manage the packages for your game.
-              </SheetDescription>
-            </SheetHeader>
-          </SheetContent>
-        </Sheet>
       </div>
     </GodotRoomProvider>
   );

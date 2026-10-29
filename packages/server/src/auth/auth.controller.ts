@@ -17,7 +17,7 @@ import { UsersService } from '../users/users.service';
 import { CreateUserDTO } from './create-user.dto';
 import { AuthTokenDTO } from './auth-token.dto';
 import { AuthUserDTO } from './auth-user.dto';
-import { UseAuthQuard } from './jwt-auth.guard';
+import { UseAuthGuard } from './jwt-auth.guard';
 
 @Controller('auth')
 export class AuthController {
@@ -49,10 +49,10 @@ export class AuthController {
   }
   @Post('logout')
   @ApiOkResponse({ schema: { type: 'boolean' } })
-  @UseAuthQuard()
+  @UseAuthGuard()
   logout(@Res({ passthrough: true }) res: Response) {
     this.authService.clearCookie(res);
-    return res.json(true);
+    return true;
   }
 
   @Get('google')

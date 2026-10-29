@@ -14,35 +14,40 @@ import { Room } from 'src/database/entities/room.entity';
 import { RoomsService } from './rooms.service';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
-import { UseAuthQuard } from 'src/auth/jwt-auth.guard';
-import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
+import { UseAuthGuard, UseSilentAuthGuard } from 'src/auth/jwt-auth.guard';
+import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 
 @ApiTags('rooms')
 @Controller('rooms')
 export class RoomsController {
   constructor(private readonly roomsService: RoomsService) {}
 
+  @UseSilentAuthGuard()
   @ApiOkResponse({ type: [Room] })
   @Get()
-  findAll() {
-    return this.roomsService.findAll();
+  findAll(@Req() req: SilentAuthRequest) {
+    return this.roomsService.findAll(req.user);
   }
 
+  @UseSilentAuthGuard()
   @ApiOkResponse({ type: Room })
   @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.roomsService.findOne(id);
+  findOne(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: SilentAuthRequest,
+  ) {
+    return this.roomsService.findVisibleOne(id, req.user);
   }
 
-  @UseAuthQuard()
+  @UseAuthGuard()
   @ApiOkResponse({ type: Room })
   @Post()
   async create(@Body() dto: CreateRoomDto, @Req() req: AuthenticatedRequest) {
     await this.roomsService.assertRoomCreation(req.user, dto);
-    return await this.roomsService.create(dto);
+    return await this.roomsService.create(dto, req.user);
   }
 
-  @UseAuthQuard()
+  @UseAuthGuard()
   @ApiOkResponse({ type: Room })
   @Patch(':id')
   async update(
@@ -54,7 +59,7 @@ export class RoomsController {
     return await this.roomsService.update(id, dto);
   }
 
-  @UseAuthQuard()
+  @UseAuthGuard()
   @Delete(':id')
   async remove(
     @Param('id', ParseIntPipe) id: number,

@@ -5,13 +5,26 @@ import { GODOT_EDITOR_URL } from "@/utils/variables";
 import { ProjectInfo } from "@wired-io/shared";
 import EventEmitter from "easy-event-emitter";
 
-declare global {
-  interface Window {
-    Engine: any;
-  }
+export interface GodotEngine {
+  init(path?: string): Promise<void>;
+  start(options: {
+    args: string[];
+    persistentDrops?: boolean;
+    canvas?: HTMLCanvasElement | null;
+  }): Promise<void>;
+  copyToFS(path: string, data: Uint8Array): void;
 }
 
-export type GodotEngine = Window["Engine"];
+type GodotEngineConstructor = {
+  new (config: Record<string, unknown>): GodotEngine;
+  isWebGLAvailable(): boolean;
+};
+
+declare global {
+  interface Window {
+    Engine: GodotEngineConstructor;
+  }
+}
 
 export type EditorLoadStatus =
   | "loading"
@@ -38,7 +51,7 @@ export class GodotEditorInstance {
   rootPath = "/home/web_user";
   persistentPaths = [this.rootPath];
   lastScale = 0;
-  editor: GodotEngine;
+  editor!: GodotEngine;
   OnEditorExit: ((code: number) => void) | null = null;
   projectInfo: ProjectInfo | null = null;
 
@@ -49,30 +62,52 @@ export class GodotEditorInstance {
     this.editor = new window.Engine(editorConfig);
     if (!window.Engine.isWebGLAvailable()) {
       this.events.emit("onFailure", "WebGL not available");
-    } else {
-      this.events.emit("onProgressStatusChange", "indeterminate");
-      await this.editor.init(`${GODOT_EDITOR_URL}/godot.editor`);
+      throw new Error("WebGL недоступен в этом браузере.");
     }
+    this.events.emit("onProgressStatusChange", "indeterminate");
+    await this.editor.init(`${GODOT_EDITOR_URL}/godot.editor`);
   }
   async downloadProject(project: ProjectInfo) {
     this.events.emit("onLoadStatusChange", "downloading project");
     this.events.emit("onProgressStatusChange", "progress");
     this.events.emit("onProgressValueChange", 0);
     this.projectInfo = project;
-    let i = 0;
-    for (const filepath of project.filepaths) {
-      const response = await fetch(`${project.baseUrl}${filepath}`);
-      const arrayBuffer = await response.arrayBuffer();
-      this.editor.copyToFS(
-        `${this.rootPath}/${project.name}/${filepath}`,
-        new Uint8Array(arrayBuffer)
-      );
-      i++;
-      this.events.emit(
-        "onProgressValueChange",
-        parseFloat((i / project.filepaths.length).toFixed(1))
-      );
+    const filepaths = project.filepaths;
+    if (filepaths.length === 0) {
+      this.events.emit("onProgressValueChange", 1);
+      return;
     }
+    const total = filepaths.length;
+    let completed = 0;
+    let next = 0;
+    // Bounded concurrency: the project has ~80 files and a serial fetch is
+    // needlessly slow, while unbounded parallel requests trip rate limits.
+    const downloadNext = async (): Promise<void> => {
+      while (next < total) {
+        const filepath = filepaths[next++];
+        const response = await fetch(`${project.baseUrl}${filepath}`);
+        if (!response.ok) {
+          throw new Error(
+            `Не удалось загрузить файл проекта ${filepath} (${response.status}).`
+          );
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        this.editor.copyToFS(
+          `${this.rootPath}/${project.name}/${filepath}`,
+          new Uint8Array(arrayBuffer)
+        );
+        completed++;
+        this.events.emit(
+          "onProgressValueChange",
+          parseFloat((completed / total).toFixed(2))
+        );
+      }
+    };
+    const workers = Array.from(
+      { length: Math.min(6, total) },
+      () => downloadNext()
+    );
+    await Promise.all(workers);
     this.events.emit("onProgressStatusChange", "indeterminate");
     this.events.emit("onProgressValueChange", 1);
   }
@@ -81,10 +116,10 @@ export class GodotEditorInstance {
     try {
       // Avoid user creating project in the persistent root folder.
       this.editor.copyToFS(`${this.rootPath}/keep`, new Uint8Array());
-    } catch (e) {
+    } catch {
       // File exists
     }
-    let args: string[] = ["--single-window"];
+    const args: string[] = ["--single-window"];
     if (this.projectInfo) {
       args.push(
         "--editor",
@@ -164,11 +199,8 @@ export class GodotEditorInstance {
     if (this.video_driver) {
       args.push("--rendering-driver", this.video_driver);
     }
-    console.log("Execute", args);
-    if (is_game) {
-    } else {
-      console.log("setting OnEditorExit");
-      this.OnEditorExit = (code) => {
+    if (!is_game) {
+      this.OnEditorExit = () => {
         setTimeout(() => {
           this.editor.init().then(() => {
             this.OnEditorExit = function () {};
@@ -184,7 +216,6 @@ export class GodotEditorInstance {
     }
   }
   async clearPersistence() {
-    // eslint-disable-line no-unused-vars
     function deleteDB(path: string) {
       return new Promise(function (resolve, reject) {
         const req = indexedDB.deleteDatabase(path);
@@ -201,5 +232,4 @@ export class GodotEditorInstance {
     }
     return await deleteDB(this.rootPath);
   }
-  startEditor() {}
 }
