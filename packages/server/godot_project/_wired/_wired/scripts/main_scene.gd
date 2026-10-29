@@ -29,7 +29,10 @@ var _packages: PackagesManager
 
 
 func _ready() -> void:
-	_setup_packages()
+	var cfg := _read_config()
+	# The room is part of the package directory, so it has to be known before
+	# the loader is configured.
+	_setup_packages(str(cfg.get("room", DEFAULT_ROOM)))
 	_net.status_changed.connect(_on_status_changed)
 	_net.log_line.connect(_on_log_line)
 	_net.authenticated.connect(_on_authenticated)
@@ -39,7 +42,6 @@ func _ready() -> void:
 	_net.server_event.connect(_on_server_event)
 	# The host waits for this before minting a ticket.
 	_bridge_call("notifyReady", [])
-	var cfg := _read_config()
 	if str(cfg.get("mode", "")) == "server":
 		_run_server(cfg)
 	else:
@@ -48,11 +50,11 @@ func _ready() -> void:
 
 ## Both runtime modes load published package files over plain HTTP, so the
 ## loader is created before the network starts.
-func _setup_packages() -> void:
+func _setup_packages(room: String) -> void:
 	_packages = PackagesManager.new()
 	_packages.name = "Packages"
 	add_child(_packages)
-	_packages.configure(_api_url())
+	_packages.configure(_api_url(), room)
 
 
 func _api_url() -> String:
@@ -204,6 +206,9 @@ func _run_client(cfg: Dictionary) -> void:
 	if str(cfg.ticket).is_empty():
 		_fail("No game ticket: pass --ticket or open the Game tab")
 		return
+	# Web clients learn the room from the host bridge, after the loader was
+	# configured; apply it before anything touches package files.
+	_packages.set_room(str(cfg.get("room", "")))
 	print("WIRED_CLIENT_STARTING room=%s url=%s" % [cfg.room, cfg.url])
 	_bridge_status("connecting", str(cfg.url))
 	var err := _net.start_client(

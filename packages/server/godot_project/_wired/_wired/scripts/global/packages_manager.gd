@@ -2,7 +2,12 @@ extends Node
 class_name PackagesManager
 
 ## Downloads published package revisions from the Wired backend and materializes
-## them under user://wired/packages/<package_id>/<revision>/.
+## them under user://wired/rooms/<room>/packages/<package_id>/<revision>/.
+##
+## `user://` is a single directory per Godot project name, so every room runtime
+## on the machine shares it. The room code is therefore part of the path: two
+## rooms never see or overwrite each other's package files, and a room's data
+## can be cleaned up on its own.
 ##
 ## Rules that keep the game and editor consistent:
 ##   * every file is downloaded and verified (size + sha256) in memory first, so
@@ -19,31 +24,44 @@ signal package_failed(package_id: int, error: String)
 
 const PROTOCOL_VERSION := 1
 const DEFAULT_API_URL := "http://127.0.0.1:3000"
-const PACKAGES_ROOT := "user://wired/packages"
+const PACKAGES_ROOT := "user://wired/rooms"
+const UNASSIGNED_ROOM := "_unknown"
 const STAGING_DIR := ".staging"
 const MAX_FILES := 2000
 const MAX_FILE_SIZE := 64 * 1024 * 1024
 
 var base_url := DEFAULT_API_URL
+## Room code the loader works for. Safe as a single path segment.
+var room := UNASSIGNED_ROOM
 
 var _syncing: Dictionary = {}
 
 
-func _ready() -> void:
-	print("WIRED_PACKAGES_INIT root=%s" % PACKAGES_ROOT)
-
-
-## Called by the runtime entry point once the backend API URL is known.
-func configure(url: String) -> void:
+## Called by the runtime entry point once the backend API URL and the room are
+## known. An empty room keeps the current value (web clients learn it from the
+## host bridge later and call `set_room`).
+func configure(url: String, room_id: String = "") -> void:
 	var value := url.strip_edges()
 	if value.is_empty():
 		value = DEFAULT_API_URL
 	base_url = value.trim_suffix("/")
-	print("WIRED_PACKAGES_READY api=%s" % base_url)
+	set_room(room_id)
+	print("WIRED_PACKAGES_READY api=%s root=%s" % [base_url, packages_root()])
+
+
+## Sets the room without touching the API URL. Ignored when the code is empty.
+func set_room(room_id: String) -> void:
+	var sanitized := _sanitize_room(room_id)
+	if not sanitized.is_empty():
+		room = sanitized
+
+
+func packages_root() -> String:
+	return PACKAGES_ROOT.path_join(room).path_join("packages")
 
 
 func packages_dir(package_id: int) -> String:
-	return PACKAGES_ROOT.path_join(str(package_id))
+	return packages_root().path_join(str(package_id))
 
 
 func revision_dir(package_id: int, revision: int) -> String:
@@ -221,6 +239,28 @@ func _request(path: String) -> Dictionary:
 	if status < 200 or status >= 300:
 		return {"ok": false, "status": status, "error": "HTTP %d" % status, "body": body}
 	return {"ok": true, "status": status, "error": "", "body": body, "text": body.get_string_from_utf8()}
+
+
+## Room codes come from the backend, but here they become one path segment, so
+## only characters that cannot escape the packages root are kept.
+func _sanitize_room(room_id: String) -> String:
+	var value := room_id.strip_edges()
+	if value.is_empty():
+		return ""
+	var out := ""
+	for index in value.length():
+		var ch := value[index]
+		var allowed := (
+			(ch >= "a" and ch <= "z")
+			or (ch >= "A" and ch <= "Z")
+			or (ch >= "0" and ch <= "9")
+			or ch == "_"
+			or ch == "-"
+		)
+		out += ch if allowed else "_"
+	if out.length() > 64:
+		out = out.substr(0, 64)
+	return out
 
 
 func _validate_relative_path(filepath: String) -> String:
