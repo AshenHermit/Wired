@@ -221,17 +221,37 @@ export class PackageStorageService {
     }
   }
 
-  async readPublishedFile(
+  async resolvePublishedFile(
     packageId: number,
     revision: number,
     filepath: string,
-  ): Promise<Buffer> {
+  ): Promise<{ path: string; size: number }> {
     const fullPath = resolvePackagePath(
       this.publishedRevisionDir(packageId, revision),
       filepath,
     );
     try {
-      return await readFile(fullPath);
+      const info = await stat(fullPath);
+      if (!info.isFile()) {
+        throw new NotFoundException(`File ${filepath} is not published`);
+      }
+      return { path: fullPath, size: info.size };
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new NotFoundException(`File ${filepath} is not published`);
+    }
+  }
+
+  async readPublishedFile(
+    packageId: number,
+    revision: number,
+    filepath: string,
+  ): Promise<Buffer> {
+    const file = await this.resolvePublishedFile(packageId, revision, filepath);
+    try {
+      return await readFile(file.path);
     } catch {
       throw new NotFoundException(`File ${filepath} is not published`);
     }

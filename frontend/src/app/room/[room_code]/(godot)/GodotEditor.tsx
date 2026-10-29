@@ -10,16 +10,8 @@ import {
 } from "./GodotEditorInstance";
 import { Spinner } from "@/components/ui/spinner";
 import { getGodotProjectInfo } from "@/api/services/godot-game";
-import { useGodotRoomContext } from "./GodotRoomProvider";
 
-export type GodotEditorApi = {
-  editorRef: React.RefObject<GodotEditorInstance | null>;
-};
-
-export const GodotEditor = React.forwardRef<
-  GodotEditorApi,
-  { roomId: number }
->(({ roomId }, ref) => {
+export function GodotEditor({ roomId }: { roomId: number }) {
   const editorInstanceRef = React.useRef<GodotEditorInstance | null>(null);
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const [scriptsLoaded, setScriptsLoaded] = React.useState(false);
@@ -49,21 +41,6 @@ export const GodotEditor = React.forwardRef<
     },
     [roomId]
   );
-  const { setEditorApi } = useGodotRoomContext();
-
-  const editorApi: GodotEditorApi = React.useMemo(
-    () => ({
-      editorRef: editorInstanceRef,
-    }),
-    [editorInstanceRef],
-  );
-
-  React.useImperativeHandle(ref, () => editorApi, [editorApi]);
-
-  React.useEffect(() => {
-    setEditorApi(editorApi);
-  }, [editorApi, setEditorApi]);
-
   const handleFailure = React.useCallback((message: string) => {
     setErrorMessage(message);
     setStatus("error");
@@ -78,24 +55,11 @@ export const GodotEditor = React.forwardRef<
       editor.events.addListener("onProgressValueChange", setProgressValue);
       editor.events.addListener("onFailure", handleFailure);
       editor.setCanvas(canvasRef.current);
-      (
-        window as unknown as Window & { editor: GodotEditorInstance }
-      ).editor = editor;
 
       void loadEditor(editor);
 
       return () => {
-        editor.events.removeListener(setStatus);
-        editor.events.removeListener(setProgressStatus);
-        editor.events.removeListener(setProgressValue);
-        editor.events.removeListener(handleFailure);
         editor.events.removeAllListeners();
-        if (
-          (window as unknown as Window & { editor?: GodotEditorInstance })
-            .editor === editor
-        ) {
-          delete (window as unknown as { editor?: GodotEditorInstance }).editor;
-        }
         if (editorInstanceRef.current === editor) {
           editorInstanceRef.current = null;
         }
@@ -140,6 +104,4 @@ export const GodotEditor = React.forwardRef<
       )}
     </>
   );
-});
-
-GodotEditor.displayName = "GodotEditor";
+}

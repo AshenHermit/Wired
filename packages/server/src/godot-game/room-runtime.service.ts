@@ -11,10 +11,8 @@ import {
   RoomRuntimeInfo,
   RuntimeProcessFactory,
 } from './room-runtime.types';
+import { parseRuntimeLine } from './room-runtime.line-parser';
 
-const READY_PATTERN = /^WIRED_SERVER_READY room=(\S+) port=(\d+) bind=(\S+)/;
-const AUTH_OK_PATTERN = /^WIRED_AUTH_OK peer=(\d+) player=\d+ room=(\S+)/;
-const PLAYER_LEFT_PATTERN = /^WIRED_PLAYER_LEFT peer=(\d+) player=\d+/;
 const FORCE_KILL_WAIT_MS = 2_000;
 const HANDSHAKE_LEASE_SLACK_MS = 5_000;
 // Keep in sync with AUTH_TIMEOUT_SEC in the Godot network script.
@@ -50,56 +48,13 @@ export class RoomRuntimeService implements OnModuleDestroy {
   async getConnection(roomId: string): Promise<RoomConnection> {
     const record = this.ensureRuntime(roomId);
     await record.readyPromise;
-
-    if (record.state === 'stopping') {
-      throw new RoomRuntimeError(
-        'room_stopping',
-        `Room ${roomId} is stopping; retry after it exits`,
-        roomId,
-        record.port,
-      );
-    }
-    if (record.state !== 'running') {
-      throw new RoomRuntimeError(
-        'start_failed',
-        record.error ?? `Room ${roomId} is not running`,
-        roomId,
-        record.port,
-      );
-    }
+    this.assertPlayable(record);
 
     // Opening the game tab is itself an intent to join, but only one bounded
     // lease per peerless runtime: repeated calls must not keep it alive forever.
     this.renewHandshakeLease(record);
 
-    // A ticket minted near the end of the handshake lease would outlive the
-    // runtime. Clamp it to the remaining window (the client has one second to
-    // send hello, then the 10s auth timeout), or fail explicitly when there
-    // is not enough time left for a handshake.
-    let ticketTtlSec: number | undefined;
-    if (record.activePlayers === 0) {
-      const remainingSec = Math.floor(
-        (record.handshakeLeaseUntil - Date.now()) / 1_000,
-      );
-      if (remainingSec <= AUTH_TIMEOUT_SEC + 1) {
-        // Do not leave a window the client is told to retry into: stop this
-        // runtime so the next attempt starts a fresh one.
-        void this.stopRoom(roomId, 'handshake_window_expired').catch(() => {
-          // The exit handler still finalises the record; a failed stop must
-          // not hide the actionable error below.
-        });
-        throw new RoomRuntimeError(
-          'handshake_window_expired',
-          `Room ${roomId} has only ${remainingSec}s left in its handshake window; it is restarting, retry in a moment`,
-          roomId,
-          record.port,
-        );
-      }
-      ticketTtlSec = Math.min(
-        this.configService.godotRuntime.ticketTtlSec,
-        remainingSec - 1,
-      );
-    }
+    const ticketTtlSec = this.ticketTtlSec(record);
 
     const ticket = this.tickets.mint(roomId, ticketTtlSec);
     return {
@@ -107,6 +62,63 @@ export class RoomRuntimeService implements OnModuleDestroy {
       ticket: ticket.ticket,
       ticketExpiresAt: ticket.expiresAt,
     };
+  }
+
+  private assertPlayable(record: RuntimeRecord): void {
+    if (record.state === 'stopping') {
+      throw new RoomRuntimeError(
+        'room_stopping',
+        `Room ${record.roomId} is stopping; retry after it exits`,
+        record.roomId,
+        record.port,
+      );
+    }
+    if (record.state !== 'running') {
+      throw new RoomRuntimeError(
+        'start_failed',
+        record.error ?? `Room ${record.roomId} is not running`,
+        record.roomId,
+        record.port,
+      );
+    }
+  }
+
+  /**
+   * A ticket minted near the end of the handshake lease would outlive the
+   * runtime. Clamp it to the remaining window (the client has one second to
+   * send hello, then the 10s auth timeout), or fail explicitly when there is
+   * not enough time left for a handshake. Returns undefined for a runtime that
+   * already has players, in which case the idle timeout governs shutdown.
+   */
+  private ticketTtlSec(record: RuntimeRecord): number | undefined {
+    if (record.activePlayers > 0) {
+      return undefined;
+    }
+
+    const remainingSec = Math.floor(
+      (record.handshakeLeaseUntil - Date.now()) / 1_000,
+    );
+    if (remainingSec <= AUTH_TIMEOUT_SEC + 1) {
+      // Do not leave a window the client is told to retry into: stop this
+      // runtime so the next attempt starts a fresh one.
+      void this.stopRoom(record.roomId, 'handshake_window_expired').catch(
+        () => {
+          // The exit handler still finalises the record; a failed stop must not
+          // hide the actionable error below.
+        },
+      );
+      throw new RoomRuntimeError(
+        'handshake_window_expired',
+        `Room ${record.roomId} has only ${remainingSec}s left in its handshake window; it is restarting, retry in a moment`,
+        record.roomId,
+        record.port,
+      );
+    }
+
+    return Math.min(
+      this.configService.godotRuntime.ticketTtlSec,
+      remainingSec - 1,
+    );
   }
 
   /** Current runtime status; never starts a process. */
@@ -355,44 +367,45 @@ export class RoomRuntimeService implements OnModuleDestroy {
     }
     this.appendLog(record, `[${source}] ${line}`);
 
-    const ready = READY_PATTERN.exec(line);
-    if (ready) {
-      this.handleReady(record, ready[1], Number(ready[2]));
+    const event = parseRuntimeLine(line);
+    if (!event) {
       return;
     }
 
-    const authOk = AUTH_OK_PATTERN.exec(line);
-    if (authOk) {
-      if (authOk[2] !== record.roomId) {
-        this.appendLog(
-          record,
-          `[wired] ignored auth for foreign room=${authOk[2]}`,
-        );
+    switch (event.kind) {
+      case 'ready':
+        this.handleReady(record, event.roomId, event.port);
         return;
-      }
-      record.authenticatedPeers.add(Number(authOk[1]));
-      record.activePlayers = record.authenticatedPeers.size;
-      // The handshake succeeded; from now on only real peers keep it alive.
-      record.handshakeLeaseUntil = 0;
-      this.clearIdleTimer(record);
-      return;
-    }
 
-    const playerLeft = PLAYER_LEFT_PATTERN.exec(line);
-    if (playerLeft) {
-      const peer = Number(playerLeft[1]);
-      if (!record.authenticatedPeers.delete(peer)) {
-        this.appendLog(
-          record,
-          `[wired] ignored departure of unauthenticated peer=${peer}`,
-        );
-        return;
-      }
-      record.activePlayers = record.authenticatedPeers.size;
-      if (record.activePlayers === 0) {
+      case 'auth':
+        if (event.roomId !== record.roomId) {
+          this.appendLog(
+            record,
+            `[wired] ignored auth for foreign room=${event.roomId}`,
+          );
+          return;
+        }
+        record.authenticatedPeers.add(event.peer);
+        record.activePlayers = record.authenticatedPeers.size;
+        // The handshake succeeded; from now on only real peers keep it alive.
         record.handshakeLeaseUntil = 0;
-        this.scheduleIdleStop(record);
-      }
+        this.clearIdleTimer(record);
+        return;
+
+      case 'player-left':
+        if (!record.authenticatedPeers.delete(event.peer)) {
+          this.appendLog(
+            record,
+            `[wired] ignored departure of unauthenticated peer=${event.peer}`,
+          );
+          return;
+        }
+        record.activePlayers = record.authenticatedPeers.size;
+        if (record.activePlayers === 0) {
+          record.handshakeLeaseUntil = 0;
+          this.scheduleIdleStop(record);
+        }
+        return;
     }
   }
 

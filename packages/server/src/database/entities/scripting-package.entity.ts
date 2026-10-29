@@ -65,8 +65,8 @@ export class ScriptingPackage {
   physicalFiles: PhysicalFile[];
 
   @ApiProperty({ description: 'package author', type: () => User })
-  @ManyToOne(() => User, (user) => user.scriptingPackages)
-  author: User;
+  @ManyToOne(() => User, (user) => user.scriptingPackages, { nullable: true })
+  author?: User | null;
 
   @ApiProperty({
     description: 'package contributors',
@@ -78,8 +78,8 @@ export class ScriptingPackage {
   contributors: User[];
 
   @ApiProperty({ description: 'package room', type: () => Room })
-  @ManyToOne(() => Room, (room) => room.scriptingPackages)
-  room: Room;
+  @ManyToOne(() => Room, (room) => room.scriptingPackages, { nullable: true })
+  room?: Room | null;
 
   @ApiProperty({
     description: 'package parent package',
@@ -88,8 +88,9 @@ export class ScriptingPackage {
   @ManyToOne(
     () => ScriptingPackage,
     (scriptingPackage) => scriptingPackage.childrenPackages,
+    { nullable: true },
   )
-  parentPackage: ScriptingPackage;
+  parentPackage?: ScriptingPackage | null;
 
   @ApiProperty({
     description: 'package children packages',

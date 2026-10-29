@@ -10,6 +10,7 @@ import { User } from 'src/database/entities/user.entity';
 import { Room } from 'src/database/entities/room.entity';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
+import { canEditRoom } from 'src/rooms/room-access';
 
 @Injectable()
 export class ScriptingPackagesService {
@@ -42,7 +43,7 @@ export class ScriptingPackagesService {
     const isContributor = pkg.contributors?.some(
       (contributor) => contributor.id === user.id,
     );
-    const isRoomAuthor = pkg.room?.author?.id === user.id;
+    const isRoomAuthor = pkg.room ? canEditRoom(pkg.room, user.id) : false;
 
     if (!isAuthor && !isContributor && !isRoomAuthor) {
       throw new ForbiddenException('You are not allowed to edit this package');

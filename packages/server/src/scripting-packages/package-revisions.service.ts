@@ -220,24 +220,27 @@ export class PackageRevisionsService {
     revision: number,
     filepath: string,
   ): Promise<Buffer> {
-    const row = await this.findRevision(packageId, revision);
-
-    if (row.status !== 'published') {
-      throw new NotFoundException(
-        `Revision ${revision} of package ${packageId} is not published`,
-      );
-    }
-
-    const declared = row.files.some(
-      (entry: PackageFileEntry) => entry.filepath === filepath,
+    await assertPublishedFile(
+      this.revisionsRepository,
+      packageId,
+      revision,
+      filepath,
     );
-    if (!declared) {
-      throw new NotFoundException(
-        `File ${filepath} is not declared in revision ${revision}`,
-      );
-    }
-
     return this.storage.readPublishedFile(packageId, revision, filepath);
+  }
+
+  async resolvePublishedFile(
+    packageId: number,
+    revision: number,
+    filepath: string,
+  ): Promise<{ path: string; size: number }> {
+    await assertPublishedFile(
+      this.revisionsRepository,
+      packageId,
+      revision,
+      filepath,
+    );
+    return this.storage.resolvePublishedFile(packageId, revision, filepath);
   }
 
   async findRevision(
@@ -311,4 +314,32 @@ function isUniqueViolation(error: unknown): boolean {
     error !== null &&
     (error as { code?: string }).code === '23505'
   );
+}
+
+async function assertPublishedFile(
+  repository: Repository<ScriptingPackageRevision>,
+  packageId: number,
+  revision: number,
+  filepath: string,
+): Promise<void> {
+  const row = await repository.findOne({
+    where: { package: { id: packageId }, revision },
+  });
+  if (!row) {
+    throw new NotFoundException(
+      `Revision ${revision} of package ${packageId} not found`,
+    );
+  }
+  if (row.status !== 'published') {
+    throw new NotFoundException(
+      `Revision ${revision} of package ${packageId} is not published`,
+    );
+  }
+  if (
+    !row.files.some((entry: PackageFileEntry) => entry.filepath === filepath)
+  ) {
+    throw new NotFoundException(
+      `File ${filepath} is not declared in revision ${revision}`,
+    );
+  }
 }

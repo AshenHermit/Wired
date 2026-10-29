@@ -11,7 +11,7 @@ import { Extension, getContentType } from 'content-type-to-ext';
 import { Response } from 'express';
 import { createReadStream } from 'fs';
 import { glob, stat } from 'fs/promises';
-import path, { join } from 'path';
+import path, { resolve } from 'path';
 import { AppConfigService } from 'src/config/config.service';
 import { resolvePackagePath } from 'src/scripting-packages/package-path';
 
@@ -45,7 +45,7 @@ export class GodotEditorProviderController {
     const relativeFilepath = toRelativePath(requestedPath);
     const file = await assertFile(
       resolvePackagePath(
-        join(process.cwd(), this.configService.godot.editorPath),
+        resolve(this.configService.godot.editorPath),
         relativeFilepath,
       ),
     );
@@ -61,8 +61,7 @@ export class GodotEditorProviderController {
   @Get('godot-project-info/wired')
   async getGodotProjectInfo(): Promise<ProjectInfo> {
     const projectDir = path.join(
-      process.cwd(),
-      this.configService.godot.projectPath,
+      resolve(this.configService.godot.projectPath),
       '_wired',
     );
     const filepaths: string[] = [];
@@ -101,8 +100,7 @@ export class GodotEditorProviderController {
     @Res({ passthrough: true }) res?: Response,
   ): Promise<StreamableFile> {
     const projectDir = path.join(
-      process.cwd(),
-      this.configService.godot.projectPath,
+      resolve(this.configService.godot.projectPath),
       '_wired',
     );
     const file = await assertFile(

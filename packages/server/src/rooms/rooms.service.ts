@@ -10,6 +10,7 @@ import { Room } from 'src/database/entities/room.entity';
 import { User } from 'src/database/entities/user.entity';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
+import { canEditRoom, canViewRoom } from './room-access';
 
 @Injectable()
 export class RoomsService {
@@ -30,7 +31,7 @@ export class RoomsService {
 
   async assertRoomEditing(user: User, roomId: number): Promise<void> {
     const room = await this.findOne(roomId);
-    if (!room.author || room.author.id !== user.id) {
+    if (!canEditRoom(room, user.id)) {
       throw new ForbiddenException('You are not allowed to edit this room');
     }
   }
@@ -55,12 +56,8 @@ export class RoomsService {
 
   async findVisibleOne(id: number, user?: User | null): Promise<Room> {
     const room = await this.findOne(id);
-    const visible =
-      room.isPublic ||
-      room.author?.id === user?.id ||
-      room.contributors?.some((contributor) => contributor.id === user?.id);
 
-    if (!visible) {
+    if (!canViewRoom(room, user?.id)) {
       // 404 rather than 403 so private room ids cannot be probed.
       throw new NotFoundException(`Room with id=${id} not found`);
     }
@@ -86,7 +83,7 @@ export class RoomsService {
       isPublic: dto.isPublic,
       description: dto.description,
       type: dto.type,
-      parentRoomId: dto.parentRoomId,
+      parentRoomId: dto.parentRoomId ?? null,
       author,
     });
 

@@ -50,7 +50,7 @@ export class GameExportController implements OnModuleInit {
   private readonly isProduction: boolean;
 
   constructor(configService: AppConfigService) {
-    this.root = resolve(process.cwd(), configService.godotRuntime.exportDir);
+    this.root = resolve(configService.godotRuntime.exportDir);
     this.isProduction = configService.isProduction;
   }
 

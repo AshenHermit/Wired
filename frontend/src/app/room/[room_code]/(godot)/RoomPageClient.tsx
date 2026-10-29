@@ -1,7 +1,7 @@
 "use client";
 
 import { Room } from "@wired-io/shared";
-import { GodotEditor, GodotEditorApi } from "./GodotEditor";
+import { GodotEditor } from "./GodotEditor";
 import {
   Tabs,
   TabsContent,
@@ -11,13 +11,11 @@ import {
 } from "@/components/animate-ui/components/animate/tabs";
 import { GamepadIcon, WrenchIcon } from "lucide-react";
 import React from "react";
-import { GodotRoomProvider } from "./GodotRoomProvider";
 import { GameTab } from "./GameTab";
 
 export function GodotRoomPageClient({ room }: { room: Room }) {
   const [activeTab, setActiveTab] = React.useState("editor");
   const [gameMounted, setGameMounted] = React.useState(false);
-  const editorRef = React.useRef<GodotEditorApi>(null);
 
   const handleTabChange = React.useCallback((value: string) => {
     setActiveTab(value);
@@ -29,39 +27,37 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
   }, []);
 
   return (
-    <GodotRoomProvider>
-      <div className="w-screen h-screen">
-        <Tabs
-          value={activeTab}
-          onValueChange={handleTabChange}
-          className="w-full h-full !gap-0"
+    <div className="w-screen h-screen">
+      <Tabs
+        value={activeTab}
+        onValueChange={handleTabChange}
+        className="w-full h-full !gap-0"
+      >
+        <div className="absolute top-0 left-[60%] z-10">
+          <TabsList>
+            <TabsTrigger value="editor">
+              <WrenchIcon /> Editor
+            </TabsTrigger>
+            <TabsTrigger value="game">
+              <GamepadIcon />
+              Game
+            </TabsTrigger>
+          </TabsList>
+        </div>
+        <TabsContents
+          className="w-full !h-full relative"
+          motionDivProps={{
+            style: { justifyItems: "stretch", height: "100%" },
+          }}
         >
-          <div className="absolute top-0 left-[60%] z-10">
-            <TabsList>
-              <TabsTrigger value="editor">
-                <WrenchIcon /> Editor
-              </TabsTrigger>
-              <TabsTrigger value="game">
-                <GamepadIcon />
-                Game
-              </TabsTrigger>
-            </TabsList>
-          </div>
-          <TabsContents
-            className="w-full !h-full relative"
-            motionDivProps={{
-              style: { justifyItems: "stretch", height: "100%" },
-            }}
-          >
-            <TabsContent value="editor" className="w-full !h-full">
-              <GodotEditor ref={editorRef} roomId={room.id} />
-            </TabsContent>
-            <TabsContent value="game" className="w-full !h-full">
-              {gameMounted && <GameTab room={room} />}
-            </TabsContent>
-          </TabsContents>
-        </Tabs>
-      </div>
-    </GodotRoomProvider>
+          <TabsContent value="editor" className="w-full !h-full">
+            <GodotEditor roomId={room.id} />
+          </TabsContent>
+          <TabsContent value="game" className="w-full !h-full">
+            {gameMounted && <GameTab room={room} />}
+          </TabsContent>
+        </TabsContents>
+      </Tabs>
+    </div>
   );
 }

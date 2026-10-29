@@ -41,6 +41,10 @@ describe('ScriptingPackagesController revisions API', () => {
       getManifest: jest.fn(),
       getManifestForRevision: jest.fn(),
       readPublishedFile: jest.fn(async () => Buffer.from('abc')),
+      resolvePublishedFile: jest.fn(async () => ({
+        path: __filename,
+        size: 3,
+      })),
     };
     controller = new ScriptingPackagesController(
       packagesService as unknown as ScriptingPackagesService,
@@ -167,7 +171,7 @@ describe('ScriptingPackagesController revisions API', () => {
       'hero.gd',
     ]);
 
-    expect(revisionsService.readPublishedFile).toHaveBeenCalledWith(
+    expect(revisionsService.resolvePublishedFile).toHaveBeenCalledWith(
       7,
       2,
       'scripts/hero.gd',

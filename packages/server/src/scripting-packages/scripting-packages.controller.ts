@@ -17,6 +17,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { createReadStream } from 'fs';
 import {
   CreatePackageRevisionPayload,
   PackageRevision,
@@ -160,14 +161,19 @@ export class ScriptingPackagesController {
     @Param('revision', ParseIntPipe) revision: number,
     @Param('path') path: string | string[],
   ): Promise<StreamableFile> {
-    const data = await this.revisionsService.readPublishedFile(
+    const file = await this.revisionsService.resolvePublishedFile(
       id,
       revision,
       Array.isArray(path) ? path.join('/') : path,
     );
-    return new StreamableFile(data, {
+    // Stream from disk instead of buffering the (up to 64 MB) file in memory.
+    const stream = createReadStream(file.path);
+    // The file can disappear between stat and open; without a listener that
+    // ENOENT becomes an unhandled 'error' event and takes down the process.
+    stream.on('error', () => stream.destroy());
+    return new StreamableFile(stream, {
       type: 'application/octet-stream',
-      length: data.byteLength,
+      length: file.size,
     });
   }
 

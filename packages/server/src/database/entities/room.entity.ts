@@ -76,7 +76,7 @@ export class Room {
     description: 'parent room id',
   })
   @Column({ nullable: true, default: null })
-  parentRoomId: number;
+  parentRoomId: number | null;
 
   @ApiProperty({
     description: 'room packages',

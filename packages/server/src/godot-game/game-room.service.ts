@@ -11,6 +11,7 @@ import { GameRoomConnection, GameRoomRuntimeStatus } from '@wired-io/shared';
 import { Room } from 'src/database/entities/room.entity';
 import { User } from 'src/database/entities/user.entity';
 import { RoomsService } from 'src/rooms/rooms.service';
+import { canViewRoom } from 'src/rooms/room-access';
 import { GameRoomTicketRateLimiter } from './game-room.rate-limiter';
 import { RoomRuntimeError, RoomRuntimeErrorCode } from './room-runtime.errors';
 import { RoomRuntimeService } from './room-runtime.service';
@@ -127,11 +128,7 @@ export class GameRoomService {
       return { room, user };
     }
 
-    const isAuthor = room.author?.id === user.id;
-    const isContributor = (room.contributors ?? []).some(
-      (contributor) => contributor.id === user.id,
-    );
-    if (!isAuthor && !isContributor) {
+    if (!canViewRoom(room, user.id)) {
       throw new ForbiddenException(
         `Room ${roomId} is private; only its author and contributors can play it`,
       );

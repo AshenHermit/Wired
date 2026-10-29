@@ -50,6 +50,7 @@ describe('PackageRevisionsService', () => {
     publishRevision: jest.Mock;
     discardDraft: jest.Mock;
     readPublishedFile: jest.Mock;
+    resolvePublishedFile: jest.Mock;
   };
   let service: PackageRevisionsService;
 
@@ -75,6 +76,10 @@ describe('PackageRevisionsService', () => {
       publishRevision: jest.fn(async (_id, _rev, _files, commit) => commit()),
       discardDraft: jest.fn(async () => undefined),
       readPublishedFile: jest.fn(async () => Buffer.from('x')),
+      resolvePublishedFile: jest.fn(async () => ({
+        path: '/tmp/a.txt',
+        size: 1,
+      })),
     };
     service = new PackageRevisionsService(
       repository as never,
@@ -308,6 +313,31 @@ describe('PackageRevisionsService', () => {
       await expect(service.readPublishedFile(7, 3, 'a.txt')).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('resolvePublishedFile', () => {
+    it('returns a descriptor for a declared published file', async () => {
+      repository.findOne.mockResolvedValue({
+        ...draftRow(3, [file('a.txt', 'a')]),
+        status: 'published',
+      });
+
+      await expect(
+        service.resolvePublishedFile(7, 3, 'a.txt'),
+      ).resolves.toEqual({ path: '/tmp/a.txt', size: 1 });
+      expect(storage.resolvePublishedFile).toHaveBeenCalledWith(7, 3, 'a.txt');
+    });
+
+    it('rejects files that are not declared in the revision', async () => {
+      repository.findOne.mockResolvedValue({
+        ...draftRow(3, [file('a.txt', 'a')]),
+        status: 'published',
+      });
+
+      await expect(
+        service.resolvePublishedFile(7, 3, 'secret.txt'),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 
