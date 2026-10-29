@@ -13,7 +13,6 @@ import { Response } from 'express';
 import { GoogleAuthenticatedRequest } from './google/auth-google.strategy';
 import { AppConfigService } from 'src/config/config.service';
 import { ApiOkResponse } from '@nestjs/swagger';
-import { User } from 'src/database/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { CreateUserDTO } from './create-user.dto';
 import { AuthTokenDTO } from './auth-token.dto';
@@ -40,7 +39,10 @@ export class AuthController {
 
   @Post('login')
   @ApiOkResponse({ type: AuthTokenDTO })
-  async login(@Body() body: AuthUserDTO, @Res() res: Response) {
+  async login(
+    @Res({ passthrough: true }) res: Response,
+    @Body() body: AuthUserDTO,
+  ) {
     const token = await this.authService.login(body.email, body.password);
     this.authService.writeCookie(res, token);
     return token;
