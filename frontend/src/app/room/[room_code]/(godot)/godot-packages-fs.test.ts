@@ -18,6 +18,7 @@ class FakeFs implements EmscriptenFs {
   files = new Map<string, Uint8Array>();
   dirs = new Set<string>(["/"]);
   syncCalls = 0;
+  failWrites: (path: string) => boolean = () => false;
 
   private addDir(path: string) {
     const parts = path.split("/").filter(Boolean);
@@ -35,6 +36,9 @@ class FakeFs implements EmscriptenFs {
   writeFile(path: string, data: Uint8Array) {
     if (!this.dirs.has(dirname(path))) {
       throw new Error(`ENOENT: no such directory ${dirname(path)}`);
+    }
+    if (this.failWrites(path)) {
+      throw new Error(`ENOSPC: cannot write ${path}`);
     }
     this.files.set(path, Uint8Array.from(data));
   }
@@ -69,6 +73,30 @@ class FakeFs implements EmscriptenFs {
 
   rmdir(path: string) {
     if (!this.dirs.delete(path)) throw new Error(`ENOENT: ${path}`);
+  }
+
+  rename(oldPath: string, newPath: string) {
+    if (!this.dirs.has(oldPath) && !this.files.has(oldPath)) {
+      throw new Error(`ENOENT: ${oldPath}`);
+    }
+    const prefix = `${oldPath}/`;
+    for (const dir of [...this.dirs]) {
+      if (dir === oldPath) {
+        this.dirs.delete(dir);
+        this.addDir(newPath);
+      } else if (dir.startsWith(prefix)) {
+        this.dirs.delete(dir);
+        this.addDir(`${newPath}/${dir.slice(prefix.length)}`);
+      }
+    }
+    for (const file of [...this.files.keys()]) {
+      if (!file.startsWith(prefix)) continue;
+      const contents = this.files.get(file)!;
+      this.files.delete(file);
+      const target = `${newPath}/${file.slice(prefix.length)}`;
+      this.addDir(dirname(target));
+      this.files.set(target, contents);
+    }
   }
 
   syncfs(populate: boolean, callback: (error?: unknown) => void) {
@@ -280,6 +308,64 @@ describe("applyPackageRevision", () => {
     ).rejects.toThrow(/size/i);
 
     expect(await files.listFiles(3)).toEqual([]);
+  });
+
+  it("keeps the previous revision when staging fails in the middle", async () => {
+    const { fs, files } = makeFs();
+    files.writeFile(3, "keep.gd", data("keep"));
+    const first = await entry("a.gd", "a");
+    const last = await entry("z.gd", "z");
+    fs.failWrites = (path) => path.endsWith("/z.gd");
+
+    await expect(
+      applyPackageRevision({
+        files,
+        manifest: { ...manifest, files: [first, last] },
+        download: async (filepath) =>
+          data(filepath === first.filepath ? "a" : "z"),
+      })
+    ).rejects.toThrow(GodotFsError);
+
+    expect(await files.listFiles(3)).toEqual(["keep.gd"]);
+    expect([...fs.files.keys()].filter((path) => path.includes(".staging"))).toEqual(
+      []
+    );
+  });
+
+  it("carries editor metadata over and never publishes it", async () => {
+    const { files } = makeFs();
+    files.writeFile(3, "hero.gd", data("old"));
+    files.writeFile(3, "hero.gd.uid", data("uid-local"));
+    files.writeFile(3, "art.png.import", data("[remap]"));
+    const hero = await entry("hero.gd", "extends Node");
+
+    const result = await applyPackageRevision({
+      files,
+      manifest: { ...manifest, files: [hero] },
+      download: async () => data("extends Node"),
+    });
+
+    expect(result.deleted).toEqual([]);
+    expect(await files.listFiles(3)).toEqual([
+      "art.png.import",
+      "hero.gd",
+      "hero.gd.uid",
+    ]);
+    expect([...files.readFile(3, "hero.gd.uid")]).toEqual([
+      ...data("uid-local"),
+    ]);
+  });
+
+  it("collects only package sources, not editor metadata", async () => {
+    const { files } = makeFs();
+    files.writeFile(3, "hero.gd", data("extends Node"));
+    files.writeFile(3, "hero.gd.uid", data("uid"));
+    files.writeFile(3, "art.png.import", data("[remap]"));
+    files.writeFile(3, ".godot/cache", data("cache"));
+
+    const collected = await files.collectFiles(3);
+
+    expect(collected.map((file) => file.entry.filepath)).toEqual(["hero.gd"]);
   });
 
   it("prunes nothing outside the package when the manifest is empty", async () => {

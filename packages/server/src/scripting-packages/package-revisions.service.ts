@@ -34,6 +34,9 @@ import { ScriptingPackagesService } from './scripting-packages.service';
  */
 @Injectable()
 export class PackageRevisionsService {
+  /** Packages whose bytes are being verified and moved right now. */
+  private readonly publishing = new Set<number>();
+
   constructor(
     @InjectRepository(ScriptingPackageRevision)
     private readonly revisionsRepository: Repository<ScriptingPackageRevision>,
@@ -79,11 +82,23 @@ export class PackageRevisionsService {
     filepath: string,
     data: Buffer,
   ): Promise<SavedDraftFile> {
+    if (this.publishing.has(packageId)) {
+      throw new ConflictException(
+        `Package ${packageId} is being published, try again in a moment`,
+      );
+    }
+
     const row = await this.findRevision(packageId, revision);
+
+    if (row.status === 'published') {
+      throw new ConflictException(
+        `Revision ${revision} is already published and cannot be modified`,
+      );
+    }
 
     if (row.status !== 'draft') {
       throw new ConflictException(
-        `Revision ${revision} is already published and cannot be modified`,
+        `Revision ${revision} was replaced by a newer draft and cannot be modified`,
       );
     }
 
@@ -108,18 +123,30 @@ export class PackageRevisionsService {
       return toRevision(row, packageId);
     }
 
+    if (row.status !== 'draft') {
+      throw new ConflictException(
+        `Revision ${revision} was replaced by a newer draft and cannot be published`,
+      );
+    }
+
     const pkg = await this.packagesService.findOne(packageId);
 
-    await this.storage.publishRevision(
-      packageId,
-      revision,
-      row.files,
-      async () => {
-        row.status = 'published';
-        row.publishedAt = new Date();
-        await this.revisionsRepository.save(row);
-      },
-    );
+    // Reject uploads for this package while its bytes are verified and moved.
+    this.publishing.add(packageId);
+    try {
+      await this.storage.publishRevision(
+        packageId,
+        revision,
+        row.files,
+        async () => {
+          row.status = 'published';
+          row.publishedAt = new Date();
+          await this.revisionsRepository.save(row);
+        },
+      );
+    } finally {
+      this.publishing.delete(packageId);
+    }
 
     const published = toRevision(row, packageId);
     this.eventEmitter.emit(
@@ -129,11 +156,20 @@ export class PackageRevisionsService {
     return published;
   }
 
-  async list(packageId: number): Promise<PackageRevision[]> {
+  /**
+   * Published revisions are public. Drafts stay visible only to callers that
+   * ask for them explicitly (the editor), never to anonymous readers.
+   */
+  async list(
+    packageId: number,
+    options: { includeDrafts?: boolean } = {},
+  ): Promise<PackageRevision[]> {
     await this.packagesService.findOne(packageId);
 
     const rows = await this.revisionsRepository.find({
-      where: { package: { id: packageId } },
+      where: options.includeDrafts
+        ? { package: { id: packageId } }
+        : { package: { id: packageId }, status: 'published' },
       order: { revision: 'DESC' },
     });
     return rows.map((row) => toRevision(row, packageId));
@@ -230,6 +266,11 @@ export class PackageRevisionsService {
     return row;
   }
 
+  /**
+   * A newer draft replaces the unfinished one. The old row is kept as
+   * `discarded` instead of being deleted, so revision numbers are never reused
+   * and a stale upload session cannot publish into somebody else's row.
+   */
   private async discardDrafts(packageId: number): Promise<void> {
     const drafts = await this.revisionsRepository.find({
       where: { package: { id: packageId }, status: 'draft' },
@@ -238,8 +279,9 @@ export class PackageRevisionsService {
       return;
     }
 
-    await this.revisionsRepository.delete(drafts.map((draft) => draft.id));
     for (const draft of drafts) {
+      draft.status = 'discarded';
+      await this.revisionsRepository.save(draft);
       await this.storage.discardDraft(packageId, draft.revision);
     }
   }

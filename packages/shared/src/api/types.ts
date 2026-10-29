@@ -36,7 +36,7 @@ export type PackageFileEntry = {
   sha256: string;
 };
 
-export type PackageRevisionStatus = "draft" | "published";
+export type PackageRevisionStatus = "draft" | "published" | "discarded";
 
 export type PackageRevision = {
   packageId: number;

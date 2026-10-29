@@ -65,6 +65,25 @@ class FakeFs {
     this.dirs.delete(path);
   }
 
+  rename(oldPath: string, newPath: string) {
+    const prefix = `${oldPath}/`;
+    this.mkdirTree(newPath);
+    for (const dir of [...this.dirs]) {
+      if (!dir.startsWith(prefix)) continue;
+      this.dirs.delete(dir);
+      this.mkdirTree(`${newPath}/${dir.slice(prefix.length)}`);
+    }
+    for (const file of [...this.files.keys()]) {
+      if (!file.startsWith(prefix)) continue;
+      const contents = this.files.get(file)!;
+      this.files.delete(file);
+      const target = `${newPath}/${file.slice(prefix.length)}`;
+      this.mkdirTree(target.slice(0, target.lastIndexOf("/")));
+      this.files.set(target, contents);
+    }
+    this.dirs.delete(oldPath);
+  }
+
   put(path: string, content: string) {
     this.mkdirTree(path.slice(0, path.lastIndexOf("/")));
     this.files.set(path, new TextEncoder().encode(content));

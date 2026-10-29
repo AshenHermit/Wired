@@ -30,8 +30,20 @@ export type EmscriptenFs = {
   stat(path: string): { mode: number; size: number };
   unlink(path: string): void;
   rmdir?(path: string): void;
+  rename(oldPath: string, newPath: string): void;
   syncfs?(populate: boolean, callback: (error?: unknown) => void): void;
 };
+
+/**
+ * Files the Godot editor generates next to package sources (`.gd.uid`,
+ * `*.import`, `.godot/`). They belong to the machine that produced them, so
+ * they are neither published nor replaced by a synchronized revision.
+ */
+export function isEditorMetadataPath(filepath: string): boolean {
+  const segments = filepath.split("/");
+  if (segments.some((segment) => segment.startsWith("."))) return true;
+  return filepath.endsWith(".uid") || filepath.endsWith(".import");
+}
 
 export const PACKAGES_DIR = "packages";
 
@@ -171,7 +183,9 @@ export class PackageFileSystem {
 
   /** Reads every package file together with its size and sha256. */
   async collectFiles(packageId: number): Promise<CollectedPackageFile[]> {
-    const filepaths = await this.listFiles(packageId);
+    const filepaths = (await this.listFiles(packageId)).filter(
+      (filepath) => !isEditorMetadataPath(filepath)
+    );
     const collected: CollectedPackageFile[] = [];
     for (const filepath of filepaths) {
       const contents = this.readFile(packageId, filepath);
@@ -185,6 +199,85 @@ export class PackageFileSystem {
       });
     }
     return collected;
+  }
+
+  /**
+   * Replaces the whole package directory in one swap, so a failure in the
+   * middle of a synchronisation never leaves a mix of two revisions.
+   *
+   * Editor metadata (`.uid`, `.import`, dotfiles) of the existing revision is
+   * carried over: it belongs to this machine's import cache, not to the
+   * published package.
+   */
+  async replaceContents(
+    packageId: number,
+    contents: Map<string, Uint8Array>
+  ): Promise<{ written: string[]; deleted: string[] }> {
+    const root = this.packageDir(packageId);
+    const staging = this.stagingDir(packageId);
+    const previous = this.previousDir(packageId);
+
+    this.removeTree(staging);
+    this.removeTree(previous);
+    this.fs.mkdirTree(staging);
+
+    const written: string[] = [];
+    for (const [filepath, data] of contents) {
+      const path = this.resolve(packageId, filepath);
+      const target = `${staging}${path.slice(root.length)}`;
+      try {
+        this.fs.mkdirTree(dirname(target));
+        this.fs.writeFile(target, data);
+      } catch (error) {
+        this.removeTree(staging);
+        throw new GodotFsError(
+          `Package ${packageId}: cannot stage ${filepath}: ${errorMessage(error)}`
+        );
+      }
+      written.push(filepath);
+    }
+
+    const existing = isDirectory(this.fs, root)
+      ? await this.listFiles(packageId)
+      : [];
+    for (const filepath of existing) {
+      if (!isEditorMetadataPath(filepath)) continue;
+      const data = this.readFile(packageId, filepath);
+      const target = `${staging}/${filepath}`;
+      this.fs.mkdirTree(dirname(target));
+      this.fs.writeFile(target, data);
+    }
+
+    const deleted = existing.filter(
+      (filepath) =>
+        !contents.has(filepath) && !isEditorMetadataPath(filepath)
+    );
+
+    if (existing.length > 0) {
+      try {
+        this.fs.rename(root, previous);
+      } catch (error) {
+        this.removeTree(staging);
+        throw new GodotFsError(
+          `Package ${packageId}: cannot replace the package directory: ${errorMessage(error)}`
+        );
+      }
+    }
+
+    try {
+      this.fs.rename(staging, root);
+    } catch (error) {
+      if (isDirectory(this.fs, previous)) {
+        this.fs.rename(previous, root);
+      }
+      this.removeTree(staging);
+      throw new GodotFsError(
+        `Package ${packageId}: cannot apply the new revision: ${errorMessage(error)}`
+      );
+    }
+
+    this.removeTree(previous);
+    return { written: written.sort(), deleted };
   }
 
   /**
@@ -225,6 +318,34 @@ export class PackageFileSystem {
       }
     }
     return files.sort();
+  }
+
+  private packageSwapDir(packageId: number, suffix: string): string {
+    return `${this.packagesRoot}/.${packageId}.${suffix}`;
+  }
+
+  private stagingDir(packageId: number): string {
+    return this.packageSwapDir(packageId, "staging");
+  }
+
+  private previousDir(packageId: number): string {
+    return this.packageSwapDir(packageId, "previous");
+  }
+
+  private removeTree(path: string): void {
+    if (!isDirectory(this.fs, path)) {
+      try {
+        this.fs.unlink(path);
+      } catch {
+        // Missing files are already in the desired state.
+      }
+      return;
+    }
+    for (const name of this.fs.readdir(path)) {
+      if (name === "." || name === "..") continue;
+      this.removeTree(`${path}/${name}`);
+    }
+    this.fs.rmdir?.(path);
   }
 
   private removeEmptyDirectories(packageId: number): void {
@@ -310,19 +431,13 @@ export async function applyPackageRevision({
     onProgress?.(index + 1, total);
   }
 
-  const written: string[] = [];
-  for (const [filepath, contents] of verified) {
-    files.writeFile(manifest.packageId, filepath, contents);
-    written.push(filepath);
-  }
-
-  const deleted = await files.prune(
+  const { written, deleted } = await files.replaceContents(
     manifest.packageId,
-    manifest.files.map((file) => file.filepath)
+    verified
   );
   await files.sync();
 
-  return { written: written.sort(), deleted };
+  return { written, deleted };
 }
 
 function errorMessage(error: unknown): string {

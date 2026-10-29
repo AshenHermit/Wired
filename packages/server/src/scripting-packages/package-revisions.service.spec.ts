@@ -125,7 +125,13 @@ describe('PackageRevisionsService', () => {
 
       await service.createDraft(7, { files: [file('a.txt', 'a')] });
 
-      expect(repository.delete).toHaveBeenCalledWith([10, 20]);
+      expect(repository.delete).not.toHaveBeenCalled();
+      expect(repository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ revision: 1, status: 'discarded' }),
+      );
+      expect(repository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ revision: 2, status: 'discarded' }),
+      );
       expect(storage.discardDraft).toHaveBeenCalledWith(7, 1);
       expect(storage.discardDraft).toHaveBeenCalledWith(7, 2);
     });
@@ -288,7 +294,7 @@ describe('PackageRevisionsService', () => {
     });
   });
 
-  it('lists revisions newest first', async () => {
+  it('lists published revisions newest first and hides drafts by default', async () => {
     repository.find.mockResolvedValue([
       draftRow(3, []),
       draftRow(2, []),
@@ -301,8 +307,55 @@ describe('PackageRevisionsService', () => {
       3, 2, 1,
     ]);
     expect(repository.find).toHaveBeenCalledWith({
+      where: { package: { id: 7 }, status: 'published' },
+      order: { revision: 'DESC' },
+    });
+  });
+
+  it('includes drafts only when the caller asks for them', async () => {
+    repository.find.mockResolvedValue([draftRow(2, [])]);
+
+    await service.list(7, { includeDrafts: true });
+
+    expect(repository.find).toHaveBeenCalledWith({
       where: { package: { id: 7 } },
       order: { revision: 'DESC' },
     });
+  });
+
+  it('refuses to publish a revision that a newer draft replaced', async () => {
+    repository.findOne.mockResolvedValue({
+      ...draftRow(3, [file('a.txt', 'a')]),
+      status: 'discarded',
+    });
+
+    await expect(service.publish(7, 3)).rejects.toThrow(ConflictException);
+    expect(storage.publishRevision).not.toHaveBeenCalled();
+  });
+
+  it('refuses uploads while the same package is being published', async () => {
+    repository.findOne.mockResolvedValue(draftRow(3, [file('a.txt', 'a')]));
+    let release: () => void = () => undefined;
+    storage.publishRevision.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    const publishing = service.publish(7, 3);
+    while (storage.publishRevision.mock.calls.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    await expect(
+      service.uploadFile(7, 3, 'a.txt', Buffer.from('a')),
+    ).rejects.toThrow(ConflictException);
+
+    release();
+    await publishing;
+    await expect(
+      service.uploadFile(7, 3, 'a.txt', Buffer.from('a')),
+    ).resolves.toBeDefined();
   });
 });

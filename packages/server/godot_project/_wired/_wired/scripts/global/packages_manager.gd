@@ -26,14 +26,10 @@ const MAX_FILE_SIZE := 64 * 1024 * 1024
 
 var base_url := DEFAULT_API_URL
 
-var _http: HTTPRequest
 var _syncing: Dictionary = {}
 
 
 func _ready() -> void:
-	_http = HTTPRequest.new()
-	_http.timeout = 30.0
-	add_child(_http)
 	print("WIRED_PACKAGES_INIT root=%s" % PACKAGES_ROOT)
 
 
@@ -56,18 +52,21 @@ func revision_dir(package_id: int, revision: int) -> String:
 
 ## Fetches the latest published manifest of a package. Returns an empty
 ## dictionary when the package has no published revision yet.
+## Returns {ok: bool, error: String, manifest: Dictionary}. A missing package or
+## a package without a published revision is reported as `ok` with an empty
+## manifest; transport and format errors are reported as failures.
 func fetch_manifest(package_id: int) -> Dictionary:
 	var response := await _request("/scripting-packages/%d/manifest" % package_id)
 	if response.status == 404:
-		return {}
+		return {"ok": true, "error": "", "manifest": {}}
 	if not response.ok:
 		push_warning("WIRED_PACKAGES_MANIFEST_FAILED package=%d %s" % [package_id, response.error])
-		return {}
+		return {"ok": false, "error": str(response.error), "manifest": {}}
 	var parsed: Variant = JSON.parse_string(response.text)
 	if typeof(parsed) != TYPE_DICTIONARY:
 		push_warning("WIRED_PACKAGES_MANIFEST_INVALID package=%d" % package_id)
-		return {}
-	return parsed
+		return {"ok": false, "error": "manifest is not a JSON object", "manifest": {}}
+	return {"ok": true, "error": "", "manifest": parsed}
 
 
 ## Downloads the latest published revision of a package and applies it.
@@ -87,7 +86,12 @@ func sync_package(package_id: int) -> Dictionary:
 
 
 func _sync_package(package_id: int) -> Dictionary:
-	var manifest := await fetch_manifest(package_id)
+	var manifest_result := await fetch_manifest(package_id)
+	if not bool(manifest_result.get("ok", false)):
+		return _failure(
+			"package %d: cannot read the manifest: %s" % [package_id, manifest_result.get("error", "")]
+		)
+	var manifest: Dictionary = manifest_result.get("manifest", {})
 	if manifest.is_empty():
 		return _failure("package %d has no published revision" % package_id)
 
@@ -157,16 +161,32 @@ func _sync_package(package_id: int) -> Dictionary:
 		handle.store_buffer(file.body)
 		handle.close()
 
-	# 3. Replace previous revisions inside the managed package directory only.
+	# 3. Replace the previous revision only after the new one is in place, so a
+	# failed swap keeps a working package on disk.
 	var target_dir := revision_dir(package_id, revision)
-	_remove_tree(target_dir)
-	_remove_other_revisions(package_id, revision)
+	var backup_dir := packages_dir(package_id).path_join(".previous")
+	_remove_tree(backup_dir)
+	if DirAccess.dir_exists_absolute(target_dir):
+		var backup_error := DirAccess.rename_absolute(target_dir, backup_dir)
+		if backup_error != OK:
+			_remove_tree(staging)
+			return _failure(
+				"package %d: cannot replace revision %d: %s"
+				% [package_id, revision, error_string(backup_error)]
+			)
+
 	var rename_error := DirAccess.rename_absolute(staging, target_dir)
 	if rename_error != OK:
+		if DirAccess.dir_exists_absolute(backup_dir):
+			DirAccess.rename_absolute(backup_dir, target_dir)
+		_remove_tree(staging)
 		return _failure(
 			"package %d: cannot publish revision %d: %s"
 			% [package_id, revision, error_string(rename_error)]
 		)
+
+	_remove_tree(backup_dir)
+	_remove_other_revisions(package_id, revision)
 
 	print(
 		"WIRED_PACKAGES_APPLIED package=%d revision=%d files=%d"
@@ -181,14 +201,21 @@ func _sync_package(package_id: int) -> Dictionary:
 
 
 func _request(path: String) -> Dictionary:
-	var url := base_url + path
-	var error := _http.request(url)
+	var http := HTTPRequest.new()
+	http.timeout = 30.0
+	add_child(http)
+	# HTTPRequest builds its client only after entering the tree.
+	if is_inside_tree():
+		await get_tree().process_frame
+	var error := http.request(base_url + path)
 	if error != OK:
+		http.queue_free()
 		return {"ok": false, "status": 0, "error": error_string(error), "body": PackedByteArray()}
-	var response: Array = await _http.request_completed
+	var response: Array = await http.request_completed
 	var result := int(response[0])
 	var status := int(response[1])
 	var body: PackedByteArray = response[3]
+	http.queue_free()
 	if result != HTTPRequest.RESULT_SUCCESS:
 		return {"ok": false, "status": status, "error": "request failed (%d)" % result, "body": PackedByteArray()}
 	if status < 200 or status >= 300:
@@ -227,17 +254,20 @@ func _remove_tree(path: String) -> void:
 	var dir := DirAccess.open(path)
 	if dir == null:
 		return
+	# Collect names first: deleting while enumerating can skip entries.
+	var names := PackedStringArray()
 	dir.list_dir_begin()
 	var name := dir.get_next()
 	while not name.is_empty():
-		var child := path.path_join(name)
-		if dir.current_is_dir():
-			_remove_tree(child)
-			DirAccess.remove_absolute(child)
-		else:
-			DirAccess.remove_absolute(child)
+		names.append(name)
 		name = dir.get_next()
 	dir.list_dir_end()
+	for child_name: String in names:
+		var child := path.path_join(child_name)
+		if DirAccess.dir_exists_absolute(child):
+			_remove_tree(child)
+		else:
+			DirAccess.remove_absolute(child)
 	DirAccess.remove_absolute(path)
 
 
@@ -248,7 +278,7 @@ func _remove_other_revisions(package_id: int, keep_revision: int) -> void:
 	if dir == null:
 		return
 	for name: String in dir.get_directories():
-		if name == STAGING_DIR or name == str(keep_revision):
+		if name == STAGING_DIR or name == ".previous" or name == str(keep_revision):
 			continue
 		_remove_tree(root.path_join(name))
 

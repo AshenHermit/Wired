@@ -121,16 +121,60 @@ export class PackageStorageService {
     commit: () => Promise<void>,
   ): Promise<void> {
     const draftDir = this.draftRevisionDir(packageId, revision);
-    const draftFiles = await this.listFilesRecursive(draftDir);
 
-    if (draftFiles.length === 0) {
+    await this.assertMatchesManifest(draftDir, revision, declared);
+
+    const publishedDir = this.publishedRevisionDir(packageId, revision);
+    if (existsSync(publishedDir)) {
+      throw new ConflictException(
+        `Revision ${revision} is already published and cannot be replaced`,
+      );
+    }
+
+    await mkdir(path.dirname(publishedDir), { recursive: true });
+
+    try {
+      await rename(draftDir, publishedDir);
+    } catch (error) {
+      // A concurrent publish can win the rename; report it as a conflict
+      // instead of a 500 and keep the bytes it already committed.
+      if (existsSync(publishedDir)) {
+        throw new ConflictException(
+          `Revision ${revision} is already published and cannot be replaced`,
+        );
+      }
+      throw error;
+    }
+
+    try {
+      // Uploads are rejected while publishing, but re-verify the bytes that
+      // will actually be served: a verified draft is not a verified revision.
+      await this.assertMatchesManifest(publishedDir, revision, declared);
+      await commit();
+    } catch (error) {
+      await rename(publishedDir, draftDir).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /**
+   * The uploaded files must be exactly the declared ones, byte for byte.
+   */
+  private async assertMatchesManifest(
+    dir: string,
+    revision: number,
+    declared: PackageFileEntry[],
+  ): Promise<void> {
+    const files = await this.listFilesRecursive(dir);
+
+    if (files.length === 0) {
       throw new BadRequestException(
         `Revision ${revision} has no uploaded files`,
       );
     }
 
     const declaredPaths = new Set(declared.map((entry) => entry.filepath));
-    const uploadedPaths = new Set(draftFiles);
+    const uploadedPaths = new Set(files);
 
     const missing = [...declaredPaths].filter(
       (filepath) => !uploadedPaths.has(filepath),
@@ -151,7 +195,7 @@ export class PackageStorageService {
     }
 
     for (const entry of declared) {
-      const fullPath = resolvePackagePath(draftDir, entry.filepath);
+      const fullPath = resolvePackagePath(dir, entry.filepath);
       const actualSize = (await stat(fullPath)).size;
       if (actualSize !== entry.size) {
         throw new BadRequestException(
@@ -164,23 +208,6 @@ export class PackageStorageService {
           `Cannot publish revision, sha256 mismatch for ${entry.filepath}`,
         );
       }
-    }
-
-    const publishedDir = this.publishedRevisionDir(packageId, revision);
-    if (existsSync(publishedDir)) {
-      throw new ConflictException(
-        `Revision ${revision} is already published and cannot be replaced`,
-      );
-    }
-
-    await mkdir(path.dirname(publishedDir), { recursive: true });
-    await rename(draftDir, publishedDir);
-
-    try {
-      await commit();
-    } catch (error) {
-      await rename(publishedDir, draftDir);
-      throw error;
     }
   }
 
