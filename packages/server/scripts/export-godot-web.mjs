@@ -5,13 +5,18 @@
  * Run from the repository root:
  *   pnpm export:game
  *
- * The export is a generated artifact (`godot_project/_wired/build/web` is
- * git-ignored); the backend serves it at `/game-export/*`, which the frontend
- * proxies through `/api`. Nothing has to be copied by hand.
+ * The export is a generated artifact (`packages/server/game_export/web` by
+ * default, git-ignored) and deliberately lives OUTSIDE the Godot project:
+ * `godot_project/_wired` is the base project served to every room editor and
+ * to the runtime, so a build inside it would be imported, copied into the
+ * editor FS on every room open and scanned by Godot. The backend serves the
+ * output at `/game-export/*`, which the frontend proxies through `/api`.
+ * Nothing has to be copied by hand.
  *
  * Configuration comes from the environment or `packages/server/.env`:
  *   GODOT_RUNTIME_PATH           Godot executable (required)
  *   GODOT_RUNTIME_PROJECT_PATH   project directory, default godot_project/_wired
+ *   GODOT_GAME_EXPORT_DIR        export output, default game_export/web
  *
  * Uses only Node built-ins (Node >= 22), no extra dependencies.
  */
@@ -73,7 +78,12 @@ if (!existsSync(path.join(projectPath, 'project.godot'))) {
   fail(`No project.godot in ${projectPath}`);
 }
 
-const destDir = path.join(projectPath, 'build', 'web');
+// The output lives outside the Godot project on purpose: the project
+// directory is shared by every room editor and by the runtime.
+const destDir = path.resolve(
+  SERVER_ROOT,
+  process.env.GODOT_GAME_EXPORT_DIR ?? 'game_export/web',
+);
 const destFile = path.join(destDir, 'index.html');
 mkdirSync(destDir, { recursive: true });
 

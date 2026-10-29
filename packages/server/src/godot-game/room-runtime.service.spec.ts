@@ -113,6 +113,7 @@ describe('RoomRuntimeService', () => {
       ticketRateLimit: 20,
       ticketRateLimitWindowMs: 60_000,
       stateDir,
+      exportDir: 'C:/wired/game_export/web',
       publicWsBaseUrl: '',
       logBufferLines: 50,
       ...overrides,

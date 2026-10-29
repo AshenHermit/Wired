@@ -37,5 +37,7 @@ export interface AppConfig {
     stateDir: string;
     publicWsBaseUrl: string;
     logBufferLines: number;
+    /** Directory of the generated Web export, outside the Godot project. */
+    exportDir: string;
   };
 }

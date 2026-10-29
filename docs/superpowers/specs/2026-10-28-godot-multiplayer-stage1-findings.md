@@ -135,12 +135,17 @@ HTTP и передаваться в игру без попадания в URL/и
 - Пресет `Web` в `export_presets.cfg`: `export_filter="all_resources"`,
   `exclude_filter="build/*, .godot/*"`, `variant/thread_support=true`,
   `progressive_web_app/ensure_cross_origin_isolation_headers=true`,
-  `export_path="build/web/index.html"`.
+  `export_path=""` (путь всегда задаёт CLI).
 - Команда:
-  `godot --headless --path . --export-release "Web" "build/web/index.html"`.
+  `godot --headless --path . --export-release "Web" "<dest>/index.html"`.
   Каталог назначения должен существовать заранее.
+- Сборка **не** кладётся внутрь базового проекта `godot_project/_wired`:
+  этот каталог общий для всех комнат, а `GET /godot-project-info/wired`
+  отдаёт его файлы в FS каждого редактора. Каталог вывода —
+  `packages/server/game_export/web` (`GODOT_GAME_EXPORT_DIR`), он
+  git-ignored и обслуживается backend'ом по `/game-export/*`.
 - Размер сборки: `index.wasm` ~37 МБ, `index.js` ~350 КБ,
-  `index.pck` ~26 КБ. `build/` в git не попадает.
+  `index.pck` ~26 КБ.
 - Для кастомной сборки Godot шаблоны ищутся в
   `%APPDATA%\Godot\export_templates\4.5.1.stable` (без суффикса
   `custom_build`); официальные шаблоны `4.5.stable` нужно скопировать в
@@ -201,8 +206,8 @@ HTTP и передаваться в игру без попадания в URL/и
   string. Для интеграции следует перенести ticket в прикладной handshake
   через проверенный frontend↔Godot bridge, не помещая его в URL/history.
 - Web export нужно включить в локальный и deploy frontend workflow с
-  корректными MIME, COOP/COEP и same-origin URL; `build/web` — генерируемый,
-  неотслеживаемый артефакт.
+  корректными MIME, COOP/COEP и same-origin URL; сборка — генерируемый,
+  неотслеживаемый артефакт вне базового проекта (`game_export/web`).
 - Origin checks и rate limits для внешнего reverse proxy остаются задачей
   production-инфраструктуры; они не заменяются проверкой ticket в Godot.
 

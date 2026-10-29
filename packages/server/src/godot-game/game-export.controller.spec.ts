@@ -14,7 +14,7 @@ describe('GameExportController', () => {
 
   const build = async () => {
     const configService = {
-      godotRuntime: { projectPath: projectDir },
+      godotRuntime: { projectPath: projectDir, exportDir: webDir },
       isProduction: false,
     } as unknown as AppConfigService;
     const moduleRef = await Test.createTestingModule({
@@ -28,7 +28,7 @@ describe('GameExportController', () => {
 
   beforeEach(async () => {
     projectDir = mkdtempSync(join(tmpdir(), 'wired-export-'));
-    webDir = join(projectDir, 'build', 'web');
+    webDir = join(projectDir, 'game_export', 'web');
     mkdirSync(join(webDir, 'worklets'), { recursive: true });
     writeFileSync(join(webDir, 'index.html'), '<!doctype html><title>game</title>');
     writeFileSync(join(webDir, 'index.js'), 'console.log("engine");');
@@ -126,7 +126,7 @@ describe('GameExportController', () => {
       .expect(404);
     expect(missing.body.message).toMatch(/not found/i);
 
-    rmSync(join(projectDir, 'build'), { recursive: true, force: true });
+    rmSync(join(projectDir, 'game_export'), { recursive: true, force: true });
     const unbuilt = await request(app.getHttpServer())
       .get('/game-export/index.html')
       .expect(404);

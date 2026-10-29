@@ -16,6 +16,8 @@ import { glob } from 'fs/promises';
 import path, { join } from 'path';
 import { AppConfigService } from 'src/config/config.service';
 
+const EXCLUDED_PROJECT_DIRS = new Set(['build', 'storage', '.godot']);
+
 @Controller('')
 export class GodotEditorProviderController {
   constructor(private readonly configService: AppConfigService) {}
@@ -51,7 +53,17 @@ export class GodotEditorProviderController {
     );
     const filepaths: string[] = [];
     for await (const filepath of glob(path.join(projectDir, '**', '*.*'))) {
-      filepaths.push(path.relative(projectDir, filepath).replace(/\\/g, '/'));
+      const relative = path.relative(projectDir, filepath).replace(/\\/g, '/');
+      // The export and runtime state must never reach the editor FS, even if
+      // somebody builds into the base project by mistake.
+      if (
+        relative
+          .split('/')
+          .some((segment) => EXCLUDED_PROJECT_DIRS.has(segment))
+      ) {
+        continue;
+      }
+      filepaths.push(relative);
     }
     const projectInfo: ProjectInfo = {
       name: 'Wired',

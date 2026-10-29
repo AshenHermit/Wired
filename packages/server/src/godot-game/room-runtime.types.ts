@@ -35,6 +35,11 @@ export interface GodotRuntimeConfig {
   /** Directory for per-room state and runtime logs. */
   stateDir: string;
   /**
+   * Directory of the generated Web export. Kept outside the Godot project so
+   * the editor never copies a build into the room's project filesystem.
+   */
+  exportDir: string;
+  /**
    * Public WebSocket base for deployed environments. Supports `{room}` and
    * `{port}` placeholders. Empty means the local `ws://127.0.0.1:<port>`.
    */

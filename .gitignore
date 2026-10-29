@@ -3,3 +3,4 @@ dist
 .env
 .superpowers/
 packages/server/storage/
+packages/server/game_export/

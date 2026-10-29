@@ -18,6 +18,7 @@ const config: GodotRuntimeConfig = {
   stateDir: './storage/rooms',
   publicWsBaseUrl: '',
   logBufferLines: 200,
+  exportDir: './game_export/web',
 };
 
 describe('RoomRuntimeConfiguration', () => {

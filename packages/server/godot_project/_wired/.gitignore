@@ -2,8 +2,5 @@
 .godot/
 /android/
 
-# Local game builds (Web export used by the Stage 1 prototype)
-build/
-
 # Runtime state written by the backend-managed server process
 storage/

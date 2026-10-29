@@ -17,6 +17,7 @@ const baseConfig: GodotRuntimeConfig = {
   ticketRateLimit: 20,
   ticketRateLimitWindowMs: 60_000,
   stateDir: 'state',
+  exportDir: 'game_export/web',
   publicWsBaseUrl: '',
   logBufferLines: 100,
 };

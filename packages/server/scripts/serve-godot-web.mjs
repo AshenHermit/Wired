@@ -12,7 +12,9 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const root = path.resolve(process.argv[2] ?? 'godot_project/_wired/build/web');
+const root = path.resolve(
+  process.argv[2] ?? process.env.GODOT_GAME_EXPORT_DIR ?? 'game_export/web',
+);
 const port = Number(process.argv[3] ?? 8099);
 
 const MIME = {

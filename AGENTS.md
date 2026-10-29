@@ -19,7 +19,7 @@ Wired is a browser-based Godot game platform: Next.js frontend + NestJS API/asse
 - COOP/COEP headers (`frontend/next.config.ts` and the editor controller) are required by the WASM editor (SharedArrayBuffer). The `/api/*` rewrite proxies to `NEXT_PUBLIC_BACKEND_URL`; Godot asset URLs depend on it.
 - UI auth is Google OAuth only. Backend also has email/password endpoints. The Google callback sets the cookie on `COMMON_DOMAIN`, then redirects to `SITE_HOST`.
 - The room "Game" tab runs the client-side Godot Web export in a same-origin iframe. `POST /rooms/:id/game/connection` starts/reuses that room's native Godot runtime and mints a single-use ticket; `GET /rooms/:id/game/status` reads state without starting anything. The browser-only client calls both through `/api/*`.
-- The Web export is a **build artifact** (`godot_project/_wired/build/web`, gitignored). Run `pnpm export:game` before opening the Game tab; the backend serves it at `/game-export/*` with COOP/COEP. A clean Docker deploy must mount or build this directory — the image only contains `dist` and `node_modules`, so otherwise the tab correctly reports a missing build.
+- The Web export is a **build artifact** (`packages/server/game_export/web` by default, `GODOT_GAME_EXPORT_DIR` overrides it, gitignored). Keep it **outside** `godot_project/_wired`: that directory is the shared base project for every room and `GET /godot-project-info/wired` copies its files into the editor FS. Run `pnpm export:game` before opening the Game tab; the backend serves the export at `/game-export/*` with COOP/COEP. A clean Docker deploy must mount or build this directory - the image only contains `dist` and `node_modules`, so otherwise the tab correctly reports a missing build.
 
 ## Commands
 
@@ -32,7 +32,7 @@ pnpm --filter server build               # also the server typecheck (no separat
 pnpm --filter frontend build             # next build --webpack
 pnpm --filter frontend lint
 pnpm --filter server lint                # eslint --fix
-pnpm export:game                         # rebuild the Godot Web export into build/web
+pnpm export:game                         # rebuild the Godot Web export into packages/server/game_export/web
 pnpm build                               # recursive: server + frontend
 ```
 

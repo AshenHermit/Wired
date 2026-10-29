@@ -52,6 +52,11 @@ const config: () => AppConfig = () => ({
     stateDir: process.env.GODOT_ROOM_STATE_DIR ?? './storage/godot_rooms',
     publicWsBaseUrl: process.env.GODOT_ROOM_PUBLIC_WS_BASE ?? '',
     logBufferLines: intFromEnv('GODOT_ROOM_LOG_BUFFER_LINES', 2000),
+    // The Web export is a build artifact and must live outside
+    // godot_project/_wired: that directory is the base project served to every
+    // room editor and to the runtime, so a build there would be imported,
+    // copied into the editor FS and scanned by Godot.
+    exportDir: process.env.GODOT_GAME_EXPORT_DIR ?? './game_export/web',
   },
 });
 export default config;
