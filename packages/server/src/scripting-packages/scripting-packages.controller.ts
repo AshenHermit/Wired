@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -9,20 +10,32 @@ import {
   Patch,
   Post,
   Req,
+  StreamableFile,
   UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import {
+  CreatePackageRevisionPayload,
+  PackageRevision,
+} from '@wired-io/shared';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackagesService } from './scripting-packages.service';
+import { PackageRevisionsService } from './package-revisions.service';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
 import { UseAuthQuard } from 'src/auth/jwt-auth.guard';
 import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
+import { MAX_PACKAGE_FILE_SIZE } from './package-manifest';
 
 @ApiTags('scripting-packages')
 @Controller('scripting-packages')
 export class ScriptingPackagesController {
-  constructor(private readonly packagesService: ScriptingPackagesService) {}
+  constructor(
+    private readonly packagesService: ScriptingPackagesService,
+    private readonly revisionsService: PackageRevisionsService,
+  ) {}
 
   @ApiOkResponse({ type: [ScriptingPackage] })
   @Get()
@@ -54,6 +67,98 @@ export class ScriptingPackagesController {
     @Param('id', ParseIntPipe) id: number,
   ) {
     return await this.packagesService.getPhysicalFile(id, path.join('/'));
+  }
+
+  // --- Package revisions ---------------------------------------------------
+  // Draft revisions are written file by file, published revision files are
+  // immutable and readable by the Godot server and game clients over HTTP.
+
+  @UseAuthQuard()
+  @ApiOkResponse({ type: ScriptingPackage })
+  @Post(':id/revisions')
+  async createRevision(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() payload: CreatePackageRevisionPayload,
+  ): Promise<PackageRevision> {
+    await this.packagesService.assertPackageEditing(req.user, id);
+    return await this.revisionsService.createDraft(id, payload);
+  }
+
+  @ApiOkResponse({ type: ScriptingPackage })
+  @Get(':id/revisions')
+  listRevisions(@Param('id', ParseIntPipe) id: number) {
+    return this.revisionsService.list(id);
+  }
+
+  @UseAuthQuard()
+  @ApiOkResponse({ type: ScriptingPackage })
+  @Post(':id/revisions/:revision/files/*path')
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: MAX_PACKAGE_FILE_SIZE } }),
+  )
+  async uploadRevisionFile(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('revision', ParseIntPipe) revision: number,
+    @Param('path', ParseArrayPipe) path: string[],
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    await this.packagesService.assertPackageEditing(req.user, id);
+    if (!file || !file.buffer) {
+      throw new BadRequestException('Package file body is required');
+    }
+    return await this.revisionsService.uploadFile(
+      id,
+      revision,
+      path.join('/'),
+      file.buffer,
+    );
+  }
+
+  @UseAuthQuard()
+  @ApiOkResponse({ type: ScriptingPackage })
+  @Post(':id/revisions/:revision/publish')
+  async publishRevision(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('revision', ParseIntPipe) revision: number,
+  ): Promise<PackageRevision> {
+    await this.packagesService.assertPackageEditing(req.user, id);
+    return await this.revisionsService.publish(id, revision);
+  }
+
+  @ApiOkResponse({ type: ScriptingPackage })
+  @Get(':id/manifest')
+  getManifest(@Param('id', ParseIntPipe) id: number) {
+    return this.revisionsService.getManifest(id);
+  }
+
+  @ApiOkResponse({ type: ScriptingPackage })
+  @Get(':id/revisions/:revision/manifest')
+  getRevisionManifest(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('revision', ParseIntPipe) revision: number,
+  ) {
+    return this.revisionsService.getManifestForRevision(id, revision);
+  }
+
+  @ApiOkResponse({ type: ScriptingPackage })
+  @Get(':id/revisions/:revision/files/*path')
+  async getRevisionFile(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('revision', ParseIntPipe) revision: number,
+    @Param('path', ParseArrayPipe) path: string[],
+  ): Promise<StreamableFile> {
+    const data = await this.revisionsService.readPublishedFile(
+      id,
+      revision,
+      path.join('/'),
+    );
+    return new StreamableFile(data, {
+      type: 'application/octet-stream',
+      length: data.byteLength,
+    });
   }
 
   @UseAuthQuard()

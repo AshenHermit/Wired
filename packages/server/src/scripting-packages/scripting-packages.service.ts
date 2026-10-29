@@ -22,6 +22,7 @@ import path from 'path';
 import { AppConfigService } from 'src/config/config.service';
 import * as fs from 'fs';
 import sha256 from 'crypto-js/sha256';
+import { assertLegacyPackagePath } from './package-path';
 
 @Injectable()
 export class ScriptingPackagesService {
@@ -206,7 +207,7 @@ export class ScriptingPackagesService {
     return path.join(
       this.configService.storage.packagesFilesDir,
       pkg.id.toString(),
-      filepath,
+      assertLegacyPackagePath(filepath),
     );
   }
 
@@ -229,7 +230,7 @@ export class ScriptingPackagesService {
   ): Promise<boolean> {
     const pkg = await this.findOne(id);
     const fullPath = this.getPhysicalFileFullPath(pkg, filepath);
-    if (fs.existsSync(path.dirname(fullPath))) {
+    if (!fs.existsSync(path.dirname(fullPath))) {
       fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     }
     fs.writeFileSync(fullPath, file.buffer);

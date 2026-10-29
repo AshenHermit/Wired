@@ -25,6 +25,46 @@ export type PhysicalFile = {
   hash?: string;
 };
 
+/**
+ * One file of a package revision. `filepath` is a relative POSIX path inside
+ * the package directory (no `..`, no drive letters, no leading slash).
+ * `sha256` is the lowercase hex digest of the raw bytes.
+ */
+export type PackageFileEntry = {
+  filepath: string;
+  size: number;
+  sha256: string;
+};
+
+export type PackageRevisionStatus = "draft" | "published";
+
+export type PackageRevision = {
+  packageId: number;
+  revision: number;
+  status: PackageRevisionStatus;
+  files: PackageFileEntry[];
+  createdAt: string;
+  publishedAt: string | null;
+};
+
+/**
+ * The authoritative description of a published package revision. Clients
+ * download every file listed here, verify `sha256`, and remove files of the
+ * previous revision from the managed package directory only.
+ */
+export type PackageManifest = {
+  packageId: number;
+  name: string;
+  revision: number;
+  files: PackageFileEntry[];
+  totalSize: number;
+  publishedAt: string;
+};
+
+export type CreatePackageRevisionPayload = {
+  files: PackageFileEntry[];
+};
+
 export type Room = {
   id: number;
   name: string;
