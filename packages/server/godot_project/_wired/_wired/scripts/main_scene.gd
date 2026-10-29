@@ -3,6 +3,7 @@ extends Node
 ## Entry point for both runtime modes of the game build:
 ##
 ##   server: godot --headless --path . --server --port <p> --room <room>
+##           [--api-url <url>]   (package files are fetched over HTTP)
 ##   client: godot --path . --url ws://host:port --ticket <ticket> --room <room>
 ##   web:    loaded inside the Wired Game tab; endpoint, ticket and room arrive
 ##           over the same-origin postMessage bridge, never in the URL.
@@ -20,6 +21,7 @@ var _control_thread: Thread = null
 var _shutdown_in_progress := false
 var _authenticated_once := false
 var _auth_error_reported := false
+var _packages: PackagesManager
 
 @onready var _net: WiredNetwork = $Net
 @onready var _status: Label = $UI/Margin/VBox/Status
@@ -27,6 +29,7 @@ var _auth_error_reported := false
 
 
 func _ready() -> void:
+	_setup_packages()
 	_net.status_changed.connect(_on_status_changed)
 	_net.log_line.connect(_on_log_line)
 	_net.authenticated.connect(_on_authenticated)
@@ -41,6 +44,29 @@ func _ready() -> void:
 		_run_server(cfg)
 	else:
 		await _run_client(cfg)
+
+
+## Both runtime modes load published package files over plain HTTP, so the
+## loader is created before the network starts.
+func _setup_packages() -> void:
+	_packages = PackagesManager.new()
+	_packages.name = "Packages"
+	add_child(_packages)
+	_packages.configure(_api_url())
+
+
+func _api_url() -> String:
+	var from_args := _arg_value(OS.get_cmdline_args(), "--api-url", "")
+	if not from_args.is_empty():
+		return from_args
+	var from_env := OS.get_environment("WIRED_API_URL")
+	if not from_env.is_empty():
+		return from_env
+	return PackagesManager.DEFAULT_API_URL
+
+
+func get_packages_manager() -> PackagesManager:
+	return _packages
 
 
 func _read_config() -> Dictionary:
