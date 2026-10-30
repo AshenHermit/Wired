@@ -13,9 +13,9 @@ class_name PackageReloader
 ## package without live roots is therefore a no-op.
 ##
 ## Replaced roots keep their name, parent index, exported script values and
-## transform; children and external references are not carried over, they
-## belong to the scene. Package metadata comes from the new instantiation, so
-## the new revision is never overwritten by the old one.
+## transform; children, Node references and external references are not carried
+## over, they belong to the scene. Package metadata comes from the new
+## instantiation, so the new revision is never overwritten by the old one.
 ##
 ## Autoloads and global `class_name` scripts are not reloaded: a runtime restart
 ## is required for those.
@@ -26,20 +26,24 @@ const RELOAD_DEBOUNCE_SEC := 0.2
 ## variables are captured separately through their property usage flags.
 const PRESERVED_PROPERTIES := ["position", "rotation", "scale", "size"]
 
+## Test seam: when set, also receives every printed reload log line.
+var log_sink: Callable = Callable()
+
 var _packages: PackagesManager
 ## package id -> { filepath: true } of the changes gathered in this window.
 var _pending: Dictionary = {}
 var _flush_scheduled := false
 
 
-## Connects the reloader to a configured packages manager. Safe to call twice:
-## only the first call takes effect.
+## Connects the reloader to a packages manager. Re-setting the same manager is a
+## no-op; a different manager replaces the previous connection.
 func setup(packages: PackagesManager) -> void:
-	if _packages != null:
+	if packages == null or packages == _packages:
 		return
+	if _packages != null and is_instance_valid(_packages):
+		if _packages.package_applied.is_connected(_on_package_applied):
+			_packages.package_applied.disconnect(_on_package_applied)
 	_packages = packages
-	if _packages == null:
-		return
 	if not _packages.package_applied.is_connected(_on_package_applied):
 		_packages.package_applied.connect(_on_package_applied)
 
@@ -77,22 +81,22 @@ func _schedule_flush() -> void:
 
 
 func _flush() -> void:
-	if _packages == null or _pending.is_empty():
+	if _pending.is_empty():
 		return
 	var changed := _changed_entries(_pending)
-	_pending = {}
 	for root: Node in _collect_roots():
 		_reload_root(root, changed)
 
 
-## Flattens the per-package changes into the "<package id>:<filepath>" entries
-## used by the scene dependency map.
+## Flattens and clears the pending per-package changes into the
+## "<package id>:<filepath>" entries used by the scene dependency map.
 func _changed_entries(pending: Dictionary) -> Dictionary:
 	var entries := {}
 	for package_id: Variant in pending:
 		var files: Dictionary = pending[package_id]
 		for filepath: Variant in files:
 			entries["%d:%s" % [int(package_id), str(filepath)]] = true
+	pending.clear()
 	return entries
 
 
@@ -122,12 +126,18 @@ func _reload_root(node: Node, changed: Dictionary) -> void:
 	if not _is_affected(package_id, scene_path, changed):
 		return
 	var parent := node.get_parent()
+	if parent == null:
+		_log(
+			"WIRED_PACKAGE_RELOAD_FAILED package=%d scene=%s reason=no_parent"
+			% [package_id, scene_path]
+		)
+		return
 	var state := _capture_state(node)
 	# Instantiate before touching the live node: a scene that no longer loads
 	# keeps the old root, including its state and package metadata.
 	var replacement := _packages.instantiate_scene(package_id, scene_path)
 	if replacement == null:
-		push_warning(
+		_log(
 			"WIRED_PACKAGE_RELOAD_FAILED package=%d scene=%s reason=instantiate_failed"
 			% [package_id, scene_path]
 		)
@@ -139,7 +149,7 @@ func _reload_root(node: Node, changed: Dictionary) -> void:
 	parent.add_child(replacement)
 	parent.move_child(replacement, int(state.get("index", 0)))
 	node.queue_free()
-	print(
+	_log(
 		"WIRED_PACKAGE_RELOADED package=%d scene=%s revision=%d"
 		% [package_id, scene_path, int(replacement.get_meta("_wired_package_revision", 0))]
 	)
@@ -155,7 +165,9 @@ func _is_affected(package_id: int, scene_path: String, changed: Dictionary) -> b
 
 
 ## Identity in the parent, the transform and the exported script values.
-## Children and external references are deliberately not captured.
+## Node references are deliberately dropped: they point into the scene that is
+## about to be freed. Containers are duplicated so the old and the new instance
+## never share live state.
 func _capture_state(node: Node) -> Dictionary:
 	var properties := {}
 	for property: Dictionary in node.get_property_list():
@@ -165,8 +177,18 @@ func _capture_state(node: Node) -> Dictionary:
 			(usage & PROPERTY_USAGE_SCRIPT_VARIABLE) != 0
 			and (usage & PROPERTY_USAGE_STORAGE) != 0
 		)
-		if exported or PRESERVED_PROPERTIES.has(name):
-			properties[name] = node.get(name)
+		if not exported and not PRESERVED_PROPERTIES.has(name):
+			continue
+		var value: Variant = node.get(name)
+		if value is Node:
+			continue
+		if typeof(value) == TYPE_ARRAY:
+			var array: Array = value
+			value = array.duplicate(true)
+		elif typeof(value) == TYPE_DICTIONARY:
+			var dictionary: Dictionary = value
+			value = dictionary.duplicate(true)
+		properties[name] = value
 	return {
 		"name": node.name,
 		"index": node.get_index(),
@@ -174,16 +196,35 @@ func _capture_state(node: Node) -> Dictionary:
 	}
 
 
+## Applies the captured properties that the new script still declares. A newer
+## revision may drop an exported variable, which must not fail the reload.
 func _apply_state(node: Node, state: Dictionary) -> void:
 	var properties: Dictionary = state.get("properties", {})
+	if properties.is_empty():
+		return
+	var accepted := {}
+	for property: Dictionary in node.get_property_list():
+		accepted[str(property.get("name", ""))] = true
 	for name: String in properties:
-		node.set(name, properties[name])
+		if accepted.has(name):
+			node.set(name, properties[name])
 
 
 ## Copies user metadata to the replacement. `_wired_package_*` keys describe the
-## package scene and are already set correctly by `instantiate_scene`.
+## package scene and are already set correctly by `instantiate_scene`. A Node
+## value is skipped because it belongs to the scene that is being replaced.
 func _copy_metadata(source: Node, target: Node) -> void:
 	for key: StringName in source.get_meta_list():
 		if str(key).begins_with("_wired_package_"):
 			continue
-		target.set_meta(key, source.get_meta(key))
+		var value: Variant = source.get_meta(key)
+		if value is Node:
+			continue
+		target.set_meta(key, value)
+
+
+## Every lifecycle line is printed, so it stays directly parseable in logs.
+func _log(line: String) -> void:
+	print(line)
+	if log_sink.is_valid():
+		log_sink.call(line)
