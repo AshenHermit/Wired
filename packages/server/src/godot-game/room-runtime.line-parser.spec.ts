@@ -22,6 +22,50 @@ describe('parseRuntimeLine', () => {
     });
   });
 
+  it('parses a package application confirmation', () => {
+    expect(
+      parseRuntimeLine('WIRED_PACKAGES_APPLIED package=42 revision=3 files=7'),
+    ).toEqual({ kind: 'packages-applied', packageId: 42, revision: 3, files: 7 });
+  });
+
+  it('parses a package application failure', () => {
+    expect(
+      parseRuntimeLine(
+        'WIRED_PACKAGES_SYNC_FAILED package=42 revision=3 error=hash mismatch',
+      ),
+    ).toEqual({
+      kind: 'packages-failed',
+      packageId: 42,
+      revision: 3,
+      error: 'hash mismatch',
+    });
+  });
+
+  it('parses a client package readiness report', () => {
+    expect(
+      parseRuntimeLine('WIRED_CLIENT_PACKAGES_READY peer=5 package=42 revision=3'),
+    ).toEqual({
+      kind: 'client-packages-ready',
+      peer: 5,
+      packageId: 42,
+      revision: 3,
+    });
+  });
+
+  it('parses a client package failure report', () => {
+    expect(
+      parseRuntimeLine(
+        'WIRED_CLIENT_PACKAGES_FAILED peer=5 package=42 revision=3 error=download failed',
+      ),
+    ).toEqual({
+      kind: 'client-packages-failed',
+      peer: 5,
+      packageId: 42,
+      revision: 3,
+      error: 'download failed',
+    });
+  });
+
   it('ignores unrelated output', () => {
     expect(parseRuntimeLine('Godot Engine v4.3')).toBeNull();
   });
