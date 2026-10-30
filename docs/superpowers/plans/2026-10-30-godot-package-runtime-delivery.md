@@ -4,7 +4,7 @@
 
 **Goal:** Доставлять опубликованные пакеты в Godot-рантайм и Web-клиент без перезапуска проекта, с серверным переписыванием путей, подписанными read-only URL, генерацией текстур/аудио и пересозданием живых веток сцен с сохранением export-переменных корня.
 
-**Architecture:** Опубликованные ревизии остаются неизменяемым источником для редактора. Сервер собирает отдельный runtime-артефакт на комнату: переписывает `res://packages/<id>/...` в точные `user://wired/rooms/<room>/packages/<id>/<revision>/...`, считает хеши уже переписанных файлов и выдаёт короткоживущий HMAC-токен на чтение. Godot рекурсивно скачивает runtime-манифесты зависимостей, проверяет хеши, генерирует локальные `ImageTexture`/`AudioStream` и `.import`, а затем `PackageReloader` пересоздаёт только затронутые корни сцен. Web получает same-origin API base от хоста; headless продолжает использовать `--api-url`.
+**Architecture:** Опубликованные ревизии остаются неизменяемым источником для редактора. Сервер собирает отдельный runtime-артефакт на комнату: переписывает `res://packages/<id>/...` в точные `user://wired/rooms/<room>/packages/<id>/<revision>-<artifactKey>/...`, считает хеши уже переписанных файлов и выдаёт короткоживущий HMAC-токен на чтение. `artifactKey` — sha256 отсортированного `(packageId, revision)` замыкания самого пакета, поэтому публикация транзитивной зависимости меняет путь клиента. Godot рекурсивно скачивает runtime-манифесты зависимостей, проверяет хеши, генерирует локальные `ImageTexture`/`AudioStream` и `.import`, а затем `PackageReloader` пересоздаёт только затронутые корни сцен. Web получает same-origin API base от хоста; headless продолжает использовать `--api-url`.
 
 **Tech Stack:** NestJS 11, TypeORM/Postgres, Jest, общие типы `@wired-io/shared`, Godot 4.5 GDScript, Next.js/React 19, Vitest.
 
@@ -277,14 +277,15 @@ describe('package runtime references', () => {
 
   it('rewrites every package prefix to the pinned runtime revision', () => {
     const revisions = new Map([[5, 3], [6, 9]]);
+    const keys = new Map([[5, 'k5'], [6, 'k6']]);
     expect(
       rewritePackageReferences(
         'preload("res://packages/5/lib/a.gd") + "res://packages/6/tex.png"',
-        { roomId: 7, revisionByPackage: revisions },
+        { roomId: 7, revisionByPackage: revisions, artifactKeyByPackage: keys },
       ),
     ).toBe(
-      'preload("user://wired/rooms/7/packages/5/3/lib/a.gd") + ' +
-        '"user://wired/rooms/7/packages/6/9/tex.png"',
+      'preload("user://wired/rooms/7/packages/5/3-k5/lib/a.gd") + ' +
+        '"user://wired/rooms/7/packages/6/9-k6/tex.png"',
     );
   });
 
@@ -342,8 +343,8 @@ Expected: FAIL — модуль не найден.
 Правила:
 - `isTextPackageFile`: расширение `.tscn`, `.tres`, `.gd` (case-insensitive).
 - `decodePackageText`: `new TextDecoder('utf-8', { fatal: true }).decode(data)`; при ошибке бросить `Error('package_text_not_utf8:<filepath>')`.
-- `collectPackageReferences`: искать только внутри строковых литералов: `(["'])res:\/\/packages\/(\d+)\/([^"'\r\n]+)\1`; нормализовать `path.posix.normalize`, убрать ведущий `/`, отбросить пустой путь, вернуть уникальные пары в порядке появления. Комментарии и произвольный текст не должны создавать зависимости.
-- `rewritePackageReferences`: заменять `res://packages/<id>/` на `user://wired/rooms/<roomId>/packages/<id>/<revision>/`. Если для встреченного `<id>` нет ревизии в map — бросить `Error('package_reference_not_rewritable:<id>')`.
+- `collectPackageReferences`: искать только внутри строковых литералов: `(["'])res:\/\/packages\/(\d+)\/([^"'\r\n]+)\1`; нормализовать `path.posix.normalize`, убрать ведущий `/`, отбросить пустой путь, вернуть уникальные пары в порядке появления. Строки-комментарии (первый непробельный символ `#` или `;`) пропускать целиком, чтобы закомментированная ссылка не создавала зависимость; ссылки внутри многострочных строк по-прежнему считать ссылками.
+- `rewritePackageReferences`: заменять `res://packages/<id>/` на `user://wired/rooms/<roomId>/packages/<id>/<revision>-<artifactKey>/`, где ключ берётся у **самого referenced-пакета**. Комментарии не переписывать. Если для встреченного `<id>` нет ревизии или ключа в map — бросить `Error('package_reference_not_rewritable:<id>')`.
 - `stripExtResourceUids`: только строки, чей trimmed-вариант начинается с `[ext_resource`; удалить один атрибут ` uid="..."`.
 - `buildSceneDependencies`: для каждого `.tscn` в `files` построить DFS по цитируемым путям и абсолютным `res://packages/<id>/...`. Относительные пути разрешать от каталога текущего файла. Включать сам scene-key `"<rootId>:<scenePath>"`, скрипты, `.tres`, текстуры, аудио и транзитивные `preload`/`load`. Для cross-package использовать `dependencies`. Отсутствующие цели не включать (валидация — в задаче 3). Результат — отсортированные уникальные ключи `"<packageId>:<filepath>"`.
 
@@ -396,17 +397,22 @@ it('rewrites package paths, strips ext_resource uid and pins dependency revision
 
   expect(manifest.roomId).toBe(7);
   expect(manifest.dependencies).toEqual([
-    { packageId: 6, revision: 9, name: 'Library' },
+    {
+      packageId: 6,
+      revision: 9,
+      name: 'Library',
+      artifactKey: expect.stringMatching(/^[0-9a-f]{64}$/),
+    },
   ]);
   expect(manifest.files.map((f) => f.filepath)).toEqual([
     'hero.gd',
     'main.tscn',
   ]);
   expect(await readArtifact(5, 3, 7, 'main.tscn')).toContain(
-    'path="user://wired/rooms/7/packages/5/3/hero.gd"',
+    `path="user://wired/rooms/7/packages/5/3-${manifest.artifactKey}/hero.gd"`,
   );
   expect(await readArtifact(5, 3, 7, 'main.tscn')).toContain(
-    'path="user://wired/rooms/7/packages/6/9/tex.png"',
+    `path="user://wired/rooms/7/packages/6/9-${manifest.dependencies[0].artifactKey}/tex.png"`,
   );
   expect(await readArtifact(5, 3, 7, 'main.tscn')).not.toContain('uid="uid://x"');
   expect(manifest.download.token).toBeTruthy();
@@ -442,6 +448,7 @@ async resolveRuntimeFile(
   packageId: number,
   revision: number,
   roomId: number,
+  artifactKey: string,
   filepath: string,
 ): Promise<{ path: string; size: number }>;
 ```
@@ -455,6 +462,7 @@ type RuntimeArtifact = {
   revision: number;
   roomId: number;
   publishedAt: string;
+  artifactKey: string;
   files: PackageFileEntry[];
   totalSize: number;
   dependencies: PackageRuntimeDependency[];
@@ -464,20 +472,22 @@ type RuntimeArtifact = {
 ```
 
 Правила сборки:
+- Проверить `roomId > 0` и существование комнаты (`Room` repository) до чтения пакета; иначе `400 room_invalid` / `404`, артефакт не создаётся.
 - Загрузить опубликованную ревизию с `package.room`; если пакет комнатный и `room.id !== roomId` → `BadRequestException('package_dependency_room_mismatch:<id>')`; если ревизия не published → `NotFoundException`.
 - Рекурсивно разрешить ссылки из задачи 2. Для каждой зависимости брать **последнюю published** ревизию; проверять комнату (та же или `null`), наличие referenced-файла, отсутствие цикла. Стек цикла возвращать в сообщении.
 - Для same-package ссылок также проверять наличие файла; иначе `package_dependency_missing_file:<rootId>:<path>`.
 - `revisionByPackage` содержит корень и всё транзитивное замыкание.
 - `decodePackageText` может бросить `package_text_not_utf8:<file>`; перехватить и вернуть `BadRequestException` с этим сообщением.
-- `depsHash = sha256Hex(JSON.stringify(sortedClosure.map(([id, rev]) => [id, rev])))`.
-- Каталог: `<packagesFilesDir>/<packageId>/runtime/<roomId>/<revision>/<depsHash>/`.
+- `artifactKey` каждого пакета = `sha256Hex(JSON.stringify(sorted [[id, rev], ...]))` по замыканию, достижимому из этого пакета. Ключ корня — ключ его артефакта; прямые зависимости получают свои ключи.
+- Каталог: `<packagesFilesDir>/<packageId>/runtime/v1/<roomId>/<revision>/<artifactKey>/`.
 - Если `manifest.json` уже есть — вернуть его без чтения исходников.
 - Сборка в `<dir>.staging-<pid>-<random>`, затем `rename` в целевой каталог; при гонке удалить staging и прочитать существующий `manifest.json`. Держать in-flight `Map<string, Promise<RuntimeArtifact>>`.
-- Для каждого raw-файла: текстовый — `decodePackageText`, `rewritePackageReferences`, `stripExtResourceUids`, `Buffer.from`; бинарный — исходные байты. Считать `size`/`sha256` заново, писать в staging, `files` сортировать по `filepath`.
-- `dependencies` — только прямые зависимости корня; `sceneDependencies` — из `buildSceneDependencies` по всему замыканию.
+- Для каждого raw-файла: текстовый — `decodePackageText`, `rewritePackageReferences` (с ключами referenced-пакетов), `stripExtResourceUids`, `Buffer.from`; бинарный — исходные байты. Считать `size`/`sha256` заново, писать в staging через `resolvePackagePath`, `files` сортировать по codepoint.
+- `dependencies` — только прямые зависимости корня, у каждой `revision`, `name`, `artifactKey`; `sceneDependencies` — из `buildSceneDependencies` по всему замыканию.
 - `manifest.json` содержит все поля артефакта, кроме `dir`; писать в staging до rename.
 - `getRuntimeManifest` добавляет `download: readUrls.createToken({ roomId, packageId, revision })`.
-- `resolveRuntimeFile`: вызвать `ensureArtifact`, проверить, что `filepath` есть в `artifact.files`, затем `resolvePackagePath(artifact.dir, filepath)`; иначе `NotFoundException`. Вернуть `{ path, size }`.
+- `resolveRuntimeFile` открывает ровно каталог по `artifactKey`, читает `manifest.json`, проверяет `filepath` и возвращает `resolvePackagePath(artifact.dir, filepath)`; отсутствующий артефакт — `404 package_artifact_not_found`. Замыкание не пересчитывается.
+- После успешной сборки оставлять три новейших каталога на `<package>/<room>/<revision>`, остальные удалять.
 
 - [ ] **Step 4: Добавить модуль**
 
@@ -485,7 +495,11 @@ type RuntimeArtifact = {
 @Module({
   imports: [
     AppConfigModule,
-    TypeOrmModule.forFeature([ScriptingPackage, ScriptingPackageRevision]),
+    TypeOrmModule.forFeature([
+      ScriptingPackage,
+      ScriptingPackageRevision,
+      Room,
+    ]),
   ],
   providers: [
     PackageStorageService,
@@ -530,7 +544,7 @@ git commit -m "feat(packages): build per-room runtime artifacts"
 - Consumes: `PackageDeliveryService.getRuntimeManifest`, `resolveRuntimeFile`, `PackageReadUrlService.verifyToken`.
 - Produces:
   - `GET /scripting-packages/:id/revisions/:revision/runtime-manifest?room=<id>`
-  - `GET /scripting-packages/:id/revisions/:revision/runtime-files/*path?room=<id>&token=<token>`
+  - `GET /scripting-packages/:id/revisions/:revision/runtime-files/*path?room=<id>&key=<artifactKey>&token=<token>`
 
 - [ ] **Step 1: Написать падающие тесты контроллера**
 
@@ -578,6 +592,7 @@ async runtimeFile(
   @Param('revision', ParseIntPipe) revision: number,
   @Param('path') path: string | string[],
   @Query('room', ParseIntPipe) room: number,
+  @Query('key') artifactKey: string,
   @Query('token') token: string,
   @Res() res: Response,
 ): Promise<void>;
@@ -586,8 +601,10 @@ async runtimeFile(
 Правила:
 - `filepath = Array.isArray(path) ? path.join('/') : path`.
 - Нет токена или `verifyToken` вернул `false` → `UnauthorizedException('package_read_token_invalid')`.
+- Нет `key` → `BadRequestException('package_artifact_key_missing')`; `resolveRuntimeFile(id, revision, room, key, filepath)` резолвит ровно этот артефакт.
+- Runtime-маршруты публичные (без `@UseAuthGuard`), но требуют `room` и валидный токен для файлов. `room` валидируется в сервисе (положительный id существующей комнаты).
+- `Cache-Control: no-store` на манифесте и файлах.
 - `resolveRuntimeFile` → `createReadStream(file.path)`, `Content-Type: application/octet-stream`, `Content-Length: file.size`; ошибка стрима уничтожает ответ, как в существующем `downloadFile`.
-- Runtime-маршруты публичные (без `@UseAuthGuard`), но требуют `room` и валидный токен для файлов.
 - Не логировать `token`.
 
 - [ ] **Step 4: Запустить тест**
@@ -858,7 +875,8 @@ git commit -m "feat(game): pass same-origin api base to web build"
 - Produces:
   - `fetch_runtime_manifest(package_id: int, revision: int) -> Dictionary`
   - `sync_package(package_id: int, revision_hint: int = 0) -> Dictionary`
-  - `runtime_path(package_id: int, revision: int, filepath: String) -> String`
+  - `runtime_path(package_id: int, revision: int, filepath: String, artifact_key: String = "") -> String`
+  - `current_artifact_key(package_id: int) -> String`
   - `current_revision(package_id: int) -> int`
   - `scene_dependencies(package_id: int, scene_path: String) -> PackedStringArray`
   - `instantiate_scene(package_id: int, scene_path: String, revision: int = 0) -> Node`
@@ -871,8 +889,8 @@ git commit -m "feat(game): pass same-origin api base to web build"
 ```gdscript
 var manager := PackagesManager.new()
 manager.configure("http://127.0.0.1:1", "7")
-assert(manager.runtime_path(5, 3, "scripts/hero.gd") ==
-	"user://wired/rooms/7/packages/5/3/scripts/hero.gd")
+assert(manager.runtime_path(5, 3, "scripts/hero.gd", "abc") ==
+	"user://wired/rooms/7/packages/5/3-abc/scripts/hero.gd")
 assert(manager._changed_files(
 	{"a.gd": "1", "b.gd": "2"},
 	{"a.gd": "1", "b.gd": "3", "c.gd": "4"},
@@ -894,9 +912,12 @@ Expected: FAIL — методов нет.
 
 - `fetch_runtime_manifest(package_id, revision)`:
   `GET /scripting-packages/%d/revisions/%d/runtime-manifest?room=%d`; вернуть `{ok,error,manifest}`; 404 → `ok=false`, `error="runtime_manifest_missing"`.
-- `runtime_path(package_id, revision, filepath)`:
-  `"user://wired/rooms/%s/packages/%d/%d/%s" % [room, package_id, revision, filepath]`.
-- `current_revision(package_id)` из `_current_revisions`.
+- `runtime_path(package_id, revision, filepath, artifact_key = "")`:
+  `"user://wired/rooms/%s/packages/%d/%d-%s/%s"`; пустой ключ берётся из
+  `_current_artifact_keys`, если ревизия применена, иначе путь без ключа
+  (совместимость для диагностики).
+- `current_revision(package_id)` из `_current_revisions`;
+  `current_artifact_key(package_id)` из `_current_artifact_keys`.
 - `scene_dependencies(package_id, scene_path)` из `_scene_dependencies`.
 - `instantiate_scene(package_id, scene_path, revision=0)`:
   - revision 0 → `current_revision`;
@@ -908,15 +929,18 @@ Expected: FAIL — методов нет.
 - [ ] **Step 4: Реализовать рекурсивный `sync_package`**
 
 - Ключ защиты от повторного входа: per-package `_applying` с ожиданием и таймаутом; цикл по графу зависимостей защищён цепочкой вызовов (`chain`), а не парой `package_id:revision`.
-- Сначала `fetch_runtime_manifest`; для каждого `manifest.dependencies` вызвать `sync_package(dep.package_id, dep.revision)`.
-- Скачивать файлы по `base_url + "/scripting-packages/%d/revisions/%d/runtime-files/%s?room=%d&token=%s"`.
+- Сначала `fetch_runtime_manifest`; для каждого `manifest.dependencies` вызвать `_sync_package_chain(dep.package_id, dep.revision, chain, applied)`.
+- `artifactKey` из манифеста обязателен; он входит в URL файла после `key=`, в каталог `<revision>-<key>` и в `_current_artifact_keys`.
+- Скачивать файлы по `base_url + "/scripting-packages/%d/revisions/%d/runtime-files/%s?room=%d&key=%s&token=%s"`.
 - Проверять `size` и `sha256` уже переписанного файла из манифеста.
-- Писать в `packages/<id>/.staging`; хранить текущую и предыдущую ревизии:
-  - существующую целевую ревизию переименовать в `.previous` на время замены;
-  - staging → `<newRev>`;
-  - после успешной замены удалить `.previous` и все числовые ревизии, кроме новой и самой высокой оставшейся.
+- Писать в `packages/<id>/.staging`; хранить текущий и предыдущий артефакты:
+  - существующий целевой `<rev>-<key>` переименовать в `.previous` на время замены;
+  - staging → `<rev>-<key>`;
+  - после успешной замены удалить `.previous` и все каталоги этого пакета, кроме нового и самой высокой другой ревизии; старые ключи той же ревизии тоже удаляются.
+- В одном top-level sync передавать `applied` map: diamond-зависимость обрабатывается один раз.
 - После swap:
   - `_current_revisions[package_id] = revision`;
+  - `_current_artifact_keys[package_id] = artifact_key`;
   - `_scene_dependencies[package_id] = manifest.sceneDependencies`;
   - `changed = _changed_files(old_hashes, new_hashes)`;
   - `_file_hashes[package_id] = new_hashes`;
@@ -1039,11 +1063,12 @@ git commit -m "feat(game): derive runtime textures and audio"
 - [ ] **Step 1: Написать падающий smoke-тест**
 
 `package_reloader_smoke.gd` extends `SceneTree`:
-- создать `user://wired/rooms/7/packages/5/1/fixture.tscn` с корнем `Node2D` и скриптом с `@export var score := 1`;
-- `manager.configure(..., "7")`, вручную выставить `_current_revisions[5] = 1` и `_scene_dependencies[5]`, чтобы `instantiate_scene` работал без сети;
-- `var node = manager.instantiate_scene(5, "fixture.tscn")`; `root.add_child(node)`; `node.score = 42`; `node.position = Vector2(3, 4)`;
+- создать `user://wired/rooms/7/packages/5/1-<key>/fixture.tscn` с корнем `Node2D` и скриптом с `@export var score := 1`, `@export var texture: Texture2D`, `@export var nodes: Array[Node]`;
+- `manager.configure(..., "7")`, вручную выставить `_current_revisions[5] = 1`, `_current_artifact_keys[5] = <key>` и `_scene_dependencies[5]`, чтобы `instantiate_scene` работал без сети;
+- `var node = manager.instantiate_scene(5, "fixture.tscn")`; `root.add_child(node)`; `node.score = 42`; `node.texture = old_texture`; добавить Node в `node.nodes`; `node.position = Vector2(3, 4)`;
 - `root.add_child(reloader)`; `reloader.setup(manager)`; `reloader.reload_for(5, PackedStringArray(["fixture.tscn"]))`; дождаться кадра;
-- `assert` старый instance id исчез, новый `score == 42`, `position == Vector2(3,4)`, meta сохранены;
+- `assert` старый instance id исчез, новый `score == 42`, `position == Vector2(3,4)`, meta сохранены; `texture` — из новой сцены (не `old_texture`), `nodes` пуст;
+- отдельный кейс: тот же revision с новым artifact key → новый скрипт исполняется (C2);
 - отдельный кейс: битый `.tscn` → старый узел остаётся, лог `WIRED_PACKAGE_RELOAD_FAILED`.
 
 - [ ] **Step 2: Запустить smoke и убедиться, что он падает**
@@ -1082,8 +1107,9 @@ const RELOAD_DEBOUNCE_SEC := 0.2
 - `_capture_state`:
   - export-переменные: `usage & PROPERTY_USAGE_SCRIPT_VARIABLE` и `usage & PROPERTY_USAGE_STORAGE`; значение по `prop.name`;
   - `position`, `rotation`, `scale`, `size`, если свойства есть;
-  - значения-`Node` не переносятся, `Array`/`Dictionary` копируются глубоко.
-- Пользовательские meta-ключи (кроме `_wired_package_*`) копируются на новый корень; meta-значения-`Node` пропускаются.
+  - переносятся только value-типы: числа, строки, bool, enum, math/color, packed arrays и рекурсивно value-only `Array`/`Dictionary`; `Object`, `Resource`, `RID`, `Callable` и контейнеры с ними пропускаются целиком;
+  - value-only контейнеры копируются глубоко.
+- Пользовательские meta-ключи (кроме `_wired_package_*`) копируются на новый корень по тем же правилам value-only.
 - Не сохранять дочерние узлы и внешние ссылки. Nested package roots пересоздаются вместе с внешней сценой.
 - `package_applied` от пакета-библиотеки без live-узлов — no-op.
 - Autoload/`class_name` не трогать; в docs указать перезапуск.

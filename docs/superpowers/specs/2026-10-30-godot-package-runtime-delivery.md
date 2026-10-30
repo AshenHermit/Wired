@@ -9,7 +9,8 @@ Godot smokes пройдены, lint-долг остаётся (см. «Пров�
 
 Опубликованная ревизия остаётся неизменяемым источником для редактора.
 Для игры сервер собирает отдельный runtime-артефакт на комнату: переписывает
-`res://packages/<id>/...` в точные `user://wired/rooms/<room>/packages/<id>/<revision>/...`,
+`res://packages/<id>/...` в точные
+`user://wired/rooms/<room>/packages/<id>/<revision>-<artifactKey>/...`,
 фиксирует ревизии всего транзитивного замыкания и выдаёт короткоживущий
 HMAC-токен на чтение. Godot рекурсивно скачивает runtime-манифесты
 зависимостей, проверяет размер и `sha256`, строит локальные текстуры/аудио и
@@ -84,6 +85,7 @@ export type PackageRuntimeDependency = {
   packageId: number;
   revision: number;
   name: string;
+  artifactKey: string;
 };
 
 export type PackageRuntimeManifest = {
@@ -92,6 +94,7 @@ export type PackageRuntimeManifest = {
   revision: number;
   roomId: number;
   publishedAt: string;
+  artifactKey: string;
   files: PackageFileEntry[];
   totalSize: number;
   dependencies: PackageRuntimeDependency[];
@@ -101,10 +104,17 @@ export type PackageRuntimeManifest = {
 };
 ```
 
+- `artifactKey` — sha256 отсортированного списка `(packageId, revision)`,
+  достижимого из этого пакета, включая его самого. Один и тот же ключ
+  получают корень и зависимость для одного состояния библиотеки; публикация
+  любой транзитивной зависимости меняет ключ всех пакетов над ней.
 - `files` описывает уже переписанный артефакт: `size` и `sha256` считаются по
-  тем байтам, которые скачает клиент.
-- `dependencies` — только прямые зависимости корня; транзитивное замыкание
-  зафиксировано в ключе артефакта и в манифестах самих зависимостей.
+  тем байтам, которые скачает клиент. Каждый путь внутри файла указывает на
+  каталог `<referencedRevision>-<referencedArtifactKey>` ровно того пакета,
+  на который ссылается.
+- `dependencies` — только прямые зависимости корня; у каждой свой
+  `artifactKey`. Транзитивное замыкание зафиксировано в ключе артефакта и в
+  манифестах самих зависимостей.
 - `sceneDependencies` нужен reloader-у: по нему определяется, какие живые
   корни сцен затронуты изменением файла.
 
@@ -113,11 +123,20 @@ export type PackageRuntimeManifest = {
 | Метод и путь | Доступ | Назначение |
 | --- | --- | --- |
 | `GET /scripting-packages/:id/revisions/:rev/runtime-manifest?room=<id>` | публичный | подписанный runtime-манифест ревизии для комнаты |
-| `GET /scripting-packages/:id/revisions/:rev/runtime-files/*path?room=<id>&token=<token>` | публичный + токен | байты файла артефакта |
+| `GET /scripting-packages/:id/revisions/:rev/runtime-files/*path?room=<id>&key=<artifactKey>&token=<token>` | публичный + токен | байты файла артефакта |
 
 Файловый маршрут без токена или с токеном для другой комнаты/пакета/ревизии
-возвращает `401 package_read_token_invalid`. Write-маршруты пакетов не менялись:
-JWT и `assertPackageEditing`.
+возвращает `401 package_read_token_invalid`; без `key` —
+`400 package_artifact_key_missing`. `key` резолвит ровно тот каталог, который
+был в манифесте: сервер не пересчитывает замыкание между запросами файлов и
+возвращает `404 package_artifact_not_found`, если артефакт уже удалён.
+Write-маршруты пакетов не менялись: JWT и `assertPackageEditing`.
+
+`room` обязателен на обоих маршрутах и должен быть положительным id
+существующей комнаты: `400 room_invalid` для `0`/отрицательных значений и
+`404` для несуществующей комнаты. Проверка выполняется до чтения пакета и до
+создания каталога артефакта, в том числе для глобальных библиотек, у которых
+нет собственной комнаты. Runtime-ответы отдаются с `Cache-Control: no-store`.
 
 Манифест публичен и содержит токен: любой, кто знает `packageId`, `revision` и
 `room`, может получить манифест и скачать байты, пока токен жив. Токен
@@ -147,26 +166,40 @@ JWT и `assertPackageEditing`.
 - Циклы запрещены: `package_dependency_cycle:<a->b->a>`. Ошибка возвращается
   до записи байтов, частичный артефакт не отдаётся.
 - Зависимость фиксируется на последнюю опубликованную ревизию на момент
-  сборки. Ключ артефакта —
-  `<packagesFilesDir>/<packageId>/runtime/<roomId>/<revision>/<depsHash>/`,
-  где `depsHash = sha256(JSON(sorted [packageId, revision]))`. Публикация
-  библиотеки меняет ключ, поэтому старые байты не переиспользуются.
+  сборки. Ключ артефакта — sha256 отсортированного `(packageId, revision)`
+  замыкания самого пакета. Каталог сервера:
+  `<packagesFilesDir>/<packageId>/runtime/v1/<roomId>/<revision>/<artifactKey>/`.
+  Публикация библиотеки меняет ключ зависимых пакетов, поэтому старые байты не
+  переиспользуются, а клиент получает новый путь ресурса.
 - После публикации библиотеки сервер повторно отправляет зависимые
   room-пакеты, даже если их собственная ревизия не менялась.
+- В одном `sync_package` каждая зависимость применяется один раз: diamond
+  `P -> A -> L`, `P -> B -> L` скачивает, стейджит и эмитит `package_applied`
+  для `L` один раз.
 - `network.gd` объявляет применённую ревизию всем клиентам. Явное применение
   broadcast-ится всегда, даже при том же номере ревизии: артефакт мог
   измениться из-за обновления зависимости. Новому peer-у уходит только
   последняя ревизия.
 - Сборка идёт в `.staging-<pid>-<random>` и публикуется атомарным `rename`;
   конкурентные запросы на один артефакт разделяют одну сборку.
+- Хранятся три новейших артефакта на `<package>/<room>/<revision>`; более
+  старые полные каталоги удаляются после успешной сборки. Объём растёт с
+  числом публикаций библиотек в пределах этого окна (каждый зависимый пакет
+  получает новый каталог), поэтому storage нужно мониторить.
+- Строки-комментарии (первый непробельный символ `#` или `;`) не участвуют ни
+  в сборе зависимостей, ни в переписывании: закомментированная ссылка не
+  ломает публикацию. Ссылки внутри многострочных строк по-прежнему
+  считаются ссылками.
 
 ## Две ревизии и очистка
 
-Клиент хранит применённую ревизию и самую высокую другую ревизию пакета;
-остальные числовые каталоги удаляются только внутри каталога этого пакета.
-Старая сцена, которая ссылается на ревизию глубже этого окна, после очистки
-ломается — известное ограничение v1. Текущая и предыдущая ревизии сохраняются
-специально, чтобы пережить один откат/обновление.
+Клиент хранит применённую ревизию и её artifact key, а также самую высокую
+другую ревизию пакета; остальные каталоги `<revision>-<key>` удаляются только
+внутри каталога этого пакета. Повторная сборка той же ревизии даёт новый ключ,
+поэтому старый каталог той же ревизии тоже удаляется. Старая сцена, которая
+ссылается на ревизию глубже этого окна, после очистки ломается — известное
+ограничение v1. Текущая и предыдущая ревизии сохраняются специально, чтобы
+пережить один откат/обновление.
 
 ## Горячая перезагрузка
 
@@ -179,7 +212,14 @@ JWT и `assertPackageEditing`.
   старый корень остаётся, пишется `WIRED_PACKAGE_RELOAD_FAILED`.
 - Сохраняются имя, индекс в родителе, export-переменные скрипта, transform
   (`position`, `rotation`, `scale`, `size`) и пользовательские meta-ключи.
-  Значения-`Node` пропускаются; `Array`/`Dictionary` копируются глубоко.
+  Переносятся только value-типы: числа, строки, bool, enum, math/color типы и
+  рекурсивно value-only `Array`/`Dictionary`/packed arrays. `Object`,
+  `Resource`, `RID`, `Callable` и контейнеры, содержащие их, пропускаются:
+  новый инстанс читает их из новой сцены. `Array[Node]` поэтому не оставляет
+  висячих ссылок.
+- Артефакт хранится в каталоге с artifact key, поэтому публикация зависимости
+  без смены ревизии даёт новый путь `.gd`/`.tscn` и не попадает в
+  `ResourceCache`; сцена загружается с `CACHE_MODE_IGNORE`.
 - Дочерние узлы, Node-ссылки и внешние ссылки не переносятся: они принадлежат
   сцене, а не корню.
 - Autoload, глобальные `class_name` и регистрации на старте не горячо
@@ -232,16 +272,17 @@ JWT и `assertPackageEditing`.
 ## Проверки
 
 Все команды запускались из корня репозитория на Godot
-`4.5.1.stable.custom_build.f62fdbde1`.
+`4.6.2.stable.official.71f334935` (fix wave final review); исходная матрица
+ресурсов выше снята на 4.5.x.
 
 | Команда | Результат |
 | --- | --- |
-| `pnpm --filter server exec jest package-read-url.service.spec` | pass, 1 suite / 4 tests |
-| `pnpm --filter server exec jest package-runtime-references.spec` | pass, 1 / 11 |
-| `pnpm --filter server exec jest package-delivery.service.spec` | pass, 1 / 27 |
-| `pnpm --filter server exec jest scripting-packages.controller.spec` | pass, 1 / 15 |
+| `pnpm --filter server exec jest package-read-url.service.spec` | pass, 1 suite / 9 tests |
+| `pnpm --filter server exec jest package-runtime-references.spec` | pass, 1 / 14 |
+| `pnpm --filter server exec jest package-delivery.service.spec` | pass, 1 / 36 |
+| `pnpm --filter server exec jest scripting-packages.controller.spec` | pass, 1 / 16 |
 | `pnpm --filter server exec jest package-sync.service.spec` | pass, 1 / 25 |
-| `pnpm --filter server exec jest package-revisions.service.spec` | pass, 1 / 25 |
+| `pnpm --filter server exec jest config.spec` | pass, 1 / 4 |
 | `pnpm --filter frontend exec vitest run GameTab.test.tsx` | pass, 1 file / 3 tests |
 | `pnpm check-types:frontend` | pass |
 | `pnpm --filter server build` | pass |
@@ -252,8 +293,13 @@ JWT и `assertPackageEditing`.
 | `package_reloader_smoke.gd` | pass, exit 0 |
 | `pnpm export:game` | pass; `index.html` содержит `apiBase`/`sameOriginApiBase` |
 
-Шесть Jest-наборов дают 107 тестов. В
-`scripting-packages.controller.spec.ts` был один diagnostic, внесённый этой
+Шесть наборов fix wave дают 104 теста: delivery покрывает artifact key,
+инвалидацию зависимостью, конкурентную сборку, bounded GC и валидацию комнаты;
+runtime references — комментарии; controller — `key=` и `no-store`;
+read-url — malformed-токены; config — fallback секрета. Godot smokes
+дополнительно покрывают смену artifact key при той же ревизии, diamond,
+экспортированные `Texture2D`/`Array[Node]` и keyed-перезагрузку.
+В `scripting-packages.controller.spec.ts` был один diagnostic, внесённый этой
 веткой (`require-await` на mock `resolveRuntimeFile`); он исправлен на
 promise-mock без `async`. Остальной долг frontend/server lint — pre-existing.
 Полные lint-команды по-прежнему падают; targeted ESLint по пяти основным
