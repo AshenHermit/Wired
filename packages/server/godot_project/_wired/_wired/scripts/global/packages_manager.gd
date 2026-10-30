@@ -928,12 +928,29 @@ func _room_id() -> int:
 	return room.to_int()
 
 
+## JSON numbers arrive from the browser bridge as floats, so `7` becomes
+## `7.0`. Normalize integral values before they become a path segment: sanitizing
+## `7.0` into `7_0` would make `to_int()` return 70.
+func _normalize_numeric_room(value: String) -> String:
+	if value.is_valid_int():
+		var integer := value.to_int()
+		return str(integer) if integer > 0 else ""
+	if value.is_valid_float():
+		var number := value.to_float()
+		if number > 0.0 and number == floor(number):
+			return str(int(number))
+	return ""
+
+
 ## Room codes come from the backend, but here they become one path segment, so
 ## only characters that cannot escape the packages root are kept.
 func _sanitize_room(room_id: String) -> String:
 	var value := room_id.strip_edges()
 	if value.is_empty():
 		return ""
+	var numeric := _normalize_numeric_room(value)
+	if not numeric.is_empty():
+		return numeric
 	var out := ""
 	for index in value.length():
 		var ch := value[index]

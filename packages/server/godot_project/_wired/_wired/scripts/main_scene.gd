@@ -233,7 +233,18 @@ func _run_client(cfg: Dictionary) -> void:
 			return
 		cfg["url"] = str(bridge_config.get("endpoint", ""))
 		cfg["ticket"] = str(bridge_config.get("ticket", ""))
-		cfg["room"] = str(bridge_config.get("room", ""))
+		# JSON numbers arrive as floats: `7` becomes `7.0`. The room is an
+		# integer id everywhere, so normalize it before the package manager or
+		# network sees it.
+		var bridge_room: Variant = bridge_config.get("room", 0)
+		if typeof(bridge_room) != TYPE_INT and typeof(bridge_room) != TYPE_FLOAT:
+			_fail("Invalid room received from the Wired host")
+			return
+		var room_id := int(bridge_room)
+		if room_id <= 0 or float(bridge_room) != float(room_id):
+			_fail("Invalid room received from the Wired host")
+			return
+		cfg["room"] = str(room_id)
 		# The Web build is served from the frontend origin and cannot reach the
 		# backend by itself. A build that does not get an API root must fail
 		# loudly: falling back to the loader default would silently fetch

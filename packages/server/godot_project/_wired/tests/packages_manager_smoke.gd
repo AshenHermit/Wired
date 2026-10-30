@@ -55,6 +55,7 @@ func _run() -> void:
 		_finish()
 		return
 	_test_runtime_path_and_changed_files()
+	_test_room_normalization()
 	_manager = PackagesManager.new()
 	_manager.configure("http://127.0.0.1:1", ROOM)
 	_manager.request_override = _transport
@@ -122,6 +123,14 @@ func _test_runtime_path_and_changed_files() -> void:
 		manager._changed_files({}, {"a.gd": "1"}) == PackedStringArray(["a.gd"]),
 		"a file without an old hash is changed"
 	)
+	manager.free()
+
+
+func _test_room_normalization() -> void:
+	var manager := PackagesManager.new()
+	manager.set_room("7.0")
+	_check(manager.room == "7", "a bridge room of 7.0 must normalize to 7")
+	_check(manager._room_id() == 7, "a normalized room must keep its integer id")
 	manager.free()
 
 
