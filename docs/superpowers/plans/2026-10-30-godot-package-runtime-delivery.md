@@ -1076,8 +1076,9 @@ const RELOAD_DEBOUNCE_SEC := 0.2
   2. `new = packages.instantiate_scene(package_id, scene_path)`;
   3. если `new == null` — лог `WIRED_PACKAGE_RELOAD_FAILED` и оставить старый;
   4. `parent.remove_child(old)`;
-  5. `new.name = old_name`; применить state; `parent.add_child(new)`; `parent.move_child(new, old_index)`;
-  6. `old.queue_free()`.
+  5. `new.name = old_name`; `_copy_metadata(old, new)`;
+  6. `_apply_state(new, state)`; `parent.add_child(new)`; `parent.move_child(new, old_index)`;
+  7. `old.queue_free()`.
 - `_capture_state`:
   - export-переменные: `usage & PROPERTY_USAGE_SCRIPT_VARIABLE` и `usage & PROPERTY_USAGE_STORAGE`; значение по `prop.name`;
   - `position`, `rotation`, `scale`, `size`, если свойства есть;

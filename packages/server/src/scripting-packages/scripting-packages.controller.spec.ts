@@ -59,7 +59,9 @@ describe('ScriptingPackagesController revisions API', () => {
     };
     delivery = {
       getRuntimeManifest: jest.fn(),
-      resolveRuntimeFile: jest.fn(async () => ({ path: __filename, size: 3 })),
+      resolveRuntimeFile: jest.fn(() =>
+        Promise.resolve({ path: __filename, size: 3 }),
+      ),
     };
     readUrls = { verifyToken: jest.fn(() => true) };
     response = Object.assign(new PassThrough(), {
