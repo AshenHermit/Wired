@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
@@ -62,6 +63,7 @@ describe('PackageSyncService', () => {
   afterEach(() => {
     service.onModuleDestroy();
     jest.useRealTimers();
+    jest.restoreAllMocks();
   });
 
   it('dispatches a published revision to the package room runtime', async () => {
@@ -94,11 +96,6 @@ describe('PackageSyncService', () => {
     delivery.findDependentRoomPackages.mockResolvedValue([
       { packageId: 99, roomId: 7, revision: 4 },
     ]);
-    packages.findOne.mockResolvedValueOnce(roomPackage).mockResolvedValueOnce({
-      id: 99,
-      name: 'Game',
-      room: { id: 7 },
-    } as unknown as ScriptingPackage);
 
     await service.revisionPublished(42, 3);
 
@@ -141,20 +138,15 @@ describe('PackageSyncService', () => {
       packageId: 99,
       revision: 4,
       publishedAt: '2026-10-30T10:00:00.000Z',
+      // Record-derived: without the dependent record the aggregate state would
+      // still be 'published', because the dispatch would not be tracked.
+      state: 'pending',
+      runtime: { state: 'pending', revision: 4 },
     });
   });
 
   it('keeps a dependent pending until a runtime is ready', async () => {
     runtime.getRuntime.mockReturnValue({ state: 'starting' });
-    delivery.findDependentRoomPackages.mockResolvedValue([
-      { packageId: 99, roomId: 7, revision: 4 },
-    ]);
-
-    await service.revisionPublished(42, 3);
-
-    expect(runtime.sendPackage).not.toHaveBeenCalled();
-
-    runtime.getRuntime.mockReturnValue({ state: 'running' });
     packages.find.mockResolvedValue([
       { id: 99, name: 'Game' },
     ] as unknown as ScriptingPackage[]);
@@ -162,6 +154,23 @@ describe('PackageSyncService', () => {
       revision: 4,
       publishedAt: new Date('2026-10-30T09:00:00.000Z'),
     } as unknown as ScriptingPackageRevision);
+    delivery.findDependentRoomPackages.mockResolvedValue([
+      { packageId: 99, roomId: 7, revision: 4 },
+    ]);
+
+    await service.revisionPublished(42, 3);
+
+    expect(runtime.sendPackage).not.toHaveBeenCalled();
+    const pending = await service.getStatuses('7');
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      packageId: 99,
+      revision: 4,
+      state: 'published',
+      runtime: { state: 'pending', revision: 4 },
+    });
+
+    runtime.getRuntime.mockReturnValue({ state: 'running' });
     service.onModuleInit();
 
     service.onRuntimeReady('7');
@@ -185,14 +194,100 @@ describe('PackageSyncService', () => {
     expect(runtime.sendPackage).toHaveBeenLastCalledWith('7', 99, 4);
   });
 
-  it('publishes even when the dependent scan fails', async () => {
+  it('logs a dependent scan failure and still publishes', async () => {
+    const errorSpy = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
     delivery.findDependentRoomPackages.mockRejectedValue(
       new Error('scan failed'),
     );
 
     await expect(service.revisionPublished(42, 3)).resolves.toBeUndefined();
 
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to scan dependents of package 42'),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('scan failed'),
+    );
     expect(runtime.sendPackage).toHaveBeenCalledWith('7', 42, 3);
+  });
+
+  it('upgrades a dependent to a newer scanned revision', async () => {
+    packages.find.mockResolvedValue([
+      { id: 99, name: 'Game' },
+    ] as unknown as ScriptingPackage[]);
+    delivery.findDependentRoomPackages
+      .mockResolvedValueOnce([{ packageId: 99, roomId: 7, revision: 4 }])
+      .mockResolvedValueOnce([{ packageId: 99, roomId: 7, revision: 5 }]);
+
+    await service.revisionPublished(42, 3);
+    expect(runtime.sendPackage).toHaveBeenLastCalledWith('7', 99, 4);
+
+    revisions.findOne.mockResolvedValue({
+      revision: 5,
+      publishedAt: new Date('2026-10-30T10:00:00.000Z'),
+    } as unknown as ScriptingPackageRevision);
+
+    await service.revisionPublished(42, 3);
+
+    expect(runtime.sendPackage).toHaveBeenLastCalledWith('7', 99, 5);
+    const status = (await service.getStatuses('7'))[0];
+    expect(status).toMatchObject({
+      packageId: 99,
+      revision: 5,
+      publishedAt: '2026-10-30T10:00:00.000Z',
+      runtime: { state: 'pending', revision: 5 },
+    });
+    expect(status.state).not.toBe('stale');
+  });
+
+  it('retries a dependent that exhausted its attempts when a library publishes', async () => {
+    jest.useFakeTimers();
+    packages.find.mockResolvedValue([
+      { id: 99, name: 'Game' },
+    ] as unknown as ScriptingPackage[]);
+    revisions.findOne.mockResolvedValue({
+      revision: 4,
+      publishedAt: new Date('2026-10-30T09:00:00.000Z'),
+    } as unknown as ScriptingPackageRevision);
+    delivery.findDependentRoomPackages.mockResolvedValue([
+      { packageId: 99, roomId: 7, revision: 4 },
+    ]);
+
+    await service.revisionPublished(42, 3);
+    service.onPackagesApplied('7', 42, 3, 1);
+    service.onModuleInit();
+    expect(runtime.sendPackage).toHaveBeenCalledTimes(2);
+
+    // Exhaust the dependent's attempts: two retries, then no `nextAttemptAt`,
+    // so only a fresh refresh can send it again.
+    service.onPackagesFailed('7', 99, 4, 'hash mismatch');
+    jest.advanceTimersByTime(10_000);
+    await flushAsync();
+    service.onPackagesFailed('7', 99, 4, 'hash mismatch');
+    jest.advanceTimersByTime(20_000);
+    await flushAsync();
+    service.onPackagesFailed('7', 99, 4, 'hash mismatch');
+    jest.advanceTimersByTime(120_000);
+    await flushAsync();
+
+    expect(runtime.sendPackage).toHaveBeenCalledTimes(4);
+    expect((await service.getStatuses('7'))[0]).toMatchObject({
+      packageId: 99,
+      state: 'failed',
+      runtime: { state: 'failed' },
+    });
+
+    await service.revisionPublished(42, 3);
+
+    expect(runtime.sendPackage).toHaveBeenCalledTimes(5);
+    expect(runtime.sendPackage).toHaveBeenLastCalledWith('7', 99, 4);
+    expect((await service.getStatuses('7'))[0]).toMatchObject({
+      packageId: 99,
+      state: 'pending',
+      runtime: { state: 'pending', error: null },
+    });
   });
 
   it('leaves the revision pending while the runtime is not running', async () => {

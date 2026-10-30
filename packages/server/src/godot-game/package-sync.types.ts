@@ -6,7 +6,9 @@
 export interface PackageRevisionDispatcher {
   /**
    * Notification payload is the package id and revision only. Receivers load
-   * the manifest and files over HTTP and verify hashes themselves.
+   * the manifest and files over HTTP and verify hashes themselves. A
+   * publication also refreshes the room packages that depend on the published
+   * one, since their runtime artifacts embed its bytes.
    */
   revisionPublished(packageId: number, revision: number): Promise<void>;
 }

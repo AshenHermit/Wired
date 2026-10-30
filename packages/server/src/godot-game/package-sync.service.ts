@@ -8,7 +8,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { PackageRevisionSyncState, PackageSyncStatus } from '@wired-io/shared';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
-import { PackageDeliveryService } from 'src/scripting-packages/package-delivery.service';
+import {
+  DependentRoomPackage,
+  PackageDeliveryService,
+} from 'src/scripting-packages/package-delivery.service';
 import { Repository } from 'typeorm';
 import { RoomRuntimeService } from './room-runtime.service';
 import { RuntimeObserver } from './room-runtime.types';
@@ -24,13 +27,6 @@ const DISPATCH_TIMEOUT_MS = 30_000;
 type RuntimeState = 'pending' | 'applied' | 'failed';
 type ClientState = 'pending' | 'ready' | 'failed';
 
-/** A room package that references a just-published package, as scanned. */
-type DependentRoomPackage = {
-  packageId: number;
-  roomId: number;
-  revision: number;
-};
-
 interface ClientSyncRecord {
   state: ClientState;
   revision: number;
@@ -42,7 +38,6 @@ interface SyncRecord {
   roomId: string;
   packageId: number;
   revision: number;
-  publishedAt: string;
   runtimeState: RuntimeState;
   runtimeError: string | null;
   runtimeUpdatedAt: string | null;
@@ -119,7 +114,7 @@ export class PackageSyncService
     }
 
     if (pkg.room) {
-      await this.dispatchOwnRevision(packageId, String(pkg.room.id), revision);
+      this.dispatchOwnRevision(packageId, String(pkg.room.id), revision);
     } else {
       this.logger.log(
         `Package ${packageId} is not bound to a room; revision ${revision} stays published only`,
@@ -182,12 +177,7 @@ export class PackageSyncService
       const key = this.recordKey(roomId, pkg.id);
       const existing = this.records.get(key);
       if (!existing || existing.revision !== latest.revision) {
-        const record = this.createRecord(
-          roomId,
-          pkg.id,
-          latest.revision,
-          latest.publishedAt.toISOString(),
-        );
+        const record = this.createRecord(roomId, pkg.id, latest.revision);
         this.records.set(key, record);
         this.dispatch(record);
         continue;
@@ -336,22 +326,18 @@ export class PackageSyncService
    * same-revision publish is idempotent for the package itself: only the
    * dependents of a library need refreshing in that case.
    */
-  private async dispatchOwnRevision(
+  private dispatchOwnRevision(
     packageId: number,
     roomId: string,
     revision: number,
-  ): Promise<void> {
+  ): void {
     const key = this.recordKey(roomId, packageId);
     const existing = this.records.get(key);
     if (existing && existing.revision === revision) {
       return;
     }
 
-    const row = await this.revisions.findOne({
-      where: { package: { id: packageId }, revision },
-    });
-    const publishedAt = (row?.publishedAt ?? new Date()).toISOString();
-    const record = this.createRecord(roomId, packageId, revision, publishedAt);
+    const record = this.createRecord(roomId, packageId, revision);
     this.records.set(key, record);
     this.dispatch(record);
   }
@@ -393,30 +379,33 @@ export class PackageSyncService
         roomId,
         dependent.packageId,
         dependent.revision,
-        new Date().toISOString(),
       );
       this.records.set(key, record);
       this.dispatch(record);
       return;
     }
 
-    existing.revision = dependent.revision;
-    existing.publishedAt = new Date().toISOString();
+    if (dependent.revision > existing.revision) {
+      // The scan is not authoritative: a lagging result must not downgrade a
+      // revision the runtime already adopted through `onPackagesApplied`.
+      existing.revision = dependent.revision;
+    }
+    // Clearing clients on a same-revision refresh is deliberate: the revision
+    // alone no longer identifies the artifact, so a late confirmation from the
+    // previous artifact may be accepted as if it were the new one.
     this.resetForDispatch(existing);
-    this.dispatch(existing, true);
+    this.dispatch(existing);
   }
 
   private createRecord(
     roomId: string,
     packageId: number,
     revision: number,
-    publishedAt: string,
   ): SyncRecord {
     return {
       roomId,
       packageId,
       revision,
-      publishedAt,
       runtimeState: 'pending',
       runtimeError: null,
       runtimeUpdatedAt: null,

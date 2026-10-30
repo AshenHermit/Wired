@@ -78,7 +78,7 @@ type LoadedRevision = {
 };
 
 /** One element of the result of `findDependentRoomPackages`. */
-type DependentRoomPackage = {
+export type DependentRoomPackage = {
   packageId: number;
   roomId: number;
   revision: number;
@@ -175,7 +175,7 @@ export class PackageDeliveryService {
    */
   async findDependentRoomPackages(
     packageId: number,
-  ): Promise<Array<{ packageId: number; roomId: number; revision: number }>> {
+  ): Promise<DependentRoomPackage[]> {
     const latestByPackage = await this.loadLatestPublishedRevisions();
     const root = latestByPackage.get(packageId);
     if (!root) {
