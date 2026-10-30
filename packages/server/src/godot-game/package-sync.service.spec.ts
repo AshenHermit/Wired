@@ -169,6 +169,25 @@ describe('PackageSyncService', () => {
       state: 'published',
       runtime: { state: 'pending', revision: 4 },
     });
+    // The status above looks the same with or without a record, so read the
+    // in-memory record itself to prove the publish created it.
+    const records = (
+      service as unknown as {
+        records: ReadonlyMap<
+          string,
+          {
+            revision: number;
+            runtimeState: string;
+            dispatchedAt: string | null;
+          }
+        >;
+      }
+    ).records;
+    expect(records.get('7:99')).toMatchObject({
+      revision: 4,
+      runtimeState: 'pending',
+      dispatchedAt: null,
+    });
 
     runtime.getRuntime.mockReturnValue({ state: 'running' });
     service.onModuleInit();
