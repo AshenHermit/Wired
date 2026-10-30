@@ -55,6 +55,11 @@ func _setup_packages(room: String) -> void:
 	_packages.name = "Packages"
 	add_child(_packages)
 	_packages.configure(_api_url(), room)
+	# Applied revisions have to reach live package scenes, so the reloader
+	# listens to the loader for as long as this scene lives.
+	var reloader := PackageReloader.new()
+	add_child(reloader)
+	reloader.setup(_packages)
 
 
 func _api_url() -> String:
