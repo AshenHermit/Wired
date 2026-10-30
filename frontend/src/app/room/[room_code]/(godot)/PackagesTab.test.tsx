@@ -4,7 +4,7 @@ import type {
   RoomPackageEntry,
   RoomPackagesController,
 } from "./use-room-packages";
-import { LocalChangesError } from "./use-room-packages";
+import { LocalChangesError, NewerRevisionError } from "./use-room-packages";
 import { PackagesTab } from "./PackagesTab";
 
 function entry(overrides: Partial<RoomPackageEntry> = {}): RoomPackageEntry {
@@ -48,6 +48,7 @@ function controller(
     createPackage: vi.fn().mockResolvedValue({ id: 7, name: "New" }),
     downloadPackage: vi.fn().mockResolvedValue(undefined),
     removePackage: vi.fn().mockResolvedValue(undefined),
+    adoptPackage: vi.fn().mockResolvedValue(undefined),
     emitPackage: vi.fn().mockResolvedValue(undefined),
   };
   return { ...base, ...overrides };
@@ -214,5 +215,62 @@ describe("PackagesTab", () => {
     expect(notLoadedEmit).toHaveProperty("disabled", true);
     fireEvent.click(loadedEmit);
     await waitFor(() => expect(emitPackage).toHaveBeenCalledWith(5));
+  });
+
+  it("adopts a leftover directory so its files can be published", async () => {
+    const adoptPackage = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PackagesTab
+        authorId={42}
+        packages={controller({
+          entries: [
+            entry({
+              status: "local-changes",
+              loaded: false,
+              loadedRevision: null,
+              localChanges: ["scripts/hero.gd"],
+            }),
+          ],
+          adoptPackage,
+        })}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /использовать каталог/i }),
+    );
+    await waitFor(() => expect(adoptPackage).toHaveBeenCalledWith(5));
+  });
+
+  it("asks before emitting over a newer published revision", async () => {
+    const emitPackage = vi
+      .fn()
+      .mockRejectedValueOnce(new NewerRevisionError(5, 2, 3))
+      .mockResolvedValueOnce(undefined);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(
+      <PackagesTab
+        authorId={42}
+        packages={controller({
+          entries: [
+            entry({
+              status: "new-revision",
+              publishedRevision: 3,
+              loadedRevision: 2,
+            }),
+          ],
+          emitPackage,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /emit/i }));
+
+    await waitFor(() => expect(emitPackage).toHaveBeenCalledTimes(2));
+    expect(emitPackage).toHaveBeenLastCalledWith(5, { force: true });
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("ревизия 3"),
+    );
   });
 });

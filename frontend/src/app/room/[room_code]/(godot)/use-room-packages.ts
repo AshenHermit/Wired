@@ -85,7 +85,11 @@ export type RoomPackagesController = {
     packageId: number,
     options?: { force?: boolean },
   ) => Promise<void>;
-  emitPackage: (packageId: number) => Promise<void>;
+  adoptPackage: (packageId: number) => Promise<void>;
+  emitPackage: (
+    packageId: number,
+    options?: { force?: boolean },
+  ) => Promise<void>;
 };
 
 /**
@@ -105,6 +109,27 @@ export class LocalChangesError extends Error {
   }
 }
 
+/**
+ * Raised when Emit would replace a published revision the panel already knows
+ * about. The panel asks for confirmation and repeats the action with `force`.
+ */
+export class NewerRevisionError extends Error {
+  constructor(
+    public readonly packageId: number,
+    public readonly loadedRevision: number | null,
+    public readonly publishedRevision: number,
+  ) {
+    super(
+      `В пакете ${packageId} уже опубликована ревизия ${publishedRevision}, а в редакторе ${
+        loadedRevision === null || loadedRevision === 0
+          ? "ревизия не загружена"
+          : `ревизия ${loadedRevision}`
+      }`,
+    );
+    this.name = "NewerRevisionError";
+  }
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -121,6 +146,25 @@ function mergePackages(
     changed = true;
   }
   return changed ? result : current;
+}
+
+/**
+ * A package can be created and published by another user while this editor is
+ * open. The room prop is a snapshot, so such packages enter the list from the
+ * status endpoint. Only its name and published revision are known here.
+ */
+function packageFromStatus(status: PackageSyncStatus): ScriptingPackage {
+  const timestamp = status.publishedAt ?? "";
+  return {
+    id: status.packageId,
+    name: status.name,
+    version: "",
+    description: "",
+    dependencies: [],
+    scripts: [],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
 }
 
 function buildEntries(
@@ -205,6 +249,11 @@ export function useRoomPackages(
 
   const packagesRef = React.useRef<ScriptingPackage[]>(packages);
   const loadedRef = React.useRef<Map<number, PackageBaseline>>(new Map());
+  const snapshotsRef = React.useRef<Map<number, Record<string, string>>>(
+    new Map(),
+  );
+  const remoteRef = React.useRef<Map<number, PackageSyncStatus>>(new Map());
+  const inFlightRef = React.useRef<Set<number>>(new Set());
   const filesRef = React.useRef<PackageFileSystem | null>(null);
   const mountedRef = React.useRef(false);
   const requestRef = React.useRef(0);
@@ -243,39 +292,90 @@ export function useRoomPackages(
     [actions],
   );
 
-  const refresh = React.useCallback(async (): Promise<void> => {
-    const request = ++requestRef.current;
-    const files = filesRef.current;
-    try {
-      const status = await getRoomPackages(roomId);
-      const remote = new Map(
-        status.packages.map((pkg) => [pkg.packageId, pkg]),
-      );
+  const load = React.useCallback(
+    async (local: boolean): Promise<void> => {
+      const request = ++requestRef.current;
+      const files = filesRef.current;
+      try {
+        const status = await getRoomPackages(roomId);
+        const remote = new Map(
+          status.packages.map((pkg) => [pkg.packageId, pkg]),
+        );
+        remoteRef.current = remote;
 
-      const snapshots = new Map<number, Record<string, string>>();
-      if (files) {
-        for (const pkg of packagesRef.current) {
-          try {
-            snapshots.set(pkg.id, await files.snapshot(pkg.id));
-          } catch {
-            snapshots.set(pkg.id, {});
-          }
+        let nextPackages = packagesRef.current;
+        const added = status.packages
+          .filter(
+            (pkg) => !nextPackages.some((existing) => existing.id === pkg.packageId),
+          )
+          .map(packageFromStatus);
+        if (added.length > 0) {
+          nextPackages = [...nextPackages, ...added];
+          packagesRef.current = nextPackages;
         }
-      }
 
-      if (!mountedRef.current || request !== requestRef.current) return;
-      setEntries(
-        buildEntries(packagesRef.current, remote, loadedRef.current, snapshots, files),
-      );
-      setStatusLoaded(true);
-      setError(null);
-    } catch (cause) {
-      if (!mountedRef.current || request !== requestRef.current) return;
-      setError(
-        `Не удалось получить пакеты комнаты: ${errorMessage(cause)}`,
-      );
-    }
-  }, [roomId]);
+        // Hashing every package on every poll competes with the editor for
+        // CPU. Status polls reuse the last snapshots; local changes are
+        // recomputed on open, focus, manual refresh and around explicit actions.
+        let snapshots = snapshotsRef.current;
+        if (files && local) {
+          const fresh = new Map<number, Record<string, string>>();
+          for (const pkg of nextPackages) {
+            try {
+              fresh.set(pkg.id, await files.snapshot(pkg.id));
+            } catch {
+              fresh.set(pkg.id, {});
+            }
+          }
+          snapshots = fresh;
+          snapshotsRef.current = fresh;
+        }
+
+        if (!mountedRef.current || request !== requestRef.current) return;
+        if (added.length > 0) setPackages(nextPackages);
+        setEntries(
+          buildEntries(
+            nextPackages,
+            remote,
+            loadedRef.current,
+            snapshots,
+            files,
+          ),
+        );
+        setStatusLoaded(true);
+        setError(null);
+      } catch (cause) {
+        if (!mountedRef.current || request !== requestRef.current) return;
+        setError(
+          `Не удалось получить пакеты комнаты: ${errorMessage(cause)}`,
+        );
+      }
+    },
+    [roomId],
+  );
+
+  const refresh = React.useCallback(
+    (): Promise<void> => load(true),
+    [load],
+  );
+
+  const roomIdRef = React.useRef(roomId);
+  React.useEffect(() => {
+    if (roomIdRef.current === roomId) return;
+    roomIdRef.current = roomId;
+    loadedRef.current.clear();
+    snapshotsRef.current.clear();
+    remoteRef.current.clear();
+    inFlightRef.current.clear();
+    filesRef.current = null;
+    packagesRef.current = roomPackages;
+    setPackages(roomPackages);
+    setEntries([]);
+    setActions({});
+    setFsReady(false);
+    setStatusLoaded(false);
+    setError(null);
+  }, [roomId, roomPackages]);
 
   React.useEffect(() => {
     void refresh();
@@ -285,18 +385,23 @@ export function useRoomPackages(
     if (!fsReady) return;
     const tick = () => {
       if (document.visibilityState === "visible") {
+        void load(false);
+      }
+    };
+    const focus = () => {
+      if (document.visibilityState === "visible") {
         void refresh();
       }
     };
     const timer = window.setInterval(tick, POLL_MS);
-    window.addEventListener("focus", tick);
-    document.addEventListener("visibilitychange", tick);
+    window.addEventListener("focus", focus);
+    document.addEventListener("visibilitychange", focus);
     return () => {
       window.clearInterval(timer);
-      window.removeEventListener("focus", tick);
-      document.removeEventListener("visibilitychange", tick);
+      window.removeEventListener("focus", focus);
+      document.removeEventListener("visibilitychange", focus);
     };
-  }, [fsReady, refresh]);
+  }, [fsReady, load, refresh]);
 
   const beforeEditorStart = React.useCallback(
     async (editor: GodotEditorInstance): Promise<void> => {
@@ -366,23 +471,47 @@ export function useRoomPackages(
     [refresh, roomId, setAction],
   );
 
+  const beginAction = React.useCallback(
+    (packageId: number) => {
+      if (inFlightRef.current.has(packageId)) {
+        throw new Error(`Действие с пакетом ${packageId} уже выполняется`);
+      }
+      inFlightRef.current.add(packageId);
+      setAction(packageId, {
+        busy: true,
+        progress: null,
+        notice: null,
+        error: null,
+      });
+    },
+    [setAction],
+  );
+
+  const endAction = React.useCallback(
+    (packageId: number) => {
+      inFlightRef.current.delete(packageId);
+      setAction(packageId, { busy: false, progress: null });
+    },
+    [setAction],
+  );
+
   const downloadPackage = React.useCallback(
     async (
       packageId: number,
       options: { force?: boolean } = {},
     ): Promise<void> => {
-      const files = requireFs();
-      const baseline = loadedRef.current.get(packageId) ?? null;
-      const current = await files.snapshot(packageId);
-      const changed = baseline
-        ? changedPackageFiles(baseline.files, current)
-        : Object.keys(current);
-      if (!options.force && changed.length > 0) {
-        throw new LocalChangesError(packageId, changed);
-      }
-
-      setAction(packageId, { busy: true, progress: null, notice: null, error: null });
+      beginAction(packageId);
       try {
+        const files = requireFs();
+        const baseline = loadedRef.current.get(packageId) ?? null;
+        const current = await files.snapshot(packageId);
+        const changed = baseline
+          ? changedPackageFiles(baseline.files, current)
+          : Object.keys(current);
+        if (!options.force && changed.length > 0) {
+          throw new LocalChangesError(packageId, changed);
+        }
+
         const result = await reconcilePackageRevision(packageId, files, null, {
           force: true,
           onProgress: (currentCount, total) =>
@@ -404,14 +533,15 @@ export function useRoomPackages(
         });
         await refresh();
       } catch (cause) {
+        if (cause instanceof LocalChangesError) throw cause;
         const message = `Не удалось скачать пакет: ${errorMessage(cause)}`;
         setAction(packageId, { error: message });
         throw new Error(message);
       } finally {
-        setAction(packageId, { busy: false, progress: null });
+        endAction(packageId);
       }
     },
-    [refresh, setAction],
+    [beginAction, endAction, refresh, setAction],
   );
 
   const removePackage = React.useCallback(
@@ -419,24 +549,24 @@ export function useRoomPackages(
       packageId: number,
       options: { force?: boolean } = {},
     ): Promise<void> => {
-      const files = requireFs();
-      if (!files.exists(packageId)) {
-        loadedRef.current.delete(packageId);
-        await refresh();
-        return;
-      }
-
-      const baseline = loadedRef.current.get(packageId) ?? null;
-      const current = await files.snapshot(packageId);
-      const changed = baseline
-        ? changedPackageFiles(baseline.files, current)
-        : Object.keys(current);
-      if (!options.force && changed.length > 0) {
-        throw new LocalChangesError(packageId, changed);
-      }
-
-      setAction(packageId, { busy: true, progress: null, notice: null, error: null });
+      beginAction(packageId);
       try {
+        const files = requireFs();
+        if (!files.exists(packageId)) {
+          loadedRef.current.delete(packageId);
+          await refresh();
+          return;
+        }
+
+        const baseline = loadedRef.current.get(packageId) ?? null;
+        const current = await files.snapshot(packageId);
+        const changed = baseline
+          ? changedPackageFiles(baseline.files, current)
+          : Object.keys(current);
+        if (!options.force && changed.length > 0) {
+          throw new LocalChangesError(packageId, changed);
+        }
+
         await files.deletePackage(packageId);
         await files.sync();
         loadedRef.current.delete(packageId);
@@ -445,26 +575,70 @@ export function useRoomPackages(
         });
         await refresh();
       } catch (cause) {
+        if (cause instanceof LocalChangesError) throw cause;
         const message = `Не удалось убрать пакет: ${errorMessage(cause)}`;
         setAction(packageId, { error: message });
         throw new Error(message);
       } finally {
-        setAction(packageId, { busy: false });
+        endAction(packageId);
       }
     },
-    [refresh, setAction],
+    [beginAction, endAction, refresh, setAction],
+  );
+
+  const adoptPackage = React.useCallback(
+    async (packageId: number): Promise<void> => {
+      beginAction(packageId);
+      try {
+        const files = requireFs();
+        if (!files.exists(packageId)) {
+          throw new Error("каталог пакета не найден в редакторе");
+        }
+        const snapshot = await files.snapshot(packageId);
+        loadedRef.current.set(packageId, { revision: 0, files: snapshot });
+        setAction(packageId, {
+          notice:
+            "Существующий каталог подключён к пакету. Emit опубликует его файлы.",
+        });
+        await refresh();
+      } catch (cause) {
+        const message = `Не удалось подключить каталог пакета: ${errorMessage(cause)}`;
+        setAction(packageId, { error: message });
+        throw new Error(message);
+      } finally {
+        endAction(packageId);
+      }
+    },
+    [beginAction, endAction, refresh, setAction],
   );
 
   const emitPackage = React.useCallback(
-    async (packageId: number): Promise<void> => {
+    async (
+      packageId: number,
+      options: { force?: boolean } = {},
+    ): Promise<void> => {
       const files = requireFs();
-      if (!loadedRef.current.has(packageId)) {
+      const baseline = loadedRef.current.get(packageId);
+      if (!baseline) {
         throw new Error(
           "Пакет не загружен в редактор: Emit доступен только для загруженного пакета",
         );
       }
 
-      setAction(packageId, { busy: true, progress: null, notice: null, error: null });
+      const remote = remoteRef.current.get(packageId);
+      if (
+        !options.force &&
+        remote &&
+        remote.revision > baseline.revision
+      ) {
+        throw new NewerRevisionError(
+          packageId,
+          baseline.revision,
+          remote.revision,
+        );
+      }
+
+      beginAction(packageId);
       try {
         const result = await publishPackageFiles(
           packageId,
@@ -482,14 +656,15 @@ export function useRoomPackages(
         });
         await refresh();
       } catch (cause) {
+        if (cause instanceof NewerRevisionError) throw cause;
         const message = `Не удалось опубликовать пакет: ${errorMessage(cause)}`;
         setAction(packageId, { error: message });
         throw new Error(message);
       } finally {
-        setAction(packageId, { busy: false, progress: null });
+        endAction(packageId);
       }
     },
-    [refresh, setAction],
+    [beginAction, endAction, refresh, setAction],
   );
 
   return {
@@ -504,6 +679,7 @@ export function useRoomPackages(
     createPackage,
     downloadPackage,
     removePackage,
+    adoptPackage,
     emitPackage,
   };
 }

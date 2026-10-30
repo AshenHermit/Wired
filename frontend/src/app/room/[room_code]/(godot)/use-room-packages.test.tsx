@@ -9,7 +9,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "@/utils/sha256";
 import type { GodotEditorInstance } from "./GodotEditorInstance";
 import type { EmscriptenFs } from "./godot-packages-fs";
-import { LocalChangesError, useRoomPackages } from "./use-room-packages";
+import {
+  LocalChangesError,
+  NewerRevisionError,
+  useRoomPackages,
+} from "./use-room-packages";
 
 vi.mock("@/api/services/godot-game", () => ({
   getRoomPackages: vi.fn(),
@@ -32,6 +36,7 @@ const encoder = new TextEncoder();
 class FakeFs implements EmscriptenFs {
   files = new Map<string, Uint8Array>();
   dirs = new Set<string>(["/"]);
+  reads = 0;
 
   mkdirTree(path: string) {
     let current = "";
@@ -49,6 +54,7 @@ class FakeFs implements EmscriptenFs {
   }
 
   readFile(path: string) {
+    this.reads += 1;
     const data = this.files.get(path);
     if (!data) throw new Error(`ENOENT: ${path}`);
     return Uint8Array.from(data);
@@ -458,5 +464,143 @@ describe("useRoomPackages", () => {
       await result.current.downloadPackage(5, { force: true });
     });
     expect(fs.read(FILE)).toBe("extends Node");
+  });
+
+  it("adopts a leftover directory so its files can be emitted", async () => {
+    const { fs, editor } = makeEditor();
+    fs.put(FILE, "stale draft");
+
+    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
+    await act(async () => {
+      await result.current.beforeEditorStart(editor);
+    });
+    await waitFor(() => {
+      expect(
+        result.current.entries.find((item) => item.packageId === 5)?.status,
+      ).toBe("local-changes");
+    });
+
+    await act(async () => {
+      await result.current.adoptPackage(5);
+    });
+    expect(
+      result.current.entries.find((item) => item.packageId === 5),
+    ).toMatchObject({
+      loaded: true,
+      loadedRevision: 0,
+      localChanges: [],
+      status: "new-revision",
+    });
+
+    await act(async () => {
+      await result.current.emitPackage(5, { force: true });
+    });
+    expect(packagesApi.createPackageRevision).toHaveBeenCalledWith(5, {
+      files: [expect.objectContaining({ filepath: "scripts/hero.gd" })],
+    });
+    expect(fs.read(FILE)).toBe("stale draft");
+  });
+
+  it("asks before emitting over a newer published revision", async () => {
+    const { editor } = makeEditor();
+    vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
+      await manifestOf("extends Node"),
+    );
+
+    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
+    await act(async () => {
+      await result.current.beforeEditorStart(editor);
+    });
+    await act(async () => {
+      await result.current.downloadPackage(5);
+    });
+
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValue(
+      roomStatus([{ id: 5, revision: 3 }]),
+    );
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    await expect(result.current.emitPackage(5)).rejects.toBeInstanceOf(
+      NewerRevisionError,
+    );
+    expect(packagesApi.publishPackageRevision).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.emitPackage(5, { force: true });
+    });
+    expect(packagesApi.publishPackageRevision).toHaveBeenCalledWith(5, 3);
+  });
+
+  it("rejects overlapping actions on the same package", async () => {
+    const { editor } = makeEditor();
+    let resolveManifest: (manifest: PackageManifest) => void = () => {};
+    vi.mocked(packagesApi.getPackageManifest).mockReturnValue(
+      new Promise((resolve) => {
+        resolveManifest = resolve;
+      }),
+    );
+
+    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
+    await act(async () => {
+      await result.current.beforeEditorStart(editor);
+    });
+
+    const first = result.current.downloadPackage(5);
+    await expect(result.current.downloadPackage(5)).rejects.toThrow(
+      /уже выполняется/,
+    );
+
+    await act(async () => {
+      resolveManifest(await manifestOf("extends Node"));
+      await first;
+    });
+  });
+
+  it("adds newly published room packages from the status endpoint", async () => {
+    const { editor } = makeEditor();
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValue(
+      roomStatus([
+        { id: 5, revision: 2 },
+        { id: 6, revision: 4 },
+      ]),
+    );
+
+    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
+    await act(async () => {
+      await result.current.beforeEditorStart(editor);
+    });
+
+    expect(
+      result.current.entries.find((item) => item.packageId === 6),
+    ).toMatchObject({
+      name: "Other",
+      version: "",
+      publishedRevision: 4,
+      status: "not-loaded",
+    });
+  });
+
+  it("polls statuses without hashing editor files", async () => {
+    vi.useFakeTimers();
+    try {
+      const { fs, editor } = makeEditor();
+      const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
+      await act(async () => {
+        await result.current.beforeEditorStart(editor);
+      });
+
+      fs.put(FILE, "local draft");
+      fs.reads = 0;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_500);
+      });
+
+      expect(gameApi.getRoomPackages).toHaveBeenCalledTimes(3);
+      expect(fs.reads).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

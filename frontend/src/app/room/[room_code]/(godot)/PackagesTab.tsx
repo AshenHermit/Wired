@@ -4,6 +4,7 @@ import * as React from "react";
 import {
   CheckIcon,
   DownloadIcon,
+  FolderOpenIcon,
   Loader2Icon,
   PackageIcon,
   PlusIcon,
@@ -17,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   LocalChangesError,
+  NewerRevisionError,
   type RoomPackageEntry,
   type RoomPackageStatus,
   type RoomPackagesController,
@@ -66,11 +68,15 @@ function PackageCard({
   packages,
   onDownload,
   onRemove,
+  onAdopt,
+  onEmit,
 }: {
   entry: RoomPackageEntry;
   packages: RoomPackagesController;
   onDownload: (entry: RoomPackageEntry) => void;
   onRemove: (entry: RoomPackageEntry) => void;
+  onAdopt: (entry: RoomPackageEntry) => void;
+  onEmit: (entry: RoomPackageEntry) => void;
 }) {
   const action = packages.actionFor(entry.packageId);
   const disabled = !packages.fsReady || action.busy;
@@ -92,7 +98,7 @@ function PackageCard({
             </span>
           </div>
           <div className="mt-1 text-xs text-white/50">
-            версия {entry.version}
+            {entry.version ? `версия ${entry.version}` : "версия не указана"}
             {entry.publishedRevision !== null
               ? ` · опубликована ревизия ${entry.publishedRevision}`
               : " · опубликованных ревизий нет"}
@@ -131,11 +137,26 @@ function PackageCard({
               Убрать из редактора
             </Button>
           )}
+          {!entry.loaded &&
+            entry.inEditor &&
+            entry.localChanges.length > 0 && (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={disabled}
+                onClick={() => onAdopt(entry)}
+                title="Оставить существующие файлы и разрешить их публикацию через Emit"
+              >
+                <FolderOpenIcon className="size-4" />
+                Использовать каталог
+              </Button>
+            )}
           <Button
             type="button"
             size="sm"
             disabled={disabled || !entry.loaded}
-            onClick={() => void packages.emitPackage(entry.packageId)}
+            onClick={() => onEmit(entry)}
             title={
               entry.loaded
                 ? "Опубликовать файлы каталога пакета"
@@ -291,6 +312,36 @@ export function PackagesTab({
     [packages],
   );
 
+  const handleEmit = React.useCallback(
+    async (entry: RoomPackageEntry) => {
+      try {
+        await packages.emitPackage(entry.packageId);
+      } catch (error) {
+        if (!(error instanceof NewerRevisionError)) return;
+        if (
+          !window.confirm(
+            `В пакете «${entry.name}» уже опубликована ревизия ${error.publishedRevision}, ` +
+              `а в редакторе ${
+                error.loadedRevision === null || error.loadedRevision === 0
+                  ? "ревизия не загружена"
+                  : `ревизия ${error.loadedRevision}`
+              }.\n\n` +
+              `Emit опубликует файлы из редактора как новую ревизию и заменит ` +
+              `опубликованную ревизию ${error.publishedRevision}. Продолжить?`,
+          )
+        ) {
+          return;
+        }
+        try {
+          await packages.emitPackage(entry.packageId, { force: true });
+        } catch {
+          // The panel already shows the error of the failed action.
+        }
+      }
+    },
+    [packages],
+  );
+
   const handleCreate = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!authorId) {
@@ -328,9 +379,8 @@ export function PackagesTab({
             type="button"
             size="sm"
             variant="outline"
-            disabled={!packages.fsReady}
             onClick={() => void packages.refresh()}
-            title="Проверить опубликованные ревизии"
+            title="Проверить опубликованные ревизии и локальные изменения"
           >
             <RefreshCwIcon className="size-4" />
             Обновить
@@ -416,6 +466,12 @@ export function PackagesTab({
                 packages={packages}
                 onDownload={(pkg) => void handleDownload(pkg)}
                 onRemove={(pkg) => void handleRemove(pkg)}
+                onAdopt={(pkg) =>
+                  void packages.adoptPackage(pkg.packageId).catch(() => {
+                    // The panel already shows the error of the failed action.
+                  })
+                }
+                onEmit={(pkg) => void handleEmit(pkg)}
               />
             ))}
           </ul>
