@@ -38,7 +38,7 @@ const READY_PATTERN = /^WIRED_SERVER_READY room=(\S+) port=(\d+) bind=(\S+)/;
 const AUTH_OK_PATTERN = /^WIRED_AUTH_OK peer=(\d+) player=\d+ room=(\S+)/;
 const PLAYER_LEFT_PATTERN = /^WIRED_PLAYER_LEFT peer=(\d+) player=\d+/;
 const PACKAGES_APPLIED_PATTERN =
-  /^WIRED_PACKAGES_APPLIED package=(\d+) revision=(\d+) files=(\d+)/;
+  /^WIRED_PACKAGES_APPLIED package=(\d+) revision=(\d+)(?: artifact=\S+)? files=(\d+)/;
 const PACKAGES_FAILED_PATTERN =
   /^WIRED_PACKAGES_SYNC_FAILED package=(\d+) revision=(\d+) (?:error=)?(.*)$/;
 const CLIENT_PACKAGES_READY_PATTERN =

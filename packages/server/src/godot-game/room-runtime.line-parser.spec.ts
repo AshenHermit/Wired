@@ -28,6 +28,14 @@ describe('parseRuntimeLine', () => {
     ).toEqual({ kind: 'packages-applied', packageId: 42, revision: 3, files: 7 });
   });
 
+  it('parses a confirmation with an artifact key', () => {
+    expect(
+      parseRuntimeLine(
+        'WIRED_PACKAGES_APPLIED package=42 revision=3 artifact=abc123 files=7',
+      ),
+    ).toEqual({ kind: 'packages-applied', packageId: 42, revision: 3, files: 7 });
+  });
+
   it('parses a package application failure', () => {
     expect(
       parseRuntimeLine(
