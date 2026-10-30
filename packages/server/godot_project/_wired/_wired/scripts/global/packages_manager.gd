@@ -57,14 +57,19 @@ func set_room(room_id: String) -> void:
 
 
 ## Overrides the API root after `configure`. The Web build is served from the
-## frontend origin and learns the backend only from the host bridge, so an empty
-## value keeps the current URL (`--api-url` / `WIRED_API_URL` / default).
-func set_api_base(url: String) -> void:
+## frontend origin and learns the backend only from the host bridge, so only an
+## absolute http(s) URL is accepted. Returns false when the value is unusable,
+## so the caller can report it instead of silently keeping the default.
+func set_api_base(url: String) -> bool:
 	var value := url.strip_edges()
 	if value.is_empty():
-		return
+		return false
+	if not (value.begins_with("http://") or value.begins_with("https://")):
+		return false
+	var previous := base_url
 	base_url = value.trim_suffix("/")
-	print("WIRED_PACKAGES_API api=%s" % base_url)
+	print("WIRED_PACKAGES_API_OVERRIDE api=%s previous=%s" % [base_url, previous])
+	return true
 
 
 func packages_root() -> String:

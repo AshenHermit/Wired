@@ -22,7 +22,10 @@ type GamePhase =
   | "reconnecting"
   | "error";
 
-const EXPORT_URL = "/api/game-export/index.html";
+// The backend is proxied under a single prefix on the frontend origin: the
+// export is fetched from it and the Web build asks for package files below it.
+const API_PREFIX = "/api";
+const EXPORT_URL = `${API_PREFIX}/game-export/index.html`;
 const MAX_AUTO_RETRIES = 3;
 // The engine bundle is ~36 MB, so a cold load on a slow link can take far
 // longer than 30 seconds. Export assets are revalidated with ETags, so this
@@ -128,9 +131,9 @@ export function GameTab({ room }: { room: Room }) {
         endpoint: connection.endpoint,
         ticket: connection.ticket,
         room: connection.roomId,
-        // The Web build cannot guess the backend: it is proxied under `/api`
-        // on the same origin that serves the Game tab.
-        apiBase: `${window.location.origin}/api`,
+        // The Web build cannot guess the backend: it is proxied under the same
+        // prefix that serves the Game tab.
+        apiBase: `${window.location.origin}${API_PREFIX}`,
       });
       clearHandshakeTimer();
       handshakeTimerRef.current = window.setTimeout(() => {

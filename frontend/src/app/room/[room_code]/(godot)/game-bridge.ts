@@ -5,6 +5,14 @@
  * The game ticket travels only inside `wired:configure`, after the iframe
  * reports `wired:game-ready`. It must never be put in a URL or a log.
  */
+
+/**
+ * Payload of `wired:configure`.
+ *
+ * `shell.html`'s `acceptConfig` copies these fields one by one into the engine
+ * config instead of forwarding the object, so a new field is invisible to
+ * GDScript until it is added there as well.
+ */
 export type GameConfigurePayload = {
   endpoint: string;
   ticket: string;

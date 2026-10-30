@@ -125,19 +125,38 @@
 					}
 				}
 
+				// The engine must reach the backend over the origin that serves
+				// this page: an arbitrary host in the payload would turn the
+				// package loader into a cross-origin fetch. Values that cannot
+				// be parsed or point elsewhere are dropped, never thrown.
+				function sameOriginApiBase(value) {
+					if (!/^https?:\/\/\S+$/.test(value)) {
+						return '';
+					}
+					try {
+						if (new URL(value).origin !== window.location.origin) {
+							return '';
+						}
+					} catch (error) {
+						return '';
+					}
+					return value;
+				}
+
 				function acceptConfig(data) {
 					var payload = data.payload || {};
 					var endpoint = typeof payload.endpoint === 'string' ? payload.endpoint : '';
 					var ticket = typeof payload.ticket === 'string' ? payload.ticket : '';
 					var room = payload.room;
-					// Optional same-origin API root for the package loader. An
-					// unusable value is dropped so the engine keeps its own
-					// default instead of failing the handshake.
+					// Optional API root for the package loader. It must be an
+					// absolute http(s) URL on this very origin, otherwise the
+					// engine would fetch the backend cross-origin or silently
+					// fall back to its own default. Anything unusable is
+					// dropped before the engine sees it.
 					var apiBase =
-						typeof payload.apiBase === 'string' ? payload.apiBase : '';
-					if (!/^https?:\/\/\S+$/.test(apiBase)) {
-						apiBase = '';
-					}
+						typeof payload.apiBase === 'string'
+							? sameOriginApiBase(payload.apiBase)
+							: '';
 
 					if (!/^wss?:\/\/\S+$/.test(endpoint)) {
 						return false;
