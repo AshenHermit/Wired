@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -84,6 +85,8 @@ type LoadedRevision = {
  */
 @Injectable()
 export class PackageDeliveryService {
+  private readonly logger = new Logger(PackageDeliveryService.name);
+
   /** Artifacts currently being built, so concurrent calls share one build. */
   private readonly inFlight = new Map<string, Promise<RuntimeArtifact>>();
   /**
@@ -141,6 +144,120 @@ export class PackageDeliveryService {
       path: resolvePackagePath(artifact.dir, filepath),
       size: entry.size,
     };
+  }
+
+  /**
+   * Finds every room package that (transitively) references `packageId`, so a
+   * publication can re-dispatch the runtimes that consume it as a library.
+   *
+   * Loads the latest published revision of every package (global ones
+   * included, since a global library can sit between two room packages), reads
+   * the textual files and builds a reverse reference graph, then walks it from
+   * `packageId`. Only room packages are returned, sorted by `packageId`, and
+   * `packageId` itself is never included. When `packageId` belongs to a room,
+   * dependents from other rooms are pruned: a room package may only reference
+   * same-room or global packages. A package whose files cannot be read is
+   * logged and skipped rather than failing the publication.
+   */
+  async findDependentRoomPackages(
+    packageId: number,
+  ): Promise<Array<{ packageId: number; roomId: number; revision: number }>> {
+    const revisions = await this.revisionsRepository.find({
+      where: { status: 'published' },
+      relations: ['package', 'package.room'],
+      order: { revision: 'DESC' },
+    });
+
+    // Latest published revision per package; the DESC order makes the first
+    // occurrence of each package the newest revision.
+    const latestByPackage = new Map<
+      number,
+      { revision: number; files: PackageFileEntry[]; roomId: number | null }
+    >();
+    for (const row of revisions) {
+      const id = row.package.id;
+      if (latestByPackage.has(id)) {
+        continue;
+      }
+      latestByPackage.set(id, {
+        revision: row.revision,
+        files: row.files,
+        roomId: row.package.room?.id ?? null,
+      });
+    }
+
+    // Reverse graph: referenced package -> packages that reference it.
+    const dependentsByReferenced = new Map<number, Set<number>>();
+    for (const [id, entry] of latestByPackage) {
+      let references: PackageFileReference[];
+      try {
+        references = await this.collectRevisionReferences(id, entry);
+      } catch (error) {
+        this.logger.warn(
+          `Skipping package ${id} during dependent scan: ${(error as Error).message}`,
+        );
+        continue;
+      }
+      for (const ref of references) {
+        if (ref.packageId === id) {
+          continue;
+        }
+        const dependents = dependentsByReferenced.get(ref.packageId);
+        if (dependents) {
+          dependents.add(id);
+        } else {
+          dependentsByReferenced.set(ref.packageId, new Set([id]));
+        }
+      }
+    }
+
+    const root = latestByPackage.get(packageId);
+    if (!root) {
+      return [];
+    }
+
+    const result: Array<{
+      packageId: number;
+      roomId: number;
+      revision: number;
+    }> = [];
+    const visited = new Set<number>([packageId]);
+    const queue = [packageId];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const dependents = dependentsByReferenced.get(current);
+      if (!dependents) {
+        continue;
+      }
+      for (const dependentId of dependents) {
+        if (visited.has(dependentId)) {
+          continue;
+        }
+        visited.add(dependentId);
+        const entry = latestByPackage.get(dependentId);
+        if (!entry) {
+          continue;
+        }
+        if (entry.roomId === null) {
+          // A global package has no runtime of its own, but is a valid hop.
+          queue.push(dependentId);
+          continue;
+        }
+        if (root.roomId !== null && entry.roomId !== root.roomId) {
+          // A room package in another room cannot depend on this package.
+          continue;
+        }
+        result.push({
+          packageId: dependentId,
+          roomId: entry.roomId,
+          revision: entry.revision,
+        });
+        queue.push(dependentId);
+      }
+    }
+
+    result.sort((a, b) => a.packageId - b.packageId);
+    return result;
   }
 
   /**
@@ -429,6 +546,32 @@ export class PackageDeliveryService {
     this.fileBytes.set(key, data);
     this.fileCacheBytes += data.byteLength;
     return data;
+  }
+
+  /**
+   * Reads the textual files of a revision and collects every cross-package
+   * reference they contain. Binary files are skipped. Throws when a file
+   * cannot be read or a text file fails to decode, so callers can skip the
+   * whole package rather than building a partial reference graph.
+   */
+  private async collectRevisionReferences(
+    packageId: number,
+    entry: { revision: number; files: PackageFileEntry[] },
+  ): Promise<PackageFileReference[]> {
+    const references: PackageFileReference[] = [];
+    for (const file of entry.files) {
+      if (!isTextPackageFile(file.filepath)) {
+        continue;
+      }
+      const data = await this.readFileBytes(
+        packageId,
+        entry.revision,
+        file.filepath,
+      );
+      const text = decodePackageText(file.filepath, data);
+      references.push(...collectPackageReferences(text));
+    }
+    return references;
   }
 
   private artifactDir(
