@@ -77,6 +77,20 @@ type LoadedRevision = {
   room: { id: number } | null;
 };
 
+/** One element of the result of `findDependentRoomPackages`. */
+type DependentRoomPackage = {
+  packageId: number;
+  roomId: number;
+  revision: number;
+};
+
+/** A package's latest usable published revision, as seen by the scan. */
+type LatestPublishedRevision = {
+  revision: number;
+  files: PackageFileEntry[];
+  roomId: number | null;
+};
+
 /**
  * Builds and caches per-room runtime artifacts from published raw package
  * files, rewrites package references to their runtime locations, verifies the
@@ -162,65 +176,16 @@ export class PackageDeliveryService {
   async findDependentRoomPackages(
     packageId: number,
   ): Promise<Array<{ packageId: number; roomId: number; revision: number }>> {
-    const revisions = await this.revisionsRepository.find({
-      where: { status: 'published' },
-      relations: ['package', 'package.room'],
-      order: { revision: 'DESC' },
-    });
-
-    // Latest published revision per package; the DESC order makes the first
-    // occurrence of each package the newest revision.
-    const latestByPackage = new Map<
-      number,
-      { revision: number; files: PackageFileEntry[]; roomId: number | null }
-    >();
-    for (const row of revisions) {
-      const id = row.package.id;
-      if (latestByPackage.has(id)) {
-        continue;
-      }
-      latestByPackage.set(id, {
-        revision: row.revision,
-        files: row.files,
-        roomId: row.package.room?.id ?? null,
-      });
-    }
-
-    // Reverse graph: referenced package -> packages that reference it.
-    const dependentsByReferenced = new Map<number, Set<number>>();
-    for (const [id, entry] of latestByPackage) {
-      let references: PackageFileReference[];
-      try {
-        references = await this.collectRevisionReferences(id, entry);
-      } catch (error) {
-        this.logger.warn(
-          `Skipping package ${id} during dependent scan: ${(error as Error).message}`,
-        );
-        continue;
-      }
-      for (const ref of references) {
-        if (ref.packageId === id) {
-          continue;
-        }
-        const dependents = dependentsByReferenced.get(ref.packageId);
-        if (dependents) {
-          dependents.add(id);
-        } else {
-          dependentsByReferenced.set(ref.packageId, new Set([id]));
-        }
-      }
-    }
-
+    const latestByPackage = await this.loadLatestPublishedRevisions();
     const root = latestByPackage.get(packageId);
     if (!root) {
       return [];
     }
 
-    const result: Array<{
-      packageId: number;
-      roomId: number;
-      revision: number;
-    }> = [];
+    const dependentsByReferenced =
+      await this.buildReverseReferenceGraph(latestByPackage);
+
+    const result: DependentRoomPackage[] = [];
     const visited = new Set<number>([packageId]);
     const queue = [packageId];
     while (queue.length > 0) {
@@ -258,6 +223,77 @@ export class PackageDeliveryService {
 
     result.sort((a, b) => a.packageId - b.packageId);
     return result;
+  }
+
+  /**
+   * Loads the latest published revision of every package. The DESC order makes
+   * the first occurrence of each package its newest revision; a package whose
+   * newest published row has no `publishedAt` is dropped entirely (the same
+   * invariant `loadRevision` enforces), never falling back to an older row.
+   */
+  private async loadLatestPublishedRevisions(): Promise<
+    Map<number, LatestPublishedRevision>
+  > {
+    const revisions = await this.revisionsRepository.find({
+      where: { status: 'published' },
+      relations: ['package', 'package.room'],
+      order: { revision: 'DESC' },
+    });
+
+    const latestByPackage = new Map<number, LatestPublishedRevision>();
+    const seen = new Set<number>();
+    for (const row of revisions) {
+      const id = row.package.id;
+      if (seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      if (!row.publishedAt) {
+        continue;
+      }
+      latestByPackage.set(id, {
+        revision: row.revision,
+        files: row.files,
+        roomId: row.package.room?.id ?? null,
+      });
+    }
+    return latestByPackage;
+  }
+
+  /**
+   * Builds `referenced package -> packages that reference it` from the textual
+   * files of each package's latest published revision. A package whose files
+   * cannot be read or decoded is logged and left out of the graph.
+   */
+  private async buildReverseReferenceGraph(
+    latestByPackage: Map<number, LatestPublishedRevision>,
+  ): Promise<Map<number, Set<number>>> {
+    const dependentsByReferenced = new Map<number, Set<number>>();
+    for (const [id, entry] of latestByPackage) {
+      let references: PackageFileReference[];
+      try {
+        references = await this.collectRevisionReferences(id, entry);
+      } catch (error) {
+        this.logger.warn(
+          `Skipping package ${id} during dependent scan: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        continue;
+      }
+      for (const ref of references) {
+        if (ref.packageId === id) {
+          continue;
+        }
+        const dependents = dependentsByReferenced.get(ref.packageId);
+        if (dependents) {
+          dependents.add(id);
+        } else {
+          dependentsByReferenced.set(ref.packageId, new Set([id]));
+        }
+      }
+    }
+    return dependentsByReferenced;
   }
 
   /**

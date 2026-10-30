@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Logger, NotFoundException } from '@nestjs/common';
 import { PackageFileEntry } from '@wired-io/shared';
 import { mkdtempSync, rmSync } from 'fs';
 import { readdir, readFile } from 'fs/promises';
@@ -52,9 +52,10 @@ describe('PackageDeliveryService', () => {
       }),
     };
     revisionsRepository = {
-      find: jest.fn(() => {
+      find: jest.fn((opts: { where: { status?: string } }) => {
+        const status = opts.where.status;
         return revisions
-          .filter((row) => row.status === 'published')
+          .filter((row) => status === undefined || row.status === status)
           .sort((a, b) => b.revision - a.revision)
           .map((row) => toRevisionRow(row, packageById(row.packageId)));
       }),
@@ -422,8 +423,12 @@ describe('PackageDeliveryService', () => {
       definePackage(5, 'Library', null);
       definePackage(10, 'A', 7);
       definePackage(11, 'B', 7);
-      await writePublished(10, 1, { 'a.gd': 'preload("res://packages/5/x.gd")' });
-      await writePublished(11, 1, { 'b.gd': 'preload("res://packages/10/a.gd")' });
+      await writePublished(10, 1, {
+        'a.gd': 'preload("res://packages/5/x.gd")',
+      });
+      await writePublished(11, 1, {
+        'b.gd': 'preload("res://packages/10/a.gd")',
+      });
       await writePublished(5, 2, { 'x.gd': 'extends Node' });
 
       await expect(service.findDependentRoomPackages(5)).resolves.toEqual([
@@ -432,12 +437,78 @@ describe('PackageDeliveryService', () => {
       ]);
     });
 
+    it('queries published revisions with the expected repository options', async () => {
+      definePackage(5, 'Library', null);
+      await writePublished(5, 2, { 'x.gd': 'extends Node' });
+
+      await service.findDependentRoomPackages(5);
+
+      expect(revisionsRepository.find).toHaveBeenCalledWith({
+        where: { status: 'published' },
+        relations: ['package', 'package.room'],
+        order: { revision: 'DESC' },
+      });
+    });
+
+    it('only considers the latest published revision of a dependent', async () => {
+      definePackage(5, 'Library', null);
+      definePackage(10, 'A', 7);
+      await writePublished(10, 1, {
+        'a.gd': 'preload("res://packages/5/x.gd")',
+      });
+      await writePublished(10, 2, { 'a.gd': 'extends Node' });
+      await writePublished(5, 2, { 'x.gd': 'extends Node' });
+
+      await expect(service.findDependentRoomPackages(5)).resolves.toEqual([]);
+    });
+
+    it('does not fall back when the latest published revision has no publishedAt', async () => {
+      definePackage(5, 'Library', null);
+      definePackage(10, 'A', 7);
+      await writePublished(10, 1, { 'a.gd': 'extends Node' });
+      await writePublished(10, 2, {
+        'a.gd': 'preload("res://packages/5/x.gd")',
+      });
+      const latest = revisions.find(
+        (row) => row.packageId === 10 && row.revision === 2,
+      );
+      latest!.publishedAt = null;
+      await writePublished(5, 2, { 'x.gd': 'extends Node' });
+
+      await expect(service.findDependentRoomPackages(5)).resolves.toEqual([]);
+    });
+
     it('traverses through a global library to reach a room package', async () => {
       definePackage(5, 'Root', null);
       definePackage(12, 'GlobalBridge', null);
       definePackage(13, 'Game', 7);
-      await writePublished(13, 1, { 'a.gd': 'preload("res://packages/12/m.gd")' });
-      await writePublished(12, 1, { 'm.gd': 'preload("res://packages/5/x.gd")' });
+      await writePublished(13, 1, {
+        'a.gd': 'preload("res://packages/12/m.gd")',
+      });
+      await writePublished(12, 1, {
+        'm.gd': 'preload("res://packages/5/x.gd")',
+      });
+      await writePublished(5, 2, { 'x.gd': 'extends Node' });
+
+      await expect(service.findDependentRoomPackages(5)).resolves.toEqual([
+        { packageId: 13, roomId: 7, revision: 1 },
+      ]);
+    });
+
+    it('reaches a room package through a global bridge and prunes other rooms', async () => {
+      definePackage(5, 'Library', 7);
+      definePackage(12, 'GlobalBridge', null);
+      definePackage(13, 'SameRoom', 7);
+      definePackage(14, 'OtherRoom', 8);
+      await writePublished(12, 1, {
+        'm.gd': 'preload("res://packages/5/x.gd")',
+      });
+      await writePublished(13, 1, {
+        'a.gd': 'preload("res://packages/12/m.gd")',
+      });
+      await writePublished(14, 1, {
+        'b.gd': 'preload("res://packages/12/m.gd")',
+      });
       await writePublished(5, 2, { 'x.gd': 'extends Node' });
 
       await expect(service.findDependentRoomPackages(5)).resolves.toEqual([
@@ -448,7 +519,9 @@ describe('PackageDeliveryService', () => {
     it('does not include a global package that depends on the library', async () => {
       definePackage(5, 'Root', null);
       definePackage(12, 'GlobalConsumer', null);
-      await writePublished(12, 1, { 'm.gd': 'preload("res://packages/5/x.gd")' });
+      await writePublished(12, 1, {
+        'm.gd': 'preload("res://packages/5/x.gd")',
+      });
       await writePublished(5, 2, { 'x.gd': 'extends Node' });
 
       await expect(service.findDependentRoomPackages(5)).resolves.toEqual([]);
@@ -458,8 +531,12 @@ describe('PackageDeliveryService', () => {
       definePackage(5, 'Library', 7);
       definePackage(10, 'SameRoom', 7);
       definePackage(11, 'OtherRoom', 8);
-      await writePublished(10, 1, { 'a.gd': 'preload("res://packages/5/x.gd")' });
-      await writePublished(11, 1, { 'b.gd': 'preload("res://packages/5/x.gd")' });
+      await writePublished(10, 1, {
+        'a.gd': 'preload("res://packages/5/x.gd")',
+      });
+      await writePublished(11, 1, {
+        'b.gd': 'preload("res://packages/5/x.gd")',
+      });
       await writePublished(5, 2, { 'x.gd': 'extends Node' });
 
       await expect(service.findDependentRoomPackages(5)).resolves.toEqual([
@@ -471,7 +548,9 @@ describe('PackageDeliveryService', () => {
       definePackage(5, 'Library', null);
       definePackage(10, 'Direct', 7);
       definePackage(11, 'Transitive', 7);
-      await writePublished(10, 1, { 'a.gd': 'preload("res://packages/5/x.gd")' });
+      await writePublished(10, 1, {
+        'a.gd': 'preload("res://packages/5/x.gd")',
+      });
       await writePublished(11, 1, {
         'b.gd':
           'preload("res://packages/10/a.gd") preload("res://packages/5/x.gd")',
@@ -492,13 +571,39 @@ describe('PackageDeliveryService', () => {
         'a.gd':
           'preload("res://packages/11/b.gd") preload("res://packages/5/x.gd")',
       });
-      await writePublished(11, 1, { 'b.gd': 'preload("res://packages/10/a.gd")' });
+      await writePublished(11, 1, {
+        'b.gd': 'preload("res://packages/10/a.gd")',
+      });
       await writePublished(5, 2, { 'x.gd': 'extends Node' });
 
       await expect(service.findDependentRoomPackages(5)).resolves.toEqual([
         { packageId: 10, roomId: 7, revision: 1 },
         { packageId: 11, roomId: 7, revision: 1 },
       ]);
+    });
+
+    it('skips an undecodable package but still returns the good dependents', async () => {
+      definePackage(5, 'Library', null);
+      definePackage(10, 'Good', 7);
+      definePackage(20, 'Broken', 7);
+      await writePublished(10, 1, {
+        'a.gd': 'preload("res://packages/5/x.gd")',
+      });
+      await writePublished(20, 1, { 'bad.gd': Buffer.from([0xff, 0xfe]) });
+      await writePublished(5, 2, { 'x.gd': 'extends Node' });
+
+      const logger = (service as unknown as { logger: Logger }).logger;
+      const warn = jest
+        .spyOn(logger, 'warn')
+        .mockImplementation(() => undefined);
+
+      await expect(service.findDependentRoomPackages(5)).resolves.toEqual([
+        { packageId: 10, roomId: 7, revision: 1 },
+      ]);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('Skipping package 20'),
+      );
+      warn.mockRestore();
     });
   });
 });
