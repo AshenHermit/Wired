@@ -10,6 +10,7 @@ import {
   Post,
   Query,
   Req,
+  Res,
   StreamableFile,
   UnauthorizedException,
   UploadedFile,
@@ -18,13 +19,17 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { createReadStream } from 'fs';
+import { Response } from 'express';
 import {
   CreatePackageRevisionPayload,
   PackageRevision,
+  PackageRuntimeManifest,
 } from '@wired-io/shared';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackagesService } from './scripting-packages.service';
 import { PackageRevisionsService } from './package-revisions.service';
+import { PackageDeliveryService } from './package-delivery.service';
+import { PackageReadUrlService } from './package-read-url.service';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
 import { UseAuthGuard, UseSilentAuthGuard } from 'src/auth/jwt-auth.guard';
@@ -37,6 +42,8 @@ export class ScriptingPackagesController {
   constructor(
     private readonly packagesService: ScriptingPackagesService,
     private readonly revisionsService: PackageRevisionsService,
+    private readonly delivery: PackageDeliveryService,
+    private readonly readUrls: PackageReadUrlService,
   ) {}
 
   @ApiOkResponse({ type: [ScriptingPackage] })
@@ -175,6 +182,60 @@ export class ScriptingPackagesController {
       type: 'application/octet-stream',
       length: file.size,
     });
+  }
+
+  @ApiOkResponse({ description: 'Signed runtime manifest for a room' })
+  @Get(':id/revisions/:revision/runtime-manifest')
+  async runtimeManifest(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('revision', ParseIntPipe) revision: number,
+    @Query('room', ParseIntPipe) room: number,
+  ): Promise<PackageRuntimeManifest> {
+    return this.delivery.getRuntimeManifest(id, revision, room);
+  }
+
+  @ApiOkResponse({
+    description: 'Raw contents of a runtime artifact file',
+    schema: { type: 'string', format: 'binary' },
+  })
+  @Get(':id/revisions/:revision/runtime-files/*path')
+  async runtimeFile(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('revision', ParseIntPipe) revision: number,
+    @Param('path') path: string | string[],
+    @Query('room', ParseIntPipe) room: number,
+    @Query('token') token: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    if (
+      !token ||
+      !this.readUrls.verifyToken(token, {
+        roomId: room,
+        packageId: id,
+        revision,
+      })
+    ) {
+      throw new UnauthorizedException('package_read_token_invalid');
+    }
+
+    const filepath = Array.isArray(path) ? path.join('/') : path;
+    const file = await this.delivery.resolveRuntimeFile(
+      id,
+      revision,
+      room,
+      filepath,
+    );
+
+    // Stream from disk instead of buffering the file in memory. A file can
+    // disappear between stat and open, so destroy the response on stream
+    // error rather than leaving the client hanging on an unhandled 'error'.
+    const stream = createReadStream(file.path);
+    res.set({
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': String(file.size),
+    });
+    stream.on('error', () => res.destroy());
+    stream.pipe(res);
   }
 
   @UseAuthGuard()

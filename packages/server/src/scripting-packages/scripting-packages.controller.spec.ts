@@ -1,12 +1,20 @@
-import { BadRequestException, StreamableFile } from '@nestjs/common';
+import {
+  BadRequestException,
+  StreamableFile,
+  UnauthorizedException,
+} from '@nestjs/common';
 import {
   PackageFileEntry,
   PackageManifest,
   PackageRevision,
 } from '@wired-io/shared';
+import { PassThrough } from 'stream';
+import { Response } from 'express';
 import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
 import { User } from 'src/database/entities/user.entity';
 import { ScriptingPackagesController } from './scripting-packages.controller';
+import { PackageDeliveryService } from './package-delivery.service';
+import { PackageReadUrlService } from './package-read-url.service';
 import { PackageRevisionsService } from './package-revisions.service';
 import { ScriptingPackagesService } from './scripting-packages.service';
 
@@ -29,6 +37,9 @@ describe('ScriptingPackagesController revisions API', () => {
 
   let packagesService: { assertPackageEditing: jest.Mock };
   let revisionsService: Record<string, jest.Mock>;
+  let delivery: Record<string, jest.Mock>;
+  let readUrls: { verifyToken: jest.Mock };
+  let response: Response & { set: jest.Mock };
   let controller: ScriptingPackagesController;
 
   beforeEach(() => {
@@ -46,9 +57,19 @@ describe('ScriptingPackagesController revisions API', () => {
         size: 3,
       })),
     };
+    delivery = {
+      getRuntimeManifest: jest.fn(),
+      resolveRuntimeFile: jest.fn(async () => ({ path: __filename, size: 3 })),
+    };
+    readUrls = { verifyToken: jest.fn(() => true) };
+    response = Object.assign(new PassThrough(), {
+      set: jest.fn(),
+    }) as unknown as Response & { set: jest.Mock };
     controller = new ScriptingPackagesController(
       packagesService as unknown as ScriptingPackagesService,
       revisionsService as unknown as PackageRevisionsService,
+      delivery as unknown as PackageDeliveryService,
+      readUrls as unknown as PackageReadUrlService,
     );
   });
 
@@ -180,6 +201,50 @@ describe('ScriptingPackagesController revisions API', () => {
     expect(result.getHeaders()).toMatchObject({
       type: 'application/octet-stream',
       length: 3,
+    });
+  });
+
+  it('returns a signed runtime manifest for a published revision and room', async () => {
+    delivery.getRuntimeManifest.mockResolvedValue({
+      packageId: 5,
+      revision: 3,
+    });
+
+    await expect(controller.runtimeManifest(5, 3, 7)).resolves.toMatchObject({
+      packageId: 5,
+    });
+    expect(delivery.getRuntimeManifest).toHaveBeenCalledWith(5, 3, 7);
+  });
+
+  it('rejects a runtime file with a token for another room', async () => {
+    readUrls.verifyToken.mockReturnValue(false);
+
+    await expect(
+      controller.runtimeFile(5, 3, ['a.gd'], 8, 'bad', response),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(delivery.resolveRuntimeFile).not.toHaveBeenCalled();
+  });
+
+  it('rejects a runtime file without a token', async () => {
+    await expect(
+      controller.runtimeFile(5, 3, ['a.gd'], 7, undefined as never, response),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(readUrls.verifyToken).not.toHaveBeenCalled();
+    expect(delivery.resolveRuntimeFile).not.toHaveBeenCalled();
+  });
+
+  it('streams a runtime file for a valid token', async () => {
+    await controller.runtimeFile(5, 3, ['a.gd'], 7, 'good', response);
+
+    expect(readUrls.verifyToken).toHaveBeenCalledWith('good', {
+      roomId: 7,
+      packageId: 5,
+      revision: 3,
+    });
+    expect(delivery.resolveRuntimeFile).toHaveBeenCalledWith(5, 3, 7, 'a.gd');
+    expect(response.set).toHaveBeenCalledWith({
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': '3',
     });
   });
 });
