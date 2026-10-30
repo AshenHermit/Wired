@@ -33,6 +33,14 @@ const STAGING_DIR := ".staging"
 const PREVIOUS_DIR := ".previous"
 const MAX_FILES := 2000
 const MAX_FILE_SIZE := 64 * 1024 * 1024
+## Raw image extensions that get a runtime texture next to the file.
+const TEXTURE_EXTENSIONS := ["png", "jpg", "jpeg", "webp", "bmp"]
+## Raw audio extensions and the stream class each one loads into.
+const AUDIO_STREAM_TYPES := {
+	"wav": "AudioStreamWAV",
+	"ogg": "AudioStreamOggVorbis",
+	"mp3": "AudioStreamMP3",
+}
 ## How long a sync waits for another coroutine that is applying the same package.
 const APPLY_LOCK_TIMEOUT_MS := 300_000
 
@@ -54,6 +62,11 @@ var _scene_dependencies: Dictionary = {}
 var _file_hashes: Dictionary = {}
 # package id -> true while a coroutine is applying a revision of that package
 var _applying: Dictionary = {}
+## Raw asset extension -> {kind, suffix, type}. `kind` selects the derivation
+## helper, `suffix` names the derived file next to the raw one and `type` is the
+## resource class the sidecar declares. Built from the tables above, so a raw
+## format is declared exactly once.
+var _asset_derivations: Dictionary = _build_asset_derivations()
 ## Test seam: package ids in the order their files were applied. Dependencies
 ## are appended before the package that depends on them.
 var _sync_order: Array = []
@@ -385,10 +398,21 @@ func _sync_package(package_id: int, revision: int, chain: Array) -> Dictionary:
 	var verified: Array = download.get("files", [])
 	var hashes: Dictionary = download.get("hashes", {})
 
-	# 2. Stage the new revision next to the old one, then swap.
+	# 2. Stage the new revision next to the old one, derive the runtime form of
+	# its raw images and audio, then swap.
 	var staging_error := _stage_files(package_id, verified)
 	if not staging_error.is_empty():
 		return _failure(staging_error, revision)
+	var derive_result := _derive_assets(
+		packages_dir(package_id).path_join(STAGING_DIR),
+		revision_dir(package_id, revision),
+		verified.map(func(file: Dictionary) -> String: return str(file.filepath)),
+	)
+	if not bool(derive_result.get("ok", false)):
+		# Nothing derived stays in staging, so dropping it keeps the current
+		# revision untouched.
+		_remove_tree(packages_dir(package_id).path_join(STAGING_DIR))
+		return _failure(str(derive_result.get("error", "")), revision)
 	var swap_error := _swap_revision(package_id, revision)
 	if not swap_error.is_empty():
 		return _failure(swap_error, revision)
@@ -553,6 +577,107 @@ func _stage_files(package_id: int, files: Array) -> String:
 		handle.store_buffer(file.body)
 		handle.close()
 	return ""
+
+
+## Builds the runtime form of every raw image and audio file of a staged
+## revision and writes an `.import` sidecar that remaps the raw path to it.
+##
+## The runtime only ever sees files as they were published, so nothing imported
+## them beforehand: the texture or stream is saved next to the raw file and
+## `ResourceLoader.load("<file>")` reads it through the sidecar. The sidecar's
+## `path` points at `final_dir`, because staging is renamed there after
+## derivation. Derived files are runtime-only: they never enter the manifest,
+## the hashes or the publish flow, and other file types are left untouched.
+##
+## Returns {ok: bool, error: String}. A failure removes everything derived by
+## this call, so the caller can drop staging as a whole.
+func _derive_assets(staging: String, final_dir: String, filepaths: Array) -> Dictionary:
+	var derived := PackedStringArray()
+	for filepath: Variant in filepaths:
+		var path := str(filepath)
+		var derivation: Dictionary = _asset_derivations.get(
+			path.get_extension().to_lower(), {}
+		)
+		if derivation.is_empty():
+			continue
+		var suffix := str(derivation.get("suffix", ""))
+		var type := str(derivation.get("type", ""))
+		var source := staging.path_join(path)
+		var target := staging.path_join(path + suffix)
+		var ok := (
+			_derive_texture(source, target)
+			if str(derivation.get("kind", "")) == "texture"
+			else _derive_audio(source, target, type)
+		)
+		if ok:
+			ok = _write_import(
+				staging.path_join(path + ".import"),
+				type,
+				final_dir.path_join(path + suffix),
+			)
+		if not ok:
+			_remove_files(derived)
+			return {"ok": false, "error": "asset_derive_failed:%s" % path}
+		derived.append(target)
+		derived.append(staging.path_join(path + ".import"))
+	return {"ok": true, "error": ""}
+
+
+## Extension dispatch table: every raw asset extension mapped to the kind of
+## derivation, the suffix of the derived file and the sidecar's resource class.
+func _build_asset_derivations() -> Dictionary:
+	var table := {}
+	for extension: String in TEXTURE_EXTENSIONS:
+		table[extension] = {
+			"kind": "texture", "suffix": ".image.res", "type": "ImageTexture"
+		}
+	for extension: String in AUDIO_STREAM_TYPES:
+		table[extension] = {
+			"kind": "audio",
+			"suffix": ".audio.res",
+			"type": AUDIO_STREAM_TYPES[extension],
+		}
+	return table
+
+
+## Saves the texture of a raw image file. Returns false when the bytes are not
+## a readable image or the derived resource cannot be written.
+func _derive_texture(source: String, target: String) -> bool:
+	var image := Image.load_from_file(source)
+	if image == null:
+		return false
+	return ResourceSaver.save(ImageTexture.create_from_image(image), target) == OK
+
+
+## Saves the stream of a raw audio file as `type` (`AudioStreamWAV`, ...).
+## Returns false when the bytes are not a readable stream of that class.
+func _derive_audio(source: String, target: String, type: String) -> bool:
+	var stream: AudioStream = null
+	match type:
+		"AudioStreamWAV":
+			stream = AudioStreamWAV.load_from_file(source)
+		"AudioStreamOggVorbis":
+			stream = AudioStreamOggVorbis.load_from_file(source)
+		"AudioStreamMP3":
+			stream = AudioStreamMP3.load_from_file(source)
+	if stream == null:
+		return false
+	return ResourceSaver.save(stream, target) == OK
+
+
+## Writes the sidecar that makes `ResourceLoader.load()` read the raw path as the
+## derived resource. `resource_path` is the final location, because staging is
+## renamed after derivation. The runtime remap reads `path`; `importer` and
+## `type` keep the sidecar readable and match an editor import of the format.
+func _write_import(path: String, type: String, resource_path: String) -> bool:
+	var handle := FileAccess.open(path, FileAccess.WRITE)
+	if handle == null:
+		return false
+	handle.store_string(
+		'[remap]\n\nimporter="texture"\ntype="%s"\npath="%s"\n' % [type, resource_path]
+	)
+	handle.close()
+	return true
 
 
 ## Replaces the revision directory only after the staged copy is complete, so a
@@ -734,6 +859,11 @@ func _sha256(data: PackedByteArray) -> String:
 	context.start(HashingContext.HASH_SHA256)
 	context.update(data)
 	return context.finish().hex_encode()
+
+
+func _remove_files(paths: PackedStringArray) -> void:
+	for path: String in paths:
+		DirAccess.remove_absolute(path)
 
 
 func _remove_tree(path: String) -> void:
