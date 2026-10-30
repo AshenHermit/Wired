@@ -2,8 +2,8 @@
 
 import { Room } from "@wired-io/shared";
 import { GodotEditor } from "./GodotEditor";
-import { PackageSyncStatus } from "./PackageSyncStatus";
-import { usePackageSync } from "./use-package-sync";
+import { PackagesTab } from "./PackagesTab";
+import { useRoomPackages } from "./use-room-packages";
 import {
   Tabs,
   TabsContent,
@@ -11,14 +11,21 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/animate-ui/components/animate/tabs";
-import { GamepadIcon, WrenchIcon } from "lucide-react";
+import { GamepadIcon, PackageIcon, WrenchIcon } from "lucide-react";
 import React from "react";
 import { GameTab } from "./GameTab";
+import { useUserStore } from "@/store/user-store";
 
 export function GodotRoomPageClient({ room }: { room: Room }) {
   const [activeTab, setActiveTab] = React.useState("editor");
   const [gameMounted, setGameMounted] = React.useState(false);
-  const packageSync = usePackageSync(room.id);
+  const roomPackages = React.useMemo(
+    () => room.scriptingPackages ?? [],
+    [room.scriptingPackages],
+  );
+  const packages = useRoomPackages(room.id, roomPackages);
+  const userId = useUserStore((state) => state.id);
+  const authorId = userId > 0 ? userId : null;
 
   const handleTabChange = React.useCallback((value: string) => {
     setActiveTab(value);
@@ -36,10 +43,13 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
         onValueChange={handleTabChange}
         className="w-full h-full !gap-0"
       >
-        <div className="absolute top-0 left-[60%] z-10">
+        <div className="absolute top-0 left-[52%] z-10">
           <TabsList>
             <TabsTrigger value="editor">
               <WrenchIcon /> Editor
+            </TabsTrigger>
+            <TabsTrigger value="packages">
+              <PackageIcon /> Packages
             </TabsTrigger>
             <TabsTrigger value="game">
               <GamepadIcon />
@@ -56,15 +66,17 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
           <TabsContent value="editor" className="w-full !h-full">
             <GodotEditor
               roomId={room.id}
-              beforeStart={packageSync.beforeEditorStart}
+              beforeStart={packages.beforeEditorStart}
             />
+          </TabsContent>
+          <TabsContent value="packages" className="w-full !h-full">
+            <PackagesTab packages={packages} authorId={authorId} />
           </TabsContent>
           <TabsContent value="game" className="w-full !h-full">
             {gameMounted && <GameTab room={room} />}
           </TabsContent>
         </TabsContents>
       </Tabs>
-      {activeTab === "editor" && <PackageSyncStatus sync={packageSync} />}
     </div>
   );
 }

@@ -141,6 +141,24 @@ const entry = async (filepath: string, content: string): Promise<PackageFileEntr
 });
 
 describe("PackageFileSystem", () => {
+  it("creates an empty package directory and persists it", async () => {
+    const { fs, files } = makeFs();
+
+    await files.createPackageDir(3);
+
+    expect(fs.dirs.has("/home/web_user/Wired/packages/3")).toBe(true);
+    expect(fs.syncCalls).toBe(1);
+    await expect(files.listFiles(3)).resolves.toEqual([]);
+  });
+
+  it("reports whether a package directory exists", () => {
+    const { files } = makeFs();
+
+    expect(files.exists(3)).toBe(false);
+    files.writeFile(3, "hero.gd", data("extends Node"));
+    expect(files.exists(3)).toBe(true);
+  });
+
   it("writes and reads nested package files", () => {
     const { fs, files } = makeFs();
 

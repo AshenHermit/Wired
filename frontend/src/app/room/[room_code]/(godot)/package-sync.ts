@@ -90,6 +90,24 @@ const lowerCaseHashes = (
 };
 
 /**
+ * Files whose contents differ from the revision this editor last applied,
+ * including local additions and deletions. Used only to ask the user before an
+ * explicit action replaces their work; the authoritative conflict decision is
+ * still made by `planPackageSync`.
+ */
+export function changedPackageFiles(
+  baseline: Record<string, string>,
+  local: Record<string, string>,
+): string[] {
+  const base = lowerCaseHashes(baseline);
+  const current = lowerCaseHashes(local);
+  const paths = new Set([...Object.keys(base), ...Object.keys(current)]);
+  return [...paths]
+    .filter((filepath) => base[filepath] !== current[filepath])
+    .sort();
+}
+
+/**
  * Decides how a published revision meets the editor file system.
  *
  * A local file is replaced only when it still matches the revision this editor

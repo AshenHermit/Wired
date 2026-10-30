@@ -125,6 +125,26 @@ export class PackageFileSystem {
     return this.walk(packageId, "");
   }
 
+  /** Whether the managed package directory is present in the editor FS. */
+  exists(packageId: number): boolean {
+    return isDirectory(this.fs, this.packageDir(packageId));
+  }
+
+  /**
+   * Creates the package directory without touching any other package. A newly
+   * created room package starts as an empty directory the user can fill in.
+   */
+  async createPackageDir(packageId: number): Promise<void> {
+    try {
+      this.fs.mkdirTree(this.packageDir(packageId));
+    } catch (error) {
+      throw new GodotFsError(
+        `Package ${packageId}: cannot create the package directory: ${errorMessage(error)}`,
+      );
+    }
+    await this.sync();
+  }
+
   readFile(packageId: number, filepath: string): Uint8Array {
     const path = this.resolve(packageId, filepath);
     try {
