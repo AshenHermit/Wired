@@ -2,6 +2,7 @@ import {
   buildSceneDependencies,
   collectPackageReferences,
   decodePackageText,
+  isTextPackageFile,
   rewritePackageReferences,
   stripExtResourceUids,
 } from './package-runtime-references';
@@ -19,6 +20,22 @@ describe('package runtime references', () => {
     ]);
   });
 
+  it('deduplicates repeated package references', () => {
+    expect(
+      collectPackageReferences(
+        'preload("res://packages/5/a.gd") + preload("res://packages/5/a.gd")',
+      ),
+    ).toEqual([{ packageId: 5, filepath: 'a.gd' }]);
+  });
+
+  it('recognizes editor text files case-insensitively', () => {
+    expect(isTextPackageFile('main.tscn')).toBe(true);
+    expect(isTextPackageFile('data/Material.TRES')).toBe(true);
+    expect(isTextPackageFile('scripts/hero.GD')).toBe(true);
+    expect(isTextPackageFile('tex.png')).toBe(false);
+    expect(isTextPackageFile('sound.ogg')).toBe(false);
+  });
+
   it('rewrites every package prefix to the pinned runtime revision', () => {
     const revisions = new Map([
       [5, 3],
@@ -33,6 +50,32 @@ describe('package runtime references', () => {
       'preload("user://wired/rooms/7/packages/5/3/lib/a.gd") + ' +
         '"user://wired/rooms/7/packages/6/9/tex.png"',
     );
+  });
+
+  it('rewrites only quoted references, leaving comment text alone', () => {
+    const revisions = new Map([[5, 3]]);
+    const text =
+      '# see res://packages/99/foo.gd\n' +
+      'const A = preload("res://packages/5/a.gd")';
+    expect(
+      rewritePackageReferences(text, {
+        roomId: 7,
+        revisionByPackage: revisions,
+      }),
+    ).toBe(
+      '# see res://packages/99/foo.gd\n' +
+        'const A = preload("user://wired/rooms/7/packages/5/3/a.gd")',
+    );
+  });
+
+  it('throws when a quoted reference has no pinned revision', () => {
+    const revisions = new Map([[5, 3]]);
+    expect(() =>
+      rewritePackageReferences('preload("res://packages/99/a.gd")', {
+        roomId: 7,
+        revisionByPackage: revisions,
+      }),
+    ).toThrow('package_reference_not_rewritable:99');
   });
 
   it('strips uid only from ext_resource lines', () => {

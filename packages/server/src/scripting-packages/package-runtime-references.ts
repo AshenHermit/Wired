@@ -26,9 +26,6 @@ const PACKAGE_PATH_RE = /^res:\/\/packages\/(\d+)\/([^"'\r\n]+)$/;
 const REFERENCE_PATH_RE =
   /\b(?:path\s*=\s*|(?:preload|load)\s*\(\s*)(["'])([^"'\r\n]+)\1/g;
 
-/** `res://packages/<id>/` prefix rewritten to the pinned runtime revision. */
-const PACKAGE_PREFIX_RE = /res:\/\/packages\/(\d+)\//g;
-
 /** One ` uid="..."` attribute on an `[ext_resource ...]` line. */
 const EXT_RESOURCE_UID_RE = /\suid="[^"]*"/;
 
@@ -79,9 +76,11 @@ export function collectPackageReferences(text: string): PackageFileReference[] {
 }
 
 /**
- * Rewrites every `res://packages/<id>/` prefix to the runtime location of the
- * pinned revision: `user://wired/rooms/<roomId>/packages/<id>/<revision>/`.
- * Throws when a referenced package has no pinned revision.
+ * Rewrites every `res://packages/<id>/` reference inside a quoted string
+ * literal to the runtime location of the pinned revision:
+ * `user://wired/rooms/<roomId>/packages/<id>/<revision>/`. Comments and other
+ * non-literal text are left untouched. Throws when a quoted reference targets a
+ * package with no pinned revision.
  */
 export function rewritePackageReferences(
   text: string,
@@ -90,14 +89,17 @@ export function rewritePackageReferences(
     revisionByPackage: ReadonlyMap<number, number>;
   },
 ): string {
-  return text.replace(PACKAGE_PREFIX_RE, (match, idGroup: string) => {
-    const id = Number(idGroup);
-    const revision = options.revisionByPackage.get(id);
-    if (revision === undefined) {
-      throw new Error(`package_reference_not_rewritable:${id}`);
-    }
-    return `user://wired/rooms/${options.roomId}/packages/${id}/${revision}/`;
-  });
+  return text.replace(
+    PACKAGE_REFERENCE_RE,
+    (match, quote: string, idGroup: string, rest: string) => {
+      const id = Number(idGroup);
+      const revision = options.revisionByPackage.get(id);
+      if (revision === undefined) {
+        throw new Error(`package_reference_not_rewritable:${id}`);
+      }
+      return `${quote}user://wired/rooms/${options.roomId}/packages/${id}/${revision}/${rest}${quote}`;
+    },
+  );
 }
 
 /**
