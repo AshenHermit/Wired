@@ -56,6 +56,17 @@ func set_room(room_id: String) -> void:
 		room = sanitized
 
 
+## Overrides the API root after `configure`. The Web build is served from the
+## frontend origin and learns the backend only from the host bridge, so an empty
+## value keeps the current URL (`--api-url` / `WIRED_API_URL` / default).
+func set_api_base(url: String) -> void:
+	var value := url.strip_edges()
+	if value.is_empty():
+		return
+	base_url = value.trim_suffix("/")
+	print("WIRED_PACKAGES_API api=%s" % base_url)
+
+
 func packages_root() -> String:
 	return PACKAGES_ROOT.path_join(room).path_join("packages")
 

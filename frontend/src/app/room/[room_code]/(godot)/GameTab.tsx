@@ -128,6 +128,9 @@ export function GameTab({ room }: { room: Room }) {
         endpoint: connection.endpoint,
         ticket: connection.ticket,
         room: connection.roomId,
+        // The Web build cannot guess the backend: it is proxied under `/api`
+        // on the same origin that serves the Game tab.
+        apiBase: `${window.location.origin}/api`,
       });
       clearHandshakeTimer();
       handshakeTimerRef.current = window.setTimeout(() => {

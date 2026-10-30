@@ -92,7 +92,10 @@ describe("GameTab bridge", () => {
         expect.objectContaining({
           source: "wired-host",
           type: "wired:configure",
-          payload: expect.objectContaining({ ticket: "one-time-ticket" }),
+          payload: expect.objectContaining({
+            ticket: "one-time-ticket",
+            apiBase: `${window.location.origin}/api`,
+          }),
         }),
         window.location.origin,
       );

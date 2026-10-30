@@ -130,6 +130,14 @@
 					var endpoint = typeof payload.endpoint === 'string' ? payload.endpoint : '';
 					var ticket = typeof payload.ticket === 'string' ? payload.ticket : '';
 					var room = payload.room;
+					// Optional same-origin API root for the package loader. An
+					// unusable value is dropped so the engine keeps its own
+					// default instead of failing the handshake.
+					var apiBase =
+						typeof payload.apiBase === 'string' ? payload.apiBase : '';
+					if (!/^https?:\/\/\S+$/.test(apiBase)) {
+						apiBase = '';
+					}
 
 					if (!/^wss?:\/\/\S+$/.test(endpoint)) {
 						return false;
@@ -150,7 +158,12 @@
 					}
 
 					state.configured = true;
-					state.config = { endpoint: endpoint, ticket: ticket, room: room };
+					state.config = {
+						endpoint: endpoint,
+						ticket: ticket,
+						room: room,
+						apiBase: apiBase
+					};
 					post('wired:game-configured', { room: room });
 					return true;
 				}

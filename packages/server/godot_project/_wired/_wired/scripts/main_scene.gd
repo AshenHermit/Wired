@@ -230,6 +230,10 @@ func _run_client(cfg: Dictionary) -> void:
 		cfg["url"] = str(bridge_config.get("endpoint", ""))
 		cfg["ticket"] = str(bridge_config.get("ticket", ""))
 		cfg["room"] = str(bridge_config.get("room", ""))
+		# The Web build is served from the frontend origin and cannot reach the
+		# backend by itself; the host passes an absolute same-origin API root.
+		# Empty keeps the headless default.
+		_packages.set_api_base(str(bridge_config.get("apiBase", "")))
 	if str(cfg.url).is_empty():
 		_fail("No game endpoint: pass --url or open the Game tab")
 		return

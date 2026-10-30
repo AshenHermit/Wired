@@ -9,6 +9,12 @@ export type GameConfigurePayload = {
   endpoint: string;
   ticket: string;
   room: number;
+  /**
+   * Absolute same-origin API root (`<origin>/api`). The exported Web build is
+   * served from the frontend origin, so `HTTPRequest` must not resolve package
+   * URLs relatively: the host tells the engine where `/api` lives.
+   */
+  apiBase: string;
 };
 
 export type GameStatusStage =
