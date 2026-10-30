@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { PackageRevisionSyncState, PackageSyncStatus } from '@wired-io/shared';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
+import { PackageDeliveryService } from 'src/scripting-packages/package-delivery.service';
 import { Repository } from 'typeorm';
 import { RoomRuntimeService } from './room-runtime.service';
 import { RuntimeObserver } from './room-runtime.types';
@@ -22,6 +23,13 @@ const DISPATCH_TIMEOUT_MS = 30_000;
 
 type RuntimeState = 'pending' | 'applied' | 'failed';
 type ClientState = 'pending' | 'ready' | 'failed';
+
+/** A room package that references a just-published package, as scanned. */
+type DependentRoomPackage = {
+  packageId: number;
+  roomId: number;
+  revision: number;
+};
 
 interface ClientSyncRecord {
   state: ClientState;
@@ -53,9 +61,10 @@ interface SyncRecord {
  * manifests when a runtime starts, a peer joins, or a retry tick fires. A
  * backend restart therefore loses only timing information, not correctness.
  *
- * Only the package's own `room` receives the revision. Packages without a room
- * and parent/child packages are not broadcast implicitly; each package that is
- * bound to a room is synchronized independently.
+ * The package's own `room` (when it has one) receives the revision. Packages
+ * without a room are libraries: they are never dispatched themselves, but every
+ * room package that (transitively) references them is re-dispatched, because
+ * its runtime artifact embeds the library bytes by value.
  */
 @Injectable()
 export class PackageSyncService
@@ -72,6 +81,7 @@ export class PackageSyncService
     @InjectRepository(ScriptingPackageRevision)
     private readonly revisions: Repository<ScriptingPackageRevision>,
     private readonly runtime: RoomRuntimeService,
+    private readonly delivery: PackageDeliveryService,
   ) {}
 
   onModuleInit(): void {
@@ -91,6 +101,10 @@ export class PackageSyncService
   /**
    * Called after the backend fixed a published revision. The revision is the
    * notification payload; file bytes are never sent over this channel.
+   *
+   * A room package is dispatched to its own runtime, then its dependents are
+   * refreshed. A global package has no runtime of its own, so only its
+   * dependents are refreshed.
    */
   async revisionPublished(packageId: number, revision: number): Promise<void> {
     const pkg = await this.packages.findOne({
@@ -103,40 +117,16 @@ export class PackageSyncService
       );
       return;
     }
-    if (!pkg.room) {
+
+    if (pkg.room) {
+      await this.dispatchOwnRevision(packageId, String(pkg.room.id), revision);
+    } else {
       this.logger.log(
         `Package ${packageId} is not bound to a room; revision ${revision} stays published only`,
       );
-      return;
     }
 
-    const roomId = String(pkg.room.id);
-    const key = this.recordKey(roomId, packageId);
-    const existing = this.records.get(key);
-    if (existing && existing.revision === revision) {
-      // Idempotent: a repeated publish or a duplicate event must not resend.
-      return;
-    }
-
-    const row = await this.revisions.findOne({
-      where: { package: { id: packageId }, revision },
-    });
-    const publishedAt = (row?.publishedAt ?? new Date()).toISOString();
-    const record: SyncRecord = {
-      roomId,
-      packageId,
-      revision,
-      publishedAt,
-      runtimeState: 'pending',
-      runtimeError: null,
-      runtimeUpdatedAt: null,
-      dispatchedAt: null,
-      attempts: 0,
-      nextAttemptAt: null,
-      clients: new Map(),
-    };
-    this.records.set(key, record);
-    this.dispatch(record);
+    await this.dispatchDependents(packageId);
   }
 
   /** Latest published revision per package of the room plus target states. */
@@ -192,19 +182,12 @@ export class PackageSyncService
       const key = this.recordKey(roomId, pkg.id);
       const existing = this.records.get(key);
       if (!existing || existing.revision !== latest.revision) {
-        const record: SyncRecord = {
+        const record = this.createRecord(
           roomId,
-          packageId: pkg.id,
-          revision: latest.revision,
-          publishedAt: latest.publishedAt.toISOString(),
-          runtimeState: 'pending',
-          runtimeError: null,
-          runtimeUpdatedAt: null,
-          dispatchedAt: null,
-          attempts: 0,
-          nextAttemptAt: null,
-          clients: new Map(),
-        };
+          pkg.id,
+          latest.revision,
+          latest.publishedAt.toISOString(),
+        );
         this.records.set(key, record);
         this.dispatch(record);
         continue;
@@ -212,13 +195,7 @@ export class PackageSyncService
       if (freshRuntime) {
         // A new runtime process has no applied revisions and no clients: the
         // previous session's confirmations are no longer true.
-        existing.attempts = 0;
-        existing.nextAttemptAt = null;
-        existing.runtimeState = 'pending';
-        existing.runtimeError = null;
-        existing.runtimeUpdatedAt = null;
-        existing.dispatchedAt = null;
-        existing.clients.clear();
+        this.resetForDispatch(existing);
       }
       if (
         freshRuntime ||
@@ -353,6 +330,113 @@ export class PackageSyncService
   }
 
   // --- internals ----------------------------------------------------------
+
+  /**
+   * Dispatches a package's own revision to its room runtime. A repeated
+   * same-revision publish is idempotent for the package itself: only the
+   * dependents of a library need refreshing in that case.
+   */
+  private async dispatchOwnRevision(
+    packageId: number,
+    roomId: string,
+    revision: number,
+  ): Promise<void> {
+    const key = this.recordKey(roomId, packageId);
+    const existing = this.records.get(key);
+    if (existing && existing.revision === revision) {
+      return;
+    }
+
+    const row = await this.revisions.findOne({
+      where: { package: { id: packageId }, revision },
+    });
+    const publishedAt = (row?.publishedAt ?? new Date()).toISOString();
+    const record = this.createRecord(roomId, packageId, revision, publishedAt);
+    this.records.set(key, record);
+    this.dispatch(record);
+  }
+
+  /**
+   * Re-dispatches every room package that references the published package.
+   * Dependents are not published themselves, so their runtimes only pick up the
+   * new library bytes when the artifact is requested again. The scan is best
+   * effort: a failure must not undo the publication.
+   */
+  private async dispatchDependents(packageId: number): Promise<void> {
+    let dependents: DependentRoomPackage[];
+    try {
+      dependents = await this.delivery.findDependentRoomPackages(packageId);
+    } catch (error) {
+      this.logger.error(
+        `Failed to scan dependents of package ${packageId}: ${this.errorMessage(error)}`,
+      );
+      return;
+    }
+
+    for (const dependent of dependents) {
+      this.refreshDependent(dependent);
+    }
+  }
+
+  /**
+   * Brings one dependent's record to the given revision and dispatches it. An
+   * unchanged revision is still resent: the dependent's own revision did not
+   * change, but the library bytes it embeds did. Not recursive on purpose, so a
+   * chain of dependents is refreshed exactly once.
+   */
+  private refreshDependent(dependent: DependentRoomPackage): void {
+    const roomId = String(dependent.roomId);
+    const key = this.recordKey(roomId, dependent.packageId);
+    const existing = this.records.get(key);
+    if (!existing) {
+      const record = this.createRecord(
+        roomId,
+        dependent.packageId,
+        dependent.revision,
+        new Date().toISOString(),
+      );
+      this.records.set(key, record);
+      this.dispatch(record);
+      return;
+    }
+
+    existing.revision = dependent.revision;
+    existing.publishedAt = new Date().toISOString();
+    this.resetForDispatch(existing);
+    this.dispatch(existing, true);
+  }
+
+  private createRecord(
+    roomId: string,
+    packageId: number,
+    revision: number,
+    publishedAt: string,
+  ): SyncRecord {
+    return {
+      roomId,
+      packageId,
+      revision,
+      publishedAt,
+      runtimeState: 'pending',
+      runtimeError: null,
+      runtimeUpdatedAt: null,
+      dispatchedAt: null,
+      attempts: 0,
+      nextAttemptAt: null,
+      clients: new Map(),
+    };
+  }
+
+  /** Forgets runtime confirmations and client states before a fresh dispatch. */
+  private resetForDispatch(record: SyncRecord): void {
+    record.attempts = 0;
+    record.nextAttemptAt = null;
+    record.runtimeState = 'pending';
+    record.runtimeError = null;
+    record.runtimeUpdatedAt = null;
+    record.dispatchedAt = null;
+    record.clients.clear();
+  }
 
   private updateClient(
     roomId: string,

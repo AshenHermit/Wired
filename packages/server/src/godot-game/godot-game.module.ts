@@ -4,6 +4,7 @@ import { AppConfigModule } from 'src/config/config.module';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { RoomsModule } from 'src/rooms/rooms.module';
+import { PackageDeliveryModule } from 'src/scripting-packages/package-delivery.module';
 import { GameExportController } from './game-export.controller';
 import { GameRoomController } from './game-room.controller';
 import { GameRoomTicketRateLimiter } from './game-room.rate-limiter';
@@ -19,6 +20,7 @@ import { RuntimeProcessFactory } from './room-runtime.types';
   imports: [
     AppConfigModule,
     RoomsModule,
+    PackageDeliveryModule,
     TypeOrmModule.forFeature([ScriptingPackage, ScriptingPackageRevision]),
   ],
   controllers: [GameRoomController, GameExportController],

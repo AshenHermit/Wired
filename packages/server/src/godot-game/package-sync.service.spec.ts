@@ -1,6 +1,7 @@
 import { Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
+import { PackageDeliveryService } from 'src/scripting-packages/package-delivery.service';
 import { PackageSyncService } from './package-sync.service';
 import { RoomRuntimeService } from './room-runtime.service';
 
@@ -22,6 +23,7 @@ describe('PackageSyncService', () => {
     getRuntime: jest.Mock;
     setObserver: jest.Mock;
   };
+  let delivery: { findDependentRoomPackages: jest.Mock };
   let service: PackageSyncService;
 
   const roomPackage = {
@@ -46,10 +48,14 @@ describe('PackageSyncService', () => {
       getRuntime: jest.fn().mockReturnValue({ state: 'running' }),
       setObserver: jest.fn(),
     };
+    delivery = {
+      findDependentRoomPackages: jest.fn().mockResolvedValue([]),
+    };
     service = new PackageSyncService(
       packages as unknown as Repository<ScriptingPackage>,
       revisions as unknown as Repository<ScriptingPackageRevision>,
       runtime as unknown as RoomRuntimeService,
+      delivery as unknown as PackageDeliveryService,
     );
   });
 
@@ -82,6 +88,111 @@ describe('PackageSyncService', () => {
     await service.revisionPublished(42, 3);
 
     expect(runtime.sendPackage).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-dispatches dependent room packages when a library publishes', async () => {
+    delivery.findDependentRoomPackages.mockResolvedValue([
+      { packageId: 99, roomId: 7, revision: 4 },
+    ]);
+    packages.findOne.mockResolvedValueOnce(roomPackage).mockResolvedValueOnce({
+      id: 99,
+      name: 'Game',
+      room: { id: 7 },
+    } as unknown as ScriptingPackage);
+
+    await service.revisionPublished(42, 3);
+
+    expect(runtime.sendPackage).toHaveBeenCalledWith('7', 42, 3);
+    expect(runtime.sendPackage).toHaveBeenCalledWith('7', 99, 4);
+  });
+
+  it('re-dispatches room dependents of a global library', async () => {
+    packages.findOne.mockResolvedValue({
+      id: 42,
+      name: 'Shared',
+      room: null,
+    } as unknown as ScriptingPackage);
+    delivery.findDependentRoomPackages.mockResolvedValue([
+      { packageId: 99, roomId: 7, revision: 4 },
+    ]);
+
+    await service.revisionPublished(42, 3);
+
+    expect(delivery.findDependentRoomPackages).toHaveBeenCalledWith(42);
+    expect(runtime.sendPackage).toHaveBeenCalledTimes(1);
+    expect(runtime.sendPackage).toHaveBeenCalledWith('7', 99, 4);
+  });
+
+  it('reports a dependent with its actual latest published revision', async () => {
+    delivery.findDependentRoomPackages.mockResolvedValue([
+      { packageId: 99, roomId: 7, revision: 4 },
+    ]);
+    packages.find.mockResolvedValue([
+      { id: 99, name: 'Game' },
+    ] as unknown as ScriptingPackage[]);
+    revisions.findOne.mockResolvedValue({
+      revision: 4,
+      publishedAt: new Date('2026-10-30T10:00:00.000Z'),
+    } as unknown as ScriptingPackageRevision);
+
+    await service.revisionPublished(42, 3);
+
+    expect((await service.getStatuses('7'))[0]).toMatchObject({
+      packageId: 99,
+      revision: 4,
+      publishedAt: '2026-10-30T10:00:00.000Z',
+    });
+  });
+
+  it('keeps a dependent pending until a runtime is ready', async () => {
+    runtime.getRuntime.mockReturnValue({ state: 'starting' });
+    delivery.findDependentRoomPackages.mockResolvedValue([
+      { packageId: 99, roomId: 7, revision: 4 },
+    ]);
+
+    await service.revisionPublished(42, 3);
+
+    expect(runtime.sendPackage).not.toHaveBeenCalled();
+
+    runtime.getRuntime.mockReturnValue({ state: 'running' });
+    packages.find.mockResolvedValue([
+      { id: 99, name: 'Game' },
+    ] as unknown as ScriptingPackage[]);
+    revisions.findOne.mockResolvedValue({
+      revision: 4,
+      publishedAt: new Date('2026-10-30T09:00:00.000Z'),
+    } as unknown as ScriptingPackageRevision);
+    service.onModuleInit();
+
+    service.onRuntimeReady('7');
+    await flushAsync();
+
+    expect(runtime.sendPackage).toHaveBeenCalledTimes(1);
+    expect(runtime.sendPackage).toHaveBeenCalledWith('7', 99, 4);
+  });
+
+  it('refreshes dependents on a repeated library publish without resending it', async () => {
+    delivery.findDependentRoomPackages.mockResolvedValue([
+      { packageId: 99, roomId: 7, revision: 4 },
+    ]);
+    await service.revisionPublished(42, 3);
+    service.onPackagesApplied('7', 99, 4, 1);
+    expect(runtime.sendPackage).toHaveBeenCalledTimes(2);
+
+    await service.revisionPublished(42, 3);
+
+    expect(runtime.sendPackage).toHaveBeenCalledTimes(3);
+    expect(runtime.sendPackage).toHaveBeenLastCalledWith('7', 99, 4);
+  });
+
+  it('publishes even when the dependent scan fails', async () => {
+    delivery.findDependentRoomPackages.mockRejectedValue(
+      new Error('scan failed'),
+    );
+
+    await expect(service.revisionPublished(42, 3)).resolves.toBeUndefined();
+
+    expect(runtime.sendPackage).toHaveBeenCalledWith('7', 42, 3);
   });
 
   it('leaves the revision pending while the runtime is not running', async () => {
