@@ -33,6 +33,11 @@ const STAGING_DIR := ".staging"
 const PREVIOUS_DIR := ".previous"
 const MAX_FILES := 2000
 const MAX_FILE_SIZE := 64 * 1024 * 1024
+## How long a sync waits for another coroutine that is applying the same package.
+const APPLY_LOCK_TIMEOUT_MS := 300_000
+
+## Result of trying to take the per-package apply lock.
+enum ApplyLock { ACQUIRED, WAITED, TIMEOUT }
 
 var base_url := DEFAULT_API_URL
 ## Room code the loader works for. Safe as a single path segment.
@@ -47,8 +52,8 @@ var _current_revisions: Dictionary = {}
 var _scene_dependencies: Dictionary = {}
 # package id -> { filepath: sha256 } of the applied runtime artifact
 var _file_hashes: Dictionary = {}
-# "package id:revision" currently being applied, keyed to stop re-entry
-var _syncing: Dictionary = {}
+# package id -> true while a coroutine is applying a revision of that package
+var _applying: Dictionary = {}
 ## Test seam: package ids in the order their files were applied. Dependencies
 ## are appended before the package that depends on them.
 var _sync_order: Array = []
@@ -67,10 +72,15 @@ func configure(url: String, room_id: String = "") -> void:
 
 
 ## Sets the room without touching the API URL. Ignored when the code is empty.
+## Applied state belongs to one room, so a real change starts from scratch.
 func set_room(room_id: String) -> void:
 	var sanitized := _sanitize_room(room_id)
-	if not sanitized.is_empty():
-		room = sanitized
+	if sanitized.is_empty() or sanitized == room:
+		return
+	room = sanitized
+	_current_revisions.clear()
+	_scene_dependencies.clear()
+	_file_hashes.clear()
 
 
 ## Overrides the API root after `configure`. The Web build is served from the
@@ -222,9 +232,21 @@ func fetch_runtime_manifest(package_id: int, revision: int) -> Dictionary:
 ## read first to resolve the exact revision, then its runtime manifest is
 ## applied. An explicit revision is applied directly.
 ##
+## Concurrent callers are serialized per package (`_acquire_apply_lock`), so a
+## library shared by two packages is downloaded once and a stale revision can
+## never replace a newer working copy.
+##
 ## Returns {ok: bool, error: String, revision: int, files: Array,
 ## changed_files: PackedStringArray}.
 func sync_package(package_id: int, revision_hint: int = 0) -> Dictionary:
+	return await _sync_package_chain(package_id, revision_hint, [])
+
+
+## Applies one package unless its call chain already contains it (a dependency
+## cycle) or the package is already at this or a newer revision.
+func _sync_package_chain(
+	package_id: int, revision_hint: int, chain: Array
+) -> Dictionary:
 	if package_id <= 0:
 		return _report_failure(package_id, revision_hint, "invalid package id %d" % package_id)
 	var revision := revision_hint
@@ -234,16 +256,40 @@ func sync_package(package_id: int, revision_hint: int = 0) -> Dictionary:
 			return _report_failure(package_id, revision_hint, str(latest.get("error", "")))
 		revision = int(latest.get("revision", 0))
 
-	var key := "%d:%d" % [package_id, revision]
-	if _syncing.has(key):
+	# Checked before taking the lock: a cycle would otherwise wait on a lock
+	# held by its own caller. Any revision of the package in the chain is a
+	# cycle, because a package may only be applied once per closure.
+	if _chain_contains_package(chain, package_id):
+		var path := PackedStringArray()
+		for entry: Variant in chain:
+			path.append(str(entry))
+		path.append("%d:%d" % [package_id, revision])
 		return _report_failure(
 			package_id,
 			revision,
-			"package %d revision %d is already syncing" % [package_id, revision],
+			"package_dependency_cycle:%s" % "->".join(path),
 		)
-	_syncing[key] = true
-	var result := await _sync_package(package_id, revision)
-	_syncing.erase(key)
+
+	var lock := await _acquire_apply_lock(package_id)
+	if lock == ApplyLock.TIMEOUT:
+		return _report_failure(
+			package_id,
+			revision,
+			"package %d revision %d: another apply did not finish in time"
+			% [package_id, revision],
+		)
+	# A revision already on disk (or one that another coroutine applied while
+	# this call waited) is not applied again. An older revision never replaces
+	# a newer one; an equal one is only skipped for a caller that had to wait,
+	# because a fresh call must still refresh a changed artifact.
+	var applied := maxi(
+		current_revision(package_id), _highest_revision_on_disk(package_id, 0)
+	)
+	if applied > revision or (lock == ApplyLock.WAITED and applied == revision):
+		_release_apply_lock(package_id)
+		return _skipped(applied)
+	var result := await _sync_package(package_id, revision, chain)
+	_release_apply_lock(package_id)
 	if not bool(result.get("ok", false)):
 		return _report_failure(
 			package_id, int(result.get("revision", revision)), str(result.get("error", ""))
@@ -255,7 +301,52 @@ func sync_package(package_id: int, revision_hint: int = 0) -> Dictionary:
 	return result
 
 
-func _sync_package(package_id: int, revision: int) -> Dictionary:
+## Takes the per-package apply lock. ACQUIRED means the lock was free, WAITED
+## means another coroutine's apply finished first, TIMEOUT means it never did.
+func _acquire_apply_lock(package_id: int) -> int:
+	if not _applying.has(package_id):
+		_applying[package_id] = true
+		return ApplyLock.ACQUIRED
+	var deadline := Time.get_ticks_msec() + APPLY_LOCK_TIMEOUT_MS
+	while _applying.has(package_id):
+		if Time.get_ticks_msec() >= deadline:
+			return ApplyLock.TIMEOUT
+		await _wait_idle_frame()
+	_applying[package_id] = true
+	return ApplyLock.WAITED
+
+
+func _release_apply_lock(package_id: int) -> void:
+	_applying.erase(package_id)
+
+
+func _wait_idle_frame() -> void:
+	var loop := Engine.get_main_loop()
+	if loop is SceneTree:
+		await (loop as SceneTree).process_frame
+
+
+func _chain_contains_package(chain: Array, package_id: int) -> bool:
+	var prefix := "%d:" % package_id
+	for entry: Variant in chain:
+		if str(entry).begins_with(prefix):
+			return true
+	return false
+
+
+## Successful no-op for a revision that is already applied or superseded.
+func _skipped(revision: int) -> Dictionary:
+	return {
+		"ok": true,
+		"error": "",
+		"revision": revision,
+		"files": [],
+		"changed_files": PackedStringArray(),
+		"skipped": true,
+	}
+
+
+func _sync_package(package_id: int, revision: int, chain: Array) -> Dictionary:
 	var manifest_result := await fetch_runtime_manifest(package_id, revision)
 	if not bool(manifest_result.get("ok", false)):
 		return _failure(
@@ -279,7 +370,9 @@ func _sync_package(package_id: int, revision: int) -> Dictionary:
 
 	# Dependencies first: their files have to exist before a dependent scene is
 	# loaded, and the manifest pins each of them to an exact revision.
-	var dependency_error := await _sync_dependencies(package_id, manifest)
+	var next_chain := chain.duplicate()
+	next_chain.append("%d:%d" % [package_id, revision])
+	var dependency_error := await _sync_dependencies(package_id, manifest, next_chain)
 	if not dependency_error.is_empty():
 		return _failure(dependency_error, revision)
 	# Test seam: records the apply order (dependencies before dependents).
@@ -293,11 +386,10 @@ func _sync_package(package_id: int, revision: int) -> Dictionary:
 	var hashes: Dictionary = download.get("hashes", {})
 
 	# 2. Stage the new revision next to the old one, then swap.
-	var previous_revision := current_revision(package_id)
 	var staging_error := _stage_files(package_id, verified)
 	if not staging_error.is_empty():
 		return _failure(staging_error, revision)
-	var swap_error := _swap_revision(package_id, revision, previous_revision)
+	var swap_error := _swap_revision(package_id, revision)
 	if not swap_error.is_empty():
 		return _failure(swap_error, revision)
 
@@ -344,9 +436,10 @@ func _latest_revision(package_id: int) -> Dictionary:
 	return {"ok": true, "error": "", "revision": revision}
 
 
-## Applies every direct dependency of a manifest. Returns an empty string on
+## Applies every direct dependency of a manifest, passing the current call chain
+## so a cycle is detected before it can wait forever. Returns an empty string on
 ## success, or the error that stopped the closure.
-func _sync_dependencies(package_id: int, manifest: Dictionary) -> String:
+func _sync_dependencies(package_id: int, manifest: Dictionary, chain: Array) -> String:
 	var dependencies: Variant = manifest.get("dependencies", [])
 	if typeof(dependencies) != TYPE_ARRAY:
 		return "runtime manifest of package %d has no dependency list" % package_id
@@ -357,7 +450,9 @@ func _sync_dependencies(package_id: int, manifest: Dictionary) -> String:
 		var dependency_revision := int(dependency.get("revision", 0))
 		if dependency_id <= 0 or dependency_revision <= 0:
 			return "package %d has a malformed dependency entry" % package_id
-		var result := await sync_package(dependency_id, dependency_revision)
+		var result := await _sync_package_chain(
+			dependency_id, dependency_revision, chain
+		)
 		if not bool(result.get("ok", false)):
 			return (
 				"package %d: dependency %d revision %d failed: %s"
@@ -463,7 +558,7 @@ func _stage_files(package_id: int, files: Array) -> String:
 ## Replaces the revision directory only after the staged copy is complete, so a
 ## failed swap keeps a working package on disk. Returns an empty string on
 ## success.
-func _swap_revision(package_id: int, revision: int, previous_revision: int) -> String:
+func _swap_revision(package_id: int, revision: int) -> String:
 	var target_dir := revision_dir(package_id, revision)
 	var staging := packages_dir(package_id).path_join(STAGING_DIR)
 	var backup_dir := packages_dir(package_id).path_join(PREVIOUS_DIR)
@@ -490,13 +585,16 @@ func _swap_revision(package_id: int, revision: int, previous_revision: int) -> S
 		)
 
 	_remove_tree(backup_dir)
-	_prune_revisions(package_id, [revision, previous_revision])
+	_prune_revisions(package_id, revision)
 	return ""
 
 
-## Keeps the applied revision and the one it replaced. Only numeric revision
+## Keeps the applied revision and the newest other one on disk. Deriving the
+## previous revision from the directory instead of memory keeps it correct
+## after a restart and after a same-revision refresh. Only numeric revision
 ## directories of this package are removed, so no other project file is touched.
-func _prune_revisions(package_id: int, keep: Array) -> void:
+func _prune_revisions(package_id: int, keep_revision: int) -> void:
+	var keep_previous := _highest_revision_on_disk(package_id, keep_revision)
 	var root := packages_dir(package_id)
 	var dir := DirAccess.open(root)
 	if dir == null:
@@ -504,9 +602,27 @@ func _prune_revisions(package_id: int, keep: Array) -> void:
 	for name: String in dir.get_directories():
 		if name == STAGING_DIR or name == PREVIOUS_DIR:
 			continue
-		if not name.is_valid_int() or keep.has(name.to_int()):
+		if not name.is_valid_int():
+			continue
+		var value := name.to_int()
+		if value == keep_revision or value == keep_previous:
 			continue
 		_remove_tree(root.path_join(name))
+
+
+## Highest numeric revision directory of a package, ignoring `exclude`.
+func _highest_revision_on_disk(package_id: int, exclude: int) -> int:
+	var highest := 0
+	var dir := DirAccess.open(packages_dir(package_id))
+	if dir == null:
+		return highest
+	for name: String in dir.get_directories():
+		if not name.is_valid_int():
+			continue
+		var value := name.to_int()
+		if value != exclude:
+			highest = maxi(highest, value)
+	return highest
 
 
 ## File paths of `new` whose hash is missing or different in `old`, sorted.
