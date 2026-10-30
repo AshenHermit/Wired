@@ -19,6 +19,10 @@ config/icon="res://icon.svg"
 
 Global="*res://_wired/scripts/global/global.gd"
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/wired_bridge/plugin.cfg")
+
 [display]
 
 window/size/viewport_width=960

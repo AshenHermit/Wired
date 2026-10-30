@@ -582,6 +582,37 @@ describe("useRoomPackages", () => {
     });
   });
 
+  it("asks Godot to rescan after package files change", async () => {
+    const { editor } = makeEditor();
+    const rescan = vi.fn();
+    Object.assign(window, { __wiredEditorBridge: { rescan } });
+    vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
+      await manifestOf("extends Node"),
+    );
+
+    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
+    await act(async () => {
+      await result.current.beforeEditorStart(editor);
+    });
+
+    await act(async () => {
+      await result.current.createPackage("New", 42);
+    });
+    expect(rescan).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await result.current.downloadPackage(5);
+    });
+    expect(rescan).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await result.current.removePackage(5, { force: true });
+    });
+    expect(rescan).toHaveBeenCalledTimes(3);
+
+    delete (window as { __wiredEditorBridge?: unknown }).__wiredEditorBridge;
+  });
+
   it("polls statuses without hashing editor files", async () => {
     vi.useFakeTimers();
     try {

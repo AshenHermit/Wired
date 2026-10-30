@@ -9,6 +9,7 @@ import type {
 import { getRoomPackages } from "@/api/services/godot-game";
 import { createScriptingPackage } from "@/api/services/scripting-packages";
 import type { GodotEditorInstance } from "./GodotEditorInstance";
+import { requestEditorRescan } from "./editor-bridge";
 import {
   createPackageFileSystem,
   type PackageFileSystem,
@@ -452,6 +453,7 @@ export function useRoomPackages(
       }
       try {
         await files.createPackageDir(created.id);
+        requestEditorRescan();
       } catch (cause) {
         throw new Error(
           `Пакет создан на сервере, но каталог в редакторе не создан: ${errorMessage(cause)}`,
@@ -524,6 +526,7 @@ export function useRoomPackages(
             "опубликованная ревизия не была применена из-за конфликта",
           );
         }
+        requestEditorRescan();
         loadedRef.current.set(packageId, {
           revision: result.revision,
           files: result.files,
@@ -569,6 +572,7 @@ export function useRoomPackages(
 
         await files.deletePackage(packageId);
         await files.sync();
+        requestEditorRescan();
         loadedRef.current.delete(packageId);
         setAction(packageId, {
           notice: "Пакет убран из редактора. Файлы других пакетов не изменены.",

@@ -394,11 +394,11 @@ export function PackagesTab({
           </div>
         )}
         <div className="rounded-md border border-amber-400/25 bg-amber-400/5 p-3 text-sm text-amber-100/90">
-          Godot не замечает файлы, записанные в его виртуальную ФС извне, пока
-          редактор запущен. Если каталог пакета не появился во вкладке
-          FileSystem, сохраните сцены и переоткройте проект: Project → Reload
-          Current Project. После перезагрузки страницы набор загруженных
-          пакетов сбрасывается.
+          После создания, скачивания и удаления пакета панель автоматически
+          просит Godot пересканировать файловую систему. Если каталог всё равно
+          не появился во вкладке FileSystem, сохраните сцены и переоткройте
+          проект: Project → Reload Current Project. После перезагрузки страницы
+          набор загруженных пакетов сбрасывается.
         </div>
         {packages.error && (
           <div className="rounded-md border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200">
