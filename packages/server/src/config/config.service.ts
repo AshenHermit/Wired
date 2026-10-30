@@ -35,4 +35,10 @@ export class AppConfigService {
       config().godotRuntime
     );
   }
+  get packages() {
+    return (
+      this.configService.get<AppConfig['packages']>('packages') ??
+      config().packages
+    );
+  }
 }

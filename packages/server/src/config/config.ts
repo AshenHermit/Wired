@@ -77,5 +77,12 @@ const config: () => AppConfig = () => ({
       process.env.GODOT_GAME_EXPORT_DIR ?? './game_export/web',
     ),
   },
+  packages: {
+    readSecret:
+      process.env.WIRED_PACKAGE_READ_SECRET ??
+      process.env.WIRED_GAME_TICKET_SECRET ??
+      '',
+    readTtlSec: intFromEnv('WIRED_PACKAGE_READ_TTL_SEC', 900),
+  },
 });
 export default config;

@@ -61,6 +61,26 @@ export type PackageManifest = {
   publishedAt: string;
 };
 
+export type PackageRuntimeDependency = {
+  packageId: number;
+  revision: number;
+  name: string;
+};
+
+export type PackageRuntimeManifest = {
+  packageId: number;
+  name: string;
+  revision: number;
+  roomId: number;
+  publishedAt: string;
+  files: PackageFileEntry[];
+  totalSize: number;
+  dependencies: PackageRuntimeDependency[];
+  /** scene filepath -> "<packageId>:<filepath>" dependencies, including itself */
+  sceneDependencies: Record<string, string[]>;
+  download: { token: string; expiresAt: number };
+};
+
 export type CreatePackageRevisionPayload = {
   files: PackageFileEntry[];
 };

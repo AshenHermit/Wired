@@ -44,4 +44,8 @@ export interface AppConfig {
     /** Directory of the generated Web export, outside the Godot project. */
     exportDir: string;
   };
+  packages: {
+    readSecret: string;
+    readTtlSec: number;
+  };
 }
