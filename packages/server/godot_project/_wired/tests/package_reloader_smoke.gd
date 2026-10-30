@@ -1,4 +1,4 @@
-extends SceneTree
+﻿extends SceneTree
 
 ## Headless smoke test for PackageReloader hot scene replacement.
 ##
@@ -27,6 +27,8 @@ var _manager: PackagesManager
 var _reloader: PackageReloader
 var _root: Node
 var _panel_root: Node
+## Exported resource assigned to the live root before the reload.
+var _old_texture: Texture2D
 # Package roots that entered the test tree since the counter was reset.
 var _spawned := 0
 # Lines the reloader emitted through its log sink.
@@ -66,14 +68,19 @@ func _run() -> void:
 		_finish()
 		return
 	_root.add_child(node)
-	# A Node reference and a container are live state that must not leak into
-	# the replacement as a dangling reference or as shared storage.
+	# A Node reference, an exported Resource and containers holding live state
+	# must not leak into the replacement.
 	var buddy := Node.new()
 	buddy.name = "Buddy"
 	node.add_child(buddy)
 	node.buddy = buddy
 	node.score = 42
 	node.tags = ["saved"]
+	# Exported identity-bearing values must be re-read from the new scene.
+	_old_texture = GradientTexture2D.new()
+	node.texture = _old_texture
+	var live_nodes: Array = node.get("nodes")
+	live_nodes.append(buddy)
 	node.position = Vector2(3, 4)
 	node.rotation = 0.5
 	node.scale = Vector2(2, 3)
@@ -101,6 +108,10 @@ func _run() -> void:
 		return
 
 	node = await _test_same_revision_reload()
+	if node == null:
+		_finish()
+		return
+	node = await _test_artifact_key_reload()
 	if node == null:
 		_finish()
 		return
@@ -235,10 +246,69 @@ func _test_same_revision_reload() -> Node:
 		not is_same(tags, old_tags),
 		"exported containers must be duplicated, not shared with the old instance"
 	)
+	var texture: Variant = current.get("texture")
+	_check(
+		not is_same(texture, _old_texture),
+		"an exported Resource must come from the new scene, not the old instance"
+	)
+	_check(
+		texture is GradientTexture2D,
+		"the new scene's exported texture must be loaded, got %s" % texture
+	)
+	var nodes: Array = current.get("nodes")
+	_check(
+		nodes.is_empty(),
+		"an exported Array[Node] must be skipped, got %s" % [nodes]
+	)
 	_check(
 		_logs.has("WIRED_PACKAGE_RELOADED package=5 scene=fixture.tscn revision=1"),
 		"a successful reload must log the reload marker, got %s" % [_logs]
 	)
+	return current
+
+
+## A same-revision rebuild gets a different artifact key. The reloader must
+## load the script from the new keyed directory, not the cached old one.
+func _test_artifact_key_reload() -> Node:
+	var previous := _single_package_root()
+	if previous == null:
+		_check(false, "the fixture root must be live before the artifact-key reload")
+		return null
+	var old_id := previous.get_instance_id()
+	var old_key := _manager.current_artifact_key(PACKAGE_ID)
+	var new_key := "same-revision-v2".sha256_text()
+	_write_revision(PACKAGE_ID, 1, 11, "fresh-key", new_key)
+	_check(new_key != old_key, "the fixture must use a different artifact key")
+	_manager._current_revisions[PACKAGE_ID] = 1
+	_manager._current_artifact_keys[PACKAGE_ID] = new_key
+	_logs.clear()
+	_spawned = 0
+
+	_reloader.reload_for(PACKAGE_ID, PackedStringArray([SCRIPT]))
+	var replaced := await _wait_until(func() -> bool: return _spawned > 0)
+	_check(replaced, "a keyed same-revision rebuild must be re-instantiated")
+	await _settle()
+
+	var current := _single_package_root()
+	if current == null:
+		_check(false, "the keyed reload must leave one package root")
+		return null
+	_check(not is_instance_id_valid(old_id), "the old keyed root must be freed")
+	_check(
+		int(current.get_meta("_wired_package_revision", 0)) == 1,
+		"the keyed replacement must keep revision 1"
+	)
+	_check(
+		str(current.get("label")) == "fresh-key",
+		"a same-revision key change must load the new script, got %s"
+		% current.get("label")
+	)
+	_check(
+		current.has_method("revision_marker")
+		and str(current.revision_marker()) == "fresh-key",
+		"a same-revision key change must execute the new script"
+	)
+	_check(int(current.get("score")) == 42, "state must be captured from the live root")
 	return current
 
 
@@ -251,6 +321,7 @@ func _test_new_revision_reload() -> Node:
 	var old_id := previous.get_instance_id()
 	_write_revision(PACKAGE_ID, 2, 7, "v2")
 	_manager._current_revisions[PACKAGE_ID] = 2
+	_manager._current_artifact_keys[PACKAGE_ID] = _key(2)
 	_logs.clear()
 	_spawned = 0
 
@@ -274,7 +345,8 @@ func _test_new_revision_reload() -> Node:
 		"an exported value must survive a revision reload"
 	)
 	_check(
-		str(current.get("label")) == "v2",
+		current.has_method("revision_marker")
+		and str(current.revision_marker()) == "v2",
 		"the replacement must run the new revision's script, got %s"
 		% current.get("label")
 	)
@@ -437,6 +509,7 @@ func _test_dropped_property_reload() -> Node:
 	var old_id := previous.get_instance_id()
 	_write_dropped_revision(PACKAGE_ID, 3, 9)
 	_manager._current_revisions[PACKAGE_ID] = 3
+	_manager._current_artifact_keys[PACKAGE_ID] = _key(3)
 	_logs.clear()
 	_spawned = 0
 
@@ -509,6 +582,7 @@ func _test_failed_reload() -> void:
 	var old_id := previous.get_instance_id()
 	_write_broken_revision(PACKAGE_ID, 4)
 	_manager._current_revisions[PACKAGE_ID] = 4
+	_manager._current_artifact_keys[PACKAGE_ID] = _key(4)
 	_logs.clear()
 	_spawned = 0
 
@@ -536,24 +610,28 @@ func _test_failed_reload() -> void:
 
 
 func _write_revision(
-	package_id: int, revision: int, score: int, label: String = ""
+	package_id: int, revision: int, score: int, label: String = "", key: String = ""
 ) -> void:
-	var dir := _revision_dir(package_id, revision)
+	var artifact_key := key if not key.is_empty() else _key(revision)
+	var dir := _revision_dir(package_id, revision, artifact_key)
 	DirAccess.make_dir_recursive_absolute(dir)
 	var script_path := dir.path_join(SCRIPT)
 	var source := "extends Node2D\n\n@export var score := %d\n" % score
 	source += "@export var buddy: Node\n"
+	source += "@export var nodes: Array[Node] = []\n"
+	source += "@export var texture: Texture2D\n"
 	source += "@export var tags: Array = []\n"
 	if not label.is_empty():
 		source += "@export var label := \"%s\"\n" % label
+		source += "func revision_marker() -> String:\n\treturn \"%s\"\n" % label
 	_write_text(script_path, source)
-	_write_scene(dir, FIXTURE, "Fixture", "Node2D", script_path)
+	_write_scene(dir, FIXTURE, "Fixture", "Node2D", script_path, true)
 
 
-## A newer revision whose script dropped `label` and `tags`: applying the old
-## state must skip the missing properties instead of failing.
+## A newer revision whose script dropped `label`, `tags`, `nodes` and `texture`:
+## applying the old state must skip the missing properties instead of failing.
 func _write_dropped_revision(package_id: int, revision: int, score: int) -> void:
-	var dir := _revision_dir(package_id, revision)
+	var dir := _revision_dir(package_id, revision, _key(revision))
 	DirAccess.make_dir_recursive_absolute(dir)
 	var script_path := dir.path_join(SCRIPT)
 	_write_text(script_path, "extends Node2D\n\n@export var score := %d\n" % score)
@@ -561,7 +639,7 @@ func _write_dropped_revision(package_id: int, revision: int, score: int) -> void
 
 
 func _write_library_revision() -> void:
-	var dir := _revision_dir(LIBRARY_ID, 1)
+	var dir := _revision_dir(LIBRARY_ID, 1, _key(1))
 	DirAccess.make_dir_recursive_absolute(dir)
 	var script_path := dir.path_join(LIB_SCRIPT)
 	_write_text(script_path, "extends Node2D\n\n@export var library_value := 1\n")
@@ -569,7 +647,7 @@ func _write_library_revision() -> void:
 
 
 func _write_control_revision() -> void:
-	var dir := _revision_dir(PANEL_ID, 1)
+	var dir := _revision_dir(PANEL_ID, 1, _key(1))
 	DirAccess.make_dir_recursive_absolute(dir)
 	var script_path := dir.path_join(PANEL_SCRIPT)
 	_write_text(script_path, "extends Control\n\n@export var title := \"panel\"\n")
@@ -579,31 +657,45 @@ func _write_control_revision() -> void:
 ## A revision whose scene file exists but cannot be parsed: the loader reports
 ## it as null, which is the failure path the reloader has to survive.
 func _write_broken_revision(package_id: int, revision: int) -> void:
-	var dir := _revision_dir(package_id, revision)
+	var dir := _revision_dir(package_id, revision, _key(revision))
 	DirAccess.make_dir_recursive_absolute(dir)
 	_write_text(dir.path_join(FIXTURE), "[gd_scene\nthis is not a scene\n")
 
 
 func _write_scene(
-	dir: String, scene_file: String, root_name: String, root_type: String, script_path: String
+	dir: String,
+	scene_file: String,
+	root_name: String,
+	root_type: String,
+	script_path: String,
+	with_texture: bool = false,
 ) -> void:
-	_write_text(
-		dir.path_join(scene_file),
-		(
-			"[gd_scene load_steps=2 format=3]\n\n"
-			+ '[ext_resource type="Script" path="%s" id="1_script"]\n\n'
-			+ '[node name="%s" type="%s"]\nscript = ExtResource("1_script")\n'
-		) % [script_path, root_name, root_type]
-	)
+	var text := "[gd_scene load_steps=%d format=3]\n\n" % (5 if with_texture else 2)
+	text += '[ext_resource type="Script" path="%s" id="1_script"]\n\n'
+	if with_texture:
+		text += '[sub_resource type="Gradient" id="1_gradient"]\n'
+		text += "colors = PackedColorArray(1, 0, 0, 1)\n\n"
+		text += '[sub_resource type="GradientTexture2D" id="2_texture"]\n'
+		text += 'gradient = SubResource("1_gradient")\n\n'
+	text += '[node name="%s" type="%s"]\nscript = ExtResource("1_script")\n'
+	if with_texture:
+		text += 'texture = SubResource("2_texture")\n'
+	_write_text(dir.path_join(scene_file), text % [script_path, root_name, root_type])
 
 
-func _revision_dir(package_id: int, revision: int) -> String:
-	return "%s/packages/%d/%d" % [ROOM_ROOT, package_id, revision]
+func _revision_dir(package_id: int, revision: int, artifact_key: String) -> String:
+	return "%s/packages/%d/%d-%s" % [ROOM_ROOT, package_id, revision, artifact_key]
+
+
+## The fixture uses a deterministic 64-char hex key per revision.
+func _key(seed: Variant) -> String:
+	return str(seed).sha256_text()
 
 
 ## Seeds the manager's in-memory state so `instantiate_scene` needs no network.
 func _seed(package_id: int, revision: int, scene: String, files: Array) -> void:
 	_manager._current_revisions[package_id] = revision
+	_manager._current_artifact_keys[package_id] = _key(revision)
 	var dependencies: Array = []
 	for filepath: String in files:
 		dependencies.append("%d:%s" % [package_id, filepath])

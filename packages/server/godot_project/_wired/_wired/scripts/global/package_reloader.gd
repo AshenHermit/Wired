@@ -12,10 +12,11 @@ class_name PackageReloader
 ## replaced (`scene_dependencies` includes the scene file itself). A library
 ## package without live roots is therefore a no-op.
 ##
-## Replaced roots keep their name, parent index, exported script values and
-## transform; children, Node references and external references are not carried
-## over, they belong to the scene. Package metadata comes from the new
-## instantiation, so the new revision is never overwritten by the old one.
+## Replaced roots keep their name, parent index, safe exported script values and
+## transform. Only value types are carried over: primitives, math/color types,
+## enums and recursively value-only arrays/dictionaries/packed arrays. Objects,
+## Resources, RIDs, Callables and any container holding one belong to the scene
+## (or the old artifact) and are re-read from the new instantiation.
 ##
 ## Autoloads and global `class_name` scripts are not reloaded: a runtime restart
 ## is required for those.
@@ -25,6 +26,48 @@ const RELOAD_DEBOUNCE_SEC := 0.2
 ## Properties kept across a replacement when the node has them. Exported script
 ## variables are captured separately through their property usage flags.
 const PRESERVED_PROPERTIES := ["position", "rotation", "scale", "size"]
+
+## Scalar Variant types with no identity and no references into the scene.
+## Enums are ints, so they are covered by TYPE_INT.
+const VALUE_TYPES := [
+	TYPE_NIL,
+	TYPE_BOOL,
+	TYPE_INT,
+	TYPE_FLOAT,
+	TYPE_STRING,
+	TYPE_STRING_NAME,
+	TYPE_NODE_PATH,
+	TYPE_VECTOR2,
+	TYPE_VECTOR2I,
+	TYPE_VECTOR3,
+	TYPE_VECTOR3I,
+	TYPE_VECTOR4,
+	TYPE_VECTOR4I,
+	TYPE_RECT2,
+	TYPE_RECT2I,
+	TYPE_TRANSFORM2D,
+	TYPE_TRANSFORM3D,
+	TYPE_PLANE,
+	TYPE_QUATERNION,
+	TYPE_AABB,
+	TYPE_BASIS,
+	TYPE_PROJECTION,
+	TYPE_COLOR,
+]
+
+## Packed arrays only ever hold value types.
+const PACKED_VALUE_TYPES := [
+	TYPE_PACKED_BYTE_ARRAY,
+	TYPE_PACKED_INT32_ARRAY,
+	TYPE_PACKED_INT64_ARRAY,
+	TYPE_PACKED_FLOAT32_ARRAY,
+	TYPE_PACKED_FLOAT64_ARRAY,
+	TYPE_PACKED_STRING_ARRAY,
+	TYPE_PACKED_VECTOR2_ARRAY,
+	TYPE_PACKED_VECTOR3_ARRAY,
+	TYPE_PACKED_VECTOR4_ARRAY,
+	TYPE_PACKED_COLOR_ARRAY,
+]
 
 ## Test seam: when set, also receives every printed reload log line.
 var log_sink: Callable = Callable()
@@ -164,10 +207,11 @@ func _is_affected(package_id: int, scene_path: String, changed: Dictionary) -> b
 	return false
 
 
-## Identity in the parent, the transform and the exported script values.
-## Node references are deliberately dropped: they point into the scene that is
-## about to be freed. Containers are duplicated so the old and the new instance
-## never share live state.
+## Identity in the parent, the transform and the safe exported script values.
+## Values with identity (Objects, Resources, RIDs, Callables) and any container
+## that holds one are skipped: they point into the scene or the old artifact
+## that is about to be freed. Value-only containers are duplicated so the old
+## and the new instance never share live state.
 func _capture_state(node: Node) -> Dictionary:
 	var properties := {}
 	for property: Dictionary in node.get_property_list():
@@ -180,20 +224,51 @@ func _capture_state(node: Node) -> Dictionary:
 		if not exported and not PRESERVED_PROPERTIES.has(name):
 			continue
 		var value: Variant = node.get(name)
-		if value is Node:
+		var copied := _copy_value_only(value)
+		if not bool(copied.get("ok", false)):
 			continue
-		if typeof(value) == TYPE_ARRAY:
-			var array: Array = value
-			value = array.duplicate(true)
-		elif typeof(value) == TYPE_DICTIONARY:
-			var dictionary: Dictionary = value
-			value = dictionary.duplicate(true)
-		properties[name] = value
+		properties[name] = copied.get("value")
 	return {
 		"name": node.name,
 		"index": node.get_index(),
 		"properties": properties,
 	}
+
+
+## Returns `{ok, value}`: `ok` is true only for a value type or a container that
+## recursively holds value types. Containers are deep-duplicated on success.
+func _copy_value_only(value: Variant) -> Dictionary:
+	if not _is_value_only(value):
+		return {"ok": false, "value": null}
+	var type := typeof(value)
+	if type == TYPE_ARRAY:
+		var array: Array = value
+		return {"ok": true, "value": array.duplicate(true)}
+	if type == TYPE_DICTIONARY:
+		var dictionary: Dictionary = value
+		return {"ok": true, "value": dictionary.duplicate(true)}
+	return {"ok": true, "value": value}
+
+
+## True for primitives, math/color types, enums, packed value arrays and
+## recursively value-only Arrays/Dictionaries. Objects (including every
+## Resource), RIDs and Callables are never value-only, and a container holding
+## one is rejected as a whole.
+func _is_value_only(value: Variant) -> bool:
+	var type := typeof(value)
+	if VALUE_TYPES.has(type) or PACKED_VALUE_TYPES.has(type):
+		return true
+	if type == TYPE_ARRAY:
+		for item: Variant in value:
+			if not _is_value_only(item):
+				return false
+		return true
+	if type == TYPE_DICTIONARY:
+		for key: Variant in value:
+			if not _is_value_only(key) or not _is_value_only(value[key]):
+				return false
+		return true
+	return false
 
 
 ## Applies the captured properties that the new script still declares. A newer
@@ -211,16 +286,16 @@ func _apply_state(node: Node, state: Dictionary) -> void:
 
 
 ## Copies user metadata to the replacement. `_wired_package_*` keys describe the
-## package scene and are already set correctly by `instantiate_scene`. A Node
-## value is skipped because it belongs to the scene that is being replaced.
+## package scene and are already set correctly by `instantiate_scene`. Metadata
+## with identity (Node, Resource, ...) or a container holding one belongs to the
+## scene that is being replaced and is skipped.
 func _copy_metadata(source: Node, target: Node) -> void:
 	for key: StringName in source.get_meta_list():
 		if str(key).begins_with("_wired_package_"):
 			continue
-		var value: Variant = source.get_meta(key)
-		if value is Node:
-			continue
-		target.set_meta(key, value)
+		var copied := _copy_value_only(source.get_meta(key))
+		if bool(copied.get("ok", false)):
+			target.set_meta(key, copied.get("value"))
 
 
 ## Every lifecycle line is printed, so it stays directly parseable in logs.
