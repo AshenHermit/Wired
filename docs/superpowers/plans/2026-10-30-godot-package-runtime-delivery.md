@@ -54,6 +54,7 @@
 - `packages/server/godot_project/_wired/_wired/scripts/global/packages_manager.gd` — рекурсивная синхронизация, производные ресурсы, метаданные сцен.
 - `packages/server/godot_project/_wired/_wired/scripts/global/package_reloader.gd` — пересоздание корней сцен.
 - `packages/server/godot_project/_wired/_wired/scripts/main_scene.gd` — wiring reloader и API base.
+- `packages/server/godot_project/_wired/_wired/web/shell.html` — проверка same-origin `apiBase` из host bridge.
 - `packages/server/godot_project/_wired/tests/` — headless smoke-тесты GDScript.
 - `docs/superpowers/specs/2026-10-30-godot-package-runtime-delivery.md` — итоговая матрица и ограничения.
 
@@ -744,12 +745,13 @@ git commit -m "feat(game): re-dispatch packages after library updates"
 - Modify: `frontend/src/app/room/[room_code]/(godot)/GameTab.test.tsx`
 - Modify: `packages/server/godot_project/_wired/_wired/scripts/main_scene.gd`
 - Modify: `packages/server/godot_project/_wired/_wired/scripts/global/packages_manager.gd`
+- Modify: `packages/server/godot_project/_wired/_wired/web/shell.html`
 
 **Interfaces:**
 - Consumes: `GameConfigurePayload`, bridge config, `PackagesManager.configure`.
 - Produces:
   - `GameConfigurePayload.apiBase: string`
-  - `PackagesManager.set_api_base(url: String) -> void`
+  - `PackagesManager.set_api_base(url: String) -> bool`
   - Web configure payload содержит `apiBase: "<origin>/api"`.
 
 - [ ] **Step 1: Написать падающий тест GameTab**
@@ -794,19 +796,31 @@ postGameConfigure(frame, {
 - [ ] **Step 4: Добавить `set_api_base` в `PackagesManager`**
 
 ```gdscript
-func set_api_base(url: String) -> void:
+func set_api_base(url: String) -> bool:
 	var value := url.strip_edges()
 	if value.is_empty():
-		return
+		return false
+	if not (value.begins_with("http://") or value.begins_with("https://")):
+		return false
 	base_url = value.trim_suffix("/")
+	return true
 ```
+
+`bool` нужен вызывающему: Web-клиент обязан явно упасть с понятной ошибкой, если хост не передал API base, а не молча ходить на `127.0.0.1:3000`.
 
 Вызывать в `main_scene._run_client` после получения bridge config и до `_net.start_client`:
 
 ```gdscript
 var api_base := str(config.get("apiBase", ""))
-_packages.set_api_base(api_base)
+if api_base.is_empty():
+	_fail("No API base received from the Wired host")
+	return
+if not _packages.set_api_base(api_base):
+	_fail("Invalid API base received from the Wired host")
+	return
 ```
+
+`shell.html` валидирует `apiBase` до передачи в движок: принимается только абсолютный `http(s)` URL на том же origin, иначе значение отбрасывается.
 
 Headless не меняется: `--api-url` / `WIRED_API_URL` / default.
 
@@ -826,7 +840,8 @@ git add frontend/src/app/room/[room_code]/\(godot\)/game-bridge.ts \
   frontend/src/app/room/[room_code]/\(godot\)/GameTab.tsx \
   frontend/src/app/room/[room_code]/\(godot\)/GameTab.test.tsx \
   packages/server/godot_project/_wired/_wired/scripts/main_scene.gd \
-  packages/server/godot_project/_wired/_wired/scripts/global/packages_manager.gd
+  packages/server/godot_project/_wired/_wired/scripts/global/packages_manager.gd \
+  packages/server/godot_project/_wired/_wired/web/shell.html
 git commit -m "feat(game): pass same-origin api base to web build"
 ```
 
@@ -892,14 +907,14 @@ Expected: FAIL — методов нет.
 
 - [ ] **Step 4: Реализовать рекурсивный `sync_package`**
 
-- Ключ защиты от повторного входа: `"%d:%d" % [package_id, revision_hint]`; цикл по манифесту тоже защитить `_syncing`.
+- Ключ защиты от повторного входа: per-package `_applying` с ожиданием и таймаутом; цикл по графу зависимостей защищён цепочкой вызовов (`chain`), а не парой `package_id:revision`.
 - Сначала `fetch_runtime_manifest`; для каждого `manifest.dependencies` вызвать `sync_package(dep.package_id, dep.revision)`.
 - Скачивать файлы по `base_url + "/scripting-packages/%d/revisions/%d/runtime-files/%s?room=%d&token=%s"`.
 - Проверять `size` и `sha256` уже переписанного файла из манифеста.
 - Писать в `packages/<id>/.staging`; хранить текущую и предыдущую ревизии:
-  - старую current переименовать в `.previous-<oldRev>` (или оставить каталог);
+  - существующую целевую ревизию переименовать в `.previous` на время замены;
   - staging → `<newRev>`;
-  - удалить ревизии, кроме `oldRev` и `newRev`.
+  - после успешной замены удалить `.previous` и все числовые ревизии, кроме новой и самой высокой оставшейся.
 - После swap:
   - `_current_revisions[package_id] = revision`;
   - `_scene_dependencies[package_id] = manifest.sceneDependencies`;
@@ -1065,7 +1080,9 @@ const RELOAD_DEBOUNCE_SEC := 0.2
   6. `old.queue_free()`.
 - `_capture_state`:
   - export-переменные: `usage & PROPERTY_USAGE_SCRIPT_VARIABLE` и `usage & PROPERTY_USAGE_STORAGE`; значение по `prop.name`;
-  - `position`, `rotation`, `scale`, `size`, если свойства есть.
+  - `position`, `rotation`, `scale`, `size`, если свойства есть;
+  - значения-`Node` не переносятся, `Array`/`Dictionary` копируются глубоко.
+- Пользовательские meta-ключи (кроме `_wired_package_*`) копируются на новый корень; meta-значения-`Node` пропускаются.
 - Не сохранять дочерние узлы и внешние ссылки. Nested package roots пересоздаются вместе с внешней сценой.
 - `package_applied` от пакета-библиотеки без live-узлов — no-op.
 - Autoload/`class_name` не трогать; в docs указать перезапуск.
@@ -1161,7 +1178,8 @@ pnpm export:game
 
 ```bash
 git add docs/superpowers/specs/2026-10-30-godot-package-runtime-delivery.md \
-  docs/superpowers/plans/2026-10-28-godot-multiplayer-foundation.md
+  docs/superpowers/plans/2026-10-28-godot-multiplayer-foundation.md \
+  docs/superpowers/plans/2026-10-30-godot-package-runtime-delivery.md
 git commit -m "docs: record package runtime delivery"
 ```
 
