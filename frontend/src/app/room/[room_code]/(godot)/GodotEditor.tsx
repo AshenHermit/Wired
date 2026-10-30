@@ -11,7 +11,14 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { getGodotProjectInfo } from "@/api/services/godot-game";
 
-export function GodotEditor({ roomId }: { roomId: number }) {
+export function GodotEditor({
+  roomId,
+  beforeStart,
+}: {
+  roomId: number;
+  /** Runs after the project download and before the editor starts. */
+  beforeStart?: (editor: GodotEditorInstance) => Promise<void>;
+}) {
   const editorInstanceRef = React.useRef<GodotEditorInstance | null>(null);
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const [scriptsLoaded, setScriptsLoaded] = React.useState(false);
@@ -31,6 +38,7 @@ export function GodotEditor({ roomId }: { roomId: number }) {
         await editor.init();
         const projectInfo = await getGodotProjectInfo();
         await editor.downloadProject(projectInfo);
+        await beforeStart?.(editor);
         await editor.start();
       } catch (error) {
         setErrorMessage(
@@ -39,7 +47,7 @@ export function GodotEditor({ roomId }: { roomId: number }) {
         setStatus("error");
       }
     },
-    [roomId]
+    [beforeStart, roomId]
   );
   const handleFailure = React.useCallback((message: string) => {
     setErrorMessage(message);

@@ -2,6 +2,7 @@ import {
   GameRoomConnection,
   GameRoomRuntimeStatus,
   ProjectInfo,
+  RoomPackagesStatus,
 } from "@wired-io/shared";
 import { apiClient } from "../api-client/client-api";
 
@@ -27,5 +28,15 @@ export async function createGameConnection(roomId: number) {
 export async function getGameRoomStatus(roomId: number) {
   return apiClient.get<GameRoomRuntimeStatus, void>(
     `rooms/${roomId}/game/status`
+  );
+}
+
+/**
+ * Published package revisions of the room and how far the runtime and its
+ * clients have applied them. Used by the editor to catch up after Emit.
+ */
+export async function getRoomPackages(roomId: number) {
+  return apiClient.get<RoomPackagesStatus, void>(
+    `rooms/${roomId}/game/packages`
   );
 }

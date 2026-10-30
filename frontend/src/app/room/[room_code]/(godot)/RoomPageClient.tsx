@@ -2,6 +2,8 @@
 
 import { Room } from "@wired-io/shared";
 import { GodotEditor } from "./GodotEditor";
+import { PackageSyncStatus } from "./PackageSyncStatus";
+import { usePackageSync } from "./use-package-sync";
 import {
   Tabs,
   TabsContent,
@@ -16,6 +18,7 @@ import { GameTab } from "./GameTab";
 export function GodotRoomPageClient({ room }: { room: Room }) {
   const [activeTab, setActiveTab] = React.useState("editor");
   const [gameMounted, setGameMounted] = React.useState(false);
+  const packageSync = usePackageSync(room.id);
 
   const handleTabChange = React.useCallback((value: string) => {
     setActiveTab(value);
@@ -27,7 +30,7 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
   }, []);
 
   return (
-    <div className="w-screen h-screen">
+    <div className="relative w-screen h-screen">
       <Tabs
         value={activeTab}
         onValueChange={handleTabChange}
@@ -51,13 +54,17 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
           }}
         >
           <TabsContent value="editor" className="w-full !h-full">
-            <GodotEditor roomId={room.id} />
+            <GodotEditor
+              roomId={room.id}
+              beforeStart={packageSync.beforeEditorStart}
+            />
           </TabsContent>
           <TabsContent value="game" className="w-full !h-full">
             {gameMounted && <GameTab room={room} />}
           </TabsContent>
         </TabsContents>
       </Tabs>
+      {activeTab === "editor" && <PackageSyncStatus sync={packageSync} />}
     </div>
   );
 }
