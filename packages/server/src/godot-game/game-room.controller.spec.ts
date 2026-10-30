@@ -1,4 +1,4 @@
-﻿import { INestApplication, UnauthorizedException } from '@nestjs/common';
+import { INestApplication, UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
@@ -115,7 +115,12 @@ describe('GameRoomController', () => {
           revision: 1,
           publishedAt: '2026-10-30T09:00:00.000Z',
           state: 'pending',
-          runtime: { state: 'pending', revision: 1, error: null, updatedAt: null },
+          runtime: {
+            state: 'pending',
+            revision: 1,
+            error: null,
+            updatedAt: null,
+          },
           clients: [],
         },
       ],

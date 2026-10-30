@@ -37,6 +37,11 @@ import { RuntimeProcessFactory } from './room-runtime.types';
       useExisting: PackageSyncService,
     },
   ],
-  exports: [RoomRuntimeService, GameTicketService],
+  exports: [
+    RoomRuntimeService,
+    GameTicketService,
+    PackageSyncService,
+    PACKAGE_REVISION_DISPATCHER,
+  ],
 })
 export class GodotGameModule {}

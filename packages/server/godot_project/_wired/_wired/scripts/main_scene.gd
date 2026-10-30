@@ -354,7 +354,9 @@ func _apply_client_package(package_id: int, revision: int) -> void:
 	)
 	var result: Dictionary = await _packages.sync_package(package_id, revision)
 	var ok := bool(result.get("ok", false))
-	var applied := int(result.get("revision", revision))
+	var applied := int(result.get("revision", 0))
+	if applied <= 0:
+		applied = revision
 	var error := "" if ok else str(result.get("error", ""))
 	_net.report_package_ready(package_id, applied, ok, error)
 	_bridge_call(

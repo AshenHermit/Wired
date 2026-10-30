@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Wire protocol spoken by the Godot room server on stdout/stderr.
  *
  * Kept as a pure function so the runtime service only deals with side effects
@@ -8,8 +8,18 @@ export type RuntimeLineEvent =
   | { kind: 'ready'; roomId: string; port: number }
   | { kind: 'auth'; peer: number; roomId: string }
   | { kind: 'player-left'; peer: number }
-  | { kind: 'packages-applied'; packageId: number; revision: number; files: number }
-  | { kind: 'packages-failed'; packageId: number; revision: number; error: string }
+  | {
+      kind: 'packages-applied';
+      packageId: number;
+      revision: number;
+      files: number;
+    }
+  | {
+      kind: 'packages-failed';
+      packageId: number;
+      revision: number;
+      error: string;
+    }
   | {
       kind: 'client-packages-ready';
       peer: number;

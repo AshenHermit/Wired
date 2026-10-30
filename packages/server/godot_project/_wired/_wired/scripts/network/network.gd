@@ -266,12 +266,17 @@ func cli_package_ready(payload_json: String) -> void:
 			% [peer_id, package_id]
 		)
 		return
-	if int(_package_revisions[package_id]) != revision:
+	var current_revision := int(_package_revisions[package_id])
+	if revision < current_revision:
 		print(
 			"WIRED_PACKAGES_REPORT_REJECTED peer=%d package=%d reason=stale_revision current=%d"
-			% [peer_id, package_id, int(_package_revisions[package_id])]
+			% [peer_id, package_id, current_revision]
 		)
 		return
+	# A client may see a newer manifest than the runtime (publish raced the
+	# apply). Accept it so the report is not silently lost, and track it.
+	if revision > current_revision:
+		_package_revisions[package_id] = revision
 	var ok := bool(payload.get("ok", false))
 	var error := _single_line(str(payload.get("error", "")))
 	_package_reports[peer_id][package_id] = {

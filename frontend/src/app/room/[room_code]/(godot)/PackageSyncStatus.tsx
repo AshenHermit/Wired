@@ -82,7 +82,9 @@ export function PackageSyncStatus({
         >
           <div className="flex items-center gap-1.5 font-medium text-amber-200">
             <TriangleAlertIcon className="size-3.5" />
-            {conflict.name}: локальные правки не перезаписаны
+            {conflict.conflicts.length > 0
+              ? `${conflict.name}: локальные правки не перезаписаны`
+              : `${conflict.name}: доступна новая ревизия`}
           </div>
           <ul className="mt-1 space-y-0.5 text-white/70">
             {conflict.conflicts.slice(0, 5).map((file) => (
@@ -98,17 +100,19 @@ export function PackageSyncStatus({
             )}
           </ul>
           <div className="mt-2 flex gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              className="h-7 px-2"
-              onClick={() =>
-                void sync.resolveConflict(conflict.packageId, "keep-local")
-              }
-            >
-              Оставить локальные
-            </Button>
+            {conflict.conflicts.length > 0 && (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="h-7 px-2"
+                onClick={() =>
+                  void sync.resolveConflict(conflict.packageId, "keep-local")
+                }
+              >
+                Оставить локальные
+              </Button>
+            )}
             <Button
               type="button"
               size="sm"

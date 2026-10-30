@@ -1,4 +1,4 @@
-﻿import { PackageFileEntry, PackageManifest } from "@wired-io/shared";
+import { PackageFileEntry, PackageManifest } from "@wired-io/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   GodotFsError,

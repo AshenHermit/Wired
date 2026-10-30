@@ -1,4 +1,4 @@
-﻿import { PackageFileEntry, PackageManifest, PackageRevision } from "@wired-io/shared";
+import { PackageFileEntry, PackageManifest, PackageRevision } from "@wired-io/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PackageFileSystem } from "./godot-packages-fs";
 import {

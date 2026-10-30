@@ -116,12 +116,12 @@ function makeEditor() {
   return { fs, editor };
 }
 
-async function manifestOf(content: string): Promise<PackageManifest> {
+async function manifestOf(content: string, revision = 2): Promise<PackageManifest> {
   const data = encoder.encode(content);
   return {
     packageId: 5,
     name: "Demo",
-    revision: 2,
+    revision,
     files: [
       {
         filepath: "scripts/hero.gd",
@@ -176,6 +176,48 @@ describe("usePackageSync", () => {
     expect(result.current.fsReady).toBe(true);
     expect(fs.read(FILE)).toBe("extends Node");
     expect(loadPackageBaseline(1, 5)?.revision).toBe(2);
+  });
+
+  it("does not replace files under a running editor without an explicit action", async () => {
+    const { fs, editor } = makeEditor();
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValue(roomStatus(2));
+    vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
+      await manifestOf("extends Node", 2),
+    );
+    vi.mocked(packagesApi.getRevisionFile).mockResolvedValue(
+      encoder.encode("extends Node").buffer,
+    );
+
+    const { result } = renderHook(() => usePackageSync(1));
+
+    await act(async () => {
+      await result.current.beforeEditorStart(editor);
+    });
+    expect(fs.read(FILE)).toBe("extends Node");
+
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValue(roomStatus(3));
+    vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
+      await manifestOf("extends Node2D", 3),
+    );
+
+    await act(async () => {
+      await result.current.syncNow();
+    });
+
+    expect(result.current.phase).toBe("conflict");
+    expect(result.current.entries[0].state).toBe("available");
+    expect(fs.read(FILE)).toBe("extends Node");
+    expect(packagesApi.getRevisionFile).toHaveBeenCalledTimes(1);
+
+    vi.mocked(packagesApi.getRevisionFile).mockResolvedValue(
+      encoder.encode("extends Node2D").buffer,
+    );
+    await act(async () => {
+      await result.current.resolveConflict(5, "replace-published");
+    });
+
+    expect(fs.read(FILE)).toBe("extends Node2D");
+    expect(loadPackageBaseline(1, 5)?.revision).toBe(3);
   });
 
   it("does not overwrite a local edit and replaces it only on request", async () => {

@@ -22,6 +22,7 @@ export type PackageSyncPhase = "idle" | "syncing" | "ready" | "conflict" | "erro
 export type PackageEntryState =
   | "applied"
   | "up-to-date"
+  | "available"
   | "conflict"
   | "error";
 
@@ -126,6 +127,7 @@ export function usePackageSync(roomId: number): PackageSyncController {
   const filesRef = React.useRef<PackageFileSystem | null>(null);
   const syncingRef = React.useRef(false);
   const skippedRef = React.useRef<Set<number>>(new Set());
+  const editorRunningRef = React.useRef(false);
   const mountedRef = React.useRef(true);
 
   React.useEffect(() => {
@@ -138,6 +140,7 @@ export function usePackageSync(roomId: number): PackageSyncController {
   React.useEffect(() => {
     filesRef.current = null;
     skippedRef.current = new Set();
+    editorRunningRef.current = false;
     setFsReady(false);
     setSnapshot(initialState);
   }, [roomId]);
@@ -171,11 +174,44 @@ export function usePackageSync(roomId: number): PackageSyncController {
           continue;
         }
 
+        const baseline = loadPackageBaseline(roomId, pkg.packageId);
+
+        // The Godot editor keeps unsaved buffers outside the emscripten FS, so
+        // a poll cannot see them. Never replace package files under a running
+        // editor automatically: offer the revision and let the user choose.
+        if (editorRunningRef.current) {
+          if (baseline?.revision === pkg.revision) {
+            entries.push({
+              packageId: pkg.packageId,
+              name: pkg.name,
+              revision: pkg.revision,
+              state: "up-to-date",
+              message: "Актуальная ревизия",
+            });
+            continue;
+          }
+          conflicts.push({
+            packageId: pkg.packageId,
+            name: pkg.name,
+            revision: pkg.revision,
+            conflicts: [],
+          });
+          entries.push({
+            packageId: pkg.packageId,
+            name: pkg.name,
+            revision: pkg.revision,
+            state: "available",
+            message:
+              "Доступна новая ревизия. Примените вручную, чтобы не потерять несохранённые изменения.",
+          });
+          continue;
+        }
+
         try {
           const result = await reconcilePackageRevision(
             pkg.packageId,
             files,
-            loadPackageBaseline(roomId, pkg.packageId),
+            baseline,
           );
 
           if (result.status === "conflict") {
@@ -261,6 +297,8 @@ export function usePackageSync(roomId: number): PackageSyncController {
           phase: "error",
           error: `Пакеты недоступны: ${errorMessage(error)}`,
         }));
+      } finally {
+        editorRunningRef.current = true;
       }
     },
     [syncAll],

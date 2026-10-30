@@ -1,4 +1,4 @@
-﻿import { Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { PackageSyncService } from './package-sync.service';
@@ -11,7 +11,9 @@ const flushAsync = async (): Promise<void> => {
 };
 
 describe('PackageSyncService', () => {
-  let packages: jest.Mocked<Pick<Repository<ScriptingPackage>, 'find' | 'findOne'>>;
+  let packages: jest.Mocked<
+    Pick<Repository<ScriptingPackage>, 'find' | 'findOne'>
+  >;
   let revisions: jest.Mocked<
     Pick<Repository<ScriptingPackageRevision>, 'findOne'>
   >;
@@ -224,5 +226,69 @@ describe('PackageSyncService', () => {
     service.onModuleDestroy();
 
     expect(runtime.setObserver).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('resends applied revisions to a fresh runtime process', async () => {
+    await service.revisionPublished(42, 3);
+    service.onPackagesApplied('7', 42, 3, 2);
+    service.onPeerAuthenticated('7', 5);
+
+    service.onRuntimeReady('7');
+    await flushAsync();
+
+    expect(runtime.sendPackage).toHaveBeenCalledTimes(2);
+    const status = (await service.getStatuses('7'))[0];
+    expect(status.runtime.state).toBe('pending');
+    expect(status.clients).toEqual([]);
+  });
+
+  it('derives status for a room-filtered package without loading the room relation', async () => {
+    await service.revisionPublished(42, 3);
+    packages.find.mockResolvedValue([
+      { id: 42, name: 'Demo package' },
+    ] as unknown as ScriptingPackage[]);
+
+    const status = (await service.getStatuses('7'))[0];
+
+    expect(status).toMatchObject({
+      packageId: 42,
+      revision: 3,
+      runtime: { state: 'pending', revision: 3 },
+    });
+  });
+
+  it('retries a dispatch that the runtime never confirms', async () => {
+    jest.useFakeTimers();
+    await service.revisionPublished(42, 3);
+    service.onModuleInit();
+
+    jest.advanceTimersByTime(30_000);
+    await flushAsync();
+    expect(runtime.sendPackage).toHaveBeenCalledTimes(2);
+
+    jest.advanceTimersByTime(30_000);
+    await flushAsync();
+    expect(runtime.sendPackage).toHaveBeenCalledTimes(3);
+
+    jest.advanceTimersByTime(120_000);
+    await flushAsync();
+    expect(runtime.sendPackage).toHaveBeenCalledTimes(3);
+    const status = (await service.getStatuses('7'))[0];
+    expect(status.runtime).toMatchObject({
+      state: 'failed',
+      error: 'runtime did not confirm the revision in time',
+    });
+  });
+
+  it('forgets failures of peers that already left', async () => {
+    await service.revisionPublished(42, 3);
+    service.onPackagesApplied('7', 42, 3, 1);
+    service.onPeerAuthenticated('7', 5);
+    service.onClientPackagesFailed('7', 5, 42, 3, 'download failed');
+    expect((await service.getStatuses('7'))[0].state).toBe('failed');
+
+    service.onPeerLeft('7', 5);
+
+    expect((await service.getStatuses('7'))[0].state).toBe('applied');
   });
 });

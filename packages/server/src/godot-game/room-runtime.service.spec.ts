@@ -593,7 +593,8 @@ describe('RoomRuntimeService', () => {
     await Promise.all([stopping, shutdown]);
   });
 
-  it('rejects invalid lifecycle timeouts instead of starting', async () => {    service = createService({ ticketTtlSec: 0 });
+  it('rejects invalid lifecycle timeouts instead of starting', async () => {
+    service = createService({ ticketTtlSec: 0 });
     const connection = service.getConnection('room-1');
     await flushAsync();
     if (factory.processes.length > 0) {
@@ -643,9 +644,7 @@ describe('RoomRuntimeService', () => {
 
     const { process } = await startRoom('room-1');
     process.emitLine('WIRED_AUTH_OK peer=2 player=1 room=room-1');
-    process.emitLine(
-      'WIRED_PACKAGES_APPLIED package=42 revision=3 files=7',
-    );
+    process.emitLine('WIRED_PACKAGES_APPLIED package=42 revision=3 files=7');
     process.emitLine(
       'WIRED_PACKAGES_SYNC_FAILED package=43 revision=1 error=hash mismatch',
     );

@@ -101,7 +101,9 @@ func sync_package(package_id: int, revision_hint: int = 0) -> Dictionary:
 		package_applied.emit(package_id, int(result.revision), int(result.files.size()))
 	else:
 		package_failed.emit(package_id, str(result.error))
-		var revision := int(result.get("revision", revision_hint))
+		var revision := int(result.get("revision", 0))
+		if revision <= 0:
+			revision = revision_hint
 		print(
 			"WIRED_PACKAGES_SYNC_FAILED package=%d revision=%d error=%s"
 			% [package_id, revision, _single_line(str(result.error))]
@@ -333,5 +335,5 @@ func _remove_other_revisions(package_id: int, keep_revision: int) -> void:
 		_remove_tree(root.path_join(name))
 
 
-func _failure(message: String) -> Dictionary:
-	return {"ok": false, "error": message, "revision": 0, "files": []}
+func _failure(message: String, revision: int = 0) -> Dictionary:
+	return {"ok": false, "error": message, "revision": revision, "files": []}

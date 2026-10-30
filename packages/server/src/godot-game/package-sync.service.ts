@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { PackageRevisionSyncState, PackageSyncStatus } from '@wired-io/shared';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
@@ -12,6 +17,8 @@ const RETRY_TICK_MS = 5_000;
 /** The first retry waits 10s, the second 20s. */
 const RETRY_STEP_MS = 10_000;
 const MAX_ATTEMPTS = 3;
+/** A runtime that never answers a dispatch is treated as failed. */
+const DISPATCH_TIMEOUT_MS = 30_000;
 
 type RuntimeState = 'pending' | 'applied' | 'failed';
 type ClientState = 'pending' | 'ready' | 'failed';
@@ -91,7 +98,9 @@ export class PackageSyncService
       relations: { room: true },
     });
     if (!pkg) {
-      this.logger.warn(`Cannot dispatch revision ${revision}: package ${packageId} not found`);
+      this.logger.warn(
+        `Cannot dispatch revision ${revision}: package ${packageId} not found`,
+      );
       return;
     }
     if (!pkg.room) {
@@ -148,7 +157,14 @@ export class PackageSyncService
       if (!latest?.publishedAt) {
         continue;
       }
-      statuses.push(this.toStatus(pkg, latest.revision, latest.publishedAt));
+      statuses.push(
+        this.toStatus(
+          pkg,
+          String(roomNumber),
+          latest.revision,
+          latest.publishedAt,
+        ),
+      );
     }
     return statuses.sort((a, b) => a.packageId - b.packageId);
   }
@@ -194,10 +210,18 @@ export class PackageSyncService
         continue;
       }
       if (freshRuntime) {
+        // A new runtime process has no applied revisions and no clients: the
+        // previous session's confirmations are no longer true.
         existing.attempts = 0;
         existing.nextAttemptAt = null;
+        existing.runtimeState = 'pending';
+        existing.runtimeError = null;
+        existing.runtimeUpdatedAt = null;
+        existing.dispatchedAt = null;
+        existing.clients.clear();
       }
       if (
+        freshRuntime ||
         !existing.dispatchedAt ||
         (existing.runtimeState === 'failed' && existing.nextAttemptAt === null)
       ) {
@@ -386,6 +410,19 @@ export class PackageSyncService
   private retryDue(): void {
     const now = Date.now();
     for (const record of this.records.values()) {
+      if (
+        record.runtimeState === 'pending' &&
+        record.dispatchedAt !== null &&
+        now - Date.parse(record.dispatchedAt) >= DISPATCH_TIMEOUT_MS
+      ) {
+        record.runtimeState = 'failed';
+        record.runtimeError = 'runtime did not confirm the revision in time';
+        record.runtimeUpdatedAt = new Date(now).toISOString();
+        record.nextAttemptAt = now;
+        this.logger.warn(
+          `Runtime did not confirm package ${record.packageId} revision ${record.revision} in room ${record.roomId}`,
+        );
+      }
       if (record.nextAttemptAt === null || record.nextAttemptAt > now) {
         continue;
       }
@@ -399,10 +436,10 @@ export class PackageSyncService
 
   private toStatus(
     pkg: ScriptingPackage,
+    roomId: string,
     revision: number,
     publishedAt: Date,
   ): PackageSyncStatus {
-    const roomId = String(pkg.room?.id ?? '');
     const record = this.records.get(this.recordKey(roomId, pkg.id));
     const base = {
       packageId: pkg.id,
@@ -451,7 +488,9 @@ export class PackageSyncService
       return 'failed';
     }
     if (
-      [...record.clients.values()].some((client) => client.state === 'failed')
+      [...record.clients.entries()].some(
+        ([peer, client]) => peers.has(peer) && client.state === 'failed',
+      )
     ) {
       return 'failed';
     }
