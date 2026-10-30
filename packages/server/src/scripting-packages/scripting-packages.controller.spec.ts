@@ -222,31 +222,69 @@ describe('ScriptingPackagesController revisions API', () => {
     readUrls.verifyToken.mockReturnValue(false);
 
     await expect(
-      controller.runtimeFile(5, 3, ['a.gd'], 8, 'bad', response),
+      controller.runtimeFile(
+        5,
+        3,
+        ['a.gd'],
+        8,
+        'k'.repeat(64),
+        'bad',
+        response,
+      ),
     ).rejects.toBeInstanceOf(UnauthorizedException);
     expect(delivery.resolveRuntimeFile).not.toHaveBeenCalled();
   });
 
   it('rejects a runtime file without a token', async () => {
     await expect(
-      controller.runtimeFile(5, 3, ['a.gd'], 7, undefined as never, response),
+      controller.runtimeFile(
+        5,
+        3,
+        ['a.gd'],
+        7,
+        'k'.repeat(64),
+        undefined as never,
+        response,
+      ),
     ).rejects.toBeInstanceOf(UnauthorizedException);
     expect(readUrls.verifyToken).not.toHaveBeenCalled();
     expect(delivery.resolveRuntimeFile).not.toHaveBeenCalled();
   });
 
+  it('rejects a runtime file without an artifact key', async () => {
+    await expect(
+      controller.runtimeFile(5, 3, ['a.gd'], 7, '', 'good', response),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(delivery.resolveRuntimeFile).not.toHaveBeenCalled();
+  });
+
   it('streams a runtime file for a valid token', async () => {
-    await controller.runtimeFile(5, 3, ['a.gd'], 7, 'good', response);
+    await controller.runtimeFile(
+      5,
+      3,
+      ['a.gd'],
+      7,
+      'k'.repeat(64),
+      'good',
+      response,
+    );
 
     expect(readUrls.verifyToken).toHaveBeenCalledWith('good', {
       roomId: 7,
       packageId: 5,
       revision: 3,
     });
-    expect(delivery.resolveRuntimeFile).toHaveBeenCalledWith(5, 3, 7, 'a.gd');
+    expect(delivery.resolveRuntimeFile).toHaveBeenCalledWith(
+      5,
+      3,
+      7,
+      'k'.repeat(64),
+      'a.gd',
+    );
     expect(response.set).toHaveBeenCalledWith({
       'Content-Type': 'application/octet-stream',
       'Content-Length': '3',
+      'Cache-Control': 'no-store',
     });
   });
 });

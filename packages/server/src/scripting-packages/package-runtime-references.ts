@@ -30,6 +30,35 @@ const REFERENCE_PATH_RE =
 const EXT_RESOURCE_UID_RE = /\suid="[^"]*"/;
 
 /**
+ * Whole-line comments are not code: `#` in GDScript and `;` in `.tscn`/`.tres`.
+ * A quoted package reference there is documentation, never a dependency.
+ */
+const COMMENT_PREFIXES = ['#', ';'];
+
+function isCommentLine(line: string): boolean {
+  const trimmed = line.trimStart();
+  return COMMENT_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+}
+
+/**
+ * Splits `text` into lines and applies `transform` to every line that is not a
+ * whole-line comment. Splitting on `\n` keeps `\r` intact, so CRLF files are
+ * rebuilt byte-for-byte outside the transformed spans.
+ *
+ * Quoted references inside multi-line strings are still collected and
+ * rewritten: only comments are excluded.
+ */
+function mapCodeLines(
+  text: string,
+  transform: (line: string) => string,
+): string {
+  return text
+    .split('\n')
+    .map((line) => (isCommentLine(line) ? line : transform(line)))
+    .join('\n');
+}
+
+/**
  * Package files that the editor treats as text: scenes, resources and GDScript
  * scripts. Anything else (textures, audio, ...) is binary and never decoded.
  */
@@ -53,54 +82,65 @@ export function decodePackageText(filepath: string, data: Buffer): string {
 
 /**
  * Collects every `res://packages/<id>/<path>` reference inside quoted string
- * literals. Paths are normalized and deduplicated, keeping first-seen order.
- * Comments and arbitrary text are not string literals, so they never count.
+ * literals in real code. Whole-line comments are skipped, so a commented-out
+ * reference neither creates a dependency nor blocks publishing. Paths are
+ * normalized and deduplicated, keeping first-seen order.
  */
 export function collectPackageReferences(text: string): PackageFileReference[] {
   const refs: PackageFileReference[] = [];
   const seen = new Set<string>();
-  for (const match of text.matchAll(PACKAGE_REFERENCE_RE)) {
-    assertSafeRawPath(match[3]);
-    const filepath = normalizeReferencePath(match[3]);
-    if (filepath === null) {
-      continue;
+  mapCodeLines(text, (line) => {
+    for (const match of line.matchAll(PACKAGE_REFERENCE_RE)) {
+      assertSafeRawPath(match[3]);
+      const filepath = normalizeReferencePath(match[3]);
+      if (filepath === null) {
+        continue;
+      }
+      const packageId = Number(match[2]);
+      const key = `${packageId}:${filepath}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      refs.push({ packageId, filepath });
     }
-    const packageId = Number(match[2]);
-    const key = `${packageId}:${filepath}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    refs.push({ packageId, filepath });
-  }
+    return line;
+  });
   return refs;
 }
 
 /**
  * Rewrites every `res://packages/<id>/` reference inside a quoted string
- * literal to the runtime location of the pinned revision:
- * `user://wired/rooms/<roomId>/packages/<id>/<revision>/`. Comments and other
- * non-literal text are left untouched. Throws when a quoted reference targets a
- * package with no pinned revision.
+ * literal to the artifact-keyed runtime location of the pinned revision:
+ * `user://wired/rooms/<roomId>/packages/<id>/<revision>-<artifactKey>/`.
+ *
+ * The key comes from the referenced package's own closure, so a root and its
+ * dependencies agree on the same library directory. Whole-line comments are
+ * left untouched; quoted references in multi-line strings are rewritten.
+ * Throws when a quoted reference targets a package with no pinned revision.
  */
 export function rewritePackageReferences(
   text: string,
   options: {
     roomId: number;
     revisionByPackage: ReadonlyMap<number, number>;
+    artifactKeyByPackage: ReadonlyMap<number, string>;
   },
 ): string {
-  return text.replace(
-    PACKAGE_REFERENCE_RE,
-    (match, quote: string, idGroup: string, rest: string) => {
-      assertSafeRawPath(rest);
-      const id = Number(idGroup);
-      const revision = options.revisionByPackage.get(id);
-      if (revision === undefined) {
-        throw new Error(`package_reference_not_rewritable:${id}`);
-      }
-      return `${quote}user://wired/rooms/${options.roomId}/packages/${id}/${revision}/${rest}${quote}`;
-    },
+  return mapCodeLines(text, (line) =>
+    line.replace(
+      PACKAGE_REFERENCE_RE,
+      (match, quote: string, idGroup: string, rest: string) => {
+        assertSafeRawPath(rest);
+        const id = Number(idGroup);
+        const revision = options.revisionByPackage.get(id);
+        const artifactKey = options.artifactKeyByPackage.get(id);
+        if (revision === undefined || artifactKey === undefined) {
+          throw new Error(`package_reference_not_rewritable:${id}`);
+        }
+        return `${quote}user://wired/rooms/${options.roomId}/packages/${id}/${revision}-${artifactKey}/${rest}${quote}`;
+      },
+    ),
   );
 }
 
@@ -201,22 +241,27 @@ type Reference =
 /** Collects the paths a text file references via `path="..."` or preload/load. */
 function collectReferences(text: string): Reference[] {
   const refs: Reference[] = [];
-  for (const match of text.matchAll(REFERENCE_PATH_RE)) {
-    const raw = match[2];
-    if (raw.startsWith('res://')) {
-      const parsed = parsePackagePath(raw);
-      if (parsed) {
-        refs.push({
-          kind: 'package',
-          packageId: parsed.packageId,
-          filepath: parsed.filepath,
-        });
-      }
-      // Other res:// targets are not package files and are not resolvable here.
-    } else {
-      const filepath = normalizeReferencePath(raw);
-      if (filepath !== null) {
-        refs.push({ kind: 'relative', filepath });
+  for (const line of text.split('\n')) {
+    if (isCommentLine(line)) {
+      continue;
+    }
+    for (const match of line.matchAll(REFERENCE_PATH_RE)) {
+      const raw = match[2];
+      if (raw.startsWith('res://')) {
+        const parsed = parsePackagePath(raw);
+        if (parsed) {
+          refs.push({
+            kind: 'package',
+            packageId: parsed.packageId,
+            filepath: parsed.filepath,
+          });
+        }
+        // Other res:// targets are not package files and are not resolvable here.
+      } else {
+        const filepath = normalizeReferencePath(raw);
+        if (filepath !== null) {
+          refs.push({ kind: 'relative', filepath });
+        }
       }
     }
   }

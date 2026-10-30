@@ -37,6 +37,17 @@ describe('PackageReadUrlService', () => {
     expect(service.verifyToken(tampered, subject, 1_001)).toBe(false);
   });
 
+  it.each([
+    ['exponent expiry', '1e3.' + 'a'.repeat(64)],
+    ['extra dot', '1900.' + 'a'.repeat(64) + '.extra'],
+    ['empty token', ''],
+    ['empty mac', '1900.'],
+    ['missing mac', '1900'],
+  ])('rejects a malformed token: %s', (_name, malformed) => {
+    const service = new PackageReadUrlService(config('read-secret'));
+    expect(service.verifyToken(malformed, subject, 1_001)).toBe(false);
+  });
+
   it('fails closed when the read secret is missing', () => {
     const service = new PackageReadUrlService(config(''));
     expect(() => service.createToken(subject, 1_000)).toThrow(

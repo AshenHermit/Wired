@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Param,
   ParseIntPipe,
   Patch,
@@ -185,6 +186,7 @@ export class ScriptingPackagesController {
   }
 
   @ApiOkResponse({ description: 'Signed runtime manifest for a room' })
+  @Header('Cache-Control', 'no-store')
   @Get(':id/revisions/:revision/runtime-manifest')
   async runtimeManifest(
     @Param('id', ParseIntPipe) id: number,
@@ -204,6 +206,7 @@ export class ScriptingPackagesController {
     @Param('revision', ParseIntPipe) revision: number,
     @Param('path') path: string | string[],
     @Query('room', ParseIntPipe) room: number,
+    @Query('key') artifactKey: string,
     @Query('token') token: string,
     @Res() res: Response,
   ): Promise<void> {
@@ -217,12 +220,16 @@ export class ScriptingPackagesController {
     ) {
       throw new UnauthorizedException('package_read_token_invalid');
     }
+    if (!artifactKey) {
+      throw new BadRequestException('package_artifact_key_missing');
+    }
 
     const filepath = Array.isArray(path) ? path.join('/') : path;
     const file = await this.delivery.resolveRuntimeFile(
       id,
       revision,
       room,
+      artifactKey,
       filepath,
     );
 
@@ -233,6 +240,7 @@ export class ScriptingPackagesController {
     res.set({
       'Content-Type': 'application/octet-stream',
       'Content-Length': String(file.size),
+      'Cache-Control': 'no-store',
     });
     stream.on('error', () => res.destroy());
     stream.pipe(res);

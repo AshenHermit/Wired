@@ -31,11 +31,13 @@ describe('PackageDeliveryService', () => {
   let storage: PackageStorageService;
   let packagesRepository: { findOne: jest.Mock };
   let revisionsRepository: { findOne: jest.Mock; find: jest.Mock };
+  let roomsRepository: { exist: jest.Mock };
   let readUrls: { createToken: jest.Mock };
   let service: PackageDeliveryService;
 
   let packages: PackageFixture[];
   let revisions: RevisionFixture[];
+  let rooms: Set<number>;
 
   beforeEach(() => {
     root = mkdtempSync(path.join(tmpdir(), 'wired-delivery-'));
@@ -45,11 +47,17 @@ describe('PackageDeliveryService', () => {
 
     packages = [];
     revisions = [];
+    rooms = new Set([7, 8]);
 
     packagesRepository = {
       findOne: jest.fn((opts: { where: { id: number } }) => {
         return packages.find((pkg) => pkg.id === opts.where.id) ?? null;
       }),
+    };
+    roomsRepository = {
+      exist: jest.fn((opts: { where: { id: number } }) =>
+        Promise.resolve(rooms.has(opts.where.id)),
+      ),
     };
     revisionsRepository = {
       find: jest.fn((opts: { where: { status?: string } }) => {
@@ -98,6 +106,7 @@ describe('PackageDeliveryService', () => {
     service = new PackageDeliveryService(
       packagesRepository as never,
       revisionsRepository as never,
+      roomsRepository as never,
       storage,
       readUrls as unknown as PackageReadUrlService,
     );
@@ -164,20 +173,31 @@ describe('PackageDeliveryService', () => {
     });
   }
 
+  async function artifactDirs(
+    packageId: number,
+    revision: number,
+    roomId: number,
+  ): Promise<string[]> {
+    const base = path.join(
+      root,
+      String(packageId),
+      'runtime',
+      'v1',
+      String(roomId),
+      String(revision),
+    );
+    const names = await readdir(base);
+    return names.sort().map((name) => path.join(base, name));
+  }
+
   async function artifactDir(
     packageId: number,
     revision: number,
     roomId: number,
   ): Promise<string> {
-    const base = path.join(
-      root,
-      String(packageId),
-      'runtime',
-      String(roomId),
-      String(revision),
-    );
-    const [depsHash] = await readdir(base);
-    return path.join(base, depsHash);
+    const dirs = await artifactDirs(packageId, revision, roomId);
+    expect(dirs).toHaveLength(1);
+    return dirs[0];
   }
 
   async function readArtifact(
@@ -215,18 +235,25 @@ describe('PackageDeliveryService', () => {
     const manifest = await service.getRuntimeManifest(5, 3, 7);
 
     expect(manifest.roomId).toBe(7);
+    expect(manifest.artifactKey).toMatch(/^[0-9a-f]{64}$/);
     expect(manifest.dependencies).toEqual([
-      { packageId: 6, revision: 9, name: 'Library' },
+      {
+        packageId: 6,
+        revision: 9,
+        name: 'Library',
+        artifactKey: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
     ]);
     expect(manifest.files.map((f) => f.filepath)).toEqual([
       'hero.gd',
       'main.tscn',
     ]);
+    const dependencyKey = manifest.dependencies[0].artifactKey;
     expect(await readArtifact(5, 3, 7, 'main.tscn')).toContain(
-      'path="user://wired/rooms/7/packages/5/3/hero.gd"',
+      `path="user://wired/rooms/7/packages/5/3-${manifest.artifactKey}/hero.gd"`,
     );
     expect(await readArtifact(5, 3, 7, 'main.tscn')).toContain(
-      'path="user://wired/rooms/7/packages/6/9/tex.png"',
+      `path="user://wired/rooms/7/packages/6/9-${dependencyKey}/tex.png"`,
     );
     expect(await readArtifact(5, 3, 7, 'main.tscn')).not.toContain(
       'uid="uid://x"',
@@ -401,7 +428,14 @@ describe('PackageDeliveryService', () => {
 
     it('resolves a file that is part of the artifact', async () => {
       await writePublished(5, 3, { 'hero.gd': 'extends Node' });
-      const resolved = await service.resolveRuntimeFile(5, 3, 7, 'hero.gd');
+      const manifest = await service.getRuntimeManifest(5, 3, 7);
+      const resolved = await service.resolveRuntimeFile(
+        5,
+        3,
+        7,
+        manifest.artifactKey,
+        'hero.gd',
+      );
 
       expect(resolved.size).toBe(Buffer.from('extends Node').byteLength);
       expect(resolved.path).toBe(
@@ -411,10 +445,176 @@ describe('PackageDeliveryService', () => {
 
     it('rejects a path that is not part of the artifact', async () => {
       await writePublished(5, 3, { 'hero.gd': 'extends Node' });
+      const manifest = await service.getRuntimeManifest(5, 3, 7);
 
       await expect(
-        service.resolveRuntimeFile(5, 3, 7, '../x'),
+        service.resolveRuntimeFile(5, 3, 7, manifest.artifactKey, '../x'),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('rejects a file request for an artifact that no longer exists', async () => {
+      await writePublished(5, 3, { 'hero.gd': 'extends Node' });
+      const manifest = await service.getRuntimeManifest(5, 3, 7);
+
+      await expect(
+        service.resolveRuntimeFile(5, 3, 7, 'f'.repeat(64), 'hero.gd'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('rejects a malformed artifact key without touching the disk', async () => {
+      await writePublished(5, 3, { 'hero.gd': 'extends Node' });
+      await service.getRuntimeManifest(5, 3, 7);
+
+      await expect(
+        service.resolveRuntimeFile(5, 3, 7, '../5/3', 'hero.gd'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('room validation', () => {
+    beforeEach(() => {
+      definePackage(5, 'Heroes', 7);
+    });
+
+    it.each([0, -1])(
+      'rejects the non-positive room id %d before reading a package',
+      async (roomId) => {
+        await expect(
+          service.getRuntimeManifest(5, 3, roomId),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        await expect(
+          service.resolveRuntimeFile(5, 3, roomId, 'a'.repeat(64), 'hero.gd'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(packagesRepository.findOne).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rejects a room that does not exist before building an artifact', async () => {
+      await writePublished(5, 3, { 'hero.gd': 'extends Node' });
+
+      await expect(service.getRuntimeManifest(5, 3, 99)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      await expect(
+        service.resolveRuntimeFile(5, 3, 99, 'a'.repeat(64), 'hero.gd'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      await expect(artifactDirs(5, 3, 99)).rejects.toThrow();
+      expect(packagesRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('validates the room for a global library request too', async () => {
+      definePackage(6, 'Library', null);
+      await writePublished(6, 9, { 'lib.gd': 'extends Node' });
+
+      await expect(
+        service.getRuntimeManifest(6, 9, 12345),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('artifact identity and cache', () => {
+    it('rebuilds a dependent artifact when a dependency publishes', async () => {
+      definePackage(5, 'Heroes', 7);
+      definePackage(6, 'Library', null);
+      await writePublished(6, 9, { 'lib.gd': 'lib-v9' });
+      await writePublished(5, 3, {
+        'main.gd': 'const Lib = preload("res://packages/6/lib.gd")',
+      });
+
+      const first = await service.getRuntimeManifest(5, 3, 7);
+      expect(first.dependencies[0]).toMatchObject({
+        packageId: 6,
+        revision: 9,
+      });
+
+      await writePublished(6, 10, { 'lib.gd': 'lib-v10' });
+      const second = await service.getRuntimeManifest(5, 3, 7);
+
+      // The root revision did not change, but the artifact identity must.
+      expect(second.revision).toBe(3);
+      expect(second.artifactKey).not.toBe(first.artifactKey);
+      expect(second.dependencies[0]).toMatchObject({
+        packageId: 6,
+        revision: 10,
+      });
+      expect(second.dependencies[0].artifactKey).not.toBe(
+        first.dependencies[0].artifactKey,
+      );
+
+      const secondDir = path.join(
+        root,
+        '5',
+        'runtime',
+        'v1',
+        '7',
+        '3',
+        second.artifactKey,
+      );
+      const rewritten = await readFile(path.join(secondDir, 'main.gd'), 'utf8');
+      expect(rewritten).toContain(
+        `user://wired/rooms/7/packages/6/10-${second.dependencies[0].artifactKey}/lib.gd`,
+      );
+      expect(rewritten).not.toContain(
+        `user://wired/rooms/7/packages/6/9-${first.dependencies[0].artifactKey}/lib.gd`,
+      );
+
+      // The pinned manifest resolves only the new artifact directory.
+      const resolved = await service.resolveRuntimeFile(
+        5,
+        3,
+        7,
+        second.artifactKey,
+        'main.gd',
+      );
+      expect(resolved.path).toBe(path.join(secondDir, 'main.gd'));
+    });
+
+    it('shares one build between concurrent requests', async () => {
+      definePackage(5, 'Heroes', 7);
+      await writePublished(5, 3, { 'hero.gd': 'extends Node' });
+      const buildSpy = jest.spyOn(
+        service as unknown as {
+          buildArtifact: (
+            packageId: number,
+            revision: number,
+            roomId: number,
+          ) => Promise<unknown>;
+        },
+        'buildArtifact',
+      );
+
+      const [first, second] = await Promise.all([
+        service.getRuntimeManifest(5, 3, 7),
+        service.getRuntimeManifest(5, 3, 7),
+      ]);
+
+      expect(second).toEqual(first);
+      expect(buildSpy).toHaveBeenCalledTimes(1);
+      expect(await artifactDirs(5, 3, 7)).toHaveLength(1);
+    });
+
+    it('keeps a bounded number of artifacts per package, room and revision', async () => {
+      definePackage(5, 'Heroes', 7);
+      definePackage(6, 'Library', null);
+      await writePublished(5, 3, {
+        'main.gd': 'const Lib = preload("res://packages/6/lib.gd")',
+      });
+
+      const keys: string[] = [];
+      for (let revision = 1; revision <= 5; revision += 1) {
+        await writePublished(6, revision, { 'lib.gd': `lib-${revision}` });
+        const manifest = await service.getRuntimeManifest(5, 3, 7);
+        keys.push(manifest.artifactKey);
+      }
+
+      const dirs = await artifactDirs(5, 3, 7);
+      expect(dirs).toHaveLength(3);
+      expect(dirs).toContain(
+        path.join(root, '5', 'runtime', 'v1', '7', '3', keys[4]),
+      );
+      expect(dirs).not.toContain(
+        path.join(root, '5', 'runtime', 'v1', '7', '3', keys[0]),
+      );
     });
   });
 

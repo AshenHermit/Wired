@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppConfigModule } from 'src/config/config.module';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
+import { Room } from 'src/database/entities/room.entity';
 import { PackageDeliveryService } from './package-delivery.service';
 import { PackageReadUrlService } from './package-read-url.service';
 import { PackageStorageService } from './package-storage.service';
@@ -10,7 +11,11 @@ import { PackageStorageService } from './package-storage.service';
 @Module({
   imports: [
     AppConfigModule,
-    TypeOrmModule.forFeature([ScriptingPackage, ScriptingPackageRevision]),
+    TypeOrmModule.forFeature([
+      ScriptingPackage,
+      ScriptingPackageRevision,
+      Room,
+    ]),
   ],
   providers: [
     PackageStorageService,

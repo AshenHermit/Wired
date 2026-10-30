@@ -20,6 +20,26 @@ describe('package runtime references', () => {
     ]);
   });
 
+  it('ignores package references on whole-line comments', () => {
+    expect(
+      collectPackageReferences(
+        '# const OLD = preload("res://packages/99/a.gd")\n' +
+          '  ; path="res://packages/98/b.gd"\n' +
+          '## res://packages/97/c.gd\n' +
+          'const A = preload("res://packages/5/a.gd")',
+      ),
+    ).toEqual([{ packageId: 5, filepath: 'a.gd' }]);
+  });
+
+  it('parses quoted references inside multi-line strings', () => {
+    // Documented limitation: a quoted package path inside a multi-line string
+    // is still a reference, because it is indistinguishable from code here.
+    const text = 'var note = """see "res://packages/5/a.gd" """';
+    expect(collectPackageReferences(text)).toEqual([
+      { packageId: 5, filepath: 'a.gd' },
+    ]);
+  });
+
   it('deduplicates repeated package references', () => {
     expect(
       collectPackageReferences(
@@ -36,44 +56,75 @@ describe('package runtime references', () => {
     expect(isTextPackageFile('sound.ogg')).toBe(false);
   });
 
-  it('rewrites every package prefix to the pinned runtime revision', () => {
+  it('rewrites every package prefix to the artifact-keyed runtime location', () => {
     const revisions = new Map([
       [5, 3],
       [6, 9],
     ]);
+    const keys = new Map([
+      [5, 'k5'],
+      [6, 'k6'],
+    ]);
     expect(
       rewritePackageReferences(
         'preload("res://packages/5/lib/a.gd") + "res://packages/6/tex.png"',
-        { roomId: 7, revisionByPackage: revisions },
+        {
+          roomId: 7,
+          revisionByPackage: revisions,
+          artifactKeyByPackage: keys,
+        },
       ),
     ).toBe(
-      'preload("user://wired/rooms/7/packages/5/3/lib/a.gd") + ' +
-        '"user://wired/rooms/7/packages/6/9/tex.png"',
+      'preload("user://wired/rooms/7/packages/5/3-k5/lib/a.gd") + ' +
+        '"user://wired/rooms/7/packages/6/9-k6/tex.png"',
     );
   });
 
   it('rewrites only quoted references, leaving comment text alone', () => {
     const revisions = new Map([[5, 3]]);
+    const keys = new Map([[5, 'k5']]);
     const text =
-      '# see res://packages/99/foo.gd\n' +
+      '# preload("res://packages/99/foo.gd")\n' +
       'const A = preload("res://packages/5/a.gd")';
     expect(
       rewritePackageReferences(text, {
         roomId: 7,
         revisionByPackage: revisions,
+        artifactKeyByPackage: keys,
       }),
     ).toBe(
-      '# see res://packages/99/foo.gd\n' +
-        'const A = preload("user://wired/rooms/7/packages/5/3/a.gd")',
+      '# preload("res://packages/99/foo.gd")\n' +
+        'const A = preload("user://wired/rooms/7/packages/5/3-k5/a.gd")',
+    );
+  });
+
+  it('does not fail on a commented reference to an unknown package', () => {
+    const revisions = new Map([[5, 3]]);
+    const keys = new Map([[5, 'k5']]);
+    expect(
+      rewritePackageReferences(
+        '; path="res://packages/99/missing.gd"\n' +
+          'preload("res://packages/5/a.gd")',
+        {
+          roomId: 7,
+          revisionByPackage: revisions,
+          artifactKeyByPackage: keys,
+        },
+      ),
+    ).toBe(
+      '; path="res://packages/99/missing.gd"\n' +
+        'preload("user://wired/rooms/7/packages/5/3-k5/a.gd")',
     );
   });
 
   it('throws when a quoted reference has no pinned revision', () => {
     const revisions = new Map([[5, 3]]);
+    const keys = new Map([[5, 'k5']]);
     expect(() =>
       rewritePackageReferences('preload("res://packages/99/a.gd")', {
         roomId: 7,
         revisionByPackage: revisions,
+        artifactKeyByPackage: keys,
       }),
     ).toThrow('package_reference_not_rewritable:99');
   });
@@ -92,16 +143,19 @@ describe('package runtime references', () => {
 
   it('rewritePackageReferences rejects the same unsafe paths', () => {
     const revisions = new Map([[5, 3]]);
+    const keys = new Map([[5, 'k5']]);
     expect(() =>
       rewritePackageReferences('preload("res://packages/5/./hero.gd")', {
         roomId: 7,
         revisionByPackage: revisions,
+        artifactKeyByPackage: keys,
       }),
     ).toThrow('package_reference_invalid_path:./hero.gd');
     expect(() =>
       rewritePackageReferences('preload("res://packages/5/a/../b.gd")', {
         roomId: 7,
         revisionByPackage: revisions,
+        artifactKeyByPackage: keys,
       }),
     ).toThrow('package_reference_invalid_path:a/../b.gd');
   });

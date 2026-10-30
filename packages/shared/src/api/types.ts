@@ -65,6 +65,12 @@ export type PackageRuntimeDependency = {
   packageId: number;
   revision: number;
   name: string;
+  /**
+   * Stable identity of the dependency's own runtime artifact. Every artifact
+   * lives under `<revision>-<artifactKey>/`, so a same-revision publish of the
+   * dependency changes this key and forces a fresh client path.
+   */
+  artifactKey: string;
 };
 
 export type PackageRuntimeManifest = {
@@ -76,6 +82,8 @@ export type PackageRuntimeManifest = {
   files: PackageFileEntry[];
   totalSize: number;
   dependencies: PackageRuntimeDependency[];
+  /** Stable identity of this artifact, derived from its resolved closure. */
+  artifactKey: string;
   /** scene filepath -> "<packageId>:<filepath>" dependencies, including itself */
   sceneDependencies: Record<string, string[]>;
   download: { token: string; expiresAt: number };

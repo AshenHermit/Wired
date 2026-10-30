@@ -247,8 +247,17 @@ export class PackageSyncService
     files: number,
   ): void {
     const record = this.records.get(this.recordKey(roomId, packageId));
-    if (!record || record.revision > revision) {
-      this.logger.warn(
+    if (!record) {
+      // Dependencies report their own applies, and the backend does not track
+      // a record for a library without a runtime. Staying quiet (debug) keeps
+      // the log free of misleading "obsolete package" warnings.
+      this.logger.debug(
+        `Ignoring confirmation for untracked package ${packageId} revision ${revision} in room ${roomId}`,
+      );
+      return;
+    }
+    if (record.revision > revision) {
+      this.logger.debug(
         `Ignoring confirmation for obsolete package ${packageId} revision ${revision} in room ${roomId}`,
       );
       return;
