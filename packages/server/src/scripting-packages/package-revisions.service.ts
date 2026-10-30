@@ -1,8 +1,11 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
@@ -19,6 +22,10 @@ import {
 } from './package-storage.service';
 import { validatePackageRevisionFiles } from './package-manifest';
 import { ScriptingPackagesService } from './scripting-packages.service';
+import {
+  PACKAGE_REVISION_DISPATCHER,
+  PackageRevisionDispatcher,
+} from 'src/godot-game/package-sync.types';
 
 /**
  * Draft and published revisions of a scripting package.
@@ -29,6 +36,7 @@ import { ScriptingPackagesService } from './scripting-packages.service';
  */
 @Injectable()
 export class PackageRevisionsService {
+  private readonly logger = new Logger(PackageRevisionsService.name);
   /** Packages whose bytes are being verified and moved right now. */
   private readonly publishing = new Set<number>();
 
@@ -37,6 +45,9 @@ export class PackageRevisionsService {
     private readonly revisionsRepository: Repository<ScriptingPackageRevision>,
     private readonly packagesService: ScriptingPackagesService,
     private readonly storage: PackageStorageService,
+    @Optional()
+    @Inject(PACKAGE_REVISION_DISPATCHER)
+    private readonly dispatcher?: PackageRevisionDispatcher,
   ) {}
 
   /**
@@ -156,7 +167,31 @@ export class PackageRevisionsService {
       this.publishing.delete(packageId);
     }
 
+    await this.dispatchPublished(packageId, revision);
     return toRevision(row, packageId);
+  }
+
+  /**
+   * Publication is already fixed at this point; a notification failure must
+   * not turn a successful Emit into an error. The runtime reconciles the
+   * manifest on start/reconnect, so a lost signal is recoverable.
+   */
+  private async dispatchPublished(
+    packageId: number,
+    revision: number,
+  ): Promise<void> {
+    if (!this.dispatcher) {
+      return;
+    }
+    try {
+      await this.dispatcher.revisionPublished(packageId, revision);
+    } catch (error) {
+      this.logger.error(
+        `Package ${packageId} revision ${revision} was published but runtime dispatch failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /**

@@ -37,4 +37,17 @@ export class GameRoomController {
   ) {
     return this.gameRooms.getStatus(req.user, roomId);
   }
+
+  /**
+   * Latest published revision per package with separate runtime/client states.
+   * Editors poll this to catch up on revisions they missed; it never starts
+   * the runtime.
+   */
+  @Get('packages')
+  packages(
+    @Param('roomId', ParseIntPipe) roomId: number,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.gameRooms.getPackages(req.user, roomId);
+  }
 }

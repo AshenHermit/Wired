@@ -10,6 +10,7 @@ import { sha256Hex } from './package-hash';
 import { PackageRevisionsService } from './package-revisions.service';
 import { PackageStorageService } from './package-storage.service';
 import { ScriptingPackagesService } from './scripting-packages.service';
+import type { PackageRevisionDispatcher } from 'src/godot-game/package-sync.types';
 
 const pkg = {
   id: 7,
@@ -53,6 +54,7 @@ describe('PackageRevisionsService', () => {
     resolvePublishedFile: jest.Mock;
   };
   let service: PackageRevisionsService;
+  let dispatcher: { revisionPublished: jest.Mock };
 
   beforeEach(() => {
     repository = {
@@ -68,6 +70,7 @@ describe('PackageRevisionsService', () => {
       delete: jest.fn(async () => ({ affected: 1 })),
     };
     packagesService = { findOne: jest.fn(async () => pkg) };
+    dispatcher = { revisionPublished: jest.fn(async () => undefined) };
     storage = {
       saveDraftFile: jest.fn(async (_id, _rev, _path, data: Buffer) => ({
         size: data.byteLength,
@@ -85,6 +88,7 @@ describe('PackageRevisionsService', () => {
       repository as never,
       packagesService as unknown as ScriptingPackagesService,
       storage as unknown as PackageStorageService,
+      dispatcher as unknown as PackageRevisionDispatcher,
     );
   });
 
@@ -234,6 +238,18 @@ describe('PackageRevisionsService', () => {
       );
       expect(published.status).toBe('published');
       expect(published.publishedAt).toEqual(expect.any(String));
+      expect(dispatcher.revisionPublished).toHaveBeenCalledWith(7, 3);
+    });
+
+    it('returns the fixed revision even when runtime dispatch fails', async () => {
+      repository.findOne.mockResolvedValue(draftRow(3, [file('a.txt', 'a')]));
+      dispatcher.revisionPublished.mockRejectedValue(
+        new Error('runtime unavailable'),
+      );
+
+      await expect(service.publish(7, 3)).resolves.toMatchObject({
+        status: 'published',
+      });
     });
 
     it('is idempotent for an already published revision', async () => {

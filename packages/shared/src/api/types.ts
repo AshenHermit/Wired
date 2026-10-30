@@ -177,3 +177,60 @@ export type GameRoomConnection = {
   ticketExpiresAt: number;
   activePlayers: number;
 };
+
+/**
+ * Application state of one published package revision on one target. The
+ * manifest is the source of truth; these states are best-effort bookkeeping
+ * that a receiver reconciles against the manifest after reconnects.
+ */
+export type PackageRuntimeSyncState = 'pending' | 'applied' | 'failed';
+
+export type PackageClientSyncState = 'pending' | 'ready' | 'failed';
+
+export type PackageRevisionSyncState =
+  | 'published'
+  | 'pending'
+  | 'applied'
+  | 'ready'
+  | 'failed'
+  | 'stale';
+
+export type PackageRuntimeSyncStatus = {
+  state: PackageRuntimeSyncState;
+  /** Revision the runtime was asked to apply. */
+  revision: number;
+  error: string | null;
+  /** Set when the runtime confirms application or reports a failure. */
+  updatedAt: string | null;
+};
+
+export type PackageClientSyncStatus = {
+  peer: number;
+  state: PackageClientSyncState;
+  revision: number;
+  error: string | null;
+  updatedAt: string;
+};
+
+/**
+ * State of the latest published revision of one package for one room. A
+ * revision is `published` after the backend fixed the files, `pending` while
+ * the runtime downloads it, `applied` once the runtime confirmed it (clients
+ * may still be catching up), `ready` when every authenticated client reported
+ * that revision, and `failed` when the runtime or a client reported an error.
+ * `stale` means a newer revision is published but not dispatched yet.
+ */
+export type PackageSyncStatus = {
+  packageId: number;
+  name: string;
+  revision: number;
+  publishedAt: string;
+  state: PackageRevisionSyncState;
+  runtime: PackageRuntimeSyncStatus;
+  clients: PackageClientSyncStatus[];
+};
+
+export type RoomPackagesStatus = {
+  roomId: number;
+  packages: PackageSyncStatus[];
+};

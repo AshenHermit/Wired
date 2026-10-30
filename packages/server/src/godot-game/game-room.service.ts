@@ -7,12 +7,13 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { GameRoomConnection, GameRoomRuntimeStatus } from '@wired-io/shared';
+import { GameRoomConnection, GameRoomRuntimeStatus, RoomPackagesStatus } from '@wired-io/shared';
 import { Room } from 'src/database/entities/room.entity';
 import { User } from 'src/database/entities/user.entity';
 import { RoomsService } from 'src/rooms/rooms.service';
 import { canViewRoom } from 'src/rooms/room-access';
 import { GameRoomTicketRateLimiter } from './game-room.rate-limiter';
+import { PackageSyncService } from './package-sync.service';
 import { RoomRuntimeError, RoomRuntimeErrorCode } from './room-runtime.errors';
 import { RoomRuntimeService } from './room-runtime.service';
 import type { RoomConnection } from './room-runtime.types';
@@ -52,6 +53,7 @@ export class GameRoomService {
     private readonly rooms: RoomsService,
     private readonly runtime: RoomRuntimeService,
     private readonly rateLimiter: GameRoomTicketRateLimiter,
+    private readonly packageSync: PackageSyncService,
   ) {}
 
   /**
@@ -105,6 +107,22 @@ export class GameRoomService {
       endpoint: info?.endpoint ?? null,
       activePlayers: info?.activePlayers ?? 0,
       error: info?.state === 'failed' ? 'Godot runtime failed to start' : null,
+    };
+  }
+
+  /**
+   * Package application state for the room's runtime and clients. Reads
+   * in-memory bookkeeping only; the published manifest remains authoritative.
+   * Never starts the runtime.
+   */
+  async getPackages(
+    user: User | undefined,
+    roomId: number,
+  ): Promise<RoomPackagesStatus> {
+    const { room } = await this.assertCanPlay(user, roomId);
+    return {
+      roomId: room.id,
+      packages: await this.packageSync.getStatuses(String(room.id)),
     };
   }
 

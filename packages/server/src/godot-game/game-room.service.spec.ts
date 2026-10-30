@@ -13,6 +13,7 @@ import { GameRoomService } from './game-room.service';
 import { GameRoomTicketRateLimiter } from './game-room.rate-limiter';
 import { RoomRuntimeError } from './room-runtime.errors';
 import { RoomRuntimeService } from './room-runtime.service';
+import { PackageSyncService } from './package-sync.service';
 import { RoomConnection, RoomRuntimeInfo } from './room-runtime.types';
 
 const user = (id: number): User => ({ id, email: `u${id}@wired.io` }) as User;
@@ -55,11 +56,13 @@ const connection = (): RoomConnection => ({
 describe('GameRoomService', () => {
   let rooms: { findOne: jest.Mock };
   let runtime: { getConnection: jest.Mock; getRuntime: jest.Mock };
+  let packageSync: { getStatuses: jest.Mock };
   let service: GameRoomService;
 
   const create = (limit = 20) => {
     rooms = { findOne: jest.fn() };
     runtime = { getConnection: jest.fn(), getRuntime: jest.fn() };
+    packageSync = { getStatuses: jest.fn(async () => []) };
     const configService = {
       godotRuntime: { ticketRateLimit: limit, ticketRateLimitWindowMs: 60_000 },
     } as unknown as AppConfigService;
@@ -67,6 +70,7 @@ describe('GameRoomService', () => {
       rooms as unknown as RoomsService,
       runtime as unknown as RoomRuntimeService,
       new GameRoomTicketRateLimiter(configService),
+      packageSync as unknown as PackageSyncService,
     );
     rooms.findOne.mockResolvedValue(room());
     runtime.getConnection.mockResolvedValue(connection());
@@ -200,6 +204,39 @@ describe('GameRoomService', () => {
 
     await expect(statusOf(service.getStatus(user(3), 42))).resolves.toBe(403);
     expect(runtime.getRuntime).not.toHaveBeenCalled();
+  });
+
+  it('reports package sync states for an allowed room', async () => {
+    packageSync.getStatuses.mockResolvedValue([
+      {
+        packageId: 3,
+        name: 'Demo',
+        revision: 2,
+        publishedAt: '2026-10-30T09:00:00.000Z',
+        state: 'applied',
+        runtime: {
+          state: 'applied',
+          revision: 2,
+          error: null,
+          updatedAt: '2026-10-30T09:01:00.000Z',
+        },
+        clients: [],
+      },
+    ]);
+
+    await expect(service.getPackages(user(1), 42)).resolves.toMatchObject({
+      roomId: 42,
+      packages: [{ packageId: 3, state: 'applied' }],
+    });
+    expect(packageSync.getStatuses).toHaveBeenCalledWith('42');
+    expect(runtime.getConnection).not.toHaveBeenCalled();
+  });
+
+  it('applies the same access rules to package status', async () => {
+    rooms.findOne.mockResolvedValue(room({ isPublic: false, author: user(1) }));
+
+    await expect(statusOf(service.getPackages(user(3), 42))).resolves.toBe(403);
+    expect(packageSync.getStatuses).not.toHaveBeenCalled();
   });
 
   it('keeps exceptions that are not runtime lifecycle errors intact', async () => {

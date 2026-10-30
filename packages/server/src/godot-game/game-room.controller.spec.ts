@@ -1,4 +1,4 @@
-import { INestApplication, UnauthorizedException } from '@nestjs/common';
+﻿import { INestApplication, UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
@@ -10,6 +10,7 @@ describe('GameRoomController', () => {
   const service = {
     connect: jest.fn(),
     getStatus: jest.fn(),
+    getPackages: jest.fn(),
   };
 
   const build = async (authenticated = true) => {
@@ -89,15 +90,50 @@ describe('GameRoomController', () => {
     );
   });
 
-  it('requires authentication on both routes', async () => {
+  it('requires authentication on every route', async () => {
     await build(false);
 
     await request(app.getHttpServer())
       .post('/rooms/42/game/connection')
       .expect(401);
     await request(app.getHttpServer()).get('/rooms/42/game/status').expect(401);
+    await request(app.getHttpServer())
+      .get('/rooms/42/game/packages')
+      .expect(401);
     expect(service.connect).not.toHaveBeenCalled();
     expect(service.getStatus).not.toHaveBeenCalled();
+    expect(service.getPackages).not.toHaveBeenCalled();
+  });
+
+  it('reads package sync status through GET /rooms/:id/game/packages', async () => {
+    service.getPackages.mockResolvedValue({
+      roomId: 42,
+      packages: [
+        {
+          packageId: 3,
+          name: 'Demo',
+          revision: 1,
+          publishedAt: '2026-10-30T09:00:00.000Z',
+          state: 'pending',
+          runtime: { state: 'pending', revision: 1, error: null, updatedAt: null },
+          clients: [],
+        },
+      ],
+    });
+    await build();
+
+    const response = await request(app.getHttpServer())
+      .get('/rooms/42/game/packages')
+      .expect(200);
+
+    expect(response.body.packages[0]).toMatchObject({
+      packageId: 3,
+      state: 'pending',
+    });
+    expect(service.getPackages).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 7 }),
+      42,
+    );
   });
 
   it('rejects a non-numeric room id before touching the service', async () => {

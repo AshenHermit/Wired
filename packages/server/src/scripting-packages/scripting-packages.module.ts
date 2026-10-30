@@ -9,10 +9,12 @@ import { ScriptingPackagesController } from './scripting-packages.controller';
 import { PackageRevisionsService } from './package-revisions.service';
 import { PackageStorageService } from './package-storage.service';
 import { AppConfigModule } from 'src/config/config.module';
+import { GodotGameModule } from 'src/godot-game/godot-game.module';
 
 @Module({
   imports: [
     AppConfigModule,
+    GodotGameModule,
     TypeOrmModule.forFeature([
       ScriptingPackage,
       ScriptingPackageRevision,
