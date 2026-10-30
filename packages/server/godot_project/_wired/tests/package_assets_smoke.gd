@@ -20,6 +20,7 @@ const WAV_FILE := "beep.wav"
 const SCRIPT_FILE := "scripts/hero.gd"
 const BAD_FILE := "bad.png"
 const GOOD_FILE := "good.png"
+const BLOCKED_FILE := "blocked.png"
 
 var _failures: PackedStringArray = []
 
@@ -36,6 +37,8 @@ func _run() -> void:
 	if manager.has_method("_derive_assets"):
 		_test_derives_texture_and_audio(manager)
 		_test_rejects_corrupt_asset(manager)
+		_test_sidecar_failure_rolls_back(manager)
+		_test_skips_declared_derived_names(manager)
 	manager.free()
 	_remove_tree(ROOT)
 	_finish()
@@ -67,14 +70,37 @@ func _test_derives_texture_and_audio(manager: PackagesManager) -> void:
 		"staging must be publishable as the final revision directory"
 	)
 
-	var texture: Variant = ResourceLoader.load(FINAL.path_join(PNG_FILE))
-	_check(texture is Texture2D, "a derived png must load as a Texture2D")
+	var texture := ResourceLoader.load(FINAL.path_join(PNG_FILE)) as Texture2D
+	_check(texture != null, "a derived png must load as a Texture2D")
+	if texture != null:
+		_check(
+			texture.get_width() == 1 and texture.get_height() == 1,
+			"the derived texture must stay 1x1, got %dx%d"
+			% [texture.get_width(), texture.get_height()]
+		)
+		var image := texture.get_image()
+		_check(image != null, "a derived texture must keep its image")
+		if image != null:
+			_check(
+				image.get_pixel(0, 0).is_equal_approx(Color(1.0, 0.0, 0.0, 1.0)),
+				"the derived texture must keep its pixel, got %s" % image.get_pixel(0, 0)
+			)
 	_check(
 		ResourceLoader.load(FINAL.path_join(UPPER_FILE)) is Texture2D,
 		"extension matching must be case-insensitive"
 	)
-	var stream: Variant = ResourceLoader.load(FINAL.path_join(WAV_FILE))
-	_check(stream is AudioStreamWAV, "a derived wav must load as an AudioStreamWAV")
+	var wav := ResourceLoader.load(FINAL.path_join(WAV_FILE)) as AudioStreamWAV
+	_check(wav != null, "a derived wav must load as an AudioStreamWAV")
+	if wav != null:
+		_check(wav.data.size() > 0, "a derived wav must keep its sample data")
+		_check(
+			absf(wav.get_length() - 0.1) < 0.005,
+			"a derived wav must stay 0.1 s long, got %f" % wav.get_length()
+		)
+		_check(
+			wav.mix_rate == 44100,
+			"a derived wav must keep its mix rate, got %d" % wav.mix_rate
+		)
 
 	_check_sidecar(
 		FINAL.path_join(PNG_FILE + ".import"),
@@ -132,6 +158,70 @@ func _test_rejects_corrupt_asset(manager: PackagesManager) -> void:
 	_check(
 		not DirAccess.dir_exists_absolute(FINAL),
 		"a failed derivation must not create the final revision directory"
+	)
+
+
+## A sidecar that cannot be written must not leave its derived resource behind.
+func _test_sidecar_failure_rolls_back(manager: PackagesManager) -> void:
+	_remove_tree(ROOT)
+	DirAccess.make_dir_recursive_absolute(STAGING)
+	_write_texture(STAGING.path_join(BLOCKED_FILE))
+	# A directory in the sidecar's place makes the write itself fail.
+	DirAccess.make_dir_recursive_absolute(STAGING.path_join(BLOCKED_FILE + ".import"))
+
+	var result: Dictionary = manager._derive_assets(STAGING, FINAL, [BLOCKED_FILE])
+	_check(
+		not bool(result.get("ok", false)),
+		"an unwritable sidecar must fail the derivation"
+	)
+	_check(
+		str(result.get("error", "")) == "asset_derive_failed:" + BLOCKED_FILE,
+		"the failure must name the file with the unwritable sidecar, got %s"
+		% result.get("error", "")
+	)
+	_check(
+		_derived_files(STAGING).is_empty(),
+		"a failed sidecar write must remove the derived resource, got %s"
+		% [_derived_files(STAGING)]
+	)
+
+
+## A derived name must never overwrite a file the artifact itself declares.
+func _test_skips_declared_derived_names(manager: PackagesManager) -> void:
+	_remove_tree(ROOT)
+	DirAccess.make_dir_recursive_absolute(STAGING)
+	_write_texture(STAGING.path_join(PNG_FILE))
+	_write_wav(STAGING.path_join(WAV_FILE))
+	_write_text(STAGING.path_join(PNG_FILE + ".import"), "declared sidecar\n")
+	_write_text(STAGING.path_join(WAV_FILE + ".audio.res"), "declared audio\n")
+
+	var result: Dictionary = manager._derive_assets(
+		STAGING,
+		FINAL,
+		[PNG_FILE, WAV_FILE, PNG_FILE + ".import", WAV_FILE + ".audio.res"],
+	)
+	_check(
+		bool(result.get("ok", false)),
+		"declared derived names must be skipped instead of failing: %s"
+		% result.get("error", "")
+	)
+	_check(
+		FileAccess.get_file_as_string(STAGING.path_join(PNG_FILE + ".import"))
+		== "declared sidecar\n",
+		"a declared sidecar must keep its content"
+	)
+	_check(
+		FileAccess.get_file_as_string(STAGING.path_join(WAV_FILE + ".audio.res"))
+		== "declared audio\n",
+		"a declared derived resource must keep its content"
+	)
+	_check(
+		not FileAccess.file_exists(STAGING.path_join(PNG_FILE + ".image.res")),
+		"a png with a declared sidecar must not get a derived resource"
+	)
+	_check(
+		not FileAccess.file_exists(STAGING.path_join(WAV_FILE + ".import")),
+		"a wav with a declared derived resource must not get a sidecar"
 	)
 
 
@@ -199,6 +289,10 @@ func _check_sidecar(path: String, type: String, resource_path: String) -> void:
 		return
 	var text := FileAccess.get_file_as_string(path)
 	_check(text.contains("[remap]"), "%s must contain [remap]" % path)
+	_check(
+		text.contains('importer="texture"'),
+		"%s must contain the runtime remap marker importer=\"texture\"" % path
+	)
 	_check(
 		text.contains('type="%s"' % type),
 		"%s must declare type=\"%s\"" % [path, type]

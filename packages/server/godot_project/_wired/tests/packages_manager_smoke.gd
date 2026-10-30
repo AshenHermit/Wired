@@ -63,6 +63,7 @@ func _run() -> void:
 	await _test_concurrent_shared_dependency()
 	await _test_concurrent_revisions()
 	await _test_cycle()
+	await _test_asset_derivation_failure()
 	_finish()
 
 
@@ -575,6 +576,54 @@ func _test_cycle() -> void:
 	_check(
 		not _has_request_containing("/runtime-files/"),
 		"a cycle must be rejected before files are downloaded"
+	)
+
+
+## A revision whose raw image cannot be derived must fail exactly like a corrupt
+## download: staging is dropped before the swap, so the current revision and its
+## files stay intact and no signals report an apply.
+func _test_asset_derivation_failure() -> void:
+	var applied_before := _manager.current_revision(ROOT_ID)
+	var old_file := _manager.runtime_path(ROOT_ID, applied_before, "scripts/root.gd")
+	var old_bytes := FileAccess.get_file_as_string(old_file)
+	_publish(
+		ROOT_ID,
+		8,
+		{"scripts/root.gd": "root-v8", "bad.png": "this is not a png"},
+		[_dependency(DEP_ID, 3)],
+	)
+	_applied.clear()
+	_failed.clear()
+	# Godot's decoders print an error for the deliberately corrupt file; the
+	# checks below are what decides the result.
+	var result: Dictionary = await _manager.sync_package(ROOT_ID, 8)
+	_check(not bool(result.get("ok", false)), "an undecodable image must fail the apply")
+	_check(
+		str(result.get("error", "")) == "asset_derive_failed:bad.png",
+		"the failure must name the derived asset, got %s" % result.get("error", "")
+	)
+	_check(
+		_manager.current_revision(ROOT_ID) == applied_before,
+		"a failed derivation must not publish its revision"
+	)
+	_check(
+		FileAccess.get_file_as_string(old_file) == old_bytes,
+		"a failed derivation must leave the previous files unchanged"
+	)
+	_check(
+		not DirAccess.dir_exists_absolute(
+			_manager.packages_dir(ROOT_ID).path_join(".staging")
+		),
+		"a failed derivation must remove the staging directory"
+	)
+	_check(
+		not DirAccess.dir_exists_absolute(_manager.revision_dir(ROOT_ID, 8)),
+		"a failed derivation must not create the revision directory"
+	)
+	_check(not _failed.is_empty(), "a failed derivation must emit package_failed")
+	_check(
+		_applied_for(ROOT_ID).is_empty(),
+		"a failed derivation must not emit package_applied"
 	)
 
 

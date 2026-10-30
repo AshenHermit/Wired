@@ -588,10 +588,16 @@ func _stage_files(package_id: int, files: Array) -> String:
 ## `path` points at `final_dir`, because staging is renamed there after
 ## derivation. Derived files are runtime-only: they never enter the manifest,
 ## the hashes or the publish flow, and other file types are left untouched.
+## A file whose derived name is already declared by the artifact is skipped, so
+## derivation never overwrites a published file.
 ##
 ## Returns {ok: bool, error: String}. A failure removes everything derived by
 ## this call, so the caller can drop staging as a whole.
 func _derive_assets(staging: String, final_dir: String, filepaths: Array) -> Dictionary:
+	# Derived names must never replace a file the artifact already declares.
+	var declared := {}
+	for filepath: Variant in filepaths:
+		declared[str(filepath)] = true
 	var derived := PackedStringArray()
 	for filepath: Variant in filepaths:
 		var path := str(filepath)
@@ -601,25 +607,30 @@ func _derive_assets(staging: String, final_dir: String, filepaths: Array) -> Dic
 		if derivation.is_empty():
 			continue
 		var suffix := str(derivation.get("suffix", ""))
-		var type := str(derivation.get("type", ""))
-		var source := staging.path_join(path)
+		var sidecar_name := path + ".import"
+		if declared.has(path + suffix) or declared.has(sidecar_name):
+			continue
 		var target := staging.path_join(path + suffix)
-		var ok := (
-			_derive_texture(source, target)
-			if str(derivation.get("kind", "")) == "texture"
-			else _derive_audio(source, target, type)
-		)
-		if ok:
-			ok = _write_import(
-				staging.path_join(path + ".import"),
-				type,
-				final_dir.path_join(path + suffix),
-			)
+		var type := str(derivation.get("type", ""))
+		var ok := false
+		# The dispatch table names the helper; an unknown kind stays a failure
+		# instead of falling back to audio.
+		match str(derivation.get("kind", "")):
+			"texture":
+				ok = _derive_texture(staging.path_join(path), target)
+			"audio":
+				ok = _derive_audio(staging.path_join(path), target, type)
 		if not ok:
 			_remove_files(derived)
 			return {"ok": false, "error": "asset_derive_failed:%s" % path}
+		# Both names are recorded before the sidecar write, so neither the derived
+		# resource nor a half-written sidecar can survive a failure.
+		var sidecar := staging.path_join(sidecar_name)
 		derived.append(target)
-		derived.append(staging.path_join(path + ".import"))
+		derived.append(sidecar)
+		if not _write_import(sidecar, type, final_dir.path_join(path + suffix)):
+			_remove_files(derived)
+			return {"ok": false, "error": "asset_derive_failed:%s" % path}
 	return {"ok": true, "error": ""}
 
 
@@ -667,8 +678,9 @@ func _derive_audio(source: String, target: String, type: String) -> bool:
 
 ## Writes the sidecar that makes `ResourceLoader.load()` read the raw path as the
 ## derived resource. `resource_path` is the final location, because staging is
-## renamed after derivation. The runtime remap reads `path`; `importer` and
-## `type` keep the sidecar readable and match an editor import of the format.
+## renamed after derivation. Every asset keeps the `importer="texture"` marker
+## the plan pins for the runtime remap, audio included; `path` selects the
+## derived resource at runtime.
 func _write_import(path: String, type: String, resource_path: String) -> bool:
 	var handle := FileAccess.open(path, FileAccess.WRITE)
 	if handle == null:
@@ -676,8 +688,9 @@ func _write_import(path: String, type: String, resource_path: String) -> bool:
 	handle.store_string(
 		'[remap]\n\nimporter="texture"\ntype="%s"\npath="%s"\n' % [type, resource_path]
 	)
+	var write_error := handle.get_error()
 	handle.close()
-	return true
+	return write_error == OK
 
 
 ## Replaces the revision directory only after the staged copy is complete, so a
