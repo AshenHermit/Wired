@@ -214,10 +214,13 @@ func cli_game_action(action_json: String) -> void:
 
 ## Announces an applied package revision to every authenticated client. Only
 ## the ids travel here; files are downloaded over HTTP by each receiver.
+##
+## The same revision can carry different content: a runtime artifact embeds its
+## dependencies, so a library update re-applies a dependent without bumping its
+## own revision. An explicit apply is therefore always broadcast, while
+## `_send_package_revisions` still gives new peers the latest revision only.
 func set_package_revision(package_id: int, revision: int) -> void:
 	if mode != "server" or package_id <= 0 or revision <= 0:
-		return
-	if int(_package_revisions.get(package_id, 0)) == revision:
 		return
 	_package_revisions[package_id] = revision
 	print(
