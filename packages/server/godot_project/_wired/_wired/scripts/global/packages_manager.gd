@@ -2,22 +2,28 @@ extends Node
 class_name PackagesManager
 
 ## Downloads published package runtime artifacts from the Wired backend and
-## materializes them under user://wired/rooms/<room>/packages/<package_id>/<revision>/.
+## materializes them under
+## user://wired/rooms/<room>/packages/<package_id>/<revision>-<artifact_key>/.
 ##
 ## `user://` is a single directory per Godot project name, so every room runtime
 ## on the machine shares it. The room code is therefore part of the path: two
 ## rooms never see or overwrite each other's package files, and a room's data
 ## can be cleaned up on its own.
 ##
+## The artifact key is the backend's identity of the package's resolved
+## closure. A same-revision publish of any dependency changes it, so the bytes
+## of two different library states never share a path and the engine's resource
+## cache can never mix them.
+##
 ## Rules that keep the game and editor consistent:
-##   * a runtime manifest pins the exact revision of every dependency, so the
-##     whole closure is applied before a scene can reference it;
+##   * a runtime manifest pins the exact revision and artifact key of every
+##     dependency, so the whole closure is applied before a scene can reference
+##     it;
 ##   * every file is downloaded and verified (size + sha256) in memory first, so
 ##     a failed or partial download never replaces the previous revision;
 ##   * files are written only inside the managed package directory;
-##   * the previous revision directory is kept next to the current one and older
-##     revisions are removed only after a successful apply, never arbitrary
-##     project files.
+##   * the previous artifact is kept next to the current one and older ones are
+##     removed only after a successful apply, never arbitrary project files.
 ##
 ## Manifests and files travel over plain HTTP, separately from the multiplayer
 ## WebSocket traffic.
@@ -33,6 +39,9 @@ const STAGING_DIR := ".staging"
 const PREVIOUS_DIR := ".previous"
 const MAX_FILES := 2000
 const MAX_FILE_SIZE := 64 * 1024 * 1024
+## Artifact keys are sha256 hex digests on the backend; this is the local guard
+## for a path segment. Everything else makes the artifact unusable.
+const ARTIFACT_KEY_LENGTH := 64
 ## Raw image extensions that get a runtime texture next to the file.
 const TEXTURE_EXTENSIONS := ["png", "jpg", "jpeg", "webp", "bmp"]
 ## Raw audio extensions and the stream class each one loads into.
@@ -56,6 +65,8 @@ var request_override: Callable = Callable()
 
 # package id -> applied revision
 var _current_revisions: Dictionary = {}
+# package id -> artifact key of the applied revision
+var _current_artifact_keys: Dictionary = {}
 # package id -> { scene filepath: ["<package id>:<filepath>", ...] }
 var _scene_dependencies: Dictionary = {}
 # package id -> { filepath: sha256 } of the applied runtime artifact
@@ -92,6 +103,7 @@ func set_room(room_id: String) -> void:
 		return
 	room = sanitized
 	_current_revisions.clear()
+	_current_artifact_keys.clear()
 	_scene_dependencies.clear()
 	_file_hashes.clear()
 
@@ -120,19 +132,49 @@ func packages_dir(package_id: int) -> String:
 	return packages_root().path_join(str(package_id))
 
 
-func revision_dir(package_id: int, revision: int) -> String:
-	return packages_dir(package_id).path_join(str(revision))
+## Directory of one applied artifact. An empty `artifact_key` falls back to the
+## key of the currently applied revision, or to the plain revision number when
+## that revision was never applied by this process.
+func revision_dir(
+	package_id: int, revision: int, artifact_key: String = ""
+) -> String:
+	var key := artifact_key
+	if key.is_empty() and current_revision(package_id) == revision:
+		key = current_artifact_key(package_id)
+	return packages_dir(package_id).path_join(_revision_dir_name(revision, key))
 
 
 ## Absolute (user://) location of a file of an applied runtime artifact.
-func runtime_path(package_id: int, revision: int, filepath: String) -> String:
-	return revision_dir(package_id, revision).path_join(filepath)
+## `artifact_key` may be passed explicitly; otherwise the current key is used.
+func runtime_path(
+	package_id: int, revision: int, filepath: String, artifact_key: String = ""
+) -> String:
+	return revision_dir(package_id, revision, artifact_key).path_join(filepath)
+
+
+func _revision_dir_name(revision: int, artifact_key: String) -> String:
+	if artifact_key.is_empty():
+		return str(revision)
+	return "%d-%s" % [revision, artifact_key]
+
+
+## Revision encoded in a `<revision>` or `<revision>-<artifact_key>` directory
+## name, or 0 for anything else (staging, `.previous`, arbitrary files).
+func _revision_of_dir_name(name: String) -> int:
+	var base := name.get_slice("-", 0)
+	return base.to_int() if base.is_valid_int() else 0
 
 
 ## Revision currently materialized for a package, or 0 when it was never
 ## applied by this process.
 func current_revision(package_id: int) -> int:
 	return int(_current_revisions.get(package_id, 0))
+
+
+## Artifact key of the revision currently materialized for a package, or an
+## empty string when it was never applied by this process.
+func current_artifact_key(package_id: int) -> String:
+	return str(_current_artifact_keys.get(package_id, ""))
 
 
 ## Dependencies of one scene of an applied artifact, as "<package id>:<filepath>"
@@ -247,18 +289,21 @@ func fetch_runtime_manifest(package_id: int, revision: int) -> Dictionary:
 ##
 ## Concurrent callers are serialized per package (`_acquire_apply_lock`), so a
 ## library shared by two packages is downloaded once and a stale revision can
-## never replace a newer working copy.
+## never replace a newer working copy. Within one closure, `applied` records the
+## dependencies already handled, so a diamond graph does not download, stage or
+## re-emit the shared library once per path.
 ##
 ## Returns {ok: bool, error: String, revision: int, files: Array,
 ## changed_files: PackedStringArray}.
 func sync_package(package_id: int, revision_hint: int = 0) -> Dictionary:
-	return await _sync_package_chain(package_id, revision_hint, [])
+	return await _sync_package_chain(package_id, revision_hint, [], {})
 
 
 ## Applies one package unless its call chain already contains it (a dependency
-## cycle) or the package is already at this or a newer revision.
+## cycle), the package was already applied in this sync, or the package is
+## already at this or a newer revision.
 func _sync_package_chain(
-	package_id: int, revision_hint: int, chain: Array
+	package_id: int, revision_hint: int, chain: Array, applied: Dictionary
 ) -> Dictionary:
 	if package_id <= 0:
 		return _report_failure(package_id, revision_hint, "invalid package id %d" % package_id)
@@ -268,6 +313,11 @@ func _sync_package_chain(
 		if not bool(latest.get("ok", false)):
 			return _report_failure(package_id, revision_hint, str(latest.get("error", "")))
 		revision = int(latest.get("revision", 0))
+
+	# Shared dependencies of a diamond are applied once per top-level sync.
+	var already_applied := int(applied.get(package_id, 0))
+	if already_applied >= revision:
+		return _skipped(already_applied, current_artifact_key(package_id))
 
 	# Checked before taking the lock: a cycle would otherwise wait on a lock
 	# held by its own caller. Any revision of the package in the chain is a
@@ -295,18 +345,20 @@ func _sync_package_chain(
 	# this call waited) is not applied again. An older revision never replaces
 	# a newer one; an equal one is only skipped for a caller that had to wait,
 	# because a fresh call must still refresh a changed artifact.
-	var applied := maxi(
+	var applied_revision := maxi(
 		current_revision(package_id), _highest_revision_on_disk(package_id, 0)
 	)
-	if applied > revision or (lock == ApplyLock.WAITED and applied == revision):
+	if applied_revision > revision or (lock == ApplyLock.WAITED and applied_revision == revision):
 		_release_apply_lock(package_id)
-		return _skipped(applied)
-	var result := await _sync_package(package_id, revision, chain)
+		applied[package_id] = applied_revision
+		return _skipped(applied_revision, current_artifact_key(package_id))
+	var result := await _sync_package(package_id, revision, chain, applied)
 	_release_apply_lock(package_id)
 	if not bool(result.get("ok", false)):
 		return _report_failure(
 			package_id, int(result.get("revision", revision)), str(result.get("error", ""))
 		)
+	applied[package_id] = int(result.get("revision", revision))
 	var changed: PackedStringArray = result.get(
 		"changed_files", PackedStringArray()
 	)
@@ -348,18 +400,21 @@ func _chain_contains_package(chain: Array, package_id: int) -> bool:
 
 
 ## Successful no-op for a revision that is already applied or superseded.
-func _skipped(revision: int) -> Dictionary:
+func _skipped(revision: int, artifact_key: String = "") -> Dictionary:
 	return {
 		"ok": true,
 		"error": "",
 		"revision": revision,
+		"artifact_key": artifact_key,
 		"files": [],
 		"changed_files": PackedStringArray(),
 		"skipped": true,
 	}
 
 
-func _sync_package(package_id: int, revision: int, chain: Array) -> Dictionary:
+func _sync_package(
+	package_id: int, revision: int, chain: Array, applied: Dictionary
+) -> Dictionary:
 	var manifest_result := await fetch_runtime_manifest(package_id, revision)
 	if not bool(manifest_result.get("ok", false)):
 		return _failure(
@@ -368,6 +423,12 @@ func _sync_package(package_id: int, revision: int, chain: Array) -> Dictionary:
 			revision,
 		)
 	var manifest: Dictionary = manifest_result.get("manifest", {})
+	var artifact_key := str(manifest.get("artifactKey", ""))
+	if not _is_valid_artifact_key(artifact_key):
+		return _failure(
+			"runtime manifest of package %d has no valid artifact key" % package_id,
+			revision,
+		)
 	var declared: Variant = manifest.get("files", [])
 	if typeof(declared) != TYPE_ARRAY:
 		return _failure(
@@ -382,38 +443,44 @@ func _sync_package(package_id: int, revision: int, chain: Array) -> Dictionary:
 		)
 
 	# Dependencies first: their files have to exist before a dependent scene is
-	# loaded, and the manifest pins each of them to an exact revision.
+	# loaded, and the manifest pins each of them to an exact revision and key.
 	var next_chain := chain.duplicate()
 	next_chain.append("%d:%d" % [package_id, revision])
-	var dependency_error := await _sync_dependencies(package_id, manifest, next_chain)
+	var dependency_error := await _sync_dependencies(
+		package_id, manifest, next_chain, applied
+	)
 	if not dependency_error.is_empty():
 		return _failure(dependency_error, revision)
 	# Test seam: records the apply order (dependencies before dependents).
 	_sync_order.append(package_id)
 
 	# 1. Download and verify everything in memory before touching the disk.
-	var download := await _download_files(package_id, revision, declared, token)
+	var download := await _download_files(
+		package_id, revision, declared, token, artifact_key
+	)
 	if not bool(download.get("ok", false)):
 		return _failure(str(download.get("error", "")), revision)
 	var verified: Array = download.get("files", [])
 	var hashes: Dictionary = download.get("hashes", {})
 
-	# 2. Stage the new revision next to the old one, derive the runtime form of
-	# its raw images and audio, then swap.
+	# 2. Stage the new artifact next to the old one, derive the runtime form of
+	# its raw images and audio, then swap. The final directory is keyed, so a
+	# refreshed closure never overwrites the bytes of the previous one.
+	var target_dir := revision_dir(package_id, revision, artifact_key)
 	var staging_error := _stage_files(package_id, verified)
 	if not staging_error.is_empty():
 		return _failure(staging_error, revision)
 	var derive_result := _derive_assets(
 		packages_dir(package_id).path_join(STAGING_DIR),
-		revision_dir(package_id, revision),
+		target_dir,
 		verified.map(func(file: Dictionary) -> String: return str(file.filepath)),
 	)
 	if not bool(derive_result.get("ok", false)):
 		# Nothing derived stays in staging, so dropping it keeps the current
-		# revision untouched.
+		# artifact untouched.
 		_remove_tree(packages_dir(package_id).path_join(STAGING_DIR))
 		return _failure(str(derive_result.get("error", "")), revision)
-	var swap_error := _swap_revision(package_id, revision)
+	var swap_error := _swap_revision(package_id, revision, artifact_key)
 	if not swap_error.is_empty():
 		return _failure(swap_error, revision)
 
@@ -422,17 +489,19 @@ func _sync_package(package_id: int, revision: int, chain: Array) -> Dictionary:
 	# the hashes here, even when `changed` is empty.
 	var changed := _changed_files(_file_hashes.get(package_id, {}), hashes)
 	_current_revisions[package_id] = revision
+	_current_artifact_keys[package_id] = artifact_key
 	_scene_dependencies[package_id] = _scene_map(manifest)
 	_file_hashes[package_id] = hashes
 
 	print(
-		"WIRED_PACKAGES_APPLIED package=%d revision=%d files=%d"
-		% [package_id, revision, verified.size()]
+		"WIRED_PACKAGES_APPLIED package=%d revision=%d artifact=%s files=%d"
+		% [package_id, revision, artifact_key.left(12), verified.size()]
 	)
 	return {
 		"ok": true,
 		"error": "",
 		"revision": revision,
+		"artifact_key": artifact_key,
 		"files": verified.map(func(file: Dictionary) -> String: return str(file.filepath)),
 		"changed_files": changed,
 	}
@@ -461,9 +530,12 @@ func _latest_revision(package_id: int) -> Dictionary:
 
 
 ## Applies every direct dependency of a manifest, passing the current call chain
-## so a cycle is detected before it can wait forever. Returns an empty string on
-## success, or the error that stopped the closure.
-func _sync_dependencies(package_id: int, manifest: Dictionary, chain: Array) -> String:
+## so a cycle is detected before it can wait forever, and the already-applied
+## map so a diamond's shared library is handled exactly once. Returns an empty
+## string on success, or the error that stopped the closure.
+func _sync_dependencies(
+	package_id: int, manifest: Dictionary, chain: Array, applied: Dictionary
+) -> String:
 	var dependencies: Variant = manifest.get("dependencies", [])
 	if typeof(dependencies) != TYPE_ARRAY:
 		return "runtime manifest of package %d has no dependency list" % package_id
@@ -474,13 +546,35 @@ func _sync_dependencies(package_id: int, manifest: Dictionary, chain: Array) -> 
 		var dependency_revision := int(dependency.get("revision", 0))
 		if dependency_id <= 0 or dependency_revision <= 0:
 			return "package %d has a malformed dependency entry" % package_id
+		if not _is_valid_artifact_key(str(dependency.get("artifactKey", ""))):
+			return "package %d has a malformed dependency artifact key" % package_id
+		var expected_key := str(dependency.get("artifactKey", ""))
+		if int(applied.get(dependency_id, 0)) >= dependency_revision:
+			var applied_key := current_artifact_key(dependency_id)
+			if not applied_key.is_empty() and applied_key != expected_key:
+				return (
+					"package %d: dependency %d artifact changed during sync"
+					% [package_id, dependency_id]
+				)
+			continue
 		var result := await _sync_package_chain(
-			dependency_id, dependency_revision, chain
+			dependency_id, dependency_revision, chain, applied
 		)
 		if not bool(result.get("ok", false)):
 			return (
 				"package %d: dependency %d revision %d failed: %s"
 				% [package_id, dependency_id, dependency_revision, result.get("error", "")]
+			)
+		var actual_key := str(result.get("artifact_key", ""))
+		if actual_key.is_empty():
+			actual_key = current_artifact_key(dependency_id)
+		if not actual_key.is_empty() and actual_key != expected_key:
+			# A publish between the dependent's manifest and the dependency's
+			# manifest would mix two closure states; retry instead of loading
+			# paths that do not exist on disk.
+			return (
+				"package %d: dependency %d artifact changed during sync"
+				% [package_id, dependency_id]
 			)
 	return ""
 
@@ -492,10 +586,16 @@ func _download_token(manifest: Dictionary) -> String:
 	return str(download.get("token", ""))
 
 
-## Downloads and verifies a revision's files in memory. The manifest hashes
-## describe the rewritten artifact, so they are verified as they arrive.
+## Downloads and verifies an artifact's files in memory. The manifest hashes
+## describe the rewritten artifact, so they are verified as they arrive. The
+## artifact key is part of the URL: the backend resolves exactly this artifact
+## and never re-resolves the closure between two file requests.
 func _download_files(
-	package_id: int, revision: int, declared: Array, token: String
+	package_id: int,
+	revision: int,
+	declared: Array,
+	token: String,
+	artifact_key: String,
 ) -> Dictionary:
 	var files: Array = []
 	var hashes: Dictionary = {}
@@ -520,12 +620,13 @@ func _download_files(
 			}
 
 		var download := await _fetch(
-			"/scripting-packages/%d/revisions/%d/runtime-files/%s?room=%d&token=%s"
+			"/scripting-packages/%d/revisions/%d/runtime-files/%s?room=%d&key=%s&token=%s"
 			% [
 				package_id,
 				revision,
 				_encode_path(filepath),
 				_room_id(),
+				artifact_key.uri_encode(),
 				token.uri_encode(),
 			]
 		)
@@ -693,16 +794,16 @@ func _write_import(path: String, type: String, resource_path: String) -> bool:
 	return write_error == OK
 
 
-## Replaces the revision directory only after the staged copy is complete, so a
-## failed swap keeps a working package on disk. Returns an empty string on
+## Replaces the keyed artifact directory only after the staged copy is complete,
+## so a failed swap keeps a working package on disk. Returns an empty string on
 ## success.
-func _swap_revision(package_id: int, revision: int) -> String:
-	var target_dir := revision_dir(package_id, revision)
+func _swap_revision(package_id: int, revision: int, artifact_key: String) -> String:
+	var target_dir := revision_dir(package_id, revision, artifact_key)
 	var staging := packages_dir(package_id).path_join(STAGING_DIR)
 	var backup_dir := packages_dir(package_id).path_join(PREVIOUS_DIR)
 	_remove_tree(backup_dir)
-	# Re-applying the same revision (a dependency changed) overwrites it; move
-	# the old copy aside first so it survives a failed rename.
+	# Re-applying the same artifact (a retry) overwrites it; move the old copy
+	# aside first so it survives a failed rename.
 	if DirAccess.dir_exists_absolute(target_dir):
 		var backup_error := DirAccess.rename_absolute(target_dir, backup_dir)
 		if backup_error != OK:
@@ -723,15 +824,17 @@ func _swap_revision(package_id: int, revision: int) -> String:
 		)
 
 	_remove_tree(backup_dir)
-	_prune_revisions(package_id, revision)
+	_prune_revisions(package_id, revision, target_dir.get_file())
 	return ""
 
 
-## Keeps the applied revision and the newest other one on disk. Deriving the
-## previous revision from the directory instead of memory keeps it correct
-## after a restart and after a same-revision refresh. Only numeric revision
-## directories of this package are removed, so no other project file is touched.
-func _prune_revisions(package_id: int, keep_revision: int) -> void:
+## Keeps the applied artifact and the newest other revision on disk. Older
+## artifacts of the same revision are removed: their bytes belong to a closure
+## that is no longer pinned. Deriving the previous revision from the directory
+## instead of memory keeps it correct after a restart and after a same-revision
+## refresh. Only numeric/artifact directories of this package are removed, so no
+## other project file is touched.
+func _prune_revisions(package_id: int, keep_revision: int, keep_dir_name: String) -> void:
 	var keep_previous := _highest_revision_on_disk(package_id, keep_revision)
 	var root := packages_dir(package_id)
 	var dir := DirAccess.open(root)
@@ -740,10 +843,12 @@ func _prune_revisions(package_id: int, keep_revision: int) -> void:
 	for name: String in dir.get_directories():
 		if name == STAGING_DIR or name == PREVIOUS_DIR:
 			continue
-		if not name.is_valid_int():
+		var value := _revision_of_dir_name(name)
+		if value <= 0:
 			continue
-		var value := name.to_int()
-		if value == keep_revision or value == keep_previous:
+		if name == keep_dir_name:
+			continue
+		if value == keep_previous:
 			continue
 		_remove_tree(root.path_join(name))
 
@@ -755,10 +860,8 @@ func _highest_revision_on_disk(package_id: int, exclude: int) -> int:
 	if dir == null:
 		return highest
 	for name: String in dir.get_directories():
-		if not name.is_valid_int():
-			continue
-		var value := name.to_int()
-		if value != exclude:
+		var value := _revision_of_dir_name(name)
+		if value != 0 and value != exclude:
 			highest = maxi(highest, value)
 	return highest
 
@@ -845,6 +948,18 @@ func _sanitize_room(room_id: String) -> String:
 	if out.length() > 64:
 		out = out.substr(0, 64)
 	return out
+
+
+## A backend artifact key is a lowercase sha256 hex digest. It becomes a path
+## segment, so anything else is rejected before it reaches the file system.
+func _is_valid_artifact_key(value: String) -> bool:
+	if value.length() != ARTIFACT_KEY_LENGTH:
+		return false
+	for index in value.length():
+		var ch := value[index]
+		if not ((ch >= "0" and ch <= "9") or (ch >= "a" and ch <= "f")):
+			return false
+	return true
 
 
 func _validate_relative_path(filepath: String) -> String:

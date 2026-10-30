@@ -21,6 +21,13 @@ const SHARED_LIB_ID := 40
 const ROOT_A_ID := 41
 const ROOT_B_ID := 42
 const RACE_ID := 50
+const DIAMOND_LIB_ID := 60
+const DIAMOND_A_ID := 61
+const DIAMOND_B_ID := 62
+const DIAMOND_ROOT_ID := 63
+const KEY_LIB_ID := 70
+const KEY_DEP_ID := 71
+const KEY_ROOT_ID := 72
 
 var _manager: PackagesManager
 # "package:revision" -> runtime manifest dictionary
@@ -56,6 +63,8 @@ func _run() -> void:
 	_manager._remove_tree("user://wired/rooms/%s" % ROOM)
 	await _test_recursive_sync()
 	await _test_same_revision_refresh()
+	await _test_artifact_key_refresh()
+	await _test_diamond_dependency()
 	await _test_revision_rotation()
 	await _test_failure_atomicity()
 	await _test_missing_manifest()
@@ -77,6 +86,7 @@ func _test_interface() -> void:
 		"sync_package",
 		"runtime_path",
 		"current_revision",
+		"current_artifact_key",
 		"scene_dependencies",
 		"instantiate_scene",
 		"_changed_files",
@@ -92,6 +102,11 @@ func _test_interface() -> void:
 func _test_runtime_path_and_changed_files() -> void:
 	var manager := PackagesManager.new()
 	manager.configure("http://127.0.0.1:1", "7")
+	_check(
+		manager.runtime_path(5, 3, "scripts/hero.gd", "abc")
+		== "user://wired/rooms/7/packages/5/3-abc/scripts/hero.gd",
+		"an explicit artifact key must select the keyed directory"
+	)
 	assert(manager.runtime_path(5, 3, "scripts/hero.gd") ==
 		"user://wired/rooms/7/packages/5/3/scripts/hero.gd")
 	assert(manager._changed_files(
@@ -151,10 +166,10 @@ func _test_recursive_sync() -> void:
 	)
 	_check(
 		_requests.has(
-			"/scripting-packages/%d/revisions/3/runtime-files/scripts/root.gd?room=%s&token=%d-3"
-			% [ROOT_ID, ROOM, ROOT_ID]
+			"/scripting-packages/%d/revisions/3/runtime-files/scripts/root.gd?room=%s&key=%s&token=%d-3"
+			% [ROOT_ID, ROOM, _manifest_key(ROOT_ID, 3), ROOT_ID]
 		),
-		"runtime files must be downloaded with the manifest's room and token"
+		"runtime files must be downloaded with the manifest's room, artifact key and token"
 	)
 	_check(
 		_manager.current_revision(LIB_ID) == 1
@@ -281,6 +296,144 @@ func _test_same_revision_refresh() -> void:
 		FileAccess.get_file_as_string(_manager.runtime_path(ROOT_ID, 3, "scripts/root.gd"))
 		== "root-v3b",
 		"the new bytes of a same-revision apply must be on disk"
+	)
+
+
+## A same-revision rebuild (a dependency published) must produce a new artifact
+## key and a new directory; the old bytes must not be served again.
+func _test_artifact_key_refresh() -> void:
+	_publish(KEY_LIB_ID, 1, {"scripts/key_lib.gd": "key-lib-v1"})
+	_publish(
+		KEY_DEP_ID,
+		1,
+		{"scripts/key_dep.gd": "key-dep-v1"},
+		[_dependency(KEY_LIB_ID, 1)],
+	)
+	_publish(
+		KEY_ROOT_ID,
+		1,
+		{"scripts/key_root.gd": "key-root-v1"},
+		[_dependency(KEY_DEP_ID, 1)],
+	)
+	var first: Dictionary = await _manager.sync_package(KEY_ROOT_ID, 1)
+	_check(bool(first.get("ok", false)), "the keyed artifact must apply")
+	if not bool(first.get("ok", false)):
+		return
+	var first_key := _manager.current_artifact_key(KEY_ROOT_ID)
+	var first_dir := _manager.revision_dir(KEY_ROOT_ID, 1, first_key)
+	var first_path := _manager.runtime_path(KEY_ROOT_ID, 1, "scripts/key_root.gd")
+	_check(
+		not first_key.is_empty() and FileAccess.file_exists(first_path),
+		"the first artifact must be keyed and materialized"
+	)
+	_check(
+		_manager.current_artifact_key(KEY_DEP_ID) == _manifest_key(KEY_DEP_ID, 1),
+		"the dependency directory must use the dependency's own key"
+	)
+
+	# A library publish rebuilds both dependents at the same revision.
+	_publish(KEY_LIB_ID, 2, {"scripts/key_lib.gd": "key-lib-v2"})
+	_publish(
+		KEY_DEP_ID,
+		1,
+		{"scripts/key_dep.gd": "key-dep-v1"},
+		[_dependency(KEY_LIB_ID, 2)],
+	)
+	_publish(
+		KEY_ROOT_ID,
+		1,
+		{"scripts/key_root.gd": "key-root-v1"},
+		[_dependency(KEY_DEP_ID, 1)],
+	)
+	var second: Dictionary = await _manager.sync_package(KEY_ROOT_ID, 1)
+	_check(bool(second.get("ok", false)), "the rebuilt artifact must apply")
+	if not bool(second.get("ok", false)):
+		return
+	var second_key := _manager.current_artifact_key(KEY_ROOT_ID)
+	_check(
+		second_key != first_key,
+		"a dependency publish must change the artifact key of the dependent"
+	)
+	_check(
+		_manager.revision_dir(KEY_ROOT_ID, 1, second_key) != first_dir,
+		"a dependency publish must change the client directory"
+	)
+	_check(
+		not DirAccess.dir_exists_absolute(first_dir),
+		"the stale artifact of the same revision must be pruned"
+	)
+	_check(
+		_artifact_dirs(KEY_ROOT_ID) == PackedStringArray(["1-" + second_key]),
+		"exactly the current keyed artifact must stay on disk"
+	)
+	_check(
+		FileAccess.get_file_as_string(
+			_manager.runtime_path(KEY_ROOT_ID, 1, "scripts/key_root.gd")
+		) == "key-root-v1",
+		"the rebuilt artifact must serve the pinned bytes"
+	)
+	_check(
+		FileAccess.get_file_as_string(
+			_manager.runtime_path(KEY_LIB_ID, 2, "scripts/key_lib.gd")
+		) == "key-lib-v2",
+		"the dependency must serve the newly published bytes"
+	)
+
+
+## A diamond graph applies its shared library exactly once per sync.
+func _test_diamond_dependency() -> void:
+	_publish(
+		DIAMOND_LIB_ID, 1, {"scripts/diamond_lib.gd": "diamond-lib-v1"}
+	)
+	_publish(
+		DIAMOND_A_ID,
+		1,
+		{"scripts/diamond_a.gd": "diamond-a"},
+		[_dependency(DIAMOND_LIB_ID, 1)],
+	)
+	_publish(
+		DIAMOND_B_ID,
+		1,
+		{"scripts/diamond_b.gd": "diamond-b"},
+		[_dependency(DIAMOND_LIB_ID, 1)],
+	)
+	_publish(
+		DIAMOND_ROOT_ID,
+		1,
+		{"scripts/diamond_root.gd": "diamond-root"},
+		[_dependency(DIAMOND_A_ID, 1), _dependency(DIAMOND_B_ID, 1)],
+	)
+	_requests.clear()
+	_applied.clear()
+	_manager._sync_order.clear()
+
+	var result: Dictionary = await _manager.sync_package(DIAMOND_ROOT_ID, 1)
+	_check(
+		bool(result.get("ok", false)),
+		"the diamond closure must apply: %s" % result.get("error", "")
+	)
+	_check(
+		_manager._sync_order
+		== [DIAMOND_LIB_ID, DIAMOND_A_ID, DIAMOND_B_ID, DIAMOND_ROOT_ID],
+		"a shared dependency must be applied once, before both branches: %s"
+		% [_manager._sync_order]
+	)
+	_check(
+		_count_requests(
+			"/scripting-packages/%d/revisions/1/runtime-files/scripts/diamond_lib.gd"
+			% DIAMOND_LIB_ID
+		) == 1,
+		"the diamond library must be downloaded once"
+	)
+	_check(
+		_count_requests(
+			"/scripting-packages/%d/revisions/1/runtime-manifest" % DIAMOND_LIB_ID
+		) == 1,
+		"the diamond library manifest must be requested once"
+	)
+	_check(
+		_count_applied(DIAMOND_LIB_ID) == 1,
+		"the diamond library must emit package_applied once"
 	)
 
 
@@ -664,7 +817,10 @@ func _transport(path: String) -> Dictionary:
 		var key := "%s:%s:%s" % [parts[1], parts[3], filepath]
 		if not _files.has(key):
 			return _not_found()
-		if query != "room=%s&token=%s-%s" % [ROOM, parts[1], parts[3]]:
+		var manifest_key := _manifest_key(int(parts[1]), int(parts[3]))
+		if query != "room=%s&key=%s&token=%s-%s" % [
+			ROOM, manifest_key, parts[1], parts[3]
+		]:
 			return _not_found()
 		return {
 			"ok": true,
@@ -727,15 +883,27 @@ func _publish(
 		entries.append({"filepath": str(filepath), "size": body.size(), "sha256": digest})
 		_files["%d:%d:%s" % [package_id, revision, filepath]] = body
 		total_size += body.size()
+	var normalized: Array = []
+	for dependency: Variant in dependencies:
+		var entry: Dictionary = dependency
+		var dependency_id := int(entry.get("packageId", 0))
+		var dependency_revision := int(entry.get("revision", 0))
+		normalized.append({
+			"packageId": dependency_id,
+			"revision": dependency_revision,
+			"name": "package-%d" % dependency_id,
+			"artifactKey": _manifest_key(dependency_id, dependency_revision),
+		})
 	_manifests["%d:%d" % [package_id, revision]] = {
 		"packageId": package_id,
 		"name": "package-%d" % package_id,
 		"revision": revision,
 		"roomId": int(ROOM),
 		"publishedAt": "2026-10-30T00:00:00.000Z",
+		"artifactKey": _closure_key(package_id, revision, normalized),
 		"files": entries,
 		"totalSize": total_size,
-		"dependencies": dependencies,
+		"dependencies": normalized,
 		"sceneDependencies": scenes,
 		"download": {"token": "%d-%d" % [package_id, revision], "expiresAt": 0},
 	}
@@ -743,7 +911,56 @@ func _publish(
 
 
 func _dependency(package_id: int, revision: int) -> Dictionary:
-	return {"packageId": package_id, "revision": revision, "name": "package-%d" % package_id}
+	return {
+		"packageId": package_id,
+		"revision": revision,
+		"name": "package-%d" % package_id,
+		"artifactKey": _manifest_key(package_id, revision),
+	}
+
+
+## Artifact key of a manifest already in the fixture, or a deterministic
+## fallback for a dependency that was not published yet.
+func _manifest_key(package_id: int, revision: int) -> String:
+	var key := "%d:%d" % [package_id, revision]
+	if _manifests.has(key):
+		return str(_manifests[key].get("artifactKey", ""))
+	return key.sha256_text()
+
+
+## Mirrors the server: the key covers the sorted `(packageId, revision)` list
+## reachable from the package, so a transitive publish changes it.
+func _closure_key(package_id: int, revision: int, dependencies: Array) -> String:
+	var seen := {}
+	var pairs: Array = []
+	var queue: Array = [[package_id, revision, dependencies]]
+	while not queue.is_empty():
+		var item: Array = queue.pop_front()
+		var id := int(item[0])
+		var rev := int(item[1])
+		var pair_key := "%d:%d" % [id, rev]
+		if seen.has(pair_key):
+			continue
+		seen[pair_key] = true
+		pairs.append([id, rev])
+		var manifest: Dictionary = _manifests.get(pair_key, {})
+		for dependency: Variant in item[2]:
+			var entry: Dictionary = dependency
+			var dependency_id := int(entry.get("packageId", 0))
+			var dependency_revision := int(entry.get("revision", 0))
+			var dependency_manifest: Dictionary = _manifests.get(
+				"%d:%d" % [dependency_id, dependency_revision], {}
+			)
+			queue.append([
+				dependency_id,
+				dependency_revision,
+				dependency_manifest.get("dependencies", []),
+			])
+	pairs.sort_custom(
+		func(a: Array, b: Array) -> bool:
+			return a[0] < b[0] or (a[0] == b[0] and a[1] < b[1])
+	)
+	return JSON.stringify(pairs).sha256_text()
 
 
 # --- async helpers --------------------------------------------------------
@@ -836,7 +1053,21 @@ func _revision_dirs(package_id: int) -> PackedStringArray:
 	if dir == null:
 		return names
 	for name: String in dir.get_directories():
-		if name.is_valid_int():
+		var base := name.get_slice("-", 0)
+		if base.is_valid_int() and not names.has(base):
+			names.append(base)
+	names.sort()
+	return names
+
+
+## Full artifact directory names (`<revision>-<artifact_key>`), sorted.
+func _artifact_dirs(package_id: int) -> PackedStringArray:
+	var names := PackedStringArray()
+	var dir := DirAccess.open(_manager.packages_dir(package_id))
+	if dir == null:
+		return names
+	for name: String in dir.get_directories():
+		if _manager._revision_of_dir_name(name) > 0:
 			names.append(name)
 	names.sort()
 	return names
