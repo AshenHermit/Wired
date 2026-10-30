@@ -16,6 +16,7 @@ import { Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { sha256Hex } from './package-hash';
+import { MAX_PACKAGE_FILE_SIZE } from './package-manifest';
 import { resolvePackagePath } from './package-path';
 import {
   buildSceneDependencies,
@@ -85,8 +86,14 @@ type LoadedRevision = {
 export class PackageDeliveryService {
   /** Artifacts currently being built, so concurrent calls share one build. */
   private readonly inFlight = new Map<string, Promise<RuntimeArtifact>>();
-  /** Immutable published bytes, memoized so a cache hit never re-reads disk. */
+  /**
+   * Immutable published bytes, memoized so a cache hit never re-reads disk.
+   * Bounded by total bytes (the per-file limit): oversized buffers are never
+   * cached and the oldest entries are evicted first when the cap is reached.
+   */
   private readonly fileBytes = new Map<string, Buffer>();
+  private fileCacheBytes = 0;
+  private readonly maxFileCacheBytes = MAX_PACKAGE_FILE_SIZE;
 
   constructor(
     @InjectRepository(ScriptingPackage)
@@ -255,9 +262,13 @@ export class PackageDeliveryService {
       textFilesByPackage.set(id, textFiles);
 
       for (const file of textFiles) {
-        for (const ref of collectPackageReferences(file.text)) {
-          this.assertSafeReferencePath(ref);
-
+        let references: PackageFileReference[];
+        try {
+          references = collectPackageReferences(file.text);
+        } catch (error) {
+          throw new BadRequestException((error as Error).message);
+        }
+        for (const ref of references) {
           if (ref.packageId === id) {
             if (!fileSet.has(ref.filepath)) {
               throw new BadRequestException(
@@ -373,15 +384,6 @@ export class PackageDeliveryService {
     };
   }
 
-  private assertSafeReferencePath(ref: PackageFileReference): void {
-    const segments = ref.filepath.split('/');
-    if (segments.some((segment) => segment === '.' || segment === '..')) {
-      throw new BadRequestException(
-        `package_dependency_invalid_path:${ref.filepath}`,
-      );
-    }
-  }
-
   private dependencyTextFiles(
     textFilesByPackage: Map<number, PackageTextFile[]>,
     rootId: number,
@@ -410,7 +412,22 @@ export class PackageDeliveryService {
       revision,
       filepath,
     );
+    if (data.byteLength > this.maxFileCacheBytes) {
+      return data;
+    }
+    while (this.fileCacheBytes + data.byteLength > this.maxFileCacheBytes) {
+      const oldestKey = this.fileBytes.keys().next().value as
+        | string
+        | undefined;
+      if (oldestKey === undefined) {
+        break;
+      }
+      const oldest = this.fileBytes.get(oldestKey)!;
+      this.fileBytes.delete(oldestKey);
+      this.fileCacheBytes -= oldest.byteLength;
+    }
     this.fileBytes.set(key, data);
+    this.fileCacheBytes += data.byteLength;
     return data;
   }
 
@@ -445,68 +462,70 @@ export class PackageDeliveryService {
     resolved: ResolvedClosure,
   ): Promise<RuntimeArtifact> {
     const staging = `${dir}.staging-${process.pid}-${randomBytes(4).toString('hex')}`;
-    await mkdir(staging, { recursive: true });
-
-    const textByPath = new Map(
-      resolved.rootTextFiles.map((file) => [file.filepath, file.text]),
-    );
-    const files: PackageFileEntry[] = [];
-    for (const entry of resolved.rootFiles) {
-      const data = resolved.bytes.get(entry.filepath)!;
-      const rewritten = textByPath.has(entry.filepath)
-        ? this.rewriteText(
-            entry.filepath,
-            textByPath.get(entry.filepath)!,
-            resolved.roomId,
-            resolved.revisionByPackage,
-          )
-        : data;
-      await mkdir(path.dirname(path.join(staging, entry.filepath)), {
-        recursive: true,
-      });
-      await writeFile(path.join(staging, entry.filepath), rewritten);
-      files.push({
-        filepath: entry.filepath,
-        size: rewritten.byteLength,
-        sha256: sha256Hex(rewritten),
-      });
-    }
-    files.sort((a, b) => a.filepath.localeCompare(b.filepath));
-
-    const sceneDependencies = buildSceneDependencies(
-      resolved.packageId,
-      resolved.rootTextFiles,
-      resolved.dependencyTextFiles,
-    );
-    const manifestBody = {
-      packageId: resolved.packageId,
-      name: resolved.name,
-      revision: resolved.revision,
-      roomId: resolved.roomId,
-      publishedAt: resolved.publishedAt,
-      files,
-      totalSize: files.reduce((sum, file) => sum + file.size, 0),
-      dependencies: resolved.directDependencies,
-      sceneDependencies,
-    };
-    await writeFile(
-      path.join(staging, MANIFEST_FILENAME),
-      JSON.stringify(manifestBody),
-    );
-
     try {
+      await mkdir(staging, { recursive: true });
+
+      const textByPath = new Map(
+        resolved.rootTextFiles.map((file) => [file.filepath, file.text]),
+      );
+      const files: PackageFileEntry[] = [];
+      for (const entry of resolved.rootFiles) {
+        const data = resolved.bytes.get(entry.filepath)!;
+        const rewritten = textByPath.has(entry.filepath)
+          ? this.rewriteText(
+              entry.filepath,
+              textByPath.get(entry.filepath)!,
+              resolved.roomId,
+              resolved.revisionByPackage,
+            )
+          : data;
+        await mkdir(path.dirname(path.join(staging, entry.filepath)), {
+          recursive: true,
+        });
+        await writeFile(path.join(staging, entry.filepath), rewritten);
+        files.push({
+          filepath: entry.filepath,
+          size: rewritten.byteLength,
+          sha256: sha256Hex(rewritten),
+        });
+      }
+      files.sort((a, b) => a.filepath.localeCompare(b.filepath));
+
+      const sceneDependencies = buildSceneDependencies(
+        resolved.packageId,
+        resolved.rootTextFiles,
+        resolved.dependencyTextFiles,
+      );
+      const manifestBody = {
+        packageId: resolved.packageId,
+        name: resolved.name,
+        revision: resolved.revision,
+        roomId: resolved.roomId,
+        publishedAt: resolved.publishedAt,
+        files,
+        totalSize: files.reduce((sum, file) => sum + file.size, 0),
+        dependencies: resolved.directDependencies,
+        sceneDependencies,
+      };
+      await writeFile(
+        path.join(staging, MANIFEST_FILENAME),
+        JSON.stringify(manifestBody),
+      );
+
       await rename(staging, dir);
+      return { ...manifestBody, dir };
     } catch (error) {
-      // A concurrent build may have won the rename; reuse its artifact.
-      await rm(staging, { recursive: true, force: true });
+      // Remove the staging dir on any build failure. A concurrent build may
+      // have won the rename, in which case its manifest is already in place.
+      await rm(staging, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
       const cached = await this.readManifest(dir);
       if (cached) {
         return cached;
       }
       throw error;
     }
-
-    return { ...manifestBody, dir };
   }
 
   private rewriteText(
@@ -515,10 +534,12 @@ export class PackageDeliveryService {
     roomId: number,
     revisionByPackage: Map<number, number>,
   ): Buffer {
-    const rewritten = stripExtResourceUids(
-      filepath,
-      rewritePackageReferences(text, { roomId, revisionByPackage }),
-    );
-    return Buffer.from(rewritten, 'utf8');
+    let rewritten: string;
+    try {
+      rewritten = rewritePackageReferences(text, { roomId, revisionByPackage });
+    } catch (error) {
+      throw new BadRequestException((error as Error).message);
+    }
+    return Buffer.from(stripExtResourceUids(filepath, rewritten), 'utf8');
   }
 }

@@ -60,6 +60,7 @@ export function collectPackageReferences(text: string): PackageFileReference[] {
   const refs: PackageFileReference[] = [];
   const seen = new Set<string>();
   for (const match of text.matchAll(PACKAGE_REFERENCE_RE)) {
+    assertSafeRawPath(match[3]);
     const filepath = normalizeReferencePath(match[3]);
     if (filepath === null) {
       continue;
@@ -92,6 +93,7 @@ export function rewritePackageReferences(
   return text.replace(
     PACKAGE_REFERENCE_RE,
     (match, quote: string, idGroup: string, rest: string) => {
+      assertSafeRawPath(rest);
       const id = Number(idGroup);
       const revision = options.revisionByPackage.get(id);
       if (revision === undefined) {
@@ -240,4 +242,16 @@ function normalizeReferencePath(raw: string): string | null {
     filepath = filepath.slice(1);
   }
   return filepath.length === 0 ? null : filepath;
+}
+
+/**
+ * Rejects a raw captured reference path that contains a `.` or `..` segment.
+ * Such a path would address files outside the referenced package directory
+ * (or normalize ambiguously), so it must fail before normalization collapses
+ * the offending segment and the rewrite preserves it verbatim.
+ */
+function assertSafeRawPath(raw: string): void {
+  if (raw.split('/').some((segment) => segment === '.' || segment === '..')) {
+    throw new Error(`package_reference_invalid_path:${raw}`);
+  }
 }

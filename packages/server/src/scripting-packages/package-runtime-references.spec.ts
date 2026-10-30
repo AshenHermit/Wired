@@ -78,6 +78,34 @@ describe('package runtime references', () => {
     ).toThrow('package_reference_not_rewritable:99');
   });
 
+  it('rejects reference paths containing a "." or ".." segment', () => {
+    expect(() =>
+      collectPackageReferences('preload("res://packages/5/./hero.gd")'),
+    ).toThrow('package_reference_invalid_path:./hero.gd');
+    expect(() =>
+      collectPackageReferences('preload("res://packages/5/a/../b.gd")'),
+    ).toThrow('package_reference_invalid_path:a/../b.gd');
+    expect(() =>
+      collectPackageReferences('preload("res://packages/5/../6/x")'),
+    ).toThrow('package_reference_invalid_path:../6/x');
+  });
+
+  it('rewritePackageReferences rejects the same unsafe paths', () => {
+    const revisions = new Map([[5, 3]]);
+    expect(() =>
+      rewritePackageReferences('preload("res://packages/5/./hero.gd")', {
+        roomId: 7,
+        revisionByPackage: revisions,
+      }),
+    ).toThrow('package_reference_invalid_path:./hero.gd');
+    expect(() =>
+      rewritePackageReferences('preload("res://packages/5/a/../b.gd")', {
+        roomId: 7,
+        revisionByPackage: revisions,
+      }),
+    ).toThrow('package_reference_invalid_path:a/../b.gd');
+  });
+
   it('strips uid only from ext_resource lines', () => {
     const text =
       '[gd_scene load_steps=2 format=3 uid="uid://scene"]\n' +

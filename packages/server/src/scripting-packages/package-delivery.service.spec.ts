@@ -308,18 +308,57 @@ describe('PackageDeliveryService', () => {
     );
   });
 
-  it('rejects a reference path containing traversal segments', async () => {
+  it.each([
+    ['res://packages/5/./hero.gd', 'package_reference_invalid_path:./hero.gd'],
+    ['res://packages/5/a/../b.gd', 'package_reference_invalid_path:a/../b.gd'],
+    ['res://packages/5/../6/x', 'package_reference_invalid_path:../6/x'],
+  ])('rejects the unsafe reference path %s', async (reference, expected) => {
     definePackage(5, 'Heroes', 7);
     await writePublished(5, 3, {
-      'main.gd': 'const X = preload("res://packages/5/../6/x.gd")',
+      'main.gd': `const X = preload("${reference}")`,
     });
 
-    await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toThrow(
-      'package_dependency_invalid_path:../6/x.gd',
-    );
+    await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toThrow(expected);
     await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toBeInstanceOf(
       BadRequestException,
     );
+  });
+
+  it('bounds the byte cache and evicts the oldest entries', async () => {
+    definePackage(5, 'Heroes', 7);
+    await writePublished(5, 3, {
+      'a.gd': 'a'.repeat(40),
+      'b.gd': 'b'.repeat(40),
+      'c.gd': 'c'.repeat(40),
+    });
+
+    const internals = service as unknown as {
+      maxFileCacheBytes: number;
+      fileBytes: Map<string, Buffer>;
+      fileCacheBytes: number;
+    };
+    internals.maxFileCacheBytes = 64;
+
+    await service.getRuntimeManifest(5, 3, 7);
+
+    expect(internals.fileCacheBytes).toBeLessThanOrEqual(64);
+    expect(internals.fileBytes.size).toBe(1);
+    expect(internals.fileBytes.has('5:3:c.gd')).toBe(true);
+  });
+
+  it('does not cache a single file larger than the cache cap', async () => {
+    definePackage(5, 'Heroes', 7);
+    await writePublished(5, 3, { 'big.gd': 'x'.repeat(100) });
+
+    const internals = service as unknown as {
+      maxFileCacheBytes: number;
+      fileBytes: Map<string, Buffer>;
+    };
+    internals.maxFileCacheBytes = 64;
+
+    await service.getRuntimeManifest(5, 3, 7);
+
+    expect(internals.fileBytes.size).toBe(0);
   });
 
   it('rejects invalid UTF-8 in a text file during the build', async () => {
