@@ -593,8 +593,7 @@ describe('RoomRuntimeService', () => {
     await Promise.all([stopping, shutdown]);
   });
 
-  it('rejects invalid lifecycle timeouts instead of starting', async () => {
-    service = createService({ ticketTtlSec: 0 });
+  it('rejects invalid lifecycle timeouts instead of starting', async () => {    service = createService({ ticketTtlSec: 0 });
     const connection = service.getConnection('room-1');
     await flushAsync();
     if (factory.processes.length > 0) {
@@ -604,5 +603,68 @@ describe('RoomRuntimeService', () => {
     }
 
     await expect(connection).rejects.toMatchObject({ code: 'config' });
+  });
+
+  it('sends a package command only to a running runtime', async () => {
+    const { process } = await startRoom('room-1');
+
+    expect(service.sendPackage('room-1', 42, 3)).toBe(true);
+    await flushAsync();
+    expect(process.stdinText).toContain('package 42 3\n');
+
+    expect(service.sendPackage('room-missing', 42, 3)).toBe(false);
+    expect(service.sendPackage('room-1', 0, 3)).toBe(false);
+    expect(process.stdinText).toBe('package 42 3\n');
+  });
+
+  it('notifies the observer about lifecycle and package protocol events', async () => {
+    const events: unknown[] = [];
+    service.setObserver({
+      onRuntimeReady: (roomId) => events.push(['ready', roomId]),
+      onPeerAuthenticated: (roomId, peer) =>
+        events.push(['auth', roomId, peer]),
+      onPeerLeft: (roomId, peer) => events.push(['left', roomId, peer]),
+      onPackagesApplied: (roomId, packageId, revision, files) =>
+        events.push(['applied', roomId, packageId, revision, files]),
+      onPackagesFailed: (roomId, packageId, revision, error) =>
+        events.push(['failed', roomId, packageId, revision, error]),
+      onClientPackagesReady: (roomId, peer, packageId, revision) =>
+        events.push(['client-ready', roomId, peer, packageId, revision]),
+      onClientPackagesFailed: (roomId, peer, packageId, revision, error) =>
+        events.push([
+          'client-failed',
+          roomId,
+          peer,
+          packageId,
+          revision,
+          error,
+        ]),
+    });
+
+    const { process } = await startRoom('room-1');
+    process.emitLine('WIRED_AUTH_OK peer=2 player=1 room=room-1');
+    process.emitLine(
+      'WIRED_PACKAGES_APPLIED package=42 revision=3 files=7',
+    );
+    process.emitLine(
+      'WIRED_PACKAGES_SYNC_FAILED package=43 revision=1 error=hash mismatch',
+    );
+    process.emitLine(
+      'WIRED_CLIENT_PACKAGES_READY peer=2 package=42 revision=3',
+    );
+    process.emitLine(
+      'WIRED_CLIENT_PACKAGES_FAILED peer=2 package=43 revision=1 error=download failed',
+    );
+    process.emitLine('WIRED_PLAYER_LEFT peer=2 player=1');
+
+    expect(events).toEqual([
+      ['ready', 'room-1'],
+      ['auth', 'room-1', 2],
+      ['applied', 'room-1', 42, 3, 7],
+      ['failed', 'room-1', 43, 1, 'hash mismatch'],
+      ['client-ready', 'room-1', 2, 42, 3],
+      ['client-failed', 'room-1', 2, 43, 1, 'download failed'],
+      ['left', 'room-1', 2],
+    ]);
   });
 });

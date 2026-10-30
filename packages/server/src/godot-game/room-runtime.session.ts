@@ -9,7 +9,7 @@ import {
   RoomRuntimeInfo,
   RuntimeProcessFactory,
 } from './room-runtime.types';
-import { parseRuntimeLine } from './room-runtime.line-parser';
+import { parseRuntimeLine, RuntimeLineEvent } from './room-runtime.line-parser';
 
 const FORCE_KILL_WAIT_MS = 2_000;
 const HANDSHAKE_LEASE_SLACK_MS = 5_000;
@@ -25,6 +25,8 @@ export interface RoomRuntimeSessionOptions {
   registry: RoomRuntimeRegistry;
   logger: Logger;
   paths: { projectPath: string; stateDir: string };
+  /** Best-effort local signal, never a delivery guarantee. */
+  onEvent?: (event: RuntimeLineEvent) => void;
 }
 
 /**
@@ -334,6 +336,7 @@ export class RoomRuntimeSession {
         // The handshake succeeded; from now on only real peers keep it alive.
         this.record.handshakeLeaseUntil = 0;
         this.clearIdleTimer();
+        this.notify(event);
         return;
 
       case 'player-left':
@@ -348,6 +351,14 @@ export class RoomRuntimeSession {
           this.record.handshakeLeaseUntil = 0;
           this.scheduleIdleStop();
         }
+        this.notify(event);
+        return;
+
+      case 'packages-applied':
+      case 'packages-failed':
+      case 'client-packages-ready':
+      case 'client-packages-failed':
+        this.notify(event);
         return;
     }
   }
@@ -382,6 +393,42 @@ export class RoomRuntimeSession {
     if (record.activePlayers === 0) {
       this.scheduleIdleStop();
     }
+    this.notify({ kind: 'ready', roomId: record.roomId, port: record.port });
+  }
+
+  /**
+   * Writes one control command to the runtime. Returns false when the room is
+   * not running or its input is already closed; callers retry on reconciliation
+   * instead of assuming delivery.
+   */
+  sendCommand(command: string): boolean {
+    const record = this.record;
+    if (record.state !== 'running' || !record.process?.stdin) {
+      return false;
+    }
+    try {
+      record.process.stdin.write(`${command}\n`);
+      this.appendLog(`[wired] control -> ${command}`);
+      return true;
+    } catch (error) {
+      this.appendLog(
+        `[wired] control write failed: ${this.errorMessage(error)}`,
+      );
+      return false;
+    }
+  }
+
+  /** Asks Godot to download and apply an exact published package revision. */
+  sendPackage(packageId: number, revision: number): boolean {
+    if (
+      !Number.isInteger(packageId) ||
+      packageId <= 0 ||
+      !Number.isInteger(revision) ||
+      revision <= 0
+    ) {
+      return false;
+    }
+    return this.sendCommand(`package ${packageId} ${revision}`);
   }
 
   private handleExit(code: number | null, signal: NodeJS.Signals | null): void {
@@ -668,6 +715,17 @@ export class RoomRuntimeSession {
 
   private appendLog(line: string): void {
     this.record.log.append(line);
+  }
+
+  private notify(event: RuntimeLineEvent): void {
+    try {
+      this.options.onEvent?.(event);
+    } catch (error) {
+      // A consumer bug must never break the runtime state machine.
+      this.appendLog(
+        `[wired] event observer failed: ${this.errorMessage(error)}`,
+      );
+    }
   }
 
   private toError(error: unknown): Error {

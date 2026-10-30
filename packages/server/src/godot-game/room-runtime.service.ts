@@ -5,9 +5,11 @@ import { RoomRuntimeConfiguration } from './room-runtime.configuration';
 import { RoomRuntimeError } from './room-runtime.errors';
 import { RoomRuntimeRegistry } from './room-runtime.registry';
 import { RoomRuntimeSession } from './room-runtime.session';
+import { RuntimeLineEvent } from './room-runtime.line-parser';
 import {
   RoomConnection,
   RoomRuntimeInfo,
+  RuntimeObserver,
   RuntimeProcessFactory,
 } from './room-runtime.types';
 
@@ -30,6 +32,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
   private readonly registry = new RoomRuntimeRegistry();
   private readonly runtimeConfiguration: RoomRuntimeConfiguration;
   private readonly sessions = new Map<string, RoomRuntimeSession>();
+  private observer?: RuntimeObserver;
 
   constructor(
     private readonly configService: AppConfigService,
@@ -68,6 +71,24 @@ export class RoomRuntimeService implements OnModuleDestroy {
 
   getLogs(roomId: string): string[] {
     return this.sessions.get(roomId)?.logLines() ?? [];
+  }
+
+  /**
+   * Registers the local observer of runtime protocol events. There is exactly
+   * one consumer (package sync); passing undefined unregisters it.
+   */
+  setObserver(observer: RuntimeObserver | undefined): void {
+    this.observer = observer;
+  }
+
+  /**
+   * Sends a package revision command to a running room. Returns false when the
+   * runtime is absent or not running, so the caller can retry after readiness.
+   */
+  sendPackage(roomId: string, packageId: number, revision: number): boolean {
+    return (
+      this.sessions.get(roomId)?.sendPackage(packageId, revision) ?? false
+    );
   }
 
   stopRoom(roomId: string, reason = 'requested'): Promise<void> {
@@ -145,11 +166,71 @@ export class RoomRuntimeService implements OnModuleDestroy {
       processFactory: this.processFactory,
       registry: this.registry,
       logger: this.logger,
+      onEvent: (event) =>
+        this.handleSessionEvent(roomId, event),
     });
     this.sessions.set(roomId, session);
     this.registry.add(session.record);
     session.start();
     return session;
+  }
+
+  private handleSessionEvent(roomId: string, event: RuntimeLineEvent): void {
+    const observer = this.observer;
+    if (!observer) {
+      return;
+    }
+    try {
+      switch (event.kind) {
+        case 'ready':
+          observer.onRuntimeReady?.(roomId);
+          return;
+        case 'auth':
+          observer.onPeerAuthenticated?.(roomId, event.peer);
+          return;
+        case 'player-left':
+          observer.onPeerLeft?.(roomId, event.peer);
+          return;
+        case 'packages-applied':
+          observer.onPackagesApplied?.(
+            roomId,
+            event.packageId,
+            event.revision,
+            event.files,
+          );
+          return;
+        case 'packages-failed':
+          observer.onPackagesFailed?.(
+            roomId,
+            event.packageId,
+            event.revision,
+            event.error,
+          );
+          return;
+        case 'client-packages-ready':
+          observer.onClientPackagesReady?.(
+            roomId,
+            event.peer,
+            event.packageId,
+            event.revision,
+          );
+          return;
+        case 'client-packages-failed':
+          observer.onClientPackagesFailed?.(
+            roomId,
+            event.peer,
+            event.packageId,
+            event.revision,
+            event.error,
+          );
+          return;
+      }
+    } catch (error) {
+      // Observer failures are local bookkeeping problems, not runtime failures.
+      this.logger.error(
+        `Runtime observer failed for room ${roomId}: ${this.errorMessage(error)}`,
+      );
+    }
   }
 
   private errorMessage(error: unknown): string {

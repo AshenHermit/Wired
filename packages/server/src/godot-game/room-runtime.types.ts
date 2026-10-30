@@ -91,3 +91,40 @@ export interface RuntimeProcess {
 export abstract class RuntimeProcessFactory {
   abstract spawn(options: RuntimeSpawnOptions): RuntimeProcess;
 }
+
+/**
+ * Local notification sink for protocol facts observed on the runtime control
+ * channel. Delivery is best-effort: consumers must treat these callbacks as a
+ * hint to reconcile against persisted package manifests, not as a transport
+ * with guaranteed delivery.
+ */
+export interface RuntimeObserver {
+  onRuntimeReady?(roomId: string): void;
+  onPeerAuthenticated?(roomId: string, peer: number): void;
+  onPeerLeft?(roomId: string, peer: number): void;
+  onPackagesApplied?(
+    roomId: string,
+    packageId: number,
+    revision: number,
+    files: number,
+  ): void;
+  onPackagesFailed?(
+    roomId: string,
+    packageId: number,
+    revision: number,
+    error: string,
+  ): void;
+  onClientPackagesReady?(
+    roomId: string,
+    peer: number,
+    packageId: number,
+    revision: number,
+  ): void;
+  onClientPackagesFailed?(
+    roomId: string,
+    peer: number,
+    packageId: number,
+    revision: number,
+    error: string,
+  ): void;
+}
