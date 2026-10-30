@@ -7,7 +7,7 @@ import { Room } from 'src/database/entities/room.entity';
 import { ScriptingPackagesService } from './scripting-packages.service';
 import { ScriptingPackagesController } from './scripting-packages.controller';
 import { PackageRevisionsService } from './package-revisions.service';
-import { PackageStorageService } from './package-storage.service';
+import { PackageDeliveryModule } from './package-delivery.module';
 import { AppConfigModule } from 'src/config/config.module';
 import { GodotGameModule } from 'src/godot-game/godot-game.module';
 
@@ -15,6 +15,7 @@ import { GodotGameModule } from 'src/godot-game/godot-game.module';
   imports: [
     AppConfigModule,
     GodotGameModule,
+    PackageDeliveryModule,
     TypeOrmModule.forFeature([
       ScriptingPackage,
       ScriptingPackageRevision,
@@ -22,11 +23,7 @@ import { GodotGameModule } from 'src/godot-game/godot-game.module';
       Room,
     ]),
   ],
-  providers: [
-    ScriptingPackagesService,
-    PackageStorageService,
-    PackageRevisionsService,
-  ],
+  providers: [ScriptingPackagesService, PackageRevisionsService],
   controllers: [ScriptingPackagesController],
   exports: [ScriptingPackagesService, PackageRevisionsService],
 })
