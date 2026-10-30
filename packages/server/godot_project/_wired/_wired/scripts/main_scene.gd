@@ -135,9 +135,39 @@ func _control_loop() -> void:
 		if line.is_empty():
 			call_deferred("_request_shutdown", "stdin_closed")
 			return
-		if line.strip_edges() == "shutdown":
+		var command := line.strip_edges()
+		if command == "shutdown":
 			call_deferred("_request_shutdown", "shutdown_command")
 			return
+		if command.begins_with("package "):
+			var parts := command.split(" ", false)
+			if (
+				parts.size() == 3
+				and parts[1].is_valid_int()
+				and parts[2].is_valid_int()
+			):
+				call_deferred(
+					"_apply_package_revision", int(parts[1]), int(parts[2])
+				)
+			else:
+				print("WIRED_CONTROL_ERROR invalid_package_command=%s" % command)
+
+
+## Server side: the backend asked for a published revision. The loader fetches
+## the manifest, verifies hashes and writes the files; only then is the
+## revision announced to clients. File bytes never travel over the game socket.
+func _apply_package_revision(package_id: int, revision: int) -> void:
+	print(
+		"WIRED_PACKAGES_SYNC_STARTED package=%d revision=%d"
+		% [package_id, revision]
+	)
+	var result: Dictionary = await _packages.sync_package(package_id, revision)
+	if not bool(result.get("ok", false)):
+		# PackagesManager already printed WIRED_PACKAGES_SYNC_FAILED with the
+		# requested revision; the backend owns retries.
+		return
+	var applied := int(result.get("revision", revision))
+	_net.set_package_revision(package_id, applied)
 
 
 func _request_shutdown(reason: String) -> void:
@@ -304,8 +334,43 @@ func _on_server_disconnected() -> void:
 
 func _on_server_event(event: Dictionary) -> void:
 	_bridge_call("notifyEvent", [JSON.stringify(event)])
-	if str(event.get("type", "")) == "world_state":
+	var event_type := str(event.get("type", ""))
+	if event_type == "world_state":
 		_bridge_status("ready", "world_state")
+	elif event_type == "package_revision":
+		_apply_client_package(
+			int(event.get("package_id", 0)), int(event.get("revision", 0))
+		)
+
+
+## Client side: download and verify the announced revision over HTTP, then tell
+## the server whether this client applied it.
+func _apply_client_package(package_id: int, revision: int) -> void:
+	if package_id <= 0 or revision <= 0:
+		return
+	print(
+		"WIRED_CLIENT_PACKAGES_SYNC_STARTED package=%d revision=%d"
+		% [package_id, revision]
+	)
+	var result: Dictionary = await _packages.sync_package(package_id, revision)
+	var ok := bool(result.get("ok", false))
+	var applied := int(result.get("revision", revision))
+	var error := "" if ok else str(result.get("error", ""))
+	_net.report_package_ready(package_id, applied, ok, error)
+	_bridge_call(
+		"notifyEvent",
+		[
+			JSON.stringify(
+				{
+					"type": "package_sync",
+					"package_id": package_id,
+					"revision": applied,
+					"ok": ok,
+					"error": error,
+				}
+			)
+		]
+	)
 
 
 func _on_status_changed(text: String) -> void:

@@ -88,8 +88,10 @@ func fetch_manifest(package_id: int) -> Dictionary:
 
 
 ## Downloads the latest published revision of a package and applies it.
+## `revision_hint` is the revision the backend asked for; it is only used to
+## label failures that happen before the manifest is known.
 ## Returns {ok: bool, error: String, revision: int, files: Array}.
-func sync_package(package_id: int) -> Dictionary:
+func sync_package(package_id: int, revision_hint: int = 0) -> Dictionary:
 	if _syncing.has(package_id):
 		return _failure("package %d is already syncing" % package_id)
 	_syncing[package_id] = true
@@ -99,8 +101,16 @@ func sync_package(package_id: int) -> Dictionary:
 		package_applied.emit(package_id, int(result.revision), int(result.files.size()))
 	else:
 		package_failed.emit(package_id, str(result.error))
-		push_warning("WIRED_PACKAGES_SYNC_FAILED package=%d %s" % [package_id, result.error])
+		var revision := int(result.get("revision", revision_hint))
+		print(
+			"WIRED_PACKAGES_SYNC_FAILED package=%d revision=%d error=%s"
+			% [package_id, revision, _single_line(str(result.error))]
+		)
 	return result
+
+
+func _single_line(text: String) -> String:
+	return text.replace("\r", " ").replace("\n", " ")
 
 
 func _sync_package(package_id: int) -> Dictionary:

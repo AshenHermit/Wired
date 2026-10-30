@@ -41,6 +41,10 @@ var _server_seq := 0
 var _players: Dictionary = {}
 var _pending: Dictionary = {}
 var _used_nonces: Dictionary = {}
+# server: latest applied revision per package id
+var _package_revisions: Dictionary = {}
+# server: peer -> { package_id: {revision, state} }
+var _package_reports: Dictionary = {}
 
 
 func _enter_tree() -> void:
@@ -92,6 +96,7 @@ func _on_peer_connected(peer_id: int) -> void:
 
 func _on_peer_disconnected(peer_id: int) -> void:
 	_pending.erase(peer_id)
+	_package_reports.erase(peer_id)
 	if not _players.has(peer_id):
 		print("WIRED_PEER_DISCONNECTED peer=%d (unauthenticated)" % peer_id)
 		return
@@ -135,6 +140,7 @@ func cli_hello(payload_json: String) -> void:
 		"ready": false,
 		"name": str(payload.get("name", "player")),
 	}
+	_package_reports[peer_id] = {}
 	var auth := {
 		"protocol": PROTOCOL_VERSION,
 		"room": room_code,
@@ -152,6 +158,9 @@ func cli_hello(payload_json: String) -> void:
 		"players": _player_list(),
 	}
 	rpc_id(peer_id, "srv_event", JSON.stringify(state))
+	# A client that joins late (or reconnects after a lost notification) gets
+	# the current revisions immediately; it then downloads and reports itself.
+	_send_package_revisions(peer_id)
 	_broadcast_event({"type": "player_joined", "player_id": pid})
 
 
@@ -201,6 +210,88 @@ func cli_game_action(action_json: String) -> void:
 		"WIRED_ACTION_ACCEPTED peer=%d player=%d action=%s"
 		% [peer_id, int(_players[peer_id]["player_id"]), action_json]
 	)
+
+
+## Announces an applied package revision to every authenticated client. Only
+## the ids travel here; files are downloaded over HTTP by each receiver.
+func set_package_revision(package_id: int, revision: int) -> void:
+	if mode != "server" or package_id <= 0 or revision <= 0:
+		return
+	if int(_package_revisions.get(package_id, 0)) == revision:
+		return
+	_package_revisions[package_id] = revision
+	print(
+		"WIRED_PACKAGE_REVISION_ANNOUNCED package=%d revision=%d players=%d"
+		% [package_id, revision, _players.size()]
+	)
+	_broadcast_event(
+		{"type": "package_revision", "package_id": package_id, "revision": revision}
+	)
+
+
+func _send_package_revisions(peer_id: int) -> void:
+	for package_id in _package_revisions:
+		var event := {
+			"type": "package_revision",
+			"package_id": int(package_id),
+			"revision": int(_package_revisions[package_id]),
+			"seq": _next_seq(),
+		}
+		rpc_id(peer_id, "srv_event", JSON.stringify(event))
+
+
+## A client reports whether it applied the announced revision. Unauthenticated,
+## unknown and obsolete reports are rejected; the server tracks each peer
+## separately so one slow or broken client cannot mask another's readiness.
+@rpc("any_peer", "call_remote", "reliable")
+func cli_package_ready(payload_json: String) -> void:
+	if mode != "server":
+		return
+	var peer_id := multiplayer.get_remote_sender_id()
+	if not _players.has(peer_id):
+		print(
+			"WIRED_PACKAGES_REPORT_REJECTED peer=%d reason=not_authenticated" % peer_id
+		)
+		_deny(peer_id, "cli_package_ready")
+		return
+	var payload: Variant = JSON.parse_string(payload_json)
+	if typeof(payload) != TYPE_DICTIONARY:
+		print("WIRED_PACKAGES_REPORT_REJECTED peer=%d reason=malformed" % peer_id)
+		return
+	var package_id := int(payload.get("package_id", 0))
+	var revision := int(payload.get("revision", 0))
+	if not _package_revisions.has(package_id):
+		print(
+			"WIRED_PACKAGES_REPORT_REJECTED peer=%d package=%d reason=unknown_package"
+			% [peer_id, package_id]
+		)
+		return
+	if int(_package_revisions[package_id]) != revision:
+		print(
+			"WIRED_PACKAGES_REPORT_REJECTED peer=%d package=%d reason=stale_revision current=%d"
+			% [peer_id, package_id, int(_package_revisions[package_id])]
+		)
+		return
+	var ok := bool(payload.get("ok", false))
+	var error := _single_line(str(payload.get("error", "")))
+	_package_reports[peer_id][package_id] = {
+		"revision": revision,
+		"state": "ready" if ok else "failed",
+	}
+	if ok:
+		print(
+			"WIRED_CLIENT_PACKAGES_READY peer=%d package=%d revision=%d"
+			% [peer_id, package_id, revision]
+		)
+	else:
+		print(
+			"WIRED_CLIENT_PACKAGES_FAILED peer=%d package=%d revision=%d error=%s"
+			% [peer_id, package_id, revision, error]
+		)
+
+
+func _single_line(text: String) -> String:
+	return text.replace("\r", " ").replace("\n", " ")
 
 
 func _reject(peer_id: int, reason: String) -> void:
@@ -290,6 +381,26 @@ func start_client(
 	print("WIRED_CLIENT_CONNECTING url=%s room=%s" % [url, room])
 	status_changed.emit("Connecting to %s…" % url)
 	return OK
+
+
+## Client side: reports the outcome of applying an announced revision. Every
+## report carries the revision it refers to; the server rejects stale ones.
+func report_package_ready(
+	package_id: int, revision: int, ok: bool, error := ""
+) -> void:
+	if mode != "client" or not _authenticated:
+		return
+	var payload := {
+		"package_id": package_id,
+		"revision": revision,
+		"ok": ok,
+		"error": _single_line(error),
+	}
+	rpc_id(SERVER_PEER_ID, "cli_package_ready", JSON.stringify(payload))
+	print(
+		"WIRED_CLIENT_PACKAGE_REPORT package=%d revision=%d ok=%s"
+		% [package_id, revision, str(ok)]
+	)
 
 
 func _on_connected_to_server() -> void:
