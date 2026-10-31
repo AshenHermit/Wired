@@ -880,7 +880,7 @@ git commit -m "feat(example): add wired platformer package entry"
 - Consumes: все предыдущие задачи.
 - Produces: подтверждённый сценарий «пакет опубликован → два клиента → движение, камера, толкание, краты с импульсом, рестарт».
 
-- [ ] **Step 1: Run all automated checks**
+- [x] **Step 1: Run all automated checks**
 
 ```bash
 pnpm --filter server exec jest game-room.service.spec
@@ -900,7 +900,7 @@ godot --headless --path packages/server/godot_project/_wired --script res://test
 
 Expected: Jest green; каждый Godot-скрипт печатает `ALL TESTS PASSED` и выходит с кодом 0.
 
-- [ ] **Step 2: Build the game export**
+- [x] **Step 2: Build the game export**
 
 ```bash
 pnpm fetch:runtime
@@ -921,7 +921,9 @@ Expected: `packages/server/game_export/web` обновлён, экспорт з�
 
 Expected: все пункты выполняются. Если late join не получает dynamic-сущности, добавить в Task 8 snapshot-синхронизацию и повторить.
 
-- [ ] **Step 4: Commit verification notes**
+> **Не выполнено (2026-11-01).** На стенде уже работали backend (`:3000`, `dist/server/src/main`) и frontend (`:3001`), Chrome был авторизован, публичная Godot-комната `godot test` (id 7) существовала. Однако шаг требует опубликовать новый пакет `wired-platformer` в общую БД (`DB_SYNC=1`, `packages/server/.env` → shared Postgres) и перенести файлы через WASM-редактор; одноразового окружения нет, поэтому данные общего стенда не изменялись. Два независимых клиента с одновременным вводом недоступны: автоматизация управляет одним Chrome-профилем и одной активной вкладкой. Подробные шаги и ожидаемые наблюдения — в разделе «Verification notes (2026-11-01)».
+
+- [x] **Step 4: Commit verification notes**
 
 ```bash
 git add docs/superpowers/plans/2026-11-01-wired-room-content-packages.md
@@ -929,6 +931,51 @@ git commit -m "docs: record room content package verification"
 ```
 
 ---
+
+## Verification notes (2026-11-01)
+
+Проверка выполнена на HEAD `70e88db` (Tasks 1–9). Godot: `4.7.2.stable.official.ed1daf0bf`,
+исполняемый файл `C:\Users\hermit\webdev\Wired\packages\server\godot_runtime\4.7.2-stable-win32-x64\Godot.exe`
+(установлен `pnpm fetch:runtime`; системный `godot` версии 4.6.2 не использовался).
+
+- **Step 1 — автоматические проверки: PASS.**
+  - `pnpm --filter server exec jest game-room.service.spec` — 1 suite / 19 tests, exit 0.
+  - `pnpm --filter server test` — 31 suites passed, 1 skipped (`room-runtime.integration`), 320 tests passed,
+    1 skipped, exit 0.
+  - 11 headless-скриптов (`package_registry`, `scene_layout`, `static_world`, `package_entry`,
+    `network_readiness`, `players_manager`, `player_push`, `camera_follow`, `wired_aim`, `dynamic_world`,
+    `example_package_contract`) — каждый печатает `ALL TESTS PASSED` и выходит с кодом 0; всего 380 проверок.
+- **Step 2 — Web export: PASS.**
+  - `pnpm fetch:runtime` — 4.7.2-stable (win32-x64) уже установлен.
+  - `pnpm fetch:templates` — Web-шаблоны 4.7.2-stable найдены в
+    `C:\Users\hermit\AppData\Roaming\Godot\export_templates\4.7.2.stable`.
+  - `pnpm export:game` — exit 0; `packages/server/game_export/web` обновлён (`index.pck` 130 564 B,
+    `index.wasm` 38 820 072 B).
+  - `GET /game-export/index.html` на уже запущенном сервере — 200 с `Cross-Origin-Opener-Policy: same-origin`
+    и `Cross-Origin-Embedder-Policy: require-corp`.
+- **Step 3 — ручная проверка двумя клиентами: NOT EXECUTED.** Причины и ограничения стенда:
+  - на момент проверки уже работали backend (`:3000`, `dist/server/src/main`) и frontend (`:3001`, Next),
+    Chrome был авторизован, публичная Godot-комната `godot test` (id 7) существовала;
+  - шаг требует создать и опубликовать пакет `wired-platformer` в общей БД (`DB_SYNC=1`, shared Postgres)
+    и скопировать файлы через WASM-редактор; одноразового окружения нет, данные общего стенда не изменялись;
+  - два независимых клиента (разные окна/профили с одновременным вводом) недоступны: Browser MCP управляет
+    одним Chrome-профилем и одной активной вкладкой; две вкладки одного профиля не дают одновременный
+    клавиатурный/мышиный ввод и не воспроизводят сценарий брифа.
+  - Оставшиеся шаги: (1) `pnpm dev:server` + frontend на `:3001`; (2) комната → Packages → создать
+    `wired-platformer`, перенести файлы из `packages/server/godot_project/examples/wired-platformer` в
+    `packages/<id>` через редактор, Emit; (3) открыть Game tab в двух окнах/профилях; (4) проверить отдельные
+    камеры, движение и прыжок, видимость игроков, толкание при столкновении, спавн квадрата ЛКМ из тела игрока
+    в сторону курсора, наличие импульса, лимит 8 и cooldown 250 мс; (5) перезапустить runtime и открыть снова —
+    квадраты восстановлены на местах без повторного импульса, игроки спавнятся после применения пакета;
+    (6) подключить третьего клиента позже — он получает текущие квадраты и игроков без дублей.
+  - Ожидаемые наблюдения совпадают с `Expected` шага 3. Автоматически косвенно покрыты: сохранение/восстановление
+    без повторного импульса и порядок `restore_pending` (`dynamic_world_smoke`), толкание (`player_push_smoke`),
+    камера (`camera_follow_smoke`), прицел и импульс (`wired_aim_smoke`), контракт примера
+    (`example_package_contract_smoke`). Late join через `MultiplayerSpawner` остаётся непроверенным вживую.
+- **Отклонения от спеки:** не обнаружены; статус спеки не менялся.
+- **Замечание окружения:** поставляемый `Godot_v4.7.2-stable_win64_console.exe` не запускается, так как ищет
+  отсутствующий `Godot_v4.7.2-stable_win64.exe`; headless-проверки запускались напрямую через `Godot.exe`.
+  На сервер это не влияет: `runtime.json` указывает на `Godot.exe`.
 
 ## Self-Review Notes
 
