@@ -97,15 +97,45 @@ async function download() {
   return buffer;
 }
 
-function removeStaleEditorFiles() {
+const STALE_EDITOR_PREFIX = 'godot.editor.';
+const BACKUP_DIR_PREFIX = '.editor-backup-';
+
+function existingEditorFiles() {
   if (!existsSync(destDir)) {
-    return;
+    return [];
   }
-  for (const entry of readdirSync(destDir, { withFileTypes: true })) {
-    if (entry.isFile() && entry.name.startsWith('godot.editor.')) {
-      rmSync(path.join(destDir, entry.name), { force: true });
-    }
+  return readdirSync(destDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.startsWith(STALE_EDITOR_PREFIX))
+    .map((entry) => entry.name);
+}
+
+function removeEditorFiles() {
+  for (const name of existingEditorFiles()) {
+    rmSync(path.join(destDir, name), { force: true });
   }
+}
+
+/** Moves the current editor aside so a failed install can be rolled back. */
+function moveEditorAside(backupDir) {
+  for (const name of existingEditorFiles()) {
+    renameSync(path.join(destDir, name), path.join(backupDir, name));
+  }
+  // VERSION goes too: an interrupted install must not keep advertising the
+  // old version over a half-replaced set, and rollback restores it.
+  const versionFile = path.join(destDir, 'VERSION');
+  if (existsSync(versionFile)) {
+    renameSync(versionFile, path.join(backupDir, 'VERSION'));
+  }
+}
+
+function restoreBackup(backupDir) {
+  // Drop whatever the failed install moved in, then put the old set back:
+  // the destination must never mix old and new core files.
+  removeEditorFiles();
+  for (const name of readdirSync(backupDir)) {
+    moveFile(path.join(backupDir, name), path.join(destDir, name));
+  }
+  rmSync(backupDir, { recursive: true, force: true });
 }
 
 function moveFile(source, target) {
@@ -152,16 +182,32 @@ async function main() {
     assertCoreFiles(tempDir);
 
     mkdirSync(destDir, { recursive: true });
-    removeStaleEditorFiles();
-    for (const name of files) {
-      if (name === 'VERSION') {
-        continue; // the version file is generated here, never trusted
+    const backupDir = mkdtempSync(path.join(destDir, BACKUP_DIR_PREFIX));
+    try {
+      moveEditorAside(backupDir);
+      for (const name of files) {
+        if (name === 'VERSION') {
+          continue; // the version file is generated here, never trusted
+        }
+        const target = path.join(destDir, name);
+        mkdirSync(path.dirname(target), { recursive: true });
+        moveFile(path.join(tempDir, name), target);
       }
-      const target = path.join(destDir, name);
-      mkdirSync(path.dirname(target), { recursive: true });
-      moveFile(path.join(tempDir, name), target);
+      // Only a complete new set may replace the old one, and VERSION is the
+      // last write: an interrupted install never advertises itself.
+      assertCoreFiles(destDir);
+      writeVersion();
+    } catch (error) {
+      try {
+        restoreBackup(backupDir);
+      } catch (restoreError) {
+        const reason =
+          restoreError instanceof Error ? restoreError.message : String(restoreError);
+        console.error(`[fetch:editor] не удалось восстановить предыдущий редактор: ${reason}`);
+      }
+      throw error;
     }
-    writeVersion();
+    rmSync(backupDir, { recursive: true, force: true });
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

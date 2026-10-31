@@ -27,7 +27,7 @@ function crc32(buffer) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-function localHeader(entry, data) {
+function localHeader(entry) {
   const name = Buffer.from(entry.name, 'utf8');
   const header = Buffer.alloc(30);
   header.writeUInt32LE(0x04034b50, 0);
@@ -36,15 +36,15 @@ function localHeader(entry, data) {
   header.writeUInt16LE(entry.method, 8);
   header.writeUInt16LE(0, 10);
   header.writeUInt16LE(0, 12);
-  header.writeUInt32LE(crc32(data), 14);
-  header.writeUInt32LE(data.length, 18);
+  header.writeUInt32LE(entry.crc, 14);
+  header.writeUInt32LE(entry.data.length, 18);
   header.writeUInt32LE(entry.uncompressed.length, 22);
   header.writeUInt16LE(name.length, 26);
   header.writeUInt16LE(0, 28);
-  return Buffer.concat([header, name, data]);
+  return Buffer.concat([header, name, entry.data]);
 }
 
-function centralHeader(entry, data, offset) {
+function centralHeader(entry, offset) {
   const name = Buffer.from(entry.name, 'utf8');
   const header = Buffer.alloc(46);
   header.writeUInt32LE(0x02014b50, 0);
@@ -54,8 +54,8 @@ function centralHeader(entry, data, offset) {
   header.writeUInt16LE(entry.method, 10);
   header.writeUInt16LE(0, 12);
   header.writeUInt16LE(0, 14);
-  header.writeUInt32LE(crc32(data), 16);
-  header.writeUInt32LE(data.length, 20);
+  header.writeUInt32LE(entry.crc, 16);
+  header.writeUInt32LE(entry.data.length, 20);
   header.writeUInt32LE(entry.uncompressed.length, 24);
   header.writeUInt16LE(name.length, 28);
   header.writeUInt16LE(0, 30);
@@ -70,6 +70,9 @@ function centralHeader(entry, data, offset) {
 /**
  * Builds an uncompressed-archive-format (zip) buffer containing the given
  * entries. `method` is 0 (stored) unless the entry asks for 8 (deflated).
+ *
+ * The CRC always covers the original bytes: deflating happens after the
+ * checksum is computed, as the zip format requires.
  */
 function makeZip(entries) {
   const prepared = entries.map((entry) => {
@@ -81,6 +84,7 @@ function makeZip(entries) {
       name: entry.name,
       method,
       uncompressed,
+      crc: crc32(uncompressed),
       data: method === 8 ? deflateRawSync(uncompressed) : uncompressed,
     };
   });
@@ -89,9 +93,9 @@ function makeZip(entries) {
   const central = [];
   let offset = 0;
   for (const entry of prepared) {
-    const local = localHeader(entry, entry.data);
+    const local = localHeader(entry);
     parts.push(local);
-    central.push(centralHeader(entry, entry.data, offset));
+    central.push(centralHeader(entry, offset));
     offset += local.length;
   }
 
@@ -172,5 +176,23 @@ test('ignores directory entries', () => {
     assert.deepEqual(written, []);
     assert.equal(statSync(join(dest, 'dir')).isDirectory(), true);
     assert.equal(existsSync(join(dest, 'dir', 'dir')), false);
+  });
+});
+
+test('ignores a fake end-of-central-directory signature in a comment', () => {
+  withTempDir((dest) => {
+    const base = makeZip([{ name: 'godot.editor.html', data: '<html></html>' }]);
+
+    // Real archives may carry a comment. Append 22 bytes that start with the
+    // EOCD signature, so a naive backwards scan stops on the comment instead
+    // of the actual record.
+    const comment = Buffer.alloc(22, 0xaa);
+    comment.writeUInt32LE(0x06054b50, 0);
+    base.writeUInt16LE(comment.length, base.length - 22 + 20);
+
+    const written = extractZip(Buffer.concat([base, comment]), dest);
+
+    assert.deepEqual(written, ['godot.editor.html']);
+    assert.equal(readFileSync(join(dest, 'godot.editor.html'), 'utf8'), '<html></html>');
   });
 });

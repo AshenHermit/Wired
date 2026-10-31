@@ -27,8 +27,15 @@ function fail(message) {
 
 function findEndOfCentralDirectory(buffer) {
   const earliest = Math.max(0, buffer.length - EOCD_SIZE - MAX_COMMENT_LENGTH);
+  // Archives may carry a comment, so scan backwards — but only accept a
+  // candidate whose declared comment ends exactly at the end of the buffer.
+  // Trailing bytes that merely contain the signature must not win.
   for (let offset = buffer.length - EOCD_SIZE; offset >= earliest; offset -= 1) {
-    if (buffer.readUInt32LE(offset) === EOCD_SIGNATURE) {
+    if (buffer.readUInt32LE(offset) !== EOCD_SIGNATURE) {
+      continue;
+    }
+    const commentLength = buffer.readUInt16LE(offset + 20);
+    if (offset + EOCD_SIZE + commentLength === buffer.length) {
       return offset;
     }
   }
