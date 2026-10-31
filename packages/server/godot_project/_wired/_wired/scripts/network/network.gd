@@ -29,6 +29,8 @@ signal peer_packages_ready(peer_id: int)
 # Server side: gameplay input/action arrived from an authenticated peer.
 signal player_input_received(peer_id: int, input: Dictionary)
 signal player_action_received(peer_id: int, action: String, payload: Dictionary)
+# Server side: an authenticated peer disconnected and left the game.
+signal peer_left(peer_id: int)
 
 const PROTOCOL_VERSION := 1
 const AUTH_TIMEOUT_SEC := 10.0
@@ -103,6 +105,10 @@ func _on_peer_connected(peer_id: int) -> void:
 
 
 func _on_peer_disconnected(peer_id: int) -> void:
+	# The transport callback is only connected by `start_server`, but keep the
+	# server-only contract explicit: clients never own player lifecycle state.
+	if mode != "server":
+		return
 	_pending.erase(peer_id)
 	_package_reports.erase(peer_id)
 	if not _players.has(peer_id):
@@ -112,6 +118,9 @@ func _on_peer_disconnected(peer_id: int) -> void:
 	_players.erase(peer_id)
 	print("WIRED_PLAYER_LEFT peer=%d player=%d" % [peer_id, pid])
 	_broadcast_event({"type": "player_left", "player_id": pid})
+	# Emitted after the peer is gone from `_players`, so the player manager can
+	# free the node and drop the auth record exactly once.
+	peer_left.emit(peer_id)
 
 
 @rpc("any_peer", "call_remote", "reliable")

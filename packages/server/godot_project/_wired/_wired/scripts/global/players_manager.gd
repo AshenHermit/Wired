@@ -26,6 +26,8 @@ var _authenticated: Dictionary = {}
 var _spawned: Dictionary = {}
 # player_id -> saved player state, applied on (re)spawn
 var _saved_states: Dictionary = {}
+# One diagnostic is enough: spawn lookups happen twice per player.
+var _warned_missing_static_world := false
 
 
 func setup(
@@ -37,6 +39,10 @@ func setup(
 	_network = network
 	_spawner = spawner
 	if _spawner != null:
+		# `MultiplayerSpawner` replays tracked custom spawns to late joiners
+		# through `spawn_function` (`SceneReplicationInterface::on_peer_change`
+		# sends the spawn packet and the receiver calls `spawn_function`), so no
+		# backfill code is needed. The real two-client check is Task 10.
 		_spawner.spawn_path = NodePath("..")
 		_spawner.spawn_function = _spawn_player
 	if _network != null:
@@ -48,6 +54,10 @@ func setup(
 			_on_player_action_received
 		):
 			_network.player_action_received.connect(_on_player_action_received)
+		# `peer_left` is only emitted by the server; the handler still checks
+		# `_is_server()` so a client can never despawn a replicated player.
+		if not _network.peer_left.is_connected(_on_peer_left):
+			_network.peer_left.connect(_on_peer_left)
 
 
 func get_player_by_peer(peer_id: int) -> WiredPlayer:
@@ -215,6 +225,15 @@ func _on_peer_packages_ready(peer_id: int) -> void:
 	_try_spawn(peer_id)
 
 
+## Server side: the peer is already gone from `WiredNetwork._players`, so drop
+## its auth record and free the player node there.
+func _on_peer_left(peer_id: int) -> void:
+	if not _is_server():
+		return
+	_authenticated.erase(peer_id)
+	despawn_player(peer_id)
+
+
 func _on_player_action_received(
 	peer_id: int, action: String, payload: Dictionary
 ) -> void:
@@ -283,8 +302,19 @@ func _spawn_position_3d(index: int) -> Vector3:
 func _static_world() -> Node:
 	var global := get_node_or_null("/root/Global")
 	if global == null:
+		_warn_missing_static_world()
 		return null
-	return global.get("static_world") as Node
+	var world := global.get("static_world") as Node
+	if world == null:
+		_warn_missing_static_world()
+	return world
+
+
+func _warn_missing_static_world() -> void:
+	if _warned_missing_static_world:
+		return
+	_warned_missing_static_world = true
+	push_warning("WIRED_PLAYERS_NO_STATIC_WORLD reason=spawn_position_unavailable")
 
 
 func _apply_saved_state(player: WiredPlayer) -> void:

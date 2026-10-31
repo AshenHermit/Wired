@@ -134,6 +134,10 @@ func register_action(qualified_action: String, handler: Callable) -> void:
 func handle_action(
 	qualified_action: String, payload: Dictionary, sender_peer: int
 ) -> void:
+	# Defense in depth: the transport already rejects unauthenticated peers and
+	# the manager routes by sender, but a client copy must never dispatch.
+	if not is_server_authority():
+		return
 	if not _consume_action_budget():
 		push_warning(
 			"WIRED_PLAYER_ACTION_RATE_LIMITED player=%d action=%s"

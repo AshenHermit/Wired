@@ -36,6 +36,16 @@ class RecordingNetwork extends WiredNetwork:
 		inputs.append(input)
 
 
+## Pretends to be a client copy so hook gating can be tested without a socket.
+class ClientPlayer extends WiredPlayer:
+
+	func is_server_authority() -> bool:
+		return false
+
+	func is_local_player() -> bool:
+		return false
+
+
 func _initialize() -> void:
 	# Deferred so the tree (and its MultiplayerAPI) exists before players are built.
 	_run.call_deferred()
@@ -43,14 +53,16 @@ func _initialize() -> void:
 
 func _run() -> void:
 	_test_build_player_adds_components_in_order_and_sets_anchor()
-	_test_local_only_components_stay_on_the_owner()
+	_test_component_authority_and_local_only()
 	_test_component_synchronizer_and_hooks()
+	_test_server_components_do_not_simulate_on_clients()
 	_test_request_action_only_from_local_player()
 	_test_local_client_sends_throttled_input()
 	_test_component_qualifies_action_names()
 	_test_handle_action_calls_registered_handler()
 	_test_save_and_load_state()
 	_test_spawn_waits_for_both_gates_and_routes_actions()
+	_test_disconnect_despawns_the_player()
 	_test_spawner_parents_the_spawned_player()
 	_free_owned()
 	_finish()
@@ -91,26 +103,32 @@ func _test_build_player_adds_components_in_order_and_sets_anchor() -> void:
 		)
 
 
-func _test_local_only_components_stay_on_the_owner() -> void:
+func _test_component_authority_and_local_only() -> void:
 	var registry := _make_registry(true)
 	var remote := _build_player(registry, 8, 99, Vector2.ZERO)
 	_check(
-		remote.components.size() == 1,
-		"a local-only component must not exist for a remote player, got %d"
+		remote.components.size() == 2,
+		"a remote player must get server + non-local-only components, got %d"
 		% remote.components.size(),
 	)
+	var remote_local := _find_local_authority_component(remote)
+	_check(
+		remote_local != null,
+		"a local (non-local-only) component must exist for a remote player",
+	)
+	if remote_local != null:
+		_check(
+			remote_local.get_multiplayer_authority() == 99,
+			"a local component must use the owning peer as authority, got %d"
+			% remote_local.get_multiplayer_authority(),
+		)
 	var local := _build_player(registry, 9, 1, Vector2.ZERO)
 	_check(
-		local.components.size() == 2,
-		"the owning peer must receive both components, got %d"
+		local.components.size() == 3,
+		"the owning peer must receive server, local-only and local components, got %d"
 		% local.components.size(),
 	)
-	if local.components.size() == 2:
-		_check(
-			local.components[0].package_id == PACKAGE_ID
-			and local.components[1].package_id == PACKAGE_ID,
-			"components must retain their package id",
-		)
+	if local.components.size() == 3:
 		_check(
 			local.components[0].authority_mode == "server",
 			"the lower order component must come first",
@@ -118,11 +136,38 @@ func _test_local_only_components_stay_on_the_owner() -> void:
 		_check(
 			local.components[1].authority_mode == "local"
 			and local.components[1].local_only,
-			"the second component must keep its local authority and flag",
+			"the second component must keep its local authority and local-only flag",
+		)
+		_check(
+			local.components[2].authority_mode == "local"
+			and not local.components[2].local_only,
+			"the third component must be local authority without local_only",
 		)
 		_check(
 			local.components[1].get_multiplayer_authority() == 1,
+			"a local-only component must use the owning peer as authority",
+		)
+		_check(
+			local.components[2].get_multiplayer_authority() == 1,
 			"a local component must use the owning peer as authority",
+		)
+	# The server builds a client's player too; that copy has the same local
+	# authority as the owner, not the server peer id.
+	var client_owned := _build_player(registry, 10, 5, Vector2.ZERO)
+	var client_local := _find_local_authority_component(client_owned)
+	_check(
+		client_local != null,
+		"the server-side copy must keep local (non-local-only) components",
+	)
+	if client_local != null:
+		_check(
+			client_local.get_multiplayer_authority() == 5,
+			"a local component built for peer 5 must use authority 5, got %d"
+			% client_local.get_multiplayer_authority(),
+		)
+		_check(
+			not client_local.local_only,
+			"the third descriptor must not be local_only",
 		)
 
 
@@ -182,6 +227,32 @@ func _test_component_synchronizer_and_hooks() -> void:
 	_check(
 		component.last_input_event == null,
 		"`_wired_unhandled_input` must not run for a remote player",
+	)
+
+
+## A server-authority component exists on clients for visuals only. If the
+## simulation guard disappeared, `process_count`/`physics_count` would be 1.
+func _test_server_components_do_not_simulate_on_clients() -> void:
+	var player := ClientPlayer.new()
+	_owned.append(player)
+	player.setup(11, 5, "remote", null)
+	var component := _instantiate_component()
+	component.package_id = PACKAGE_ID
+	player.add_component(component, "server", false)
+	var hooks: Variant = component
+	hooks._process(0.016)
+	hooks._physics_process(0.016)
+	_check(
+		hooks.process_count == 0,
+		"a server component must not run `_wired_process` on a client copy",
+	)
+	_check(
+		hooks.physics_count == 0,
+		"a server component must not run `_wired_physics_process` on a client copy",
+	)
+	_check(
+		hooks.visual_count == 1,
+		"`_wired_visual_process` must still run on a client copy",
 	)
 
 
@@ -411,6 +482,68 @@ func _test_spawn_waits_for_both_gates_and_routes_actions() -> void:
 	net.free()
 
 
+## Disconnect path: `WiredNetwork` emits `peer_left` only for an authenticated
+## server peer, and `PlayersManager` drops both the auth record and the node.
+func _test_disconnect_despawns_the_player() -> void:
+	var registry := _make_registry()
+	var net := WiredNetwork.new()
+	net.mode = "server"
+	net._players[5] = {
+		"player_id": 9,
+		"ready": true,
+		"packages_ready": false,
+		"name": "eve",
+	}
+	var left_events: Array = []
+	net.peer_left.connect(func(peer_id: int) -> void: left_events.append(peer_id))
+	var manager := PlayersManager.new()
+	root.add_child(manager)
+	_owned.append(manager)
+	manager.setup(registry, net, null)
+	net.peer_authenticated.emit(5, 9, "eve")
+	net._mark_packages_ready(5)
+	var player := manager.get_player_by_peer(5)
+	_check(player != null, "the disconnect test needs a spawned player")
+	if player == null:
+		net.free()
+		return
+	net._on_peer_disconnected(5)
+	_check(
+		manager.get_player_by_peer(5) == null,
+		"a disconnect must remove the player from the manager",
+	)
+	_check(
+		player.is_queued_for_deletion(),
+		"a disconnected player node must be queued for removal",
+	)
+	_check(
+		not manager._authenticated.has(5),
+		"a disconnect must drop the peer's auth record",
+	)
+	_check(
+		left_events == [5],
+		"an authenticated disconnect must emit peer_left, got %s" % [left_events],
+	)
+	net._on_peer_disconnected(99)
+	_check(
+		left_events == [5],
+		"an unauthenticated disconnect must not emit peer_left",
+	)
+	net._players[6] = {
+		"player_id": 11,
+		"ready": true,
+		"packages_ready": true,
+		"name": "gina",
+	}
+	net.mode = "client"
+	net._on_peer_disconnected(6)
+	_check(
+		left_events == [5],
+		"a client copy must never emit peer_left",
+	)
+	net.free()
+
+
 ## The real runtime path goes through `MultiplayerSpawner.spawn`: the spawner
 ## parents the returned node, so `_spawn_player` must not add it twice.
 func _test_spawner_parents_the_spawned_player() -> void:
@@ -466,8 +599,20 @@ func _make_registry(include_local := false) -> WiredPackageRegistry:
 			COMPONENT_SCENE,
 			{"order": 20, "authority": "local", "local_only": true},
 		)
+		# Local authority without local_only: the server builds this copy too,
+		# owned by the peer it belongs to rather than by the server.
+		registration.add_player_component(
+			COMPONENT_SCENE, {"order": 30, "authority": "local"}
+		)
 	registry.add_registration(registration)
 	return registry
+
+
+func _find_local_authority_component(player: WiredPlayer) -> WiredPlayerComponent:
+	for component: WiredPlayerComponent in player.components:
+		if component.authority_mode == "local" and not component.local_only:
+			return component
+	return null
 
 
 func _build_player(
