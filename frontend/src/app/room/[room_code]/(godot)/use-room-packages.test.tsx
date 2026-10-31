@@ -395,6 +395,207 @@ describe("useRoomPackages", () => {
     unmount();
   });
 
+  it("drops readiness when an action hits a transport error", async () => {
+    const { result, unmount } = await startHook();
+    fs.snapshot.mockRejectedValue(
+      new EditorBridgeError("Мост редактора не ответил за 60000 мс"),
+    );
+
+    await act(async () => {
+      await expect(
+        result.current.downloadPackage(5),
+      ).rejects.toBeInstanceOf(EditorBridgeError);
+    });
+
+    // The action's own catch must not bury the transport error that the guard
+    // needs in order to drop readiness.
+    expect(result.current.fsReady).toBe(false);
+    expect(result.current.error).toContain("Мост редактора недоступен");
+    unmount();
+  });
+
+  it("reconnects after a transport failure once the bridge answers again", async () => {
+    vi.useFakeTimers();
+    try {
+      bridgeWith();
+      const { result, unmount } = renderHook(() =>
+        useRoomPackages(1, ONE_PACKAGE),
+      );
+      await act(async () => {
+        result.current.afterEditorStart(makeEditor());
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.fsReady).toBe(true);
+
+      fs.snapshot.mockRejectedValueOnce(
+        new EditorBridgeError("Мост редактора не ответил за 60000 мс"),
+      );
+      await act(async () => {
+        await result.current.refresh();
+      });
+      expect(result.current.fsReady).toBe(false);
+      expect(result.current.error).toContain("Мост редактора недоступен");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      // The 2 s loop probed the bridge with `sync` and only then declared the
+      // file system ready again.
+      expect(result.current.fsReady).toBe(true);
+      expect(result.current.error).toBeNull();
+      expect(createPackageFileSystem).toHaveBeenCalledTimes(2);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps one reconnect loop and clears it on unmount", async () => {
+    vi.useFakeTimers();
+    try {
+      bridgeWith();
+      const { result, unmount } = renderHook(() =>
+        useRoomPackages(1, TWO_PACKAGES),
+      );
+      await act(async () => {
+        result.current.afterEditorStart(makeEditor());
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.fsReady).toBe(true);
+
+      const transport = new EditorBridgeError("Мост редактора недоступен");
+      fs.snapshot.mockRejectedValue(transport);
+      fs.sync.mockRejectedValue(transport);
+
+      // Two actions fail in the same tick: the second loss must reuse the loop
+      // the first one started instead of stacking another interval.
+      await act(async () => {
+        const first = result.current.downloadPackage(5);
+        const second = result.current.downloadPackage(6);
+        await expect(first).rejects.toBeInstanceOf(EditorBridgeError);
+        await expect(second).rejects.toBeInstanceOf(EditorBridgeError);
+      });
+      expect(result.current.fsReady).toBe(false);
+
+      const probes = fs.sync.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(fs.sync.mock.calls.length).toBe(probes + 1);
+
+      unmount();
+      const connections = vi.mocked(createPackageFileSystem).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(fs.sync.mock.calls.length).toBe(probes + 1);
+      expect(createPackageFileSystem).toHaveBeenCalledTimes(connections);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not start a reconnect loop after unmount", async () => {
+    vi.useFakeTimers();
+    try {
+      bridgeWith();
+      fs.put(5, HERO, "local draft");
+      const { result, unmount } = renderHook(() =>
+        useRoomPackages(1, ONE_PACKAGE),
+      );
+      await act(async () => {
+        result.current.afterEditorStart(makeEditor());
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.fsReady).toBe(true);
+
+      let rejectSnapshot: (error: unknown) => void = () => {};
+      fs.snapshot.mockReturnValue(
+        new Promise((_resolve, reject) => {
+          rejectSnapshot = reject;
+        }),
+      );
+      const action = result.current.removePackage(5);
+      await act(async () => {});
+      const probes = fs.sync.mock.calls.length;
+      const connections = vi.mocked(createPackageFileSystem).mock.calls.length;
+
+      unmount();
+      rejectSnapshot(
+        new EditorBridgeError("Мост редактора не ответил за 60000 мс"),
+      );
+      await expect(action).rejects.toBeInstanceOf(EditorBridgeError);
+
+      // Nothing was mounted to clear it, so a loop installed here would probe
+      // forever. The drop after unmount must install nothing.
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(fs.sync.mock.calls.length).toBe(probes);
+      expect(createPackageFileSystem).toHaveBeenCalledTimes(connections);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops readiness when a superseded load loses the bridge", async () => {
+    const { result, unmount } = await startHook();
+    let resolveFirst: (status: RoomPackagesStatus) => void = () => {};
+    vi.mocked(gameApi.getRoomPackages).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFirst = resolve;
+      }),
+    );
+
+    const stale = result.current.refresh();
+    await act(async () => {
+      await result.current.refresh();
+    });
+    fs.snapshot.mockRejectedValueOnce(
+      new EditorBridgeError("Мост редактора не ответил за 60000 мс"),
+    );
+
+    await act(async () => {
+      resolveFirst(roomStatus());
+      await stale;
+    });
+
+    // The older load is stale for entry state, but a transport error is still
+    // the truth about the bridge and must not be discarded.
+    expect(result.current.fsReady).toBe(false);
+    expect(result.current.error).toContain("Мост редактора недоступен");
+    unmount();
+  });
+
+  it("does not mark the fs ready before the bridge answers a probe", async () => {
+    vi.useFakeTimers();
+    try {
+      bridgeWith();
+      fs.sync.mockRejectedValue(
+        new EditorBridgeError("Мост редактора не ответил за 60000 мс"),
+      );
+      const { result, unmount } = renderHook(() =>
+        useRoomPackages(1, ONE_PACKAGE),
+      );
+      await act(async () => {
+        result.current.afterEditorStart(makeEditor());
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(fs.sync).toHaveBeenCalledTimes(1);
+      expect(result.current.fsReady).toBe(false);
+      expect(result.current.error).toContain("Мост редактора недоступен");
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps readiness when the plugin rejects a single operation", async () => {
     const { result, unmount } = await startHook();
     fs.put(5, HERO, "local draft");
@@ -461,6 +662,24 @@ describe("useRoomPackages", () => {
       getEngine: expect.any(Function),
       projectRoot: PROJECT,
     });
+    unmount();
+  });
+
+  it("reads the live engine on every write", async () => {
+    const editor = makeEditor();
+    const { unmount } = await startHook({ editor });
+    const options = vi.mocked(createPackageFileSystem).mock.calls[0][0];
+
+    expect(options.getEngine()).toBe(editor.editor);
+
+    // An engine restart replaces `editor.editor`; the getter must follow it
+    // instead of capturing the instance the file system was built with.
+    const restarted = {
+      copyToFS: vi.fn(),
+    } as unknown as typeof editor.editor;
+    editor.editor = restarted;
+
+    expect(options.getEngine()).toBe(restarted);
     unmount();
   });
 

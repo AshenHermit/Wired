@@ -291,6 +291,7 @@ export function useRoomPackages(
   const filesRef = React.useRef<PackageFileSystem | null>(null);
   const engineRef = React.useRef<GodotEditorInstance | null>(null);
   const reconnectRef = React.useRef<number | null>(null);
+  const connectingRef = React.useRef(false);
   const mountedRef = React.useRef(false);
   const requestRef = React.useRef(0);
 
@@ -339,13 +340,16 @@ export function useRoomPackages(
     }
   }, []);
 
-  const connectRef = React.useRef<() => void>(() => {});
+  const connectRef = React.useRef<() => Promise<boolean>>(async () => false);
 
   const startReconnectLoop = React.useCallback((): void => {
+    // An action that rejects after unmount must not install an interval
+    // nothing would ever clear.
+    if (!mountedRef.current) return;
     if (reconnectRef.current !== null) return;
     reconnectRef.current = window.setInterval(() => {
       if (window.__wiredEditorBridge?.request) {
-        connectRef.current();
+        void connectRef.current();
       }
     }, RECONNECT_MS);
   }, []);
@@ -357,6 +361,7 @@ export function useRoomPackages(
    */
   const dropBridge = React.useCallback(
     (cause: unknown): void => {
+      if (!mountedRef.current) return;
       filesRef.current = null;
       setFsReady(false);
       setError(`Мост редактора недоступен: ${errorMessage(cause)}`);
@@ -432,11 +437,15 @@ export function useRoomPackages(
         setStatusLoaded(true);
         setError(null);
       } catch (cause) {
-        if (!mountedRef.current || request !== requestRef.current) return;
+        // A dead bridge is reported even when a newer load already superseded
+        // this one: with a 10 s poll and a 60 s call timeout, discarding it
+        // would leave every later action hanging on a bridge that is gone.
+        if (!mountedRef.current) return;
         if (cause instanceof EditorBridgeError) {
           dropBridge(cause);
           return;
         }
+        if (request !== requestRef.current) return;
         setError(
           `Не удалось получить пакеты комнаты: ${errorMessage(cause)}`,
         );
@@ -497,13 +506,17 @@ export function useRoomPackages(
   /**
    * Connects the package file system to the plugin once it is reachable.
    * Idempotent: the first successful connection wins and the reconnect loop
-   * stops. The editor is already usable at this point.
+   * stops. A registered bridge is probed with one real round-trip (`sync`)
+   * before readiness is declared, so a silent plugin cannot re-enable the
+   * panel. The editor is already usable at this point.
    */
-  const connect = React.useCallback((): boolean => {
+  const connect = React.useCallback(async (): Promise<boolean> => {
     if (filesRef.current) {
       stopReconnectLoop();
       return true;
     }
+    // The initial wait and the 2 s loop can race; probe only once.
+    if (connectingRef.current) return false;
     const editor = engineRef.current;
     if (!editor || !window.__wiredEditorBridge?.request) return false;
 
@@ -512,8 +525,11 @@ export function useRoomPackages(
       setError("Проект Godot ещё не загружен в редактор: пакеты недоступны");
       return false;
     }
+
+    connectingRef.current = true;
+    let files: PackageFileSystem;
     try {
-      filesRef.current = createPackageFileSystem({
+      files = createPackageFileSystem({
         bridge: createEditorBridgeClient(),
         // Read at write time: the editor instance is recreated when the page
         // restarts the engine, and package writes must reach the live one.
@@ -522,16 +538,32 @@ export function useRoomPackages(
       });
     } catch (cause) {
       // A package problem must not prevent the editor from opening.
+      connectingRef.current = false;
       setError(`Пакеты недоступны: ${errorMessage(cause)}`);
       return false;
     }
 
+    try {
+      await files.sync();
+    } catch (cause) {
+      connectingRef.current = false;
+      if (cause instanceof EditorBridgeError) {
+        dropBridge(cause);
+      } else {
+        setError(`Пакеты недоступны: ${errorMessage(cause)}`);
+      }
+      return false;
+    }
+
+    connectingRef.current = false;
+    if (!mountedRef.current) return false;
+    filesRef.current = files;
     stopReconnectLoop();
     setFsReady(true);
     setError(null);
     void refresh();
     return true;
-  }, [refresh, stopReconnectLoop]);
+  }, [dropBridge, refresh, stopReconnectLoop]);
 
   React.useEffect(() => {
     connectRef.current = connect;
@@ -551,7 +583,7 @@ export function useRoomPackages(
         try {
           await waitForEditorBridge(BRIDGE_WAIT_MS);
           if (!mountedRef.current) return;
-          connect();
+          await connect();
         } catch {
           if (!mountedRef.current) return;
           setError("Мост редактора не появился: пакеты недоступны");
