@@ -45,6 +45,9 @@ const MESSAGE_BY_ERROR: Record<RoomRuntimeErrorCode, string> = {
   start_failed: 'The Godot runtime for this room failed to start',
 };
 
+const PACKAGE_READY_TIMEOUT_MS = 10_000;
+const PACKAGE_READY_POLL_MS = 100;
+
 @Injectable()
 export class GameRoomService {
   private readonly logger = new Logger(GameRoomService.name);
@@ -85,6 +88,8 @@ export class GameRoomService {
       throw this.toHttpException(error, runtimeRoomId);
     }
 
+    await this.waitForInitialPackages(runtimeRoomId);
+
     return {
       roomId: room.id,
       endpoint: connection.endpoint,
@@ -124,6 +129,37 @@ export class GameRoomService {
       roomId: room.id,
       packages: await this.packageSync.getStatuses(String(room.id)),
     };
+  }
+
+  private async waitForInitialPackages(roomId: string): Promise<void> {
+    const deadline = Date.now() + PACKAGE_READY_TIMEOUT_MS;
+    for (;;) {
+      const statuses = await this.packageSync.getStatuses(roomId);
+      if (statuses.some((s) => s.runtime.state === 'failed')) {
+        throw new HttpException(
+          {
+            statusCode: 502,
+            code: 'packages_failed',
+            message: 'Room packages failed to apply',
+          },
+          HttpStatus.BAD_GATEWAY,
+        );
+      }
+      if (statuses.every((s) => s.runtime.state === 'applied')) return;
+      if (Date.now() >= deadline) {
+        throw new HttpException(
+          {
+            statusCode: 409,
+            code: 'packages_pending',
+            message: 'Room packages are still applying; retry shortly',
+          },
+          HttpStatus.CONFLICT,
+        );
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, PACKAGE_READY_POLL_MS),
+      );
+    }
   }
 
   private async assertCanPlay(

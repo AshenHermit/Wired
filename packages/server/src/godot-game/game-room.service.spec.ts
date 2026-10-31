@@ -5,6 +5,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { PackageSyncStatus } from '@wired-io/shared';
 import { AppConfigService } from 'src/config/config.service';
 import { Room } from 'src/database/entities/room.entity';
 import { User } from 'src/database/entities/user.entity';
@@ -53,6 +54,34 @@ const connection = (): RoomConnection => ({
   ticketExpiresAt: 1_800_000_000,
 });
 
+type StatusOverrides = Omit<
+  Partial<PackageSyncStatus>,
+  'runtime' | 'clients'
+> & {
+  runtime?: Partial<PackageSyncStatus['runtime']>;
+  clients?: PackageSyncStatus['clients'];
+};
+
+const status = (overrides: StatusOverrides = {}): PackageSyncStatus => {
+  const { runtime, clients, ...rest } = overrides;
+  return {
+    packageId: 3,
+    name: 'Demo',
+    revision: 2,
+    publishedAt: '2026-10-30T09:00:00.000Z',
+    state: 'applied',
+    runtime: {
+      state: 'applied',
+      revision: 2,
+      error: null,
+      updatedAt: '2026-10-30T09:01:00.000Z',
+      ...runtime,
+    },
+    clients: clients ?? [],
+    ...rest,
+  };
+};
+
 describe('GameRoomService', () => {
   let rooms: { findOne: jest.Mock };
   let runtime: { getConnection: jest.Mock; getRuntime: jest.Mock };
@@ -78,6 +107,10 @@ describe('GameRoomService', () => {
 
   beforeEach(() => {
     create();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   const statusOf = async (promise: Promise<unknown>): Promise<number> => {
@@ -170,6 +203,57 @@ describe('GameRoomService', () => {
     expect(error.getStatus()).toBe(502);
     expect(JSON.stringify(error.getResponse())).not.toMatch(/19100|pid|key/);
     expect(error.getResponse()).toMatchObject({ code: 'start_failed' });
+  });
+
+  it('returns a ticket immediately when the room has no packages', async () => {
+    packageSync.getStatuses.mockResolvedValue([]);
+    const result = await service.connect(user(1), 42);
+    expect(result.ticket).toBe('ticket-value');
+  });
+
+  it('waits until the runtime applied every package', async () => {
+    packageSync.getStatuses
+      .mockResolvedValueOnce([status({ runtime: { state: 'pending' } })])
+      .mockResolvedValueOnce([status({ runtime: { state: 'applied' } })]);
+
+    const result = await service.connect(user(1), 42);
+
+    expect(result.ticket).toBe('ticket-value');
+    expect(packageSync.getStatuses).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not wait for clients', async () => {
+    packageSync.getStatuses.mockResolvedValue([
+      status({ runtime: { state: 'applied' }, clients: [] }),
+    ]);
+
+    await expect(service.connect(user(1), 42)).resolves.toMatchObject({
+      ticket: 'ticket-value',
+    });
+  });
+
+  it('rejects with packages_pending after the timeout', async () => {
+    jest.useFakeTimers();
+    packageSync.getStatuses.mockResolvedValue([
+      status({ runtime: { state: 'pending' } }),
+    ]);
+
+    const promise = service.connect(user(1), 42);
+    const rejection = expect(promise).rejects.toMatchObject({ status: 409 });
+    await jest.advanceTimersByTimeAsync(10_100);
+
+    await rejection;
+    expect(packageSync.getStatuses).toHaveBeenCalled();
+  });
+
+  it('rejects with packages_failed when the runtime failed a package', async () => {
+    packageSync.getStatuses.mockResolvedValue([
+      status({ runtime: { state: 'failed' } }),
+    ]);
+
+    await expect(service.connect(user(1), 42)).rejects.toMatchObject({
+      status: 502,
+    });
   });
 
   it('reports idle status without starting a runtime', async () => {
