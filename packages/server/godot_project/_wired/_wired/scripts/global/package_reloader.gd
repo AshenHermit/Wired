@@ -153,8 +153,15 @@ func _collect_roots() -> Array[Node]:
 
 
 ## A package root ends the descent: its nested package scenes belong to it.
+## Registry-owned roots (static world content) are skipped entirely: their
+## lifetime belongs to `StaticWorldContainer.rebuild()`, not to this reloader.
 func _collect_roots_under(node: Node, roots: Array[Node]) -> void:
 	for child: Node in node.get_children():
+		if (
+			child.has_meta("_wired_registered")
+			and bool(child.get_meta("_wired_registered"))
+		):
+			continue
 		if child.has_meta("_wired_package_id"):
 			roots.append(child)
 			continue

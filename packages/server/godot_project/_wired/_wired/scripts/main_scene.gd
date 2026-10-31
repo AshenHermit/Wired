@@ -22,6 +22,8 @@ var _shutdown_in_progress := false
 var _authenticated_once := false
 var _auth_error_reported := false
 var _packages: PackagesManager
+var _registry: WiredPackageRegistry
+var _static_world: StaticWorldContainer
 
 @onready var _net: WiredNetwork = $Net
 @onready var _status: Label = $UI/Margin/VBox/Status
@@ -56,17 +58,18 @@ func _ready() -> void:
 ## Publishes the services packages reach through the `Global` autoload. The
 ## registry is owned by the scene, so it is freed together with it.
 func _setup_services() -> void:
-	var registry := WiredPackageRegistry.new()
-	registry.name = "PackageRegistry"
-	add_child(registry)
-	Global.package_registry = registry
+	_registry = WiredPackageRegistry.new()
+	_registry.name = "PackageRegistry"
+	add_child(_registry)
+	Global.package_registry = _registry
 	Global.register_scene_services(
 		$Game/SubViewport/StaticWorld,
 		$Game/SubViewport/DynamicWorld,
 		$Game/SubViewport/Players,
 		_net
 	)
-	$Game/SubViewport/StaticWorld.setup(registry)
+	_static_world = $Game/SubViewport/StaticWorld
+	_static_world.setup(_registry)
 
 
 ## Authored overlay controls already ignore the mouse, but `RichTextLabel`
@@ -85,10 +88,43 @@ func _setup_packages(room: String) -> void:
 	add_child(_packages)
 	Global.packages = _packages
 	_packages.configure(_api_url(), room)
+	if not _packages.package_applied.is_connected(_on_package_applied):
+		_packages.package_applied.connect(_on_package_applied)
 	# Lives under Main: a package scene must never become the whole game scene.
 	var reloader := PackageReloader.new()
 	add_child(reloader)
 	reloader.setup(_packages)
+
+
+## An applied revision replaces that package's registry entries and its static
+## content. `PackageReloader` also receives the signal, but skips the roots
+## rebuilt here because `StaticWorldContainer` owns them.
+func _on_package_applied(
+	package_id: int, revision: int, _changed_files: PackedStringArray
+) -> void:
+	_apply_registered_package(package_id, revision)
+
+
+func _apply_registered_package(package_id: int, revision: int) -> void:
+	if _registry == null:
+		push_warning(
+			"WIRED_PACKAGE_ENTRY_SKIPPED package=%d revision=%d reason=no_registry"
+			% [package_id, revision]
+		)
+		return
+	var artifact_key := _packages.current_artifact_key(package_id)
+	var context := WiredPackageContext.new()
+	context.package_id = str(package_id)
+	context.revision = revision
+	context.artifact_key = artifact_key
+	context.packages = _packages
+	context.root_path = _packages.revision_dir(package_id, revision, artifact_key)
+	_registry.clear_package(context.package_id)
+	# A package without `wired_package.gd` is valid: it just contributes no
+	# content. The old entries were already cleared above.
+	PackageEntryLoader.load_entry(context.package_id, revision, context, _registry)
+	if _static_world != null:
+		_static_world.rebuild()
 
 
 func _api_url() -> String:
