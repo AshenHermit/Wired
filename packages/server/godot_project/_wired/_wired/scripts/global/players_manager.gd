@@ -1,5 +1,308 @@
 extends Node
 class_name PlayersManager
 
-func server_instantiate_player(peer_id:int):
-	pass
+## Server-side owner of the players, and the container clients spawn into.
+##
+## A peer becomes a player only when both gates are open:
+## `peer_authenticated` (identity) and `peer_packages_ready` (the client applied
+## the same revisions, so it can build the same components). The spawn record is
+## handed to `MultiplayerSpawner`, which calls `_spawn_player` on every peer, so
+## each side builds the player from its own registry in the same order.
+##
+## `build_player` is public and does not touch the tree: it turns one spawn
+## record plus the registry into a `WiredPlayer` with deterministic components.
+
+const DEFAULT_AUTHORITY := "server"
+const DEFAULT_PLAYER_ID := 1
+const SPAWN_OFFSET_STEP_2D := 48.0
+const SPAWN_OFFSET_STEP_3D := 48.0
+
+var _registry: WiredPackageRegistry = null
+var _network: WiredNetwork = null
+var _spawner: MultiplayerSpawner = null
+# peer_id -> {player_id, name}
+var _authenticated: Dictionary = {}
+# peer_id -> WiredPlayer
+var _spawned: Dictionary = {}
+# player_id -> saved player state, applied on (re)spawn
+var _saved_states: Dictionary = {}
+
+
+func setup(
+	registry: WiredPackageRegistry,
+	network: WiredNetwork,
+	spawner: MultiplayerSpawner
+) -> void:
+	_registry = registry
+	_network = network
+	_spawner = spawner
+	if _spawner != null:
+		_spawner.spawn_path = NodePath("..")
+		_spawner.spawn_function = _spawn_player
+	if _network != null:
+		if not _network.peer_authenticated.is_connected(_on_peer_authenticated):
+			_network.peer_authenticated.connect(_on_peer_authenticated)
+		if not _network.peer_packages_ready.is_connected(_on_peer_packages_ready):
+			_network.peer_packages_ready.connect(_on_peer_packages_ready)
+		if not _network.player_action_received.is_connected(
+			_on_player_action_received
+		):
+			_network.player_action_received.connect(_on_player_action_received)
+
+
+func get_player_by_peer(peer_id: int) -> WiredPlayer:
+	var player: Variant = _spawned.get(peer_id)
+	if not is_instance_valid(player):
+		return null
+	return player as WiredPlayer
+
+
+func get_player_by_id(player_id: int) -> WiredPlayer:
+	for peer_id in _spawned:
+		var player: WiredPlayer = _spawned[peer_id]
+		if is_instance_valid(player) and player.player_id == player_id:
+			return player
+	return null
+
+
+## Builds one player and its registered components without adding them to the
+## scene tree. The spawner (or the caller, in tests) owns parenting.
+func build_player(data: Dictionary, registry: WiredPackageRegistry) -> WiredPlayer:
+	var player := WiredPlayer.new()
+	var spawn_2d: Vector2 = data.get("spawn_position_2d", Vector2.ZERO)
+	var spawn_3d: Vector3 = data.get("spawn_position_3d", Vector3.ZERO)
+	player.setup(
+		int(data.get("player_id", 0)),
+		int(data.get("peer_id", 0)),
+		str(data.get("name", "")),
+		_network
+	)
+	player.spawn_position_2d = spawn_2d
+	player.spawn_position_3d = spawn_3d
+	player.set_anchor_position_2d(spawn_2d)
+	player.set_anchor_position_3d(spawn_3d)
+	if registry == null:
+		push_warning(
+			"WIRED_PLAYER_BUILD_SKIPPED player=%d reason=no_registry"
+			% player.player_id
+		)
+		return player
+	var own_peer := _current_peer_id()
+	for descriptor: Dictionary in registry.get_player_components():
+		var package_id := str(descriptor.get("package_id", ""))
+		var path := str(descriptor.get("path", ""))
+		var local_only := bool(descriptor.get("local_only", false))
+		# A local-only component exists solely on its owner's peer, so the other
+		# peers never spend nodes on it.
+		if local_only and player.peer_id != own_peer:
+			continue
+		var context := registry.get_context(package_id)
+		if context == null:
+			push_warning(
+				"WIRED_PLAYER_COMPONENT_SKIPPED package=%s path=%s reason=no_context"
+				% [package_id, path]
+			)
+			continue
+		var instance := context.instantiate(path)
+		if instance == null:
+			# WiredPackageContext already reported why it failed.
+			continue
+		var component := instance as WiredPlayerComponent
+		if component == null:
+			push_warning(
+				"WIRED_PLAYER_COMPONENT_SKIPPED package=%s path=%s reason=not_player_component"
+				% [package_id, path]
+			)
+			instance.free()
+			continue
+		component.package_id = package_id
+		player.add_component(
+			component, str(descriptor.get("authority", DEFAULT_AUTHORITY)), local_only
+		)
+	return player
+
+
+## Server only. Spawns through the scene's `MultiplayerSpawner`, which calls
+## `_spawn_player` on every peer. Without a spawner (tests, headless tools) the
+## player is built and added locally.
+func spawn_player(peer_id: int) -> void:
+	if not _is_server():
+		return
+	if _spawned.has(peer_id):
+		return
+	if not _authenticated.has(peer_id):
+		return
+	if _network != null and not _network.is_peer_packages_ready(peer_id):
+		return
+	var data := _spawn_data(peer_id)
+	if _spawner != null:
+		var node := _spawner.spawn(data)
+		if node == null:
+			push_warning(
+				"WIRED_PLAYER_SPAWN_FAILED peer=%d reason=spawner_rejected"
+				% peer_id
+			)
+		return
+	_spawn_player(data)
+
+
+func despawn_player(peer_id: int) -> void:
+	var player := get_player_by_peer(peer_id)
+	_spawned.erase(peer_id)
+	if player == null:
+		return
+	# Freeing the node in the tree both releases it locally and tells the
+	# MultiplayerSpawner to despawn the matching instance on every peer.
+	player.queue_free()
+
+
+## Called by `MultiplayerSpawner` on every peer. The spawner parents the
+## returned node, so this method must not add it to the tree when a spawner is
+## configured. It still records the instance so routing works immediately.
+func _spawn_player(data: Dictionary) -> Node:
+	var player := build_player(data, _registry)
+	if player == null:
+		return null
+	player.name = "Player%d" % player.player_id
+	_spawned[player.peer_id] = player
+	# Component hooks may use @onready refs, so restored state is applied only
+	# after the spawned subtree reports ready. The spawner parents the node
+	# after this call returns.
+	if _saved_states.has(player.player_id):
+		player.ready.connect(_apply_saved_state.bind(player), CONNECT_ONE_SHOT)
+	if _spawner == null:
+		add_child(player)
+	return player
+
+
+func save_state() -> Dictionary:
+	var records: Array = []
+	var peer_ids := _spawned.keys()
+	peer_ids.sort()
+	for peer_id in peer_ids:
+		var player: WiredPlayer = _spawned[peer_id]
+		if is_instance_valid(player):
+			records.append(player.save_state())
+	return {"players": records}
+
+
+## Restores the players found in `state.json`. Already spawned players receive
+## the state immediately; the rest is applied when that `player_id` spawns.
+func load_state(state: Dictionary) -> void:
+	var records: Variant = state.get("players", [])
+	if not (records is Array):
+		return
+	var record_list: Array = records
+	for record: Variant in record_list:
+		if typeof(record) != TYPE_DICTIONARY:
+			continue
+		var player_id := int(record.get("player_id", 0))
+		if player_id <= 0:
+			continue
+		var existing := get_player_by_id(player_id)
+		if existing != null:
+			existing.load_state(record)
+		else:
+			_saved_states[player_id] = record
+
+
+func _on_peer_authenticated(peer_id: int, player_id: int, name: String) -> void:
+	_authenticated[peer_id] = {"player_id": player_id, "name": name}
+	_try_spawn(peer_id)
+
+
+func _on_peer_packages_ready(peer_id: int) -> void:
+	_try_spawn(peer_id)
+
+
+func _on_player_action_received(
+	peer_id: int, action: String, payload: Dictionary
+) -> void:
+	var player := get_player_by_peer(peer_id)
+	if player == null:
+		push_warning(
+			"WIRED_PLAYER_ACTION_NO_PLAYER peer=%d action=%s" % [peer_id, action]
+		)
+		return
+	player.handle_action(action, payload, peer_id)
+
+
+## Requires both the identity and the package gate, and spawns at most once.
+func _try_spawn(peer_id: int) -> void:
+	if not _is_server():
+		return
+	if _spawned.has(peer_id) or not _authenticated.has(peer_id):
+		return
+	if _network == null or not _network.is_peer_packages_ready(peer_id):
+		return
+	spawn_player(peer_id)
+
+
+func _spawn_data(peer_id: int) -> Dictionary:
+	var info: Dictionary = _authenticated[peer_id]
+	var player_id := int(info.get("player_id", DEFAULT_PLAYER_ID))
+	var index := maxi(player_id - 1, 0)
+	return {
+		"player_id": player_id,
+		"peer_id": peer_id,
+		"name": str(info.get("name", "")),
+		"spawn_position_2d": _spawn_position_2d(index),
+		"spawn_position_3d": _spawn_position_3d(index),
+	}
+
+
+## Markers are indexed by join order. When a world has fewer markers than
+## players, later players share the first marker with a small deterministic
+## offset instead of stacking on one point.
+func _spawn_position_2d(index: int) -> Vector2:
+	var world := _static_world()
+	if world == null or not world.has_method("get_spawn_position_2d"):
+		return Vector2.ZERO
+	var position: Vector2 = world.call("get_spawn_position_2d", index)
+	if position == Vector2.ZERO and index > 0:
+		var origin: Vector2 = world.call("get_spawn_position_2d", 0)
+		if origin != Vector2.ZERO:
+			position = origin + Vector2(SPAWN_OFFSET_STEP_2D * index, 0.0)
+	return position
+
+
+func _spawn_position_3d(index: int) -> Vector3:
+	var world := _static_world()
+	if world == null or not world.has_method("get_spawn_position_3d"):
+		return Vector3.ZERO
+	var position: Vector3 = world.call("get_spawn_position_3d", index)
+	if position == Vector3.ZERO and index > 0:
+		var origin: Vector3 = world.call("get_spawn_position_3d", 0)
+		if origin != Vector3.ZERO:
+			position = origin + Vector3(SPAWN_OFFSET_STEP_3D * index, 0.0, 0.0)
+	return position
+
+
+## The autoload node itself; looked up by path rather than through the `Global`
+## identifier so headless smoke scripts can compile the same core scripts.
+func _static_world() -> Node:
+	var global := get_node_or_null("/root/Global")
+	if global == null:
+		return null
+	return global.get("static_world") as Node
+
+
+func _apply_saved_state(player: WiredPlayer) -> void:
+	if not _saved_states.has(player.player_id):
+		return
+	player.load_state(_saved_states[player.player_id])
+	_saved_states.erase(player.player_id)
+
+
+func _current_peer_id() -> int:
+	var api := multiplayer
+	if api == null:
+		return DEFAULT_PLAYER_ID
+	return api.get_unique_id()
+
+
+func _is_server() -> bool:
+	var api := multiplayer
+	if api == null:
+		return true
+	return api.is_server()

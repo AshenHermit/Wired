@@ -9,8 +9,7 @@ var package_registry: WiredPackageRegistry
 var static_world: StaticWorldContainer
 ## Task 8 replaces this with `DynamicWorldContainer`.
 var dynamic_world: Node
-## Task 6 attaches `PlayersManager`, so the field stays a plain `Node` until then.
-var players: Node
+var players: PlayersManager
 var packages: PackagesManager
 var network: WiredNetwork
 
@@ -26,12 +25,11 @@ func get_scene_container() -> SceneContainer:
 
 
 ## Wires the game scene services after `main.tscn` has been instantiated.
-## `dynamic_world` and `players` are plain `Node`s until Tasks 8 and 6 attach
-## their scripts.
+## `dynamic_world` stays a plain `Node` until Task 8 attaches its script.
 func register_scene_services(
 	static_world_container: StaticWorldContainer,
 	dynamic_world_container: Node,
-	players_manager: Node,
+	players_manager: PlayersManager,
 	network_service: WiredNetwork
 ) -> void:
 	static_world = static_world_container
@@ -52,7 +50,7 @@ func get_dynamic_world() -> Node:
 	return dynamic_world
 
 
-func get_players() -> Node:
+func get_players() -> PlayersManager:
 	return players
 
 

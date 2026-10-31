@@ -24,6 +24,7 @@ var _auth_error_reported := false
 var _packages: PackagesManager
 var _registry: WiredPackageRegistry
 var _static_world: StaticWorldContainer
+var _players: PlayersManager
 
 @onready var _net: WiredNetwork = $Net
 @onready var _status: Label = $UI/Margin/VBox/Status
@@ -62,14 +63,23 @@ func _setup_services() -> void:
 	_registry.name = "PackageRegistry"
 	add_child(_registry)
 	Global.package_registry = _registry
+	# Players are built from the same registry and spawned through the
+	# scene's MultiplayerSpawner once auth and package readiness both arrive.
+	_players = $Game/SubViewport/Players as PlayersManager
 	Global.register_scene_services(
 		$Game/SubViewport/StaticWorld,
 		$Game/SubViewport/DynamicWorld,
-		$Game/SubViewport/Players,
+		_players,
 		_net
 	)
 	_static_world = $Game/SubViewport/StaticWorld
 	_static_world.setup(_registry)
+	if _players != null:
+		_players.setup(
+			_registry,
+			_net,
+			_players.get_node_or_null("Spawner") as MultiplayerSpawner
+		)
 
 
 ## Authored overlay controls already ignore the mouse, but `RichTextLabel`

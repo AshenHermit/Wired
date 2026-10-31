@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tests/fixtures/player_root/player_component.gd" id="1_component"]
+
+[node name="PlayerComponent" type="Node"]
+script = ExtResource("1_component")
+
+[node name="Body" type="Node2D" parent="."]
