@@ -1,0 +1,4 @@
+[gd_scene format=3]
+
+[node name="PushBody" type="CharacterBody2D"]
+metadata/_wired_player_body = true

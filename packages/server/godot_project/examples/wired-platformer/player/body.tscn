@@ -1,0 +1,19 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="body.gd" id="1_body"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_body"]
+size = Vector2(32, 32)
+
+[node name="PlayerBody" type="Node"]
+metadata/_wired_player_body = true
+script = ExtResource("1_body")
+
+[node name="Body" type="CharacterBody2D" parent="."]
+metadata/_wired_player_body = true
+
+[node name="Sprite" type="Polygon2D" parent="Body"]
+polygon = PackedVector2Array(-16, -16, 16, -16, 16, 16, -16, 16)
+
+[node name="Collision" type="CollisionShape2D" parent="Body"]
+shape = SubResource("RectangleShape2D_body")
