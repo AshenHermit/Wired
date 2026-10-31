@@ -1,4 +1,6 @@
-import { resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import config from './config';
 
 describe('config paths', () => {
@@ -61,5 +63,40 @@ describe('config paths', () => {
     expect(config().godotRuntime.stateDir).toBe(
       resolve(process.env.GODOT_ROOM_STATE_DIR ?? './storage/godot_rooms'),
     );
+  });
+
+  it('uses the downloaded runtime when GODOT_RUNTIME_PATH is unset', () => {
+    const originalRuntime = process.env.GODOT_RUNTIME_PATH;
+    const originalCwd = process.cwd();
+    const root = mkdtempSync(join(tmpdir(), 'wired-config-'));
+    const directory = '4.7.2-stable-win32-x64';
+    try {
+      mkdirSync(join(root, 'godot_runtime', directory), { recursive: true });
+      writeFileSync(join(root, 'godot_runtime', directory, 'Godot.exe'), '');
+      writeFileSync(
+        join(root, 'godot_runtime', 'runtime.json'),
+        JSON.stringify({
+          version: '4.7.2-stable',
+          platform: 'win32-x64',
+          directory,
+          executable: `${directory}/Godot.exe`,
+        }),
+      );
+
+      delete process.env.GODOT_RUNTIME_PATH;
+      process.chdir(root);
+
+      expect(config().godotRuntime.executablePath).toBe(
+        join(root, 'godot_runtime', directory, 'Godot.exe'),
+      );
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(root, { recursive: true, force: true });
+      if (originalRuntime === undefined) {
+        delete process.env.GODOT_RUNTIME_PATH;
+      } else {
+        process.env.GODOT_RUNTIME_PATH = originalRuntime;
+      }
+    }
   });
 });

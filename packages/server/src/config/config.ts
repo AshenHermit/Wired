@@ -1,9 +1,28 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { AppConfig } from './config.interface';
 
 const intFromEnv = (name: string, fallback: number): number => {
   const value = parseInt(process.env[name] ?? '', 10);
   return Number.isFinite(value) ? value : fallback;
+};
+
+// `pnpm fetch:runtime` installs a versioned build and records its path in this
+// manifest. Explicit environment configuration still wins.
+const downloadedRuntime = (): string => {
+  const root = resolve('./godot_runtime');
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(root, 'runtime.json'), 'utf8'),
+    ) as { executable?: unknown };
+    if (typeof manifest.executable !== 'string') {
+      return '';
+    }
+    const executable = resolve(root, manifest.executable);
+    return existsSync(executable) ? executable : '';
+  } catch {
+    return '';
+  }
 };
 
 // Filesystem paths are resolved once, when the config is built, so services
@@ -41,7 +60,7 @@ const config: () => AppConfig = () => ({
   },
   godotRuntime: {
     // Local absolute paths live only in the git-ignored .env file.
-    executablePath: process.env.GODOT_RUNTIME_PATH ?? '',
+    executablePath: process.env.GODOT_RUNTIME_PATH || downloadedRuntime(),
     projectPath: resolve(
       process.env.GODOT_RUNTIME_PROJECT_PATH ?? './godot_project/_wired',
     ),

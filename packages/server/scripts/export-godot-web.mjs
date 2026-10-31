@@ -14,15 +14,20 @@
  * Nothing has to be copied by hand.
  *
  * Configuration comes from the environment or `packages/server/.env`:
- *   GODOT_RUNTIME_PATH           Godot executable (required)
+ *   GODOT_RUNTIME_PATH           Godot executable (overrides the downloaded runtime)
  *   GODOT_RUNTIME_PROJECT_PATH   project directory, default godot_project/_wired
  *   GODOT_GAME_EXPORT_DIR        export output, default game_export/web
+ *
+ * When GODOT_RUNTIME_PATH is unset, the executable installed by
+ * `pnpm fetch:runtime` is used.
  *
  * Uses only Node built-ins (Node >= 22), no extra dependencies.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+
+import { resolveRuntimeExecutable } from './lib/runtime-install.mjs';
 
 const SERVER_ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -60,14 +65,16 @@ function fail(message) {
 
 loadEnvFile(path.join(SERVER_ROOT, '.env'));
 
-const godot = process.env.GODOT_RUNTIME_PATH ?? '';
+const godot =
+  process.env.GODOT_RUNTIME_PATH ||
+  resolveRuntimeExecutable(path.join(SERVER_ROOT, 'godot_runtime'));
 if (!godot) {
   fail(
-    'GODOT_RUNTIME_PATH is not set. Add it to packages/server/.env or the environment.',
+    'Godot runtime not found. Run "pnpm fetch:runtime" or set GODOT_RUNTIME_PATH in packages/server/.env or the environment.',
   );
 }
 if (!existsSync(godot)) {
-  fail(`GODOT_RUNTIME_PATH does not point to a file: ${godot}`);
+  fail(`Godot runtime does not point to a file: ${godot}`);
 }
 
 const projectPath = path.resolve(
