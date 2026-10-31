@@ -3,13 +3,12 @@ extends EditorPlugin
 
 ## Bridges the Wired shell to the editor.
 ##
-## The shell writes package files directly into the Emscripten filesystem. Godot
-## serves those files immediately, but EditorFileSystem keeps its own cache and
-## does not notice external writes until it rescans. This plugin exposes two
-## callbacks on `window.__wiredEditorBridge`:
-## - `rescan()` asks the running editor to refresh its cache without a reload;
-## - `request(requestId, op, paramsJson)` runs a package filesystem operation
-##   and answers through `window.__wiredEditorBridgeResult({id, ok, value|error})`.
+## The shell never reads the editor filesystem directly. It sends a package
+## operation over `window.__wiredEditorBridge.request(requestId, op,
+## paramsJson)`; the plugin runs the operation against `WiredPackageFs` and
+## answers through `window.__wiredEditorBridgeResult({id, ok, value|error})`.
+## Staged revision bytes still arrive through `Engine.copyToFS`, and the plugin
+## also exposes `rescan()` so the editor refreshes its own cache after a swap.
 ##
 ## Every request runs deferred: the callback itself only validates the
 ## arguments, so no filesystem work happens while JavaScript is still on the

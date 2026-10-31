@@ -60,7 +60,7 @@ pnpm fetch:editor
 Проверка после скачивания:
 
 - `packages/server/godot_editor/godot.editor.wasm` — 96 413 171 байт (> 40 МБ),
-  суммарно каталог 96 865 615 байт (12 файлов).
+  суммарно каталог 96 865 615 байт (13 файлов: 12 из архива + `VERSION`).
 - `VERSION` — `4.7.2-stable`.
 - Новый wasm больше прежнего кастомного (96,4 МБ против 83,0 МБ): официальная
   сборка 4.7.2 включает больше кода, это ожидаемо и не является регрессом.
@@ -132,10 +132,17 @@ GitHub при `docker build` теперь обязателен. Проверит
 | --- | --- | --- |
 | `pnpm --filter server test` | 31 набор прошёл, 1 пропущен (`room-runtime.integration`); 314 тестов прошли, 1 пропущен (315) | 0 |
 | `pnpm --filter server build` | `nest build` без ошибок, `dist/server/src/main.js` на месте | 0 |
-| `pnpm --filter frontend test` | 7 файлов, 78 тестов, все прошли | 0 |
+| `pnpm --filter frontend test` | 7 файлов, 79 тестов, все прошли | 0 |
 | `pnpm check-types:frontend` | `tsc --noEmit` чисто | 0 |
 | `pnpm --filter frontend lint` | 7 errors / 17 warnings — все в файлах, не менявшихся этим этапом | 1 |
-| `pnpm --filter server test:scripts` | 11 тестов (`unzip.test.mjs`, `editor-install.test.mjs`), все прошли | 0 |
+| `pnpm --filter server test:scripts` | 35 тестов (`unzip`, `editor-install`, `runtime-install`, `export-templates`), все прошли | 0 |
+| `godot --headless --path packages/server/godot_project/_wired --script res://tests/package_fs_smoke.gd --quit-after 600` | `OK 14 checks` (Godot 4.6.2 на Windows) | 0 |
+
+`package_fs_smoke.gd` проверяет и скрытые файлы: `DirAccess.include_hidden`
+включается явно, поэтому `.config/settings.tres` переживает `replace`, а
+`op_delete` удаляет каталог с `.config/`. На Windows точка в имени не делает
+файл `FILE_ATTRIBUTE_HIDDEN`, так что эти сценарии доказывают продакшн-семантику
+(веб-редактор/POSIX) только там; прогон на 4.7.2 остаётся в e2e-чеклисте.
 
 `pnpm --filter frontend lint` падал и до этапа: `git diff HEAD -- frontend`
 пуст, то есть рабочее дерево frontend совпадает с закоммиченным состоянием

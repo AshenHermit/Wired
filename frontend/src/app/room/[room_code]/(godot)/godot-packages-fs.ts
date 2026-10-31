@@ -26,9 +26,10 @@ export class GodotFsError extends Error {
 
 /**
  * Files the Godot editor generates next to package sources (`.gd.uid`,
- * `*.import`, `.godot/`). The plugin keeps them out of `snapshot`, `collect`
- * and `replace`; this predicate is exported for callers that show a path to the
- * user or decide what a package revision owns.
+ * `*.import`, `.godot/`). The plugin lists them deliberately (hidden files are
+ * included) and filters them out of `snapshot`, `collect` and `replace`; this
+ * predicate mirrors that rule for callers that show a path to the user or
+ * decide what a package revision owns.
  */
 export function isEditorMetadataPath(filepath: string): boolean {
   const segments = filepath.split("/");
@@ -103,15 +104,18 @@ type ReplacePayload = { written: string[]; deleted: string[] };
 
 /**
  * The plugin answers with `ProjectSettings.globalize_path(...)`: an absolute
- * path inside the engine file system. An empty or relative answer would let
- * `copyToFS` write outside the package tree, so it is rejected before the first
- * write and before the swap.
+ * path inside the engine file system. An empty or relative answer, or one that
+ * does not end with `<packages>/.<packageId>.staging`, would let `copyToFS`
+ * write outside the package tree, so it is rejected before the first write and
+ * before the swap.
  */
-function assertStagingPath(stagingPath: string): string {
+function assertStagingPath(stagingPath: string, packageId: number): string {
+  const expectedSuffix = `/${PACKAGES_DIR}/.${packageId}.staging`;
   if (
     typeof stagingPath !== "string" ||
     stagingPath.length === 0 ||
-    !stagingPath.startsWith("/")
+    !stagingPath.startsWith("/") ||
+    !stagingPath.endsWith(expectedSuffix)
   ) {
     throw new GodotFsError("Редактор вернул некорректный каталог staging");
   }
@@ -231,7 +235,7 @@ export function createPackageFileSystem({
         await bridge.call<PrepareReplacePayload>("prepareReplace", {
           packageId,
         });
-      assertStagingPath(stagingPath);
+      assertStagingPath(stagingPath, packageId);
 
       const engine = getEngine();
       if (!engine) {

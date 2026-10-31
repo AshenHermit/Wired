@@ -24,7 +24,11 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { installEditorSet, isEditorInstalled } from './lib/editor-install.mjs';
+import {
+  CORE_FILES,
+  installEditorSet,
+  isEditorInstalled,
+} from './lib/editor-install.mjs';
 import { extractZip } from './lib/unzip.mjs';
 
 const VERSION = '4.7.2-stable';
@@ -33,9 +37,6 @@ const ZIP_URL = `https://github.com/godotengine/godot/releases/download/${VERSIO
 const ZIP_SIZE = 54031095;
 const ZIP_SHA512 =
   '03ad6b4b4d96f0f7d85bf4fdcf29535891b79d52ee94a11e96895463a2745347b8f601b455e7a58135bf641df43fc25296bc257bbfce593d477dfa64a2272268';
-
-/** Files the editor cannot start without; validated before the swap. */
-const CORE_FILES = ['godot.editor.js', 'godot.editor.wasm', 'godot.editor.html'];
 
 const SERVER_ROOT = path.resolve(import.meta.dirname, '..');
 const destDir = path.resolve(
@@ -86,7 +87,7 @@ function assertCoreFiles(dir) {
 }
 
 async function main() {
-  if (!force && isEditorInstalled({ destDir, version: VERSION })) {
+  if (!force && isEditorInstalled({ destDir, version: VERSION, log })) {
     log(`Редактор уже на ${VERSION}`);
     return;
   }

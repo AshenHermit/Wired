@@ -251,6 +251,45 @@ test('failure during backup restores only moved files and keeps the rest', () =>
   });
 });
 
+test('a partial install is not reported as installed', () => {
+  withTempRoot((root) => {
+    const dest = join(root, 'dest');
+    // VERSION and the wasm are present, but the shell/html pair a browser
+    // needs to boot is missing: this is the half-deleted state.
+    writeSet(dest, {
+      'godot.editor.js': 'js',
+      'godot.editor.wasm': 'wasm',
+      VERSION: `${VERSION}\n`,
+    });
+    const logged = [];
+
+    assert.equal(
+      isEditorInstalled({
+        destDir: dest,
+        version: VERSION,
+        log: (message) => logged.push(message),
+      }),
+      false,
+    );
+    assert.equal(logged.length, 1);
+    assert.match(logged[0], /godot\.editor\.html/);
+  });
+});
+
+test('a complete core set is reported as installed', () => {
+  withTempRoot((root) => {
+    const dest = join(root, 'dest');
+    writeSet(dest, {
+      'godot.editor.js': 'js',
+      'godot.editor.wasm': 'wasm',
+      'godot.editor.html': 'html',
+      VERSION: `${VERSION}\n`,
+    });
+
+    assert.equal(isEditorInstalled({ destDir: dest, version: VERSION }), true);
+  });
+});
+
 test('removes leftover backup directories after a successful install', () => {
   withTempRoot((root) => {
     const source = join(root, 'source');

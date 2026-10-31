@@ -30,6 +30,12 @@ import path from 'node:path';
 
 export const VERSION_FILE = 'VERSION';
 export const BACKUP_DIR_PREFIX = '.editor-backup-';
+/** Files the editor cannot start without. */
+export const CORE_FILES = [
+  'godot.editor.js',
+  'godot.editor.wasm',
+  'godot.editor.html',
+];
 const STALE_EDITOR_PREFIX = 'godot.editor.';
 
 function listFiles(dir, prefix = '') {
@@ -75,10 +81,21 @@ function cleanupBackupDirs(destDir) {
 }
 
 /**
- * True when the destination holds this version and the wasm payload, i.e.
- * when a download can be skipped.
+ * True when the destination holds this version and the full core set, i.e.
+ * when a download can be skipped. A half-deleted directory (matching VERSION
+ * next to a missing `.js`/`.html`/worklet) must reinstall instead of making the
+ * browser hang.
+ *
+ * @param {object} options
+ * @param {string} options.destDir install directory
+ * @param {string} options.version expected `VERSION` content
+ * @param {(message: string) => void} [options.log] reports a missing file
  */
-export function isEditorInstalled({ destDir, version }) {
+export function isEditorInstalled({
+  destDir,
+  version,
+  log = (message) => console.warn(message),
+}) {
   const versionFile = path.join(destDir, VERSION_FILE);
   if (!existsSync(versionFile)) {
     return false;
@@ -86,7 +103,13 @@ export function isEditorInstalled({ destDir, version }) {
   if (readFileSync(versionFile, 'utf8').trim() !== version) {
     return false;
   }
-  return existsSync(path.join(destDir, 'godot.editor.wasm'));
+  for (const name of CORE_FILES) {
+    if (!existsSync(path.join(destDir, name))) {
+      log(`установка неполная: отсутствует ${name}`);
+      return false;
+    }
+  }
+  return true;
 }
 
 /**

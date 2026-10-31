@@ -132,8 +132,8 @@ JavaScriptBridge.eval("window.__wiredEditorBridgeResult(%s)" % payload, true)
 | `exists` | `{packageId}` | `{exists: boolean}` |
 | `createDir` | `{packageId}` | `{}` |
 | `snapshot` | `{packageId}` | `{files: Record<path, sha256hex>}` |
-| `collect` | `{packageId}` | `{files: [{filepath, size, sha256, contentsBase64}]}` |
-| `prepareReplace` | `{packageId}` | `{stagingPath: string}` |
+| `collect` | `{packageId}` | `{files: [{filepath, size, sha256, contents_base64}]}` |
+| `prepareReplace` | `{packageId}` | `{staging_path: string}` |
 | `replace` | `{packageId}` | `{written: string[], deleted: string[]}` |
 | `delete` | `{packageId}` | `{}` |
 | `sync` | `{}` | `{}` |
@@ -193,8 +193,8 @@ GDScript выполняет операцию не внутри JS-стека, а
 
 `replaceContents()` во фронтенде:
 
-1. `prepareReplace` → `stagingPath`;
-2. для каждого файла `engine.copyToFS(`${stagingPath}/${filepath}`,
+1. `prepareReplace` → `staging_path`;
+2. для каждого файла `engine.copyToFS(`${staging_path}/${filepath}`,
    bytes)` — официальный API сам создаёт промежуточные каталоги;
 3. `replace` → `{written, deleted}`;
 4. `sync`.
@@ -262,12 +262,14 @@ createPackageFileSystem({
 
 `packages/server/scripts/fetch-godot-editor.mjs` (Node ≥ 20, только builtins):
 
-- Константы: `GODOT_EDITOR_VERSION = "4.7.2-stable"`,
+- Константы: `VERSION = "4.7.2-stable"`,
   `ZIP_NAME = "Godot_v4.7.2-stable_web_editor.zip"`, `ZIP_SHA512` из
   `SHA512-SUMS.txt`. Обновление версии — правка этих трёх констант.
 - URL: `https://github.com/godotengine/godot-builds/releases/download/<version>/<zip>`.
 - Каталог: `process.env.GODOT_EDITOR_PATH ?? packages/server/godot_editor`.
-- Если `VERSION` совпадает и `godot.editor.wasm` на месте — выход без сети;
+- Если `VERSION` совпадает и на месте весь `CORE_FILES` (`godot.editor.js`,
+  `godot.editor.wasm`, `godot.editor.html`) — выход без сети; при отсутствии
+  любого файла скрипт сообщает, какого не хватает, и переустанавливает;
   `--force` перекачивает.
 - Скачивание в `os.tmpdir()`, проверка sha512 (`node:crypto`), распаковка
   (`scripts/lib/unzip.mjs`, ~90 строк: EOCD → central directory →

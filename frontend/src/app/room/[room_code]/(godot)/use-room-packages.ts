@@ -463,6 +463,11 @@ export function useRoomPackages(
   React.useEffect(() => {
     if (roomIdRef.current === roomId) return;
     roomIdRef.current = roomId;
+    // An in-flight load belongs to the old room: invalidate it before clearing
+    // so it can neither publish stale state nor keep a dead reconnect loop.
+    stopReconnectLoop();
+    engineRef.current = null;
+    requestRef.current += 1;
     loadedRef.current.clear();
     snapshotsRef.current.clear();
     remoteRef.current.clear();
@@ -475,7 +480,7 @@ export function useRoomPackages(
     setFsReady(false);
     setStatusLoaded(false);
     setError(null);
-  }, [roomId, roomPackages]);
+  }, [roomId, roomPackages, stopReconnectLoop]);
 
   React.useEffect(() => {
     void refresh();
@@ -772,7 +777,6 @@ export function useRoomPackages(
           }
 
           await files.deletePackage(packageId);
-          await files.sync();
           requestEditorRescan();
           loadedRef.current.delete(packageId);
           setAction(packageId, {

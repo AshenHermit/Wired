@@ -103,8 +103,8 @@ function hasBridgeRequest(): boolean {
 
 /**
  * Creates a client for the editor plugin operations (`exists`, `snapshot`,
- * `collect`, `replace`, ...). Every call is matched to its answer by id; the
- * timeout is shared by all calls of this client.
+ * `collect`, `replace`, ...). Every call is matched to its answer by id and has
+ * its own timeout; a slow call never shortens the deadline of another one.
  */
 export function createEditorBridgeClient(options: {
   timeoutMs?: number;

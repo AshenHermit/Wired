@@ -69,14 +69,18 @@ static func is_editor_metadata(rel_path: String) -> bool:
 
 
 ## Undoes a swap that was interrupted between the two renames.
-static func restore_previous_if_needed(package_id: int) -> void:
+## Returns an empty string on success, or a message when the rename fails.
+static func restore_previous_if_needed(package_id: int) -> String:
 	var previous := previous_dir(package_id)
 	if not DirAccess.dir_exists_absolute(previous):
-		return
+		return ""
 	var root := package_dir(package_id)
 	if DirAccess.dir_exists_absolute(root):
-		return
-	DirAccess.rename_absolute(previous, root)
+		return ""
+	var error := DirAccess.rename_absolute(previous, root)
+	if error != OK:
+		return "не удалось восстановить пакет %d из previous: %s" % [package_id, error_string(error)]
+	return ""
 
 
 # --- operations -----------------------------------------------------------
@@ -86,7 +90,9 @@ static func op_exists(package_id: int) -> Dictionary:
 	var invalid := _invalid_id(package_id)
 	if not invalid.is_empty():
 		return {"error": invalid}
-	restore_previous_if_needed(package_id)
+	var restore_error := restore_previous_if_needed(package_id)
+	if not restore_error.is_empty():
+		return {"error": restore_error}
 	return {"exists": DirAccess.dir_exists_absolute(package_dir(package_id))}
 
 
@@ -106,6 +112,9 @@ static func op_snapshot(package_id: int) -> Dictionary:
 	var invalid := _invalid_id(package_id)
 	if not invalid.is_empty():
 		return {"error": invalid}
+	var restore_error := restore_previous_if_needed(package_id)
+	if not restore_error.is_empty():
+		return {"error": restore_error}
 	var files := {}
 	var root := package_dir(package_id)
 	if not DirAccess.dir_exists_absolute(root):
@@ -121,6 +130,9 @@ static func op_collect(package_id: int) -> Dictionary:
 	var invalid := _invalid_id(package_id)
 	if not invalid.is_empty():
 		return {"error": invalid}
+	var restore_error := restore_previous_if_needed(package_id)
+	if not restore_error.is_empty():
+		return {"error": restore_error}
 	var files: Array = []
 	var root := package_dir(package_id)
 	if not DirAccess.dir_exists_absolute(root):
@@ -145,7 +157,9 @@ static func op_prepare_replace(package_id: int) -> Dictionary:
 	var invalid := _invalid_id(package_id)
 	if not invalid.is_empty():
 		return {"error": invalid}
-	restore_previous_if_needed(package_id)
+	var restore_error := restore_previous_if_needed(package_id)
+	if not restore_error.is_empty():
+		return {"error": restore_error}
 	var prepare_error := _remove_tree(previous_dir(package_id))
 	if prepare_error != OK:
 		return {
@@ -169,7 +183,9 @@ static func op_replace(package_id: int) -> Dictionary:
 	var invalid := _invalid_id(package_id)
 	if not invalid.is_empty():
 		return {"error": invalid}
-	restore_previous_if_needed(package_id)
+	var restore_error := restore_previous_if_needed(package_id)
+	if not restore_error.is_empty():
+		return {"error": restore_error}
 
 	var root := package_dir(package_id)
 	var staging := staging_dir(package_id)
@@ -207,7 +223,12 @@ static func op_replace(package_id: int) -> Dictionary:
 				"error": "не удалось переключить staging пакета %d: %s"
 				% [package_id, error_string(swap_error)],
 			}
-		_remove_tree(previous)
+		var cleanup_error := _remove_tree(previous)
+		if cleanup_error != OK:
+			push_error(
+				"не удалось удалить previous пакета %d: %s"
+				% [package_id, error_string(cleanup_error)]
+			)
 	else:
 		var swap_error := DirAccess.rename_absolute(staging, root)
 		if swap_error != OK:
@@ -232,7 +253,9 @@ static func op_delete(package_id: int) -> Dictionary:
 	var invalid := _invalid_id(package_id)
 	if not invalid.is_empty():
 		return {"error": invalid}
-	restore_previous_if_needed(package_id)
+	var restore_error := restore_previous_if_needed(package_id)
+	if not restore_error.is_empty():
+		return {"error": restore_error}
 	for path: String in [package_dir(package_id), staging_dir(package_id), previous_dir(package_id)]:
 		var error := _remove_tree(path)
 		if error != OK:
@@ -260,6 +283,9 @@ static func _collect_files(abs_dir: String, rel_dir: String, files: Array[String
 	var dir := DirAccess.open(abs_dir)
 	if dir == null:
 		return
+	# Dot-prefixed editor metadata must be listed here and dropped deliberately
+	# by is_editor_metadata(), never by the OS hiding it from the listing.
+	dir.include_hidden = true
 	dir.list_dir_begin()
 	var name := dir.get_next()
 	while not name.is_empty():
@@ -307,6 +333,9 @@ static func _remove_tree(path: String) -> Error:
 	var dir := DirAccess.open(path)
 	if dir == null:
 		return DirAccess.get_open_error()
+	# Metadata directories are dot-prefixed: list them here so the tree can be
+	# removed completely instead of leaving `.previous` behind forever.
+	dir.include_hidden = true
 	# Collect names first: deleting while enumerating can skip entries.
 	var names := PackedStringArray()
 	dir.list_dir_begin()

@@ -182,6 +182,25 @@ describe("PackageFileSystem", () => {
     expect(order).not.toContain("sync");
   });
 
+  it("rejects an absolute staging path outside the package tree", async () => {
+    const { files, engine, order } = makeWorkspace({
+      prepareReplace: () => ({
+        staging_path: "/home/web_user/other/.7.staging",
+      }),
+    });
+
+    const replacement = files.replaceContents(
+      7,
+      new Map([["main.gd", data("main")]]),
+    );
+
+    await expect(replacement).rejects.toBeInstanceOf(GodotFsError);
+    await expect(replacement).rejects.toThrow(/некорректный каталог staging/);
+    expect(engine.copyToFS).not.toHaveBeenCalled();
+    expect(order).not.toContain("replace");
+    expect(order).not.toContain("sync");
+  });
+
   it("keeps editor metadata out of collect", async () => {
     const entries = [
       {

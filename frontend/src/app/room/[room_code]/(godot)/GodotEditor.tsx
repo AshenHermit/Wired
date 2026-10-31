@@ -44,7 +44,13 @@ export function GodotEditor({
         await editor.start();
         // The editor is already ready here; connecting the package bridge is
         // deliberately fire-and-forget so it can never block the first frame.
-        afterStart?.(editor);
+        // A failure in that callback must not turn a running editor into an
+        // error screen.
+        try {
+          afterStart?.(editor);
+        } catch (error) {
+          console.error("Godot editor afterStart callback failed", error);
+        }
       } catch (error) {
         setErrorMessage(
           error instanceof Error ? error.message : "Не удалось запустить редактор."

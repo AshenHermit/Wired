@@ -7,6 +7,10 @@ extends SceneTree
 ## package. Editor metadata (dot directories, `*.uid`, `*.import`) is never part
 ## of the reported tree but must survive a swap.
 ##
+## The dot-prefixed scenarios (`DirAccess.include_hidden`) only exercise
+## production semantics on a POSIX host or the web editor: on Windows a dotfile
+## is not `FILE_ATTRIBUTE_HIDDEN`, so the OS lists it even without the fix.
+##
 ## Run from the repository root:
 ##   godot --headless --path packages/server/godot_project/_wired \
 ##     --script res://tests/package_fs_smoke.gd --quit-after 600
@@ -30,6 +34,10 @@ func _initialize() -> void:
 	_test_metadata_preserved()
 	_test_delete()
 	_test_restore_previous()
+	_test_snapshot_restores_previous()
+	_test_collect_restores_previous()
+	_test_dot_dir_survives_replace()
+	_test_delete_with_dot_dir()
 	_test_valid_relative_path()
 	_cleanup_root()
 	_finish()
@@ -289,6 +297,108 @@ func _test_restore_previous() -> void:
 	_report("exists restores an interrupted swap", problems)
 
 
+func _test_snapshot_restores_previous() -> void:
+	var problems: Array = []
+	var package_id := 10
+	var root := WiredPackageFs.package_dir(package_id)
+	DirAccess.make_dir_recursive_absolute(root)
+	_write(root.path_join("keep.gd"), "extends Node\n")
+	_expect(
+		problems,
+		DirAccess.rename_absolute(root, WiredPackageFs.previous_dir(package_id)) == OK,
+		"the test must be able to rename the root to previous",
+	)
+
+	var snapshot := WiredPackageFs.op_snapshot(package_id)
+	_expect(problems, not snapshot.has("error"), "op_snapshot failed: %s" % [snapshot.get("error", "")])
+	var files: Dictionary = snapshot.get("files", {})
+	_expect(
+		problems,
+		files.has("keep.gd"),
+		"snapshot must restore previous and report keep.gd, got %s" % [snapshot],
+	)
+	_expect(problems, DirAccess.dir_exists_absolute(root), "snapshot must roll the swap back")
+	_report("snapshot restores an interrupted swap", problems)
+
+
+func _test_collect_restores_previous() -> void:
+	var problems: Array = []
+	var package_id := 11
+	var root := WiredPackageFs.package_dir(package_id)
+	DirAccess.make_dir_recursive_absolute(root)
+	_write(root.path_join("keep.gd"), "extends Node\n")
+	_expect(
+		problems,
+		DirAccess.rename_absolute(root, WiredPackageFs.previous_dir(package_id)) == OK,
+		"the test must be able to rename the root to previous",
+	)
+
+	var collected := WiredPackageFs.op_collect(package_id)
+	_expect(problems, not collected.has("error"), "op_collect failed: %s" % [collected.get("error", "")])
+	var paths: Array = []
+	for entry: Dictionary in collected.get("files", []):
+		paths.append(String(entry.get("filepath", "")))
+	paths.sort()
+	_expect(
+		problems,
+		paths == ["keep.gd"],
+		"collect must restore previous and report keep.gd, got %s" % [collected],
+	)
+	_expect(problems, DirAccess.dir_exists_absolute(root), "collect must roll the swap back")
+	_report("collect restores an interrupted swap", problems)
+
+
+func _test_dot_dir_survives_replace() -> void:
+	var problems: Array = []
+	var package_id := 12
+	var root := WiredPackageFs.package_dir(package_id)
+	DirAccess.make_dir_recursive_absolute(root)
+	_write(root.path_join(".config/settings.tres"), "[gd_resource]\n")
+	_write(root.path_join("old.gd"), "extends Node\n")
+
+	var prepared := WiredPackageFs.op_prepare_replace(package_id)
+	_expect(problems, not prepared.has("error"), "op_prepare_replace failed: %s" % [prepared.get("error", "")])
+	_write(WiredPackageFs.staging_dir(package_id).path_join("new.gd"), "extends RefCounted\n")
+
+	var result := WiredPackageFs.op_replace(package_id)
+	_expect(problems, not result.has("error"), "op_replace failed: %s" % [result.get("error", "")])
+	_expect(
+		problems,
+		FileAccess.file_exists(root.path_join(".config/settings.tres")),
+		"a dot directory from the old root must be carried into the new root",
+	)
+	_expect(
+		problems,
+		FileAccess.get_file_as_string(root.path_join(".config/settings.tres")) == "[gd_resource]\n",
+		"the metadata file must survive byte-for-byte",
+	)
+	var written: Array = result.get("written", [])
+	written.sort()
+	_expect(problems, written == ["new.gd"], "written must exclude dot metadata, got %s" % [written])
+	var deleted: Array = result.get("deleted", [])
+	deleted.sort()
+	_expect(problems, deleted == ["old.gd"], "deleted must exclude dot metadata, got %s" % [deleted])
+	_report("a nested dot directory survives replace", problems)
+
+
+func _test_delete_with_dot_dir() -> void:
+	var problems: Array = []
+	var package_id := 13
+	var root := WiredPackageFs.package_dir(package_id)
+	DirAccess.make_dir_recursive_absolute(root)
+	_write(root.path_join(".config/settings.tres"), "[gd_resource]\n")
+	_write(root.path_join("main.gd"), "extends Node\n")
+
+	var result := WiredPackageFs.op_delete(package_id)
+	_expect(problems, result.is_empty(), "op_delete must return {}, got %s" % [result])
+	_expect(
+		problems,
+		not DirAccess.dir_exists_absolute(root),
+		"op_delete must remove a package directory that contains .config",
+	)
+	_report("delete removes a package directory containing .config", problems)
+
+
 func _test_valid_relative_path() -> void:
 	var problems: Array = []
 	_expect(problems, WiredPackageFs.is_valid_relative_path("a/b.gd"), "a/b.gd must be a valid relative path")
@@ -344,6 +454,8 @@ func _remove_tree(path: String) -> void:
 	var dir := DirAccess.open(path)
 	if dir == null:
 		return
+	# Mirror the production helper: hidden metadata must be removable.
+	dir.include_hidden = true
 	# Collect names first: deleting while enumerating can skip entries.
 	var names := PackedStringArray()
 	dir.list_dir_begin()
