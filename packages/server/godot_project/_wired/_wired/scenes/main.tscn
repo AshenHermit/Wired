@@ -1,9 +1,10 @@
-[gd_scene load_steps=5 format=3 uid="uid://b0nt7wjwv3oh7"]
+[gd_scene load_steps=6 format=3 uid="uid://b0nt7wjwv3oh7"]
 
 [ext_resource type="Script" path="res://_wired/scripts/main_scene.gd" id="1_main"]
 [ext_resource type="Script" path="res://_wired/scripts/network/network.gd" id="2_net"]
 [ext_resource type="Script" path="res://_wired/scripts/world/static_world_container.gd" id="3_static"]
 [ext_resource type="Script" path="res://_wired/scripts/global/players_manager.gd" id="4_players"]
+[ext_resource type="Script" path="res://_wired/scripts/world/dynamic_world_container.gd" id="5_dynamic"]
 
 [node name="Main" type="Node"]
 script = ExtResource("1_main")
@@ -30,6 +31,7 @@ render_target_update_mode = 4
 script = ExtResource("3_static")
 
 [node name="DynamicWorld" type="Node" parent="Game/SubViewport"]
+script = ExtResource("5_dynamic")
 
 [node name="Spawner" type="MultiplayerSpawner" parent="Game/SubViewport/DynamicWorld"]
 

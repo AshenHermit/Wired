@@ -24,7 +24,11 @@ var _auth_error_reported := false
 var _packages: PackagesManager
 var _registry: WiredPackageRegistry
 var _static_world: StaticWorldContainer
+var _dynamic_world: DynamicWorldContainer
 var _players: PlayersManager
+## `dynamic_world` records from `state.json`. Restored after every package is
+## applied; a record whose package is not registered yet stays here.
+var _saved_dynamic_records: Array = []
 
 @onready var _net: WiredNetwork = $Net
 @onready var _status: Label = $UI/Margin/VBox/Status
@@ -51,6 +55,10 @@ func _ready() -> void:
 	# The host waits for this before minting a ticket.
 	_bridge_call("notifyReady", [])
 	if str(cfg.get("mode", "")) == "server":
+		_state_dir = str(cfg.get("state_dir", ""))
+		# Restore before the server accepts clients: players get their saved
+		# anchors on spawn, dynamic entities wait for their package entry.
+		_load_state()
 		_run_server(cfg)
 	else:
 		await _run_client(cfg)
@@ -66,9 +74,18 @@ func _setup_services() -> void:
 	# Players are built from the same registry and spawned through the
 	# scene's MultiplayerSpawner once auth and package readiness both arrive.
 	_players = $Game/SubViewport/Players as PlayersManager
+	# The dynamic world reuses the spawner authored in `main.tscn`; `setup`
+	# only creates one when none is passed, so no second spawner appears.
+	var dynamic_world_node := $Game/SubViewport/DynamicWorld as Node
+	_dynamic_world = dynamic_world_node as DynamicWorldContainer
+	if _dynamic_world != null:
+		_dynamic_world.setup(
+			_registry,
+			dynamic_world_node.get_node_or_null("Spawner") as MultiplayerSpawner
+		)
 	Global.register_scene_services(
 		$Game/SubViewport/StaticWorld,
-		$Game/SubViewport/DynamicWorld,
+		_dynamic_world,
 		_players,
 		_net
 	)
@@ -135,6 +152,10 @@ func _apply_registered_package(package_id: int, revision: int) -> void:
 	PackageEntryLoader.load_entry(context.package_id, revision, context, _registry)
 	if _static_world != null:
 		_static_world.rebuild()
+	# Package order is not guaranteed: every applied revision retries the saved
+	# records, and the ones whose type is still unregistered stay pending.
+	if _dynamic_world != null and _net.mode == "server":
+		_dynamic_world.restore_pending(_saved_dynamic_records)
 
 
 func _api_url() -> String:
@@ -263,6 +284,11 @@ func _request_shutdown(reason: String) -> void:
 ## The project owns its save format; the backend only waits for the process to
 ## exit. The file is written to the per-room directory passed by the backend.
 func _save_state(reason: String) -> void:
+	# Players and dynamic entities are server-owned; both keep their own
+	# persistence shape so a package only sees its `_wired_*_state` dictionary.
+	var players: Array = []
+	if _players != null:
+		players = _players.save_state().get("players", [])
 	var state := {
 		"room": _net.room_code,
 		"port": _server_port,
@@ -270,11 +296,13 @@ func _save_state(reason: String) -> void:
 		"active_players": _net.get_active_player_count(),
 		"server_seq": _net.get_server_seq(),
 		"saved_at": Time.get_datetime_string_from_system(true),
+		"players": players,
+		"dynamic_world": (
+			_dynamic_world.save_state() if _dynamic_world != null else []
+		),
 	}
 	var dir := _state_dir
-	if dir.is_empty():
-		dir = "user://"
-	else:
+	if not dir.is_empty():
 		var dir_err := DirAccess.make_dir_recursive_absolute(dir)
 		if dir_err != OK:
 			print(
@@ -282,7 +310,7 @@ func _save_state(reason: String) -> void:
 				% [dir, error_string(dir_err)]
 			)
 			return
-	var path := dir.path_join("state.json")
+	var path := _state_path()
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file == null:
 		print(
@@ -293,6 +321,51 @@ func _save_state(reason: String) -> void:
 	file.store_string(JSON.stringify(state, "  "))
 	file.close()
 	print("WIRED_STATE_SAVED path=%s" % path)
+
+
+## Server side. Reads the previous `state.json` before the runtime starts.
+## Dynamic records are not spawned here: their package entry may not be
+## registered yet, so `restore_pending` is retried after every package apply.
+func _load_state() -> void:
+	var path := _state_path()
+	if not FileAccess.file_exists(path):
+		return
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		print(
+			"WIRED_STATE_LOAD_FAILED path=%s err=%s"
+			% [path, error_string(FileAccess.get_open_error())]
+		)
+		return
+	var raw := file.get_as_text()
+	file.close()
+	var parsed: Variant = JSON.parse_string(raw)
+	if typeof(parsed) != TYPE_DICTIONARY:
+		print("WIRED_STATE_LOAD_FAILED path=%s reason=invalid_json" % path)
+		return
+	var state: Dictionary = parsed
+	var dynamic_records: Variant = state.get("dynamic_world", [])
+	if dynamic_records is Array:
+		_saved_dynamic_records = dynamic_records
+	var player_records: Variant = state.get("players", [])
+	if player_records is Array and _players != null:
+		# Applied immediately to live players, or on that player's next spawn.
+		_players.load_state({"players": player_records})
+	print(
+		"WIRED_STATE_LOADED path=%s dynamic=%d players=%d"
+		% [
+			path,
+			_saved_dynamic_records.size(),
+			player_records.size() if player_records is Array else 0,
+		]
+	)
+
+
+func _state_path() -> String:
+	var dir := _state_dir
+	if dir.is_empty():
+		dir = "user://"
+	return dir.path_join("state.json")
 
 
 func _notification(what: int) -> void:

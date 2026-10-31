@@ -7,8 +7,7 @@ extends Node
 
 var package_registry: WiredPackageRegistry
 var static_world: StaticWorldContainer
-## Task 8 replaces this with `DynamicWorldContainer`.
-var dynamic_world: Node
+var dynamic_world: DynamicWorldContainer
 var players: PlayersManager
 var packages: PackagesManager
 var network: WiredNetwork
@@ -25,10 +24,9 @@ func get_scene_container() -> SceneContainer:
 
 
 ## Wires the game scene services after `main.tscn` has been instantiated.
-## `dynamic_world` stays a plain `Node` until Task 8 attaches its script.
 func register_scene_services(
 	static_world_container: StaticWorldContainer,
-	dynamic_world_container: Node,
+	dynamic_world_container: DynamicWorldContainer,
 	players_manager: PlayersManager,
 	network_service: WiredNetwork
 ) -> void:
@@ -46,7 +44,7 @@ func get_static_world() -> StaticWorldContainer:
 	return static_world
 
 
-func get_dynamic_world() -> Node:
+func get_dynamic_world() -> DynamicWorldContainer:
 	return dynamic_world
 
 
