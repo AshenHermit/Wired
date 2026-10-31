@@ -138,7 +138,7 @@ test('restores the complete old set byte-for-byte when a move fails', () => {
   });
 });
 
-test('moves VERSION aside before any new file so a kill cannot look installed', () => {
+test('backs up VERSION first so a kill cannot look installed', () => {
   withTempRoot((root) => {
     const source = join(root, 'source');
     const dest = join(root, 'dest');
@@ -157,7 +157,9 @@ test('moves VERSION aside before any new file so a kill cannot look installed', 
     });
     assert.equal(isEditorInstalled({ destDir: dest, version: VERSION }), true);
 
-    let versionPresent = true;
+    const backupOrder = [];
+    const versionPresentDuringBackup = [];
+    let versionPresentBeforeMove = true;
     let lookedInstalled = true;
     assert.throws(
       () =>
@@ -166,8 +168,16 @@ test('moves VERSION aside before any new file so a kill cannot look installed', 
           sourceDir: source,
           version: VERSION,
           hooks: {
+            beforeBackup(name) {
+              backupOrder.push(name);
+              // The first call is VERSION itself (still present); every later
+              // call must already see it gone.
+              if (backupOrder.length > 1) {
+                versionPresentDuringBackup.push(existsSync(join(dest, 'VERSION')));
+              }
+            },
             beforeMove() {
-              versionPresent = existsSync(join(dest, 'VERSION'));
+              versionPresentBeforeMove = existsSync(join(dest, 'VERSION'));
               lookedInstalled = isEditorInstalled({ destDir: dest, version: VERSION });
               throw new Error('simulated kill');
             },
@@ -176,9 +186,24 @@ test('moves VERSION aside before any new file so a kill cannot look installed', 
       /simulated kill/,
     );
 
+    // Guards the original bug: moving VERSION last in the backup loop would
+    // leave a matching VERSION next to an incomplete set. Both the ordering
+    // and the state after each subsequent backup step are asserted, so a
+    // beforeMove-only check cannot pass by accident.
+    assert.equal(backupOrder[0], 'VERSION');
+    assert.ok(
+      backupOrder.length > 1,
+      'expected VERSION plus at least one other file to be backed up',
+    );
+    assert.deepEqual(
+      versionPresentDuringBackup,
+      versionPresentDuringBackup.map(() => false),
+      'VERSION must be absent for every backup step after the first',
+    );
+
     // This is the kill-like window: no new file has been moved yet, and the
     // old VERSION is already out of the way.
-    assert.equal(versionPresent, false);
+    assert.equal(versionPresentBeforeMove, false);
     assert.equal(lookedInstalled, false);
   });
 });
@@ -235,13 +260,17 @@ test('removes leftover backup directories after a successful install', () => {
       'godot.editor.wasm': 'new wasm',
       'godot.editor.html': 'new html',
     });
-    writeSet(dest, { 'godot.editor.js': 'old js' });
+    writeSet(dest, {
+      'godot.editor.js': 'old js',
+      'godot.editor.legacy.js': 'stale legacy',
+    });
     const staleBackup = join(dest, `${BACKUP_DIR_PREFIX}stale`);
     writeSet(staleBackup, { 'leftover.bin': 'leftover' });
 
     installEditorSet({ destDir: dest, sourceDir: source, version: VERSION });
 
     assert.equal(existsSync(staleBackup), false);
+    assert.equal(existsSync(join(dest, 'godot.editor.legacy.js')), false);
     assert.deepEqual(backupDirs(dest), []);
     assert.equal(readFileSync(join(dest, 'VERSION'), 'utf8'), `${VERSION}\n`);
   });
