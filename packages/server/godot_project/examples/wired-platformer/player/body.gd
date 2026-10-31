@@ -36,6 +36,10 @@ func _wired_ready() -> void:
 	set_meta(PLAYER_BODY_META, true)
 	body.set_meta(PLAYER_BODY_META, true)
 	if player != null:
+		# The authoritative spawn marker lives on the player, not in the package
+		# scene. Apply it on every peer so the server simulates from the marker
+		# and clients start there before the first synchronization.
+		body.position = player.spawn_position_2d
 		player.set_anchor_position_2d(body.position)
 
 

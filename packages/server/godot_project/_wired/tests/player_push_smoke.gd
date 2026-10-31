@@ -37,6 +37,7 @@ func _run() -> void:
 	_test_player_body_meta_lookup()
 	_test_push_collider_only_player_bodies()
 	_test_example_body_scene_carries_the_meta()
+	_test_example_body_starts_at_spawn_marker()
 	_test_pushed_body_keeps_velocity_through_idle_input_step()
 	_free_owned()
 	_finish()
@@ -226,6 +227,31 @@ func _test_example_body_scene_carries_the_meta() -> void:
 	player.free()
 
 
+## Regression: the authoritative spawn marker lives on
+## `WiredPlayer.spawn_position_2d` (filled by `PlayersManager`), not in the
+## package scene. Without applying it the body starts at the scene's `(0, 0)`
+## and is embedded in the platform above the marker.
+func _test_example_body_starts_at_spawn_marker() -> void:
+	var marker := Vector2(32, 48)
+	var setup := _instantiate_example_body(marker)
+	_check(not setup.is_empty(), "the example body scene must be usable")
+	if setup.is_empty():
+		return
+	var player: WiredPlayer = setup["player"]
+	var body: CharacterBody2D = setup["body"]
+	_check(
+		body.position == marker,
+		"the example body must start at the spawn marker, got %s" % body.position,
+	)
+	_check(
+		player.get_anchor_position_2d() == marker,
+		"the anchor must follow the marker spawn, got %s"
+		% player.get_anchor_position_2d(),
+	)
+	# Keep the physics world empty for the integration test below.
+	player.free()
+
+
 ## Regression: an unconditional `velocity.x = input.x * speed` erases a push in
 ## the very next frame when the pushed player is idle. The real hook is driven
 ## here, so the body must keep the push, move on the next slide and then settle
@@ -288,7 +314,9 @@ func _instantiate_fixture() -> CharacterBody2D:
 
 ## Builds a ready example body owned by the local player, so its hooks can be
 ## driven against the real scene (outside `res://`, loaded by absolute path).
-func _instantiate_example_body() -> Dictionary:
+## `spawn_position` mirrors the value `PlayersManager` puts on the player before
+## the component enters the tree.
+func _instantiate_example_body(spawn_position := Vector2.ZERO) -> Dictionary:
 	var packed := _load_example_scene("body.tscn")
 	_check(packed != null, "the example body.tscn must load")
 	if packed == null:
@@ -300,6 +328,7 @@ func _instantiate_example_body() -> Dictionary:
 	var player := WiredPlayer.new()
 	_owned.append(player)
 	player.setup(1, 1, "local", null)
+	player.spawn_position_2d = spawn_position
 	player.add_component(component, "server", false)
 	root.add_child(player)
 	var body := component.get_node_or_null("Body") as CharacterBody2D
