@@ -1,9 +1,10 @@
 # Дизайн: официальный Godot 4.7.2 вместо кастомной сборки
 
 Дата: 2026-10-31.
-Статус: утверждено, реализация — `docs/superpowers/plans/2026-10-31-godot-official-editor-js-bridge.md`.
+Статус: Реализовано (кроме ручного e2e на 4.7.2); результаты — `2026-10-31-godot-official-editor-results.md`.
 Связанные документы: `2026-10-29-godot-package-storage-stage4.md`,
-`2026-10-30-godot-packages-stage6.md`.
+`2026-10-30-godot-packages-stage6.md`,
+план — `docs/superpowers/plans/2026-10-31-godot-official-editor-js-bridge.md`.
 
 ## Задача
 

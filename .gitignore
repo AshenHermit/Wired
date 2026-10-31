@@ -4,3 +4,4 @@ dist
 .superpowers/
 packages/server/storage/
 packages/server/game_export/
+packages/server/godot_editor/
