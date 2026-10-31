@@ -179,6 +179,40 @@ test('ignores directory entries', () => {
   });
 });
 
+test('extracts only entries accepted by the filter', () => {
+  withTempDir((dest) => {
+    const zip = makeZip([
+      { name: 'templates/web_debug.zip', data: 'debug' },
+      { name: 'templates/web_release.zip', data: 'release' },
+      { name: 'templates/linux_debug.x86_64', data: 'linux' },
+    ]);
+
+    const written = extractZip(zip, dest, {
+      match: (name) => name === 'templates/web_debug.zip',
+    });
+
+    assert.deepEqual(written, ['templates/web_debug.zip']);
+    assert.equal(readFileSync(join(dest, 'templates', 'web_debug.zip'), 'utf8'), 'debug');
+    assert.equal(existsSync(join(dest, 'templates', 'web_release.zip')), false);
+    assert.equal(existsSync(join(dest, 'templates', 'linux_debug.x86_64')), false);
+  });
+});
+
+test('validates every entry even when the filter excludes it', () => {
+  withTempDir((dest) => {
+    const zip = makeZip([
+      { name: 'templates/web_debug.zip', data: 'debug' },
+      { name: '../evil.txt', data: 'pwned' },
+    ]);
+
+    assert.throws(
+      () => extractZip(zip, dest, { match: () => false }),
+      /\.\./,
+    );
+    assert.equal(existsSync(join(dest, '..', 'evil.txt')), false);
+  });
+});
+
 test('ignores a fake end-of-central-directory signature in a comment', () => {
   withTempDir((dest) => {
     const base = makeZip([{ name: 'godot.editor.html', data: '<html></html>' }]);

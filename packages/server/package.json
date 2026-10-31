@@ -23,7 +23,8 @@
     "export:game": "node scripts/export-godot-web.mjs",
     "fetch:editor": "node scripts/fetch-godot-editor.mjs",
     "fetch:runtime": "node scripts/fetch-godot-runtime.mjs",
-    "test:scripts": "node --test scripts/lib/unzip.test.mjs scripts/lib/editor-install.test.mjs scripts/lib/runtime-install.test.mjs"
+    "fetch:templates": "node scripts/fetch-godot-templates.mjs",
+    "test:scripts": "node --test scripts/lib/unzip.test.mjs scripts/lib/editor-install.test.mjs scripts/lib/runtime-install.test.mjs scripts/lib/export-templates.test.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

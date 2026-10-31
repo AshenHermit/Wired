@@ -159,9 +159,10 @@ function readEntryData(buffer, entry) {
  *
  * @param {Buffer} buffer zip archive bytes
  * @param {string} destDir destination directory (created if needed)
+ * @param {{ match?: (name: string) => boolean }} [options] optional entry filter
  * @returns {string[]} relative paths of the files written
  */
-export function extractZip(buffer, destDir) {
+export function extractZip(buffer, destDir, { match } = {}) {
   if (!Buffer.isBuffer(buffer)) {
     fail('expected a Buffer');
   }
@@ -170,11 +171,15 @@ export function extractZip(buffer, destDir) {
   }
 
   // Parse and validate everything first: a rejected entry must not leave
-  // partially written files behind.
+  // partially written files behind. The filter only decides what is written,
+  // never what is validated.
   const entries = readCentralDirectory(buffer);
 
   const written = [];
   for (const entry of entries) {
+    if (match && !match(entry.name)) {
+      continue;
+    }
     if (entry.isDirectory) {
       mkdirSync(path.join(destDir, entry.name), { recursive: true });
       continue;
