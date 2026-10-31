@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createEditorBridgeClient,
   EditorBridgeError,
+  EditorBridgeOperationError,
   requestEditorRescan,
   waitForEditorBridge,
 } from "./editor-bridge";
@@ -135,9 +136,59 @@ describe("EditorBridgeClient", () => {
     });
     const client = createEditorBridgeClient();
 
-    await expect(
-      client.call("prepareReplace", { packageId: 1 }),
-    ).rejects.toThrow("staging не найден");
+    const error = await client
+      .call("prepareReplace", { packageId: 1 })
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(EditorBridgeOperationError);
+    expect(error).not.toBeInstanceOf(EditorBridgeError);
+    expect(error).toHaveProperty("message", "staging не найден");
+  });
+
+  it("matches concurrent calls and drops a late answer for a timed-out id", async () => {
+    vi.useFakeTimers();
+    const request = installRequest(() => {});
+    const client = createEditorBridgeClient({ timeoutMs: 100 });
+
+    const snapshot = client.call("snapshot", { packageId: 1 });
+    const collect = client.call("collect", { packageId: 2 });
+    const timedOut = client.call("exists", { packageId: 3 });
+    const timeoutAssertion = expect(timedOut).rejects.toThrow(
+      "не ответил за 100 мс",
+    );
+    const [snapshotId, collectId, timedOutId] = request.mock.calls.map(
+      (call) => call[0] as number,
+    );
+
+    // Answers arrive in the reverse order of the requests.
+    sendResult({ id: collectId, ok: true, value: { files: ["b.gd"] } });
+    await expect(collect).resolves.toEqual({ files: ["b.gd"] });
+    sendResult({ id: snapshotId, ok: true, value: { files: ["a.gd"] } });
+    await expect(snapshot).resolves.toEqual({ files: ["a.gd"] });
+
+    await vi.advanceTimersByTimeAsync(100);
+    await timeoutAssertion;
+
+    const pending = client.call("sync");
+    let pendingSettled = false;
+    void pending.then(
+      () => {
+        pendingSettled = true;
+      },
+      () => {
+        pendingSettled = true;
+      },
+    );
+
+    expect(() => {
+      sendResult({ id: timedOutId, ok: true, value: { late: true } });
+      sendResult({ id: timedOutId, ok: false, error: "поздно" });
+    }).not.toThrow();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(pendingSettled).toBe(false);
+
+    sendResult({ id: lastRequestId(request), ok: true, value: {} });
+    await expect(pending).resolves.toEqual({});
   });
 
   it("times out", async () => {

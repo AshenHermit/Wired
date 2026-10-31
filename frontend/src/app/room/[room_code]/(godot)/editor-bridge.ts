@@ -33,6 +33,17 @@ export class EditorBridgeError extends Error {
   }
 }
 
+/**
+ * An operation failed inside the editor: the bridge is alive and answered with
+ * `{ok: false, error}`. Recoverable per operation, never a reason to reconnect.
+ */
+export class EditorBridgeOperationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EditorBridgeOperationError";
+  }
+}
+
 export type EditorBridgeClient = {
   call<T>(op: string, params?: Record<string, unknown>): Promise<T>;
 };
@@ -64,7 +75,7 @@ function handleBridgeResult(message: unknown): void {
     return;
   }
   pending.reject(
-    new EditorBridgeError(
+    new EditorBridgeOperationError(
       typeof result.error === "string" && result.error.length > 0
         ? result.error
         : "Мост редактора вернул ошибку без описания",
