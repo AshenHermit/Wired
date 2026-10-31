@@ -17,6 +17,9 @@ const PLAYER_BODY_META := "_wired_player_body"
 @export var jump_velocity := -420.0
 @export var gravity := 980.0
 @export var push_strength := 1.0
+## Horizontal decay applied when the player gives no meaningful input, so a
+## push from another player survives the next frame and then settles.
+@export var friction := 1200.0
 
 var body: CharacterBody2D = null
 
@@ -41,7 +44,15 @@ func _wired_ready() -> void:
 func _wired_physics_process(delta: float) -> void:
 	if body == null or player == null:
 		return
-	body.velocity.x = _move_x(player.input.get("move", Vector2.ZERO)) * speed
+	var input_x := _move_x(player.input.get("move", Vector2.ZERO))
+	if absf(input_x) > 0.01:
+		# Meaningful input owns the horizontal axis.
+		body.velocity.x = input_x * speed
+	else:
+		# Idle: never erase an external push in the same frame. Decay it with
+		# friction instead, so another player's push survives long enough to
+		# move this body.
+		body.velocity.x = move_toward(body.velocity.x, 0.0, friction * delta)
 	if body.is_on_floor():
 		if bool(player.input.get("jump", false)):
 			body.velocity.y = jump_velocity

@@ -37,6 +37,7 @@ func _run() -> void:
 	_test_player_body_meta_lookup()
 	_test_push_collider_only_player_bodies()
 	_test_example_body_scene_carries_the_meta()
+	_test_pushed_body_keeps_velocity_through_idle_input_step()
 	_free_owned()
 	_finish()
 
@@ -169,50 +170,103 @@ func _test_push_collider_only_player_bodies() -> void:
 		"a contact push must add the pre-slide velocity, got %s"
 		% contact_fixture.velocity,
 	)
+	# A body already moving away at the target speed is not changed, and the
+	# helper reports "not pushed" instead of pretending it did something.
+	var away_fixture := _instantiate_fixture()
+	away_fixture.velocity = Vector2(500, 0)
+	_check(
+		not PlayerPush.push_collider(
+			source, away_fixture, Vector2(100, 0), 1.0
+		),
+		"a body already moving away must not be reported as pushed",
+	)
+	_check(
+		away_fixture.velocity.x == 500.0,
+		"a body already moving away must keep its velocity, got %s"
+		% away_fixture.velocity,
+	)
 
 
 ## The example scene is outside `res://`, so it is loaded by absolute path. It
 ## must put the meta on the component root and on the actual collider child,
 ## and declare both replicated body properties.
 func _test_example_body_scene_carries_the_meta() -> void:
-	var packed := _load_example_scene("body.tscn")
-	_check(packed != null, "the example body.tscn must load")
-	if packed == null:
+	var setup := _instantiate_example_body()
+	_check(not setup.is_empty(), "the example body scene must be usable")
+	if setup.is_empty():
 		return
-	var component: Node = packed.instantiate()
-	if component == null:
-		_check(false, "the example body.tscn must instantiate")
-		return
-	var player := WiredPlayer.new()
-	_owned.append(player)
-	player.setup(1, 1, "local", null)
-	player.add_component(component, "server", false)
-	root.add_child(player)
-	var body := component.get_node_or_null("Body") as CharacterBody2D
-	_check(body != null, "the example body must contain a CharacterBody2D `Body`")
+	var component: Node = setup["component"]
+	var player: WiredPlayer = setup["player"]
+	var body: CharacterBody2D = setup["body"]
 	_check(
 		component.has_meta(PLAYER_BODY_META),
 		"the example component root must carry the player-body meta",
 	)
-	if body != null:
-		_check(
-			body.has_meta(PLAYER_BODY_META),
-			"the CharacterBody2D collider must carry the player-body meta",
-		)
-		_check(
-			component.has_method("_wired_physics_process"),
-			"the example body must implement the physics hook",
-		)
-		_check(
-			player.get_anchor_position_2d() == body.position,
-			"`_wired_ready` must seed the anchor from the body, got %s"
-			% player.get_anchor_position_2d(),
-		)
+	_check(
+		body.has_meta(PLAYER_BODY_META),
+		"the CharacterBody2D collider must carry the player-body meta",
+	)
+	_check(
+		component.has_method("_wired_physics_process"),
+		"the example body must implement the physics hook",
+	)
+	_check(
+		player.get_anchor_position_2d() == body.position,
+		"`_wired_ready` must seed the anchor from the body, got %s"
+		% player.get_anchor_position_2d(),
+	)
 	var properties: PackedStringArray = component._wired_replicated_properties()
 	_check(
 		properties == PackedStringArray(["Body:position", "Body:velocity"]),
 		"the example body must replicate position and velocity, got %s"
 		% [properties],
+	)
+	# Free this body so the integration test below starts in an empty physics
+	# world instead of overlapping it at the origin.
+	player.free()
+
+
+## Regression: an unconditional `velocity.x = input.x * speed` erases a push in
+## the very next frame when the pushed player is idle. The real hook is driven
+## here, so the body must keep the push, move on the next slide and then settle
+## through friction; meaningful input still owns the axis.
+func _test_pushed_body_keeps_velocity_through_idle_input_step() -> void:
+	var setup := _instantiate_example_body()
+	_check(not setup.is_empty(), "the example body scene must be usable")
+	if setup.is_empty():
+		return
+	var component: Node = setup["component"]
+	var player: WiredPlayer = setup["player"]
+	var body: CharacterBody2D = setup["body"]
+	# The other player pushed this body: velocity is set, no local input.
+	body.velocity = Vector2(90, 0)
+	player.input = {"move": Vector2.ZERO, "jump": false}
+	var position_before := body.position
+	component._wired_physics_process(0.016)
+	_check(
+		body.velocity.x > 0.0,
+		"an idle body must keep a push through the input step, got %s"
+		% body.velocity,
+	)
+	_check(
+		body.position.x > position_before.x,
+		"the push must move the idle body, got %s" % body.position,
+	)
+	# Friction settles the push instead of holding it forever.
+	for index in 10:
+		player.input = {"move": Vector2.ZERO, "jump": false}
+		component._wired_physics_process(0.016)
+	_check(
+		body.velocity.x == 0.0,
+		"friction must settle a push back to rest, got %s" % body.velocity,
+	)
+	# Meaningful input still owns the horizontal axis.
+	player.input = {"move": Vector2.RIGHT, "jump": false}
+	body.velocity.x = -90.0
+	component._wired_physics_process(0.016)
+	_check(
+		body.velocity.x == 240.0,
+		"meaningful input must set the horizontal speed, got %s" % body.velocity,
 	)
 
 
@@ -230,6 +284,29 @@ func _instantiate_fixture() -> CharacterBody2D:
 		return CharacterBody2D.new()
 	_owned.append(body)
 	return body
+
+
+## Builds a ready example body owned by the local player, so its hooks can be
+## driven against the real scene (outside `res://`, loaded by absolute path).
+func _instantiate_example_body() -> Dictionary:
+	var packed := _load_example_scene("body.tscn")
+	_check(packed != null, "the example body.tscn must load")
+	if packed == null:
+		return {}
+	var component: Node = packed.instantiate()
+	if component == null:
+		_check(false, "the example body.tscn must instantiate")
+		return {}
+	var player := WiredPlayer.new()
+	_owned.append(player)
+	player.setup(1, 1, "local", null)
+	player.add_component(component, "server", false)
+	root.add_child(player)
+	var body := component.get_node_or_null("Body") as CharacterBody2D
+	_check(body != null, "the example body must contain a CharacterBody2D `Body`")
+	if body == null:
+		return {}
+	return {"component": component, "player": player, "body": body}
 
 
 func _load_example_scene(file_name: String) -> PackedScene:

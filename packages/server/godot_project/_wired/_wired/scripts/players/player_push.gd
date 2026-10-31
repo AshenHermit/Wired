@@ -72,8 +72,12 @@ static func push_collider(
 		return false
 	if velocity.is_zero_approx():
 		return false
-	push_other(collider as CharacterBody2D, velocity, strength)
-	return true
+	var target := collider as CharacterBody2D
+	var before := target.velocity
+	push_other(target, velocity, strength)
+	# A body already moving away at the target speed is untouched; report that
+	# so callers can distinguish "pushed" from "collided".
+	return not target.velocity.is_equal_approx(before)
 
 
 ## Server-only loop: call right after `move_and_slide` with the pre-slide
