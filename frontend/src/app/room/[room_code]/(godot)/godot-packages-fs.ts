@@ -101,6 +101,23 @@ type CollectedFilePayload = {
 type PrepareReplacePayload = { staging_path: string };
 type ReplacePayload = { written: string[]; deleted: string[] };
 
+/**
+ * The plugin answers with `ProjectSettings.globalize_path(...)`: an absolute
+ * path inside the engine file system. An empty or relative answer would let
+ * `copyToFS` write outside the package tree, so it is rejected before the first
+ * write and before the swap.
+ */
+function assertStagingPath(stagingPath: string): string {
+  if (
+    typeof stagingPath !== "string" ||
+    stagingPath.length === 0 ||
+    !stagingPath.startsWith("/")
+  ) {
+    throw new GodotFsError("Редактор вернул некорректный каталог staging");
+  }
+  return stagingPath;
+}
+
 function decodeBase64(contentsBase64: string): Uint8Array {
   const binary = atob(contentsBase64);
   const bytes = new Uint8Array(binary.length);
@@ -214,6 +231,7 @@ export function createPackageFileSystem({
         await bridge.call<PrepareReplacePayload>("prepareReplace", {
           packageId,
         });
+      assertStagingPath(stagingPath);
 
       const engine = getEngine();
       if (!engine) {

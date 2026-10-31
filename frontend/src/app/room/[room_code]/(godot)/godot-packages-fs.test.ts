@@ -165,6 +165,23 @@ describe("PackageFileSystem", () => {
     expect(order).not.toContain("sync");
   });
 
+  it("rejects an invalid staging path from the bridge", async () => {
+    const { files, engine, order } = makeWorkspace({
+      prepareReplace: () => ({ staging_path: "" }),
+    });
+
+    const replacement = files.replaceContents(
+      7,
+      new Map([["main.gd", data("main")]]),
+    );
+
+    await expect(replacement).rejects.toBeInstanceOf(GodotFsError);
+    await expect(replacement).rejects.toThrow(/некорректный каталог staging/);
+    expect(engine.copyToFS).not.toHaveBeenCalled();
+    expect(order).not.toContain("replace");
+    expect(order).not.toContain("sync");
+  });
+
   it("keeps editor metadata out of collect", async () => {
     const entries = [
       {
