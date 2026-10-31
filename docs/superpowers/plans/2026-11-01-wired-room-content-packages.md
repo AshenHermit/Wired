@@ -159,6 +159,8 @@ git commit -m "feat(server): gate game tickets on initial package sync"
 - `WiredPackageRegistry` (class_name, extends `Node`):
   - `register_context(package_id: String, context: WiredPackageContext) -> void`
   - `add_registration(registration: WiredPackageRegistration) -> void`
+  - `register_context(package_id: String, context: WiredPackageContext) -> void`
+  - `get_context(package_id: String) -> WiredPackageContext`
   - `clear_package(package_id: String) -> void`
   - `get_static_scenes() -> Array[Dictionary]`
   - `get_player_components() -> Array[Dictionary]`
@@ -185,6 +187,9 @@ git commit -m "feat(server): gate game tickets on initial package sync"
 ```gdscript
 func test_registry_orders_and_qualifies() -> void:
     var registry := WiredPackageRegistry.new()
+    var ctx_b := WiredPackageContext.new()
+    ctx_b.package_id = "pkg.b"
+    registry.register_context("pkg.b", ctx_b)
     var b := WiredPackageRegistration.new()
     b.package_id = "pkg.b"
     b.add_player_component("player/body.tscn", {"order": 20, "authority": "server"})
@@ -200,6 +205,7 @@ func test_registry_orders_and_qualifies() -> void:
     assert(components[0]["path"] == "player/body.tscn")
     assert(components[1]["path"] == "player/camera.tscn")
     assert(components[2]["package_id"] == "pkg.b")
+    assert(registry.get_context("pkg.b") == ctx_b)
     assert(registry.resolve_action("pkg.a", "fire") == "pkg.a/fire")
 ```
 
@@ -520,9 +526,9 @@ git commit -m "feat(wired): add package readiness and player transport"
   - `get_anchor_position_2d() -> Vector2`, `set_anchor_position_2d(value)`
   - `get_anchor_position_3d() -> Vector3`, `set_anchor_position_3d(value)`
   - `add_component(component: WiredPlayerComponent, authority: String, local_only: bool) -> void`
-  - `register_action(local_name: String, handler: Callable) -> void` — только сервер.
+  - `register_action(qualified_action: String, handler: Callable) -> void` — только сервер; имя уже квалифицировано компонентом.
   - `handle_action(qualified_action: String, payload: Dictionary, sender_peer: int) -> void`
-  - `request_action(local_name: String, payload: Dictionary = {}) -> void` — только локальный игрок; квалифицирует через `component.package_id` или `player_id`.
+  - `request_action(qualified_action: String, payload: Dictionary = {}) -> void` — только локальный игрок; имя уже квалифицировано компонентом.
   - `save_state() -> Dictionary`, `load_state(state: Dictionary) -> void`
 - `WiredPlayerComponent` (class_name, extends `Node`):
   - `player: WiredPlayer`, `package_id: String`, `authority_mode: String`, `local_only: bool`
