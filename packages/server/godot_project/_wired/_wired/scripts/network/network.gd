@@ -21,6 +21,14 @@ signal authenticated(player_id: int)
 signal auth_failed(reason: String)
 signal connection_failed()
 signal disconnected()
+# Server side: a peer completed ticket auth and entered the game.
+signal peer_authenticated(peer_id: int, player_id: int, name: String)
+# Server side: every announced package revision reported ready for that peer.
+# This is the initial-spawn gate only; later revisions do not re-emit it.
+signal peer_packages_ready(peer_id: int)
+# Server side: gameplay input/action arrived from an authenticated peer.
+signal player_input_received(peer_id: int, input: Dictionary)
+signal player_action_received(peer_id: int, action: String, payload: Dictionary)
 
 const PROTOCOL_VERSION := 1
 const AUTH_TIMEOUT_SEC := 10.0
@@ -138,6 +146,7 @@ func cli_hello(payload_json: String) -> void:
 	_players[peer_id] = {
 		"player_id": pid,
 		"ready": false,
+		"packages_ready": false,
 		"name": str(payload.get("name", "player")),
 	}
 	_package_reports[peer_id] = {}
@@ -161,6 +170,7 @@ func cli_hello(payload_json: String) -> void:
 	# A client that joins late (or reconnects after a lost notification) gets
 	# the current revisions immediately; it then downloads and reports itself.
 	_send_package_revisions(peer_id)
+	peer_authenticated.emit(peer_id, pid, str(_players[peer_id]["name"]))
 	_broadcast_event({"type": "player_joined", "player_id": pid})
 
 
@@ -178,6 +188,10 @@ func cli_ready() -> void:
 		% [peer_id, int(_players[peer_id]["player_id"])]
 	)
 	_broadcast_event({"type": "player_ready", "player_id": _players[peer_id]["player_id"]})
+	# A room without packages has nothing to download: spawning is gated only
+	# by `cli_ready`, as specified. With packages, `cli_package_ready` emits.
+	if _package_revisions.is_empty():
+		_mark_packages_ready(peer_id)
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -210,6 +224,36 @@ func cli_game_action(action_json: String) -> void:
 		"WIRED_ACTION_ACCEPTED peer=%d player=%d action=%s"
 		% [peer_id, int(_players[peer_id]["player_id"]), action_json]
 	)
+
+
+## Gameplay input travels on the unreliable-ordered channel: a dropped frame is
+## preferable to a stale one, and the sender is always re-checked here.
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func cli_player_input(input: Dictionary) -> void:
+	if mode != "server":
+		return
+	var peer_id := multiplayer.get_remote_sender_id()
+	if not _players.has(peer_id):
+		print("WIRED_PLAYER_INPUT_REJECTED peer=%d reason=not_authenticated" % peer_id)
+		_deny(peer_id, "cli_player_input")
+		return
+	player_input_received.emit(peer_id, input)
+
+
+## Gameplay actions are reliable and only accepted from authenticated peers.
+@rpc("any_peer", "call_remote", "reliable")
+func cli_player_action(action: String, payload: Dictionary) -> void:
+	if mode != "server":
+		return
+	var peer_id := multiplayer.get_remote_sender_id()
+	if not _players.has(peer_id):
+		print("WIRED_PLAYER_ACTION_REJECTED peer=%d reason=not_authenticated" % peer_id)
+		_deny(peer_id, "cli_player_action")
+		return
+	if action.is_empty():
+		print("WIRED_PLAYER_ACTION_REJECTED peer=%d reason=empty_action" % peer_id)
+		return
+	player_action_received.emit(peer_id, action, payload)
 
 
 ## Announces an applied package revision to every authenticated client. Only
@@ -296,6 +340,24 @@ func cli_package_ready(payload_json: String) -> void:
 			"WIRED_CLIENT_PACKAGES_FAILED peer=%d package=%d revision=%d error=%s"
 			% [peer_id, package_id, revision, error]
 		)
+	if PackageReadiness.is_ready(_package_revisions, _package_reports[peer_id]):
+		_mark_packages_ready(peer_id)
+
+
+## Emits the initial-spawn gate at most once per peer. Readiness is never reset:
+## later revisions are applied while the player already exists.
+func _mark_packages_ready(peer_id: int) -> void:
+	if not _players.has(peer_id):
+		return
+	var player: Dictionary = _players[peer_id]
+	if bool(player.get("packages_ready", false)):
+		return
+	player["packages_ready"] = true
+	print(
+		"WIRED_PEER_PACKAGES_READY peer=%d player=%d"
+		% [peer_id, int(player["player_id"])]
+	)
+	peer_packages_ready.emit(peer_id)
 
 
 func _single_line(text: String) -> String:
@@ -356,6 +418,15 @@ func get_active_player_count() -> int:
 	return _players.size()
 
 
+## Server side: whether the initial package gate opened for this peer. Unknown
+## and unauthenticated peers are not ready.
+func is_peer_packages_ready(peer_id: int) -> bool:
+	if not _players.has(peer_id):
+		return false
+	var player: Dictionary = _players[peer_id]
+	return bool(player.get("packages_ready", false))
+
+
 func get_server_seq() -> int:
 	return _server_seq
 
@@ -409,6 +480,24 @@ func report_package_ready(
 		"WIRED_CLIENT_PACKAGE_REPORT package=%d revision=%d ok=%s"
 		% [package_id, revision, str(ok)]
 	)
+
+
+## Client side: sends the current local input snapshot. Only authenticated
+## clients may send; the RPC itself uses the unreliable-ordered channel.
+func send_player_input(input: Dictionary) -> void:
+	if mode != "client" or not _authenticated:
+		return
+	rpc_id(SERVER_PEER_ID, "cli_player_input", input)
+
+
+## Client side: sends a gameplay action reliably. Only authenticated clients
+## may send, and an empty action is never forwarded.
+func send_player_action(action: String, payload: Dictionary) -> void:
+	if mode != "client" or not _authenticated:
+		return
+	if action.is_empty():
+		return
+	rpc_id(SERVER_PEER_ID, "cli_player_action", action, payload)
 
 
 func _on_connected_to_server() -> void:
