@@ -1,4 +1,4 @@
-﻿extends SceneTree
+extends SceneTree
 
 ## Headless smoke test for the main-scene save/load integration.
 ##

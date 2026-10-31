@@ -1,4 +1,4 @@
-﻿extends SceneTree
+extends SceneTree
 
 ## Headless smoke test for the example crate spawner.
 ##
@@ -43,6 +43,7 @@ func _run() -> void:
 	_test_server_spawns_from_the_authoritative_anchor()
 	_test_sender_must_own_the_player()
 	_test_cooldown_rejects_rapid_spawns()
+	_test_malformed_direction_does_not_burn_cooldown()
 	_test_per_player_limit_counts_live_crates()
 	_test_direction_validation_and_normalization()
 	_test_client_input_only_for_the_local_player()
@@ -116,6 +117,21 @@ func _test_cooldown_rejects_rapid_spawns() -> void:
 	_check(
 		_live_entities(setup["world"]).size() == 1,
 		"a second action inside the cooldown must be rejected, got %d crates"
+		% _live_entities(setup["world"]).size(),
+	)
+
+
+## A malformed click must be rejected before the cooldown is consumed, so the
+## next valid click can still spawn immediately.
+func _test_malformed_direction_does_not_burn_cooldown() -> void:
+	var setup := _make_setup()
+	var spawner: Variant = setup["spawner"]
+	spawner.cooldown_ms = 250
+	_trigger(setup, Vector2.ZERO)
+	_trigger(setup, Vector2.RIGHT)
+	_check(
+		_live_entities(setup["world"]).size() == 1,
+		"a rejected direction must not consume the cooldown, got %d crates"
 		% _live_entities(setup["world"]).size(),
 	)
 

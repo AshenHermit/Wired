@@ -21,6 +21,7 @@ class_name DynamicWorldContainer
 
 const SPAWNER_NAME := "Spawner"
 const META_ENTITY_ID := "_wired_entity_id"
+const META_SOURCE_ENTITY_ID := "_wired_source_entity_id"
 const STATE_KEYS: Array[String] = ["position", "rotation", "linear_velocity"]
 const RECORD_KEYS: Array[String] = [
 	"entity_id",
@@ -37,6 +38,8 @@ var _spawner: MultiplayerSpawner = null
 var _entities: Dictionary = {}
 # entity_id -> true, so repeated restore_pending calls never duplicate records
 var _restored_ids: Dictionary = {}
+# Next free id. Saved ids are reserved as soon as records are known, before any
+# fresh spawn can take one.
 var _next_entity_id: int = 1
 
 
@@ -89,6 +92,14 @@ func spawn_entity(qualified_type: String, data: Dictionary = {}) -> Node:
 		)
 		return null
 	var entity_id := int(data.get("entity_id", 0))
+	if entity_id > 0 and _entities.has(entity_id):
+		# Never overwrite the index entry: the old node would stay in the tree
+		# untracked and the next save would drop it.
+		push_warning(
+			"WIRED_DYNAMIC_SPAWN_FAILED type=%s entity_id=%d reason=id_in_use"
+			% [qualified_type, entity_id]
+		)
+		return null
 	if entity_id <= 0:
 		entity_id = _next_entity_id
 	_next_entity_id = maxi(_next_entity_id, entity_id + 1)
@@ -149,6 +160,7 @@ func save_state() -> Array[Dictionary]:
 ## (live ids are still skipped, so the call stays idempotent). Compare with
 ## `restore_pending`, which never resurrects an already restored record.
 func load_state(records: Array) -> void:
+	_reserve_ids(records)
 	_restored_ids.clear()
 	_restore_records(records)
 
@@ -156,6 +168,9 @@ func load_state(records: Array) -> void:
 ## Server only. Incremental restore used after every `package_applied`: records
 ## of packages that are not registered yet simply stay pending.
 func restore_pending(records: Array) -> void:
+	# Reserve first: a fresh entity spawned before the saved package arrives
+	# must not take an id that a pending record still owns.
+	_reserve_ids(records)
 	_restore_records(records)
 
 
@@ -213,11 +228,15 @@ func _restore_records(records: Array) -> void:
 		if typeof(record) != TYPE_DICTIONARY:
 			continue
 		var source: Dictionary = record
-		var entity_id := int(source.get("entity_id", 0))
+		var source_id := int(source.get("entity_id", 0))
 		var type_id := str(source.get("type_id", ""))
-		if entity_id <= 0 or type_id.is_empty():
+		if source_id <= 0 or type_id.is_empty():
 			continue
-		if _entities.has(entity_id) or _restored_ids.has(entity_id):
+		if _restored_ids.has(source_id):
+			continue
+		# An entity already representing this record (same id or a reassigned
+		# one) means the record is restored; never spawn a duplicate.
+		if _restored_entity_id(source_id) > 0:
 			continue
 		# A record whose package has not been applied yet stays pending: the
 		# registry cannot instantiate its scene before the entry is registered.
@@ -226,18 +245,55 @@ func _restore_records(records: Array) -> void:
 		var state: Variant = source.get("state", {})
 		if typeof(state) != TYPE_DICTIONARY:
 			state = {}
-		var entity := spawn_entity(
-			type_id,
-			{
-				"entity_id": entity_id,
-				"owner_player_id": int(source.get("owner_player_id", 0)),
-				"restore": true,
-				"state": state,
-			}
-		)
+		var entity_id := source_id
+		if _entities.has(entity_id):
+			# The id is occupied by a different entity (a fresh spawn that
+			# predates the record, a duplicate save, ...). Preserve both: the
+			# saved record gets a fresh id instead of being silently dropped.
+			push_warning(
+				"WIRED_DYNAMIC_RESTORE_ID_IN_USE type=%s entity_id=%d reason=reassigned"
+				% [type_id, entity_id]
+			)
+			entity_id = 0
+		var payload := {
+			"owner_player_id": int(source.get("owner_player_id", 0)),
+			"restore": true,
+			"state": state,
+		}
+		if entity_id > 0:
+			payload["entity_id"] = entity_id
+		var entity := spawn_entity(type_id, payload)
 		if entity == null:
 			continue
-		_restored_ids[entity_id] = true
+		# Keep the persisted id on the entity so a later full load recognizes
+		# this node even when a collision forced a fresh live id.
+		entity.set_meta(META_SOURCE_ENTITY_ID, source_id)
+		_restored_ids[source_id] = true
+
+
+## Advances the allocator past every saved id, including records still waiting
+## for their package, so a fresh spawn can never steal a pending id.
+func _reserve_ids(records: Array) -> void:
+	for record: Variant in records:
+		if typeof(record) != TYPE_DICTIONARY:
+			continue
+		var source: Dictionary = record
+		var entity_id := int(source.get("entity_id", 0))
+		if entity_id <= 0:
+			continue
+		_next_entity_id = maxi(_next_entity_id, entity_id + 1)
+
+
+## Live entity that represents a saved record, or 0. Restored entities carry
+## `_wired_source_entity_id`, so this also finds records that were reassigned.
+func _restored_entity_id(source_id: int) -> int:
+	for entity_id: Variant in _entities:
+		var node := _entities[entity_id] as Node
+		if node == null:
+			continue
+		if int(node.get_meta(META_SOURCE_ENTITY_ID, -1)) == source_id:
+			return int(entity_id)
+	return 0
 
 
 ## Normalizes the two accepted payload shapes into the replicated spawn record.

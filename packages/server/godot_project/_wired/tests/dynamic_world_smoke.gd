@@ -38,6 +38,8 @@ func _run() -> void:
 	_test_save_state_omits_spawn_data()
 	_test_despawn_and_restore_do_not_replay_the_impulse()
 	_test_restore_pending_waits_for_the_registered_package()
+	_test_saved_ids_are_reserved_before_the_package_arrives()
+	_test_restore_reassigns_a_colliding_id()
 	_free_owned()
 	_finish()
 
@@ -370,6 +372,127 @@ func _test_restore_pending_waits_for_the_registered_package() -> void:
 	_check(
 		world._entities.has(43) and world._entities[43].get("impulse_count") == 0,
 		"a full load_state must restore the record without the impulse",
+	)
+
+
+## Regression: a saved record for an unregistered package must reserve its id
+## immediately. Otherwise a fresh spawn takes that id, and when the package
+## arrives the saved record is skipped forever and lost on the next save.
+func _test_saved_ids_are_reserved_before_the_package_arrives() -> void:
+	var registry := _make_registry()
+	var world := _make_world()
+	world.setup(registry, null)
+	var records: Array = [
+		{
+			"entity_id": 1,
+			"type_id": "pkg.other/crate",
+			"owner_player_id": 1,
+			"state": {"position": [7.0, 8.0]},
+		},
+	]
+
+	world.restore_pending(records)
+	_check(
+		world._entities.is_empty(),
+		"the pending record must not spawn before its package is registered",
+	)
+	_check(
+		world._next_entity_id > 1,
+		"restore_pending must reserve the saved id, next=%d"
+		% world._next_entity_id,
+	)
+	var fresh := world.spawn_entity(
+		CRATE_TYPE, {"state": {"position": [16.0, 32.0]}}
+	) as WiredDynamicEntity
+	_check(fresh != null, "a fresh spawn must still work")
+	if fresh == null:
+		return
+	_check(
+		fresh.entity_id != 1,
+		"a fresh entity must not take the reserved saved id, got %d"
+		% fresh.entity_id,
+	)
+
+	_register_other_package(registry)
+	world.restore_pending(records)
+	_check(
+		world._entities.has(1),
+		"the saved entity must restore after its package is registered",
+	)
+	if world._entities.has(1):
+		_check(
+			world._entities[1].type_id == "pkg.other/crate",
+			"the saved id must belong to the saved record, got %s"
+			% world._entities[1].type_id,
+		)
+	_check(
+		world._entities.has(fresh.entity_id),
+		"the fresh entity must survive the later restore",
+	)
+	_check(
+		_live_entities(world).size() == 2,
+		"both the fresh and the saved entity must exist, got %d"
+		% _live_entities(world).size(),
+	)
+
+
+## If a saved id is already occupied by a different entity, the restore must
+## reassign a fresh id instead of dropping the record or overwriting the node.
+func _test_restore_reassigns_a_colliding_id() -> void:
+	var registry := _make_registry()
+	var world := _make_world()
+	world.setup(registry, null)
+	var occupied := world.spawn_entity(
+		CRATE_TYPE, {"entity_id": 9, "state": {"position": [1.0, 2.0]}}
+	) as WiredDynamicEntity
+	_check(
+		occupied != null and occupied.entity_id == 9,
+		"the collision test needs a live entity with id 9",
+	)
+	if occupied == null:
+		return
+	var duplicate := world.spawn_entity(CRATE_TYPE, {"entity_id": 9})
+	_check(
+		duplicate == null,
+		"spawn_entity must reject an id that is already in use",
+	)
+	_check(
+		world._entities.get(9) == occupied,
+		"a rejected id must not overwrite the live entity",
+	)
+
+	_register_other_package(registry)
+	world.restore_pending(
+		[
+			{
+				"entity_id": 9,
+				"type_id": "pkg.other/crate",
+				"owner_player_id": 2,
+				"state": {"position": [5.0, 6.0]},
+			},
+		]
+	)
+	_check(
+		world._entities.get(9) == occupied,
+		"the live entity must keep its id after the colliding restore",
+	)
+	var restored_id := 0
+	for entity_id: Variant in world._entities:
+		var node: Node = world._entities[entity_id]
+		if str(node.get("type_id")) == "pkg.other/crate":
+			restored_id = int(entity_id)
+	_check(
+		restored_id > 0,
+		"the colliding saved record must still restore, not be skipped",
+	)
+	_check(
+		restored_id != 9,
+		"the saved record must get a fresh id, got %d" % restored_id,
+	)
+	_check(
+		_live_entities(world).size() == 2,
+		"the colliding restore must preserve both entities, got %d"
+		% _live_entities(world).size(),
 	)
 
 

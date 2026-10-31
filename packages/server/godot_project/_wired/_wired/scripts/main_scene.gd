@@ -207,7 +207,6 @@ func _run_server(cfg: Dictionary) -> void:
 		get_tree().quit(2)
 		return
 	_server_port = int(cfg.port)
-	_state_dir = str(cfg.get("state_dir", ""))
 	print(
 		"WIRED_SERVER_STARTING room=%s port=%d bind=%s"
 		% [cfg.room, cfg.port, cfg.bind]

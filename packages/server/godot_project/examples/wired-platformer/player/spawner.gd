@@ -60,15 +60,15 @@ func _on_spawn_crate(sender_peer: int, payload: Dictionary) -> void:
 	if sender_peer != player.peer_id:
 		_reject("sender")
 		return
+	var direction := _validated_direction(payload.get("direction", Vector2.ZERO))
+	if direction == Vector2.ZERO:
+		_reject("direction")
+		return
 	if not _consume_cooldown(player.player_id):
 		_reject("cooldown")
 		return
 	if _live_spawn_count() >= max_per_player:
 		_reject("limit")
-		return
-	var direction := _validated_direction(payload.get("direction", Vector2.ZERO))
-	if direction == Vector2.ZERO:
-		_reject("direction")
 		return
 	var anchor := player.get_anchor_position_2d()
 	var entity := spawn_dynamic(
