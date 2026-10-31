@@ -38,6 +38,11 @@ func _test_main_scene_has_game_viewport() -> void:
 	if game is SubViewportContainer:
 		_check(game.stretch, "Main/Game must stretch its SubViewport to the container")
 		_check(
+			game.mouse_filter == Control.MOUSE_FILTER_STOP,
+			"Main/Game must receive input explicitly (MOUSE_FILTER_STOP), got %d"
+			% game.mouse_filter,
+		)
+		_check(
 			game.anchor_left == 0.0
 			and game.anchor_top == 0.0
 			and game.anchor_right == 1.0
@@ -95,6 +100,19 @@ func _test_main_scene_has_game_viewport() -> void:
 	var ui := main.get_node_or_null("UI")
 	_check(ui is CanvasLayer, "Main/UI must stay a CanvasLayer")
 	if ui is CanvasLayer:
+		var background := main.get_node_or_null("UI/Background")
+		_check(background is ColorRect, "Main/UI/Background must stay a ColorRect")
+		if background is ColorRect:
+			_check(
+				background.color.a < 1.0,
+				"the UI background must be translucent so the game viewport stays visible, got alpha %f"
+				% background.color.a,
+			)
+			_check(
+				is_equal_approx(background.color.a, 0.35),
+				"the UI background must be dimmed to alpha 0.35, got %f"
+				% background.color.a,
+			)
 		var controls := ui.find_children("*", "Control", true, false)
 		var authored := 0
 		for child: Node in controls:
