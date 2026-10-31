@@ -66,7 +66,7 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
           <TabsContent value="editor" className="w-full !h-full">
             <GodotEditor
               roomId={room.id}
-              beforeStart={packages.beforeEditorStart}
+              afterStart={packages.afterEditorStart}
             />
           </TabsContent>
           <TabsContent value="packages" className="w-full !h-full">

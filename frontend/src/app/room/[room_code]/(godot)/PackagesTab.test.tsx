@@ -43,7 +43,7 @@ function controller(
       notice: null,
       error: null,
     }),
-    beforeEditorStart: vi.fn(),
+    afterEditorStart: vi.fn(),
     refresh: vi.fn().mockResolvedValue(undefined),
     createPackage: vi.fn().mockResolvedValue({ id: 7, name: "New" }),
     downloadPackage: vi.fn().mockResolvedValue(undefined),

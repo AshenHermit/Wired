@@ -7,12 +7,16 @@ import {
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "@/utils/sha256";
+import { EditorBridgeError, EditorBridgeOperationError } from "./editor-bridge";
 import type { GodotEditorInstance } from "./GodotEditorInstance";
-import {
-  LocalChangesError,
-  NewerRevisionError,
-  useRoomPackages,
-} from "./use-room-packages";
+
+vi.mock("./godot-packages-fs", async () => {
+  const actual =
+    await vi.importActual<typeof import("./godot-packages-fs")>(
+      "./godot-packages-fs",
+    );
+  return { ...actual, createPackageFileSystem: vi.fn() };
+});
 
 vi.mock("@/api/services/godot-game", () => ({
   getRoomPackages: vi.fn(),
@@ -29,107 +33,152 @@ vi.mock("@/api/services/scripting-packages", () => ({
 
 import * as gameApi from "@/api/services/godot-game";
 import * as packagesApi from "@/api/services/scripting-packages";
+import {
+  createPackageFileSystem,
+  type CollectedPackageFile,
+  type PackageFileSystem,
+} from "./godot-packages-fs";
+import {
+  LocalChangesError,
+  NewerRevisionError,
+  useRoomPackages,
+} from "./use-room-packages";
 
 const encoder = new TextEncoder();
-
-class FakeFs {
-  files = new Map<string, Uint8Array>();
-  dirs = new Set<string>(["/"]);
-  reads = 0;
-
-  mkdirTree(path: string) {
-    let current = "";
-    for (const part of path.split("/").filter(Boolean)) {
-      current += `/${part}`;
-      this.dirs.add(current);
-    }
-  }
-
-  writeFile(path: string, data: Uint8Array) {
-    const index = path.lastIndexOf("/");
-    const dir = index <= 0 ? "/" : path.slice(0, index);
-    if (!this.dirs.has(dir)) throw new Error(`ENOENT: ${dir}`);
-    this.files.set(path, Uint8Array.from(data));
-  }
-
-  readFile(path: string) {
-    this.reads += 1;
-    const data = this.files.get(path);
-    if (!data) throw new Error(`ENOENT: ${path}`);
-    return Uint8Array.from(data);
-  }
-
-  readdir(path: string) {
-    const prefix = path.endsWith("/") ? path : `${path}/`;
-    const names = new Set<string>();
-    for (const entry of [...this.dirs, ...this.files.keys()]) {
-      if (entry === path || !entry.startsWith(prefix)) continue;
-      names.add(entry.slice(prefix.length).split("/")[0]);
-    }
-    return [...names];
-  }
-
-  stat(path: string) {
-    if (this.dirs.has(path)) return { mode: 0o040755, size: 0 };
-    const data = this.files.get(path);
-    if (!data) throw new Error(`ENOENT: ${path}`);
-    return { mode: 0o100644, size: data.byteLength };
-  }
-
-  unlink(path: string) {
-    this.files.delete(path);
-  }
-
-  rmdir(path: string) {
-    this.dirs.delete(path);
-  }
-
-  rename(oldPath: string, newPath: string) {
-    const prefix = `${oldPath}/`;
-    this.mkdirTree(newPath);
-    for (const dir of [...this.dirs]) {
-      if (!dir.startsWith(prefix)) continue;
-      this.dirs.delete(dir);
-      this.mkdirTree(`${newPath}/${dir.slice(prefix.length)}`);
-    }
-    for (const file of [...this.files.keys()]) {
-      if (!file.startsWith(prefix)) continue;
-      const contents = this.files.get(file)!;
-      this.files.delete(file);
-      const target = `${newPath}/${file.slice(prefix.length)}`;
-      this.mkdirTree(target.slice(0, target.lastIndexOf("/")));
-      this.files.set(target, contents);
-    }
-    this.dirs.delete(oldPath);
-  }
-
-  put(path: string, content: string) {
-    this.mkdirTree(path.slice(0, path.lastIndexOf("/")));
-    this.files.set(path, encoder.encode(content));
-  }
-
-  read(path: string) {
-    return new TextDecoder().decode(this.readFile(path));
-  }
-
-  has(path: string) {
-    return this.files.has(path);
-  }
-}
+const decoder = new TextDecoder();
 
 const PROJECT = "/root/Wired";
-const FILE = `${PROJECT}/packages/5/scripts/hero.gd`;
-const OTHER_FILE = `${PROJECT}/packages/6/scripts/other.gd`;
+const HERO = "scripts/hero.gd";
+const OTHER = "scripts/other.gd";
 
-function makeEditor() {
-  const fs = new FakeFs();
-  fs.put(`${PROJECT}/project.godot`, "config_version=5");
-  const editor = {
+/**
+ * In-memory stand-in for the bridge-backed package file system. The hook only
+ * talks to this interface, so the panel tests never need a live editor: paths
+ * stay package-relative and `snapshot`/`collectFiles` hash what `put` wrote.
+ */
+function createFakeFs() {
+  const dirs = new Set<number>();
+  const trees = new Map<number, Map<string, Uint8Array>>();
+  const reads = { value: 0 };
+
+  const tree = (packageId: number): Map<string, Uint8Array> => {
+    const existing = trees.get(packageId);
+    if (existing) return existing;
+    const created = new Map<string, Uint8Array>();
+    trees.set(packageId, created);
+    return created;
+  };
+
+  const exists = vi.fn(
+    async (packageId: number): Promise<boolean> => dirs.has(packageId),
+  );
+  const createPackageDir = vi.fn(async (packageId: number): Promise<void> => {
+    dirs.add(packageId);
+    tree(packageId);
+  });
+  const snapshot = vi.fn(
+    async (packageId: number): Promise<Record<string, string>> => {
+      const hashes: Record<string, string> = {};
+      for (const [filepath, contents] of tree(packageId)) {
+        reads.value += 1;
+        hashes[filepath] = await sha256Hex(contents);
+      }
+      return hashes;
+    },
+  );
+  const collectFiles = vi.fn(
+    async (packageId: number): Promise<CollectedPackageFile[]> => {
+      const collected: CollectedPackageFile[] = [];
+      for (const [filepath, contents] of tree(packageId)) {
+        collected.push({
+          entry: {
+            filepath,
+            size: contents.byteLength,
+            sha256: await sha256Hex(contents),
+          },
+          contents,
+        });
+      }
+      return collected;
+    },
+  );
+  const replaceContents = vi.fn(
+    async (
+      packageId: number,
+      contents: Map<string, Uint8Array>,
+    ): Promise<{ written: string[]; deleted: string[] }> => {
+      const previous = tree(packageId);
+      const deleted = [...previous.keys()].filter(
+        (filepath) => !contents.has(filepath),
+      );
+      const written = [...contents.keys()];
+      dirs.add(packageId);
+      trees.set(
+        packageId,
+        new Map(
+          [...contents].map(([filepath, data]) => [
+            filepath,
+            Uint8Array.from(data),
+          ]),
+        ),
+      );
+      return { written, deleted };
+    },
+  );
+  const deletePackage = vi.fn(async (packageId: number): Promise<void> => {
+    dirs.delete(packageId);
+    trees.delete(packageId);
+  });
+  const sync = vi.fn(async (): Promise<void> => {});
+
+  const files: PackageFileSystem = {
+    exists,
+    createPackageDir,
+    snapshot,
+    collectFiles,
+    replaceContents,
+    deletePackage,
+    sync,
+    packageDir: (packageId: number) => `${PROJECT}/packages/${packageId}`,
+  };
+
+  return {
+    files,
+    exists,
+    createPackageDir,
+    snapshot,
+    collectFiles,
+    replaceContents,
+    deletePackage,
+    sync,
+    reads,
+    put(packageId: number, filepath: string, content: string) {
+      dirs.add(packageId);
+      tree(packageId).set(filepath, encoder.encode(content));
+    },
+    has(packageId: number, filepath: string): boolean {
+      return trees.get(packageId)?.has(filepath) ?? false;
+    },
+    read(packageId: number, filepath: string): string {
+      const contents = trees.get(packageId)?.get(filepath);
+      if (!contents) throw new Error(`ENOENT: ${filepath}`);
+      return decoder.decode(contents);
+    },
+  };
+}
+
+function makeEditor(): GodotEditorInstance {
+  return {
     rootPath: "/root",
     projectInfo: { name: "Wired" },
-    editor: { rtenv: { FS: fs } },
+    editor: { copyToFS: vi.fn() },
   } as unknown as GodotEditorInstance;
-  return { fs, editor };
+}
+
+function bridgeWith(rescan?: () => void) {
+  Object.assign(window, {
+    __wiredEditorBridge: { request: vi.fn(), rescan },
+  });
 }
 
 function roomPackage(id: number, name: string): ScriptingPackage {
@@ -160,7 +209,7 @@ async function manifestOf(
     revision,
     files: [
       {
-        filepath: "scripts/hero.gd",
+        filepath: HERO,
         size: data.byteLength,
         sha256: await sha256Hex(data),
       },
@@ -209,8 +258,13 @@ function mockPublishedFile(content = "extends Node") {
 }
 
 describe("useRoomPackages", () => {
+  let fs: ReturnType<typeof createFakeFs>;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    delete window.__wiredEditorBridge;
+    fs = createFakeFs();
+    vi.mocked(createPackageFileSystem).mockReturnValue(fs.files);
     vi.mocked(gameApi.getRoomPackages).mockResolvedValue(roomStatus());
     vi.mocked(packagesApi.createScriptingPackage).mockResolvedValue(
       roomPackage(7, "New"),
@@ -230,35 +284,190 @@ describe("useRoomPackages", () => {
     mockPublishedFile();
   });
 
-  it("never writes packages into the editor on start", async () => {
-    const { fs, editor } = makeEditor();
-    vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
-      await manifestOf("extends Node"),
+  /**
+   * Mounts the hook with the bridge already registered and waits until the
+   * package file system was connected and the first refresh settled.
+   */
+  async function startHook({
+    editor = makeEditor(),
+    packages = ONE_PACKAGE,
+    rescan,
+  }: {
+    editor?: GodotEditorInstance;
+    packages?: ScriptingPackage[];
+    rescan?: () => void;
+  } = {}) {
+    bridgeWith(rescan);
+    const hook = renderHook(() => useRoomPackages(1, packages));
+    await act(async () => {
+      hook.result.current.afterEditorStart(editor);
+    });
+    await waitFor(() => expect(hook.result.current.fsReady).toBe(true));
+    await waitFor(() =>
+      expect(vi.mocked(createPackageFileSystem)).toHaveBeenCalled(),
+    );
+    return hook;
+  }
+
+  it("does not mark the fs ready before the bridge appears", async () => {
+    vi.useFakeTimers();
+    try {
+      const hook = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
+      await act(async () => {
+        hook.result.current.afterEditorStart(makeEditor());
+      });
+
+      expect(hook.result.current.fsReady).toBe(false);
+      expect(createPackageFileSystem).not.toHaveBeenCalled();
+      hook.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("connects when the bridge appears later", async () => {
+    vi.useFakeTimers();
+    try {
+      const { result, unmount } = renderHook(() =>
+        useRoomPackages(1, ONE_PACKAGE),
+      );
+      await act(async () => {
+        result.current.afterEditorStart(makeEditor());
+      });
+      expect(result.current.fsReady).toBe(false);
+
+      bridgeWith();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+
+      expect(result.current.fsReady).toBe(true);
+      expect(createPackageFileSystem).toHaveBeenCalledWith({
+        bridge: expect.objectContaining({ call: expect.any(Function) }),
+        getEngine: expect.any(Function),
+        projectRoot: PROJECT,
+      });
+      // Once on mount and once after the bridge connected.
+      expect(gameApi.getRoomPackages).toHaveBeenCalledTimes(2);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports an error when the bridge never appears", async () => {
+    vi.useFakeTimers();
+    try {
+      const { result, unmount } = renderHook(() =>
+        useRoomPackages(1, ONE_PACKAGE),
+      );
+      await act(async () => {
+        result.current.afterEditorStart(makeEditor());
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+
+      expect(result.current.error).toContain("Мост редактора не появился");
+      expect(result.current.fsReady).toBe(false);
+      expect(createPackageFileSystem).not.toHaveBeenCalled();
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops readiness when a bridge call fails", async () => {
+    const { result, unmount } = await startHook();
+    fs.snapshot.mockRejectedValue(
+      new EditorBridgeError("Мост редактора не ответил за 60000 мс"),
     );
 
-    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
     await act(async () => {
-      await result.current.beforeEditorStart(editor);
+      await result.current.refresh();
     });
 
+    expect(result.current.fsReady).toBe(false);
+    expect(result.current.error).toContain("Мост редактора недоступен");
+    await expect(result.current.removePackage(5)).rejects.toThrow(
+      /Редактор ещё не готов/,
+    );
+    unmount();
+  });
+
+  it("keeps readiness when the plugin rejects a single operation", async () => {
+    const { result, unmount } = await startHook();
+    fs.put(5, HERO, "local draft");
+    fs.snapshot.mockRejectedValue(
+      new EditorBridgeOperationError("staging не найден"),
+    );
+
+    await act(async () => {
+      await expect(result.current.removePackage(5)).rejects.toThrow(
+        /staging не найден/,
+      );
+    });
+
+    // A rejected operation is not a dead bridge: the editor stays usable and
+    // no reconnect loop is started.
     expect(result.current.fsReady).toBe(true);
-    expect(fs.has(FILE)).toBe(false);
+    expect(result.current.actionFor(5).error).toContain(
+      "Не удалось убрать пакет",
+    );
+    expect(createPackageFileSystem).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it("awaits async exists", async () => {
+    const { result, unmount } = await startHook();
+    fs.exists.mockResolvedValue(false);
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+    await waitFor(() =>
+      expect(
+        result.current.entries.find((item) => item.packageId === 5)?.inEditor,
+      ).toBe(false),
+    );
+
+    await act(async () => {
+      await result.current.removePackage(5);
+    });
+    expect(fs.deletePackage).not.toHaveBeenCalled();
+
+    await expect(result.current.adoptPackage(5)).rejects.toThrow(
+      /каталог пакета не найден/,
+    );
+    unmount();
+  });
+
+  it("never writes packages into the editor on start", async () => {
+    const { result, unmount } = await startHook();
+    await waitFor(() => expect(result.current.entries).toHaveLength(1));
+
+    expect(fs.has(5, HERO)).toBe(false);
+    expect(fs.createPackageDir).not.toHaveBeenCalled();
+    expect(fs.replaceContents).not.toHaveBeenCalled();
     expect(packagesApi.getPackageManifest).not.toHaveBeenCalled();
     expect(packagesApi.getRevisionFile).not.toHaveBeenCalled();
     const entry = result.current.entries.find((item) => item.packageId === 5);
     expect(entry?.status).toBe("not-loaded");
     expect(entry?.publishedRevision).toBe(2);
     expect(entry?.loaded).toBe(false);
+    expect(entry?.inEditor).toBe(false);
+    expect(createPackageFileSystem).toHaveBeenCalledWith({
+      bridge: expect.objectContaining({ call: expect.any(Function) }),
+      getEngine: expect.any(Function),
+      projectRoot: PROJECT,
+    });
+    unmount();
   });
 
   it("creates a new package as an empty directory and loads only it", async () => {
-    const { fs, editor } = makeEditor();
     vi.mocked(gameApi.getRoomPackages).mockResolvedValue(roomStatus([]));
+    const { result, unmount } = await startHook();
 
-    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
-    await act(async () => {
-      await result.current.beforeEditorStart(editor);
-    });
     await act(async () => {
       await result.current.createPackage("New", 42);
     });
@@ -269,8 +478,9 @@ describe("useRoomPackages", () => {
       authorId: 42,
       roomId: 1,
     });
-    expect(fs.dirs.has(`${PROJECT}/packages/7`)).toBe(true);
-    expect(fs.has(FILE)).toBe(false);
+    expect(fs.createPackageDir).toHaveBeenCalledWith(7);
+    expect(fs.has(7, HERO)).toBe(false);
+    expect(fs.has(5, HERO)).toBe(false);
     const entry = result.current.entries.find((item) => item.packageId === 7);
     expect(entry).toMatchObject({
       name: "New",
@@ -279,23 +489,20 @@ describe("useRoomPackages", () => {
       loadedRevision: 0,
       publishedRevision: null,
     });
+    unmount();
   });
 
   it("downloads a published revision and asks before overwriting local edits", async () => {
-    const { fs, editor } = makeEditor();
     vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
       await manifestOf("extends Node"),
     );
+    const { result, unmount } = await startHook();
 
-    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
-    await act(async () => {
-      await result.current.beforeEditorStart(editor);
-    });
     await act(async () => {
       await result.current.downloadPackage(5);
     });
 
-    expect(fs.read(FILE)).toBe("extends Node");
+    expect(fs.read(5, HERO)).toBe("extends Node");
     expect(
       result.current.entries.find((item) => item.packageId === 5),
     ).toMatchObject({
@@ -305,7 +512,7 @@ describe("useRoomPackages", () => {
       localChanges: [],
     });
 
-    fs.put(FILE, "local edit");
+    fs.put(5, HERO, "local edit");
     await act(async () => {
       await result.current.refresh();
     });
@@ -313,76 +520,70 @@ describe("useRoomPackages", () => {
       result.current.entries.find((item) => item.packageId === 5),
     ).toMatchObject({
       status: "local-changes",
-      localChanges: ["scripts/hero.gd"],
+      localChanges: [HERO],
     });
 
     await expect(result.current.downloadPackage(5)).rejects.toBeInstanceOf(
       LocalChangesError,
     );
-    expect(fs.read(FILE)).toBe("local edit");
+    expect(fs.read(5, HERO)).toBe("local edit");
 
     await act(async () => {
       await result.current.downloadPackage(5, { force: true });
     });
-    expect(fs.read(FILE)).toBe("extends Node");
+    expect(fs.read(5, HERO)).toBe("extends Node");
+    unmount();
   });
 
   it("removes only the requested package directory", async () => {
-    const { fs, editor } = makeEditor();
     vi.mocked(packagesApi.getPackageManifest).mockImplementation(
       async (id) => await manifestOf("extends Node", 2, id),
     );
-    fs.put(OTHER_FILE, "keep me");
-
-    const { result } = renderHook(() => useRoomPackages(1, TWO_PACKAGES));
-    await act(async () => {
-      await result.current.beforeEditorStart(editor);
+    const { result, unmount } = await startHook({
+      packages: TWO_PACKAGES,
     });
+    fs.put(6, OTHER, "keep me");
+
     await act(async () => {
       await result.current.downloadPackage(5);
     });
-    expect(fs.has(FILE)).toBe(true);
+    expect(fs.has(5, HERO)).toBe(true);
 
-    fs.put(FILE, "local edit");
+    fs.put(5, HERO, "local edit");
     await expect(result.current.removePackage(5)).rejects.toBeInstanceOf(
       LocalChangesError,
     );
-    expect(fs.has(FILE)).toBe(true);
+    expect(fs.has(5, HERO)).toBe(true);
 
     await act(async () => {
       await result.current.removePackage(5, { force: true });
     });
 
-    expect(fs.has(FILE)).toBe(false);
-    expect(fs.has(OTHER_FILE)).toBe(true);
+    expect(fs.has(5, HERO)).toBe(false);
+    expect(fs.has(6, OTHER)).toBe(true);
     expect(
       result.current.entries.find((item) => item.packageId === 5)?.status,
     ).toBe("not-loaded");
+    unmount();
   });
 
   it("emits only a package loaded in this editor and takes a new baseline", async () => {
-    const { fs, editor } = makeEditor();
     vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
       await manifestOf("extends Node"),
     );
+    const { result, unmount } = await startHook();
 
-    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
-    await act(async () => {
-      await result.current.beforeEditorStart(editor);
-    });
     await act(async () => {
       await result.current.downloadPackage(5);
     });
 
-    fs.put(FILE, "extends Node2D");
+    fs.put(5, HERO, "extends Node2D");
     await act(async () => {
       await result.current.emitPackage(5);
     });
 
     expect(packagesApi.createPackageRevision).toHaveBeenCalledWith(5, {
-      files: [
-        expect.objectContaining({ filepath: "scripts/hero.gd" }),
-      ],
+      files: [expect.objectContaining({ filepath: HERO })],
     });
     expect(packagesApi.uploadRevisionFileAsUint8Array).toHaveBeenCalledTimes(1);
     expect(packagesApi.publishPackageRevision).toHaveBeenCalledWith(5, 3);
@@ -397,18 +598,15 @@ describe("useRoomPackages", () => {
     await expect(result.current.emitPackage(99)).rejects.toThrow(
       /не загружен/,
     );
+    unmount();
   });
 
   it("shows a new published revision without touching the editor files", async () => {
-    const { fs, editor } = makeEditor();
     vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
       await manifestOf("extends Node", 2),
     );
+    const { result, unmount } = await startHook();
 
-    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
-    await act(async () => {
-      await result.current.beforeEditorStart(editor);
-    });
     await act(async () => {
       await result.current.downloadPackage(5);
     });
@@ -420,7 +618,6 @@ describe("useRoomPackages", () => {
     vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
       await manifestOf("extends Node2D", 3),
     );
-    mockPublishedFile("extends Node2D");
     await act(async () => {
       await result.current.refresh();
     });
@@ -432,21 +629,18 @@ describe("useRoomPackages", () => {
       publishedRevision: 3,
       loadedRevision: 2,
     });
-    expect(fs.read(FILE)).toBe("extends Node");
+    expect(fs.read(5, HERO)).toBe("extends Node");
     expect(packagesApi.getRevisionFile).toHaveBeenCalledTimes(downloads);
+    unmount();
   });
 
   it("keeps files left by a previous session and warns before replacing them", async () => {
-    const { fs, editor } = makeEditor();
-    fs.put(FILE, "stale draft");
+    fs.put(5, HERO, "stale draft");
     vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
       await manifestOf("extends Node"),
     );
+    const { result, unmount } = await startHook();
 
-    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
-    await act(async () => {
-      await result.current.beforeEditorStart(editor);
-    });
     await waitFor(() => {
       expect(
         result.current.entries.find((item) => item.packageId === 5)?.status,
@@ -455,24 +649,21 @@ describe("useRoomPackages", () => {
 
     await expect(result.current.downloadPackage(5)).rejects.toMatchObject({
       name: "LocalChangesError",
-      files: ["scripts/hero.gd"],
+      files: [HERO],
     });
-    expect(fs.read(FILE)).toBe("stale draft");
+    expect(fs.read(5, HERO)).toBe("stale draft");
 
     await act(async () => {
       await result.current.downloadPackage(5, { force: true });
     });
-    expect(fs.read(FILE)).toBe("extends Node");
+    expect(fs.read(5, HERO)).toBe("extends Node");
+    unmount();
   });
 
   it("adopts a leftover directory so its files can be emitted", async () => {
-    const { fs, editor } = makeEditor();
-    fs.put(FILE, "stale draft");
+    fs.put(5, HERO, "stale draft");
+    const { result, unmount } = await startHook();
 
-    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
-    await act(async () => {
-      await result.current.beforeEditorStart(editor);
-    });
     await waitFor(() => {
       expect(
         result.current.entries.find((item) => item.packageId === 5)?.status,
@@ -495,21 +686,18 @@ describe("useRoomPackages", () => {
       await result.current.emitPackage(5, { force: true });
     });
     expect(packagesApi.createPackageRevision).toHaveBeenCalledWith(5, {
-      files: [expect.objectContaining({ filepath: "scripts/hero.gd" })],
+      files: [expect.objectContaining({ filepath: HERO })],
     });
-    expect(fs.read(FILE)).toBe("stale draft");
+    expect(fs.read(5, HERO)).toBe("stale draft");
+    unmount();
   });
 
   it("asks before emitting over a newer published revision", async () => {
-    const { editor } = makeEditor();
     vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
       await manifestOf("extends Node"),
     );
+    const { result, unmount } = await startHook();
 
-    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
-    await act(async () => {
-      await result.current.beforeEditorStart(editor);
-    });
     await act(async () => {
       await result.current.downloadPackage(5);
     });
@@ -530,21 +718,17 @@ describe("useRoomPackages", () => {
       await result.current.emitPackage(5, { force: true });
     });
     expect(packagesApi.publishPackageRevision).toHaveBeenCalledWith(5, 3);
+    unmount();
   });
 
   it("rejects overlapping actions on the same package", async () => {
-    const { editor } = makeEditor();
     let resolveManifest: (manifest: PackageManifest) => void = () => {};
     vi.mocked(packagesApi.getPackageManifest).mockReturnValue(
       new Promise((resolve) => {
         resolveManifest = resolve;
       }),
     );
-
-    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
-    await act(async () => {
-      await result.current.beforeEditorStart(editor);
-    });
+    const { result, unmount } = await startHook();
 
     const first = result.current.downloadPackage(5);
     await expect(result.current.downloadPackage(5)).rejects.toThrow(
@@ -555,44 +739,37 @@ describe("useRoomPackages", () => {
       resolveManifest(await manifestOf("extends Node"));
       await first;
     });
+    unmount();
   });
 
   it("adds newly published room packages from the status endpoint", async () => {
-    const { editor } = makeEditor();
     vi.mocked(gameApi.getRoomPackages).mockResolvedValue(
       roomStatus([
         { id: 5, revision: 2 },
         { id: 6, revision: 4 },
       ]),
     );
+    const { result, unmount } = await startHook();
 
-    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
-    await act(async () => {
-      await result.current.beforeEditorStart(editor);
-    });
-
-    expect(
-      result.current.entries.find((item) => item.packageId === 6),
-    ).toMatchObject({
-      name: "Other",
-      version: "",
-      publishedRevision: 4,
-      status: "not-loaded",
-    });
+    await waitFor(() =>
+      expect(
+        result.current.entries.find((item) => item.packageId === 6),
+      ).toMatchObject({
+        name: "Other",
+        version: "",
+        publishedRevision: 4,
+        status: "not-loaded",
+      }),
+    );
+    unmount();
   });
 
   it("asks Godot to rescan after package files change", async () => {
-    const { editor } = makeEditor();
     const rescan = vi.fn();
-    Object.assign(window, { __wiredEditorBridge: { rescan } });
     vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
       await manifestOf("extends Node"),
     );
-
-    const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
-    await act(async () => {
-      await result.current.beforeEditorStart(editor);
-    });
+    const { result, unmount } = await startHook({ rescan });
 
     await act(async () => {
       await result.current.createPackage("New", 42);
@@ -608,27 +785,28 @@ describe("useRoomPackages", () => {
       await result.current.removePackage(5, { force: true });
     });
     expect(rescan).toHaveBeenCalledTimes(3);
-
-    delete (window as { __wiredEditorBridge?: unknown }).__wiredEditorBridge;
+    unmount();
   });
 
   it("polls statuses without hashing editor files", async () => {
     vi.useFakeTimers();
     try {
-      const { fs, editor } = makeEditor();
-      const { result } = renderHook(() => useRoomPackages(1, ONE_PACKAGE));
+      bridgeWith();
+      const { result, unmount } = renderHook(() =>
+        useRoomPackages(1, ONE_PACKAGE),
+      );
       await act(async () => {
-        await result.current.beforeEditorStart(editor);
+        result.current.afterEditorStart(makeEditor());
       });
 
-      fs.put(FILE, "local draft");
-      fs.reads = 0;
+      fs.reads.value = 0;
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_500);
       });
 
       expect(gameApi.getRoomPackages).toHaveBeenCalledTimes(3);
-      expect(fs.reads).toBe(0);
+      expect(fs.reads.value).toBe(0);
+      unmount();
     } finally {
       vi.useRealTimers();
     }

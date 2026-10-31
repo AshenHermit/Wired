@@ -9,7 +9,12 @@ import type {
 import { getRoomPackages } from "@/api/services/godot-game";
 import { createScriptingPackage } from "@/api/services/scripting-packages";
 import type { GodotEditorInstance } from "./GodotEditorInstance";
-import { requestEditorRescan } from "./editor-bridge";
+import {
+  EditorBridgeError,
+  createEditorBridgeClient,
+  requestEditorRescan,
+  waitForEditorBridge,
+} from "./editor-bridge";
 import {
   createPackageFileSystem,
   type PackageFileSystem,
@@ -23,6 +28,16 @@ import {
 
 /** How often the panel checks for a newer published revision. */
 const POLL_MS = 10_000;
+
+/**
+ * How long the panel waits for the editor plugin to register its bridge before
+ * it reports the packages as unavailable. The project itself is already
+ * usable at that point: the editor starts before the plugin appears.
+ */
+const BRIDGE_WAIT_MS = 120_000;
+
+/** How often a lost bridge is polled again. */
+const RECONNECT_MS = 2_000;
 
 export type RoomPackageStatus =
   | "not-loaded"
@@ -71,7 +86,11 @@ export type RoomPackagesController = {
   error: string | null;
   actions: Record<number, PackageActionState>;
   actionFor: (packageId: number) => PackageActionState;
-  beforeEditorStart: (editor: GodotEditorInstance) => Promise<void>;
+  /**
+   * Called once the editor reported ready. Waits for the editor plugin bridge
+   * in the background and must never delay the editor itself.
+   */
+  afterEditorStart: (editor: GodotEditorInstance) => void;
   refresh: () => Promise<void>;
   createPackage: (
     name: string,
@@ -168,20 +187,32 @@ function packageFromStatus(status: PackageSyncStatus): ScriptingPackage {
   };
 }
 
+/**
+ * The editor keeps the project under its persistent root, and the packages
+ * live inside the project: `<rootPath>/<project name>/packages/<id>`. This is
+ * the same root the old Emscripten-FS implementation derived from the editor
+ * instance.
+ */
+function packageProjectRoot(editor: GodotEditorInstance): string {
+  const projectName = editor.projectInfo?.name;
+  if (!editor.rootPath || !projectName) return "";
+  return `${editor.rootPath}/${projectName}`;
+}
+
 function buildEntries(
   packages: ScriptingPackage[],
   remote: Map<number, PackageSyncStatus>,
   loaded: Map<number, PackageBaseline>,
   snapshots: Map<number, Record<string, string>>,
-  files: PackageFileSystem | null,
+  present: Set<number>,
 ): RoomPackageEntry[] {
   return packages.map((pkg) => {
     const loadedState = loaded.get(pkg.id) ?? null;
     const remoteState = remote.get(pkg.id) ?? null;
     const snapshot = snapshots.get(pkg.id) ?? {};
-    // The bridge-backed `exists` is async; Task 5 awaits it in `load` and
-    // passes the resulting set here. Until then this stays a truthy check.
-    const inEditor = Boolean((files?.exists(pkg.id) as unknown) ?? false);
+    // `exists` is an asynchronous bridge call now, so `load` awaits it for
+    // every package and passes the resulting set here.
+    const inEditor = present.has(pkg.id);
     const localChanges = loadedState
       ? changedPackageFiles(loadedState.files, snapshot)
       : Object.keys(snapshot);
@@ -258,6 +289,8 @@ export function useRoomPackages(
   const remoteRef = React.useRef<Map<number, PackageSyncStatus>>(new Map());
   const inFlightRef = React.useRef<Set<number>>(new Set());
   const filesRef = React.useRef<PackageFileSystem | null>(null);
+  const engineRef = React.useRef<GodotEditorInstance | null>(null);
+  const reconnectRef = React.useRef<number | null>(null);
   const mountedRef = React.useRef(false);
   const requestRef = React.useRef(0);
 
@@ -295,6 +328,43 @@ export function useRoomPackages(
     [actions],
   );
 
+  /**
+   * A lost bridge is retried until the plugin registers itself again. The
+   * interval is owned by a ref, so repeated losses never stack loops.
+   */
+  const stopReconnectLoop = React.useCallback((): void => {
+    if (reconnectRef.current !== null) {
+      window.clearInterval(reconnectRef.current);
+      reconnectRef.current = null;
+    }
+  }, []);
+
+  const connectRef = React.useRef<() => void>(() => {});
+
+  const startReconnectLoop = React.useCallback((): void => {
+    if (reconnectRef.current !== null) return;
+    reconnectRef.current = window.setInterval(() => {
+      if (window.__wiredEditorBridge?.request) {
+        connectRef.current();
+      }
+    }, RECONNECT_MS);
+  }, []);
+
+  /**
+   * Transport loss only: the plugin is gone or silent, so every package action
+   * is refused until the bridge answers again. An operation the plugin rejected
+   * is a normal per-action failure and never lands here.
+   */
+  const dropBridge = React.useCallback(
+    (cause: unknown): void => {
+      filesRef.current = null;
+      setFsReady(false);
+      setError(`Мост редактора недоступен: ${errorMessage(cause)}`);
+      startReconnectLoop();
+    },
+    [startReconnectLoop],
+  );
+
   const load = React.useCallback(
     async (local: boolean): Promise<void> => {
       const request = ++requestRef.current;
@@ -317,6 +387,19 @@ export function useRoomPackages(
           packagesRef.current = nextPackages;
         }
 
+        // `exists` is a bridge round-trip now, so ask once per load and hand
+        // the resulting set to `buildEntries`.
+        const present = new Set<number>();
+        if (files) {
+          for (const pkg of nextPackages) {
+            try {
+              if (await files.exists(pkg.id)) present.add(pkg.id);
+            } catch (cause) {
+              if (cause instanceof EditorBridgeError) throw cause;
+            }
+          }
+        }
+
         // Hashing every package on every poll competes with the editor for
         // CPU. Status polls reuse the last snapshots; local changes are
         // recomputed on open, focus, manual refresh and around explicit actions.
@@ -326,7 +409,8 @@ export function useRoomPackages(
           for (const pkg of nextPackages) {
             try {
               fresh.set(pkg.id, await files.snapshot(pkg.id));
-            } catch {
+            } catch (cause) {
+              if (cause instanceof EditorBridgeError) throw cause;
               fresh.set(pkg.id, {});
             }
           }
@@ -342,19 +426,23 @@ export function useRoomPackages(
             remote,
             loadedRef.current,
             snapshots,
-            files,
+            present,
           ),
         );
         setStatusLoaded(true);
         setError(null);
       } catch (cause) {
         if (!mountedRef.current || request !== requestRef.current) return;
+        if (cause instanceof EditorBridgeError) {
+          dropBridge(cause);
+          return;
+        }
         setError(
           `Не удалось получить пакеты комнаты: ${errorMessage(cause)}`,
         );
       }
     },
-    [roomId],
+    [dropBridge, roomId],
   );
 
   const refresh = React.useCallback(
@@ -406,20 +494,90 @@ export function useRoomPackages(
     };
   }, [fsReady, load, refresh]);
 
-  const beforeEditorStart = React.useCallback(
-    async (editor: GodotEditorInstance): Promise<void> => {
-      try {
-        // Task 5 passes `{bridge, getEngine, projectRoot}` here.
-        filesRef.current = createPackageFileSystem(editor as never);
-        setFsReady(true);
-      } catch (cause) {
-        // A package problem must not prevent the editor from opening.
-        setError(`Пакеты недоступны: ${errorMessage(cause)}`);
-        return;
-      }
-      await refresh();
+  /**
+   * Connects the package file system to the plugin once it is reachable.
+   * Idempotent: the first successful connection wins and the reconnect loop
+   * stops. The editor is already usable at this point.
+   */
+  const connect = React.useCallback((): boolean => {
+    if (filesRef.current) {
+      stopReconnectLoop();
+      return true;
+    }
+    const editor = engineRef.current;
+    if (!editor || !window.__wiredEditorBridge?.request) return false;
+
+    const projectRoot = packageProjectRoot(editor);
+    if (!projectRoot) {
+      setError("Проект Godot ещё не загружен в редактор: пакеты недоступны");
+      return false;
+    }
+    try {
+      filesRef.current = createPackageFileSystem({
+        bridge: createEditorBridgeClient(),
+        // Read at write time: the editor instance is recreated when the page
+        // restarts the engine, and package writes must reach the live one.
+        getEngine: () => engineRef.current!.editor,
+        projectRoot,
+      });
+    } catch (cause) {
+      // A package problem must not prevent the editor from opening.
+      setError(`Пакеты недоступны: ${errorMessage(cause)}`);
+      return false;
+    }
+
+    stopReconnectLoop();
+    setFsReady(true);
+    setError(null);
+    void refresh();
+    return true;
+  }, [refresh, stopReconnectLoop]);
+
+  React.useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
+
+  React.useEffect(() => () => stopReconnectLoop(), [stopReconnectLoop]);
+
+  /**
+   * Runs after the editor reported ready and waits for the plugin bridge in the
+   * background, so it never blocks the editor. A plugin that never appears is
+   * reported, but the reconnect loop keeps trying.
+   */
+  const afterEditorStart = React.useCallback(
+    (editor: GodotEditorInstance): void => {
+      engineRef.current = editor;
+      void (async () => {
+        try {
+          await waitForEditorBridge(BRIDGE_WAIT_MS);
+          if (!mountedRef.current) return;
+          connect();
+        } catch {
+          if (!mountedRef.current) return;
+          setError("Мост редактора не появился: пакеты недоступны");
+          startReconnectLoop();
+        }
+      })();
     },
-    [refresh],
+    [connect, startReconnectLoop],
+  );
+
+  /**
+   * Applies the transport policy around one action: only `EditorBridgeError`
+   * drops readiness; everything else is the action's own business.
+   */
+  const guarded = React.useCallback(
+    async <T,>(action: () => Promise<T>): Promise<T> => {
+      try {
+        return await action();
+      } catch (cause) {
+        if (cause instanceof EditorBridgeError) {
+          dropBridge(cause);
+        }
+        throw cause;
+      }
+    },
+    [dropBridge],
   );
 
   const requireFs = (): PackageFileSystem => {
@@ -433,47 +591,49 @@ export function useRoomPackages(
   };
 
   const createPackage = React.useCallback(
-    async (
+    (
       name: string,
       authorId: number,
       version = "0.1.0",
-    ): Promise<ScriptingPackage> => {
-      const trimmed = name.trim();
-      if (!trimmed) {
-        throw new Error("Укажите имя пакета");
-      }
-      const files = requireFs();
-      let created: ScriptingPackage;
-      try {
-        created = await createScriptingPackage({
-          name: trimmed,
-          version,
-          authorId,
-          roomId,
-        });
-      } catch (cause) {
-        throw new Error(`Не удалось создать пакет: ${errorMessage(cause)}`);
-      }
-      try {
-        await files.createPackageDir(created.id);
-        requestEditorRescan();
-      } catch (cause) {
-        throw new Error(
-          `Пакет создан на сервере, но каталог в редакторе не создан: ${errorMessage(cause)}`,
-        );
-      }
+    ): Promise<ScriptingPackage> =>
+      guarded(async () => {
+        const trimmed = name.trim();
+        if (!trimmed) {
+          throw new Error("Укажите имя пакета");
+        }
+        const files = requireFs();
+        let created: ScriptingPackage;
+        try {
+          created = await createScriptingPackage({
+            name: trimmed,
+            version,
+            authorId,
+            roomId,
+          });
+        } catch (cause) {
+          throw new Error(`Не удалось создать пакет: ${errorMessage(cause)}`);
+        }
+        try {
+          await files.createPackageDir(created.id);
+          requestEditorRescan();
+        } catch (cause) {
+          if (cause instanceof EditorBridgeError) throw cause;
+          throw new Error(
+            `Пакет создан на сервере, но каталог в редакторе не создан: ${errorMessage(cause)}`,
+          );
+        }
 
-      loadedRef.current.set(created.id, { revision: 0, files: {} });
-      const merged = mergePackages(packagesRef.current, [created]);
-      packagesRef.current = merged;
-      setPackages(merged);
-      setAction(created.id, {
-        notice: "Пакет создан. В редакторе появился пустой каталог пакета.",
-      });
-      await refresh();
-      return created;
-    },
-    [refresh, roomId, setAction],
+        loadedRef.current.set(created.id, { revision: 0, files: {} });
+        const merged = mergePackages(packagesRef.current, [created]);
+        packagesRef.current = merged;
+        setPackages(merged);
+        setAction(created.id, {
+          notice: "Пакет создан. В редакторе появился пустой каталог пакета.",
+        });
+        await refresh();
+        return created;
+      }),
+    [guarded, refresh, roomId, setAction],
   );
 
   const beginAction = React.useCallback(
@@ -501,177 +661,186 @@ export function useRoomPackages(
   );
 
   const downloadPackage = React.useCallback(
-    async (
+    (
       packageId: number,
       options: { force?: boolean } = {},
-    ): Promise<void> => {
-      beginAction(packageId);
-      try {
-        const files = requireFs();
-        const baseline = loadedRef.current.get(packageId) ?? null;
-        const current = await files.snapshot(packageId);
-        const changed = baseline
-          ? changedPackageFiles(baseline.files, current)
-          : Object.keys(current);
-        if (!options.force && changed.length > 0) {
-          throw new LocalChangesError(packageId, changed);
-        }
+    ): Promise<void> =>
+      guarded(async () => {
+        beginAction(packageId);
+        try {
+          const files = requireFs();
+          const baseline = loadedRef.current.get(packageId) ?? null;
+          const current = await files.snapshot(packageId);
+          const changed = baseline
+            ? changedPackageFiles(baseline.files, current)
+            : Object.keys(current);
+          if (!options.force && changed.length > 0) {
+            throw new LocalChangesError(packageId, changed);
+          }
 
-        const result = await reconcilePackageRevision(packageId, files, null, {
-          force: true,
-          onProgress: (currentCount, total) =>
-            setAction(packageId, {
-              progress: { current: currentCount, total },
-            }),
-        });
-        if (result.status === "conflict") {
-          throw new Error(
-            "опубликованная ревизия не была применена из-за конфликта",
-          );
+          const result = await reconcilePackageRevision(packageId, files, null, {
+            force: true,
+            onProgress: (currentCount, total) =>
+              setAction(packageId, {
+                progress: { current: currentCount, total },
+              }),
+          });
+          if (result.status === "conflict") {
+            throw new Error(
+              "опубликованная ревизия не была применена из-за конфликта",
+            );
+          }
+          requestEditorRescan();
+          loadedRef.current.set(packageId, {
+            revision: result.revision,
+            files: result.files,
+          });
+          setAction(packageId, {
+            notice: `Загружена опубликованная ревизия ${result.revision}.`,
+          });
+          await refresh();
+        } catch (cause) {
+          if (cause instanceof LocalChangesError) throw cause;
+          if (cause instanceof EditorBridgeError) throw cause;
+          const message = `Не удалось скачать пакет: ${errorMessage(cause)}`;
+          setAction(packageId, { error: message });
+          throw new Error(message);
+        } finally {
+          endAction(packageId);
         }
-        requestEditorRescan();
-        loadedRef.current.set(packageId, {
-          revision: result.revision,
-          files: result.files,
-        });
-        setAction(packageId, {
-          notice: `Загружена опубликованная ревизия ${result.revision}.`,
-        });
-        await refresh();
-      } catch (cause) {
-        if (cause instanceof LocalChangesError) throw cause;
-        const message = `Не удалось скачать пакет: ${errorMessage(cause)}`;
-        setAction(packageId, { error: message });
-        throw new Error(message);
-      } finally {
-        endAction(packageId);
-      }
-    },
-    [beginAction, endAction, refresh, setAction],
+      }),
+    [beginAction, endAction, guarded, refresh, setAction],
   );
 
   const removePackage = React.useCallback(
-    async (
+    (
       packageId: number,
       options: { force?: boolean } = {},
-    ): Promise<void> => {
-      beginAction(packageId);
-      try {
-        const files = requireFs();
-        if (!files.exists(packageId)) {
+    ): Promise<void> =>
+      guarded(async () => {
+        beginAction(packageId);
+        try {
+          const files = requireFs();
+          if (!(await files.exists(packageId))) {
+            loadedRef.current.delete(packageId);
+            await refresh();
+            return;
+          }
+
+          const baseline = loadedRef.current.get(packageId) ?? null;
+          const current = await files.snapshot(packageId);
+          const changed = baseline
+            ? changedPackageFiles(baseline.files, current)
+            : Object.keys(current);
+          if (!options.force && changed.length > 0) {
+            throw new LocalChangesError(packageId, changed);
+          }
+
+          await files.deletePackage(packageId);
+          await files.sync();
+          requestEditorRescan();
           loadedRef.current.delete(packageId);
+          setAction(packageId, {
+            notice:
+              "Пакет убран из редактора. Файлы других пакетов не изменены.",
+          });
           await refresh();
-          return;
+        } catch (cause) {
+          if (cause instanceof LocalChangesError) throw cause;
+          if (cause instanceof EditorBridgeError) throw cause;
+          const message = `Не удалось убрать пакет: ${errorMessage(cause)}`;
+          setAction(packageId, { error: message });
+          throw new Error(message);
+        } finally {
+          endAction(packageId);
         }
-
-        const baseline = loadedRef.current.get(packageId) ?? null;
-        const current = await files.snapshot(packageId);
-        const changed = baseline
-          ? changedPackageFiles(baseline.files, current)
-          : Object.keys(current);
-        if (!options.force && changed.length > 0) {
-          throw new LocalChangesError(packageId, changed);
-        }
-
-        await files.deletePackage(packageId);
-        await files.sync();
-        requestEditorRescan();
-        loadedRef.current.delete(packageId);
-        setAction(packageId, {
-          notice: "Пакет убран из редактора. Файлы других пакетов не изменены.",
-        });
-        await refresh();
-      } catch (cause) {
-        if (cause instanceof LocalChangesError) throw cause;
-        const message = `Не удалось убрать пакет: ${errorMessage(cause)}`;
-        setAction(packageId, { error: message });
-        throw new Error(message);
-      } finally {
-        endAction(packageId);
-      }
-    },
-    [beginAction, endAction, refresh, setAction],
+      }),
+    [beginAction, endAction, guarded, refresh, setAction],
   );
 
   const adoptPackage = React.useCallback(
-    async (packageId: number): Promise<void> => {
-      beginAction(packageId);
-      try {
-        const files = requireFs();
-        if (!files.exists(packageId)) {
-          throw new Error("каталог пакета не найден в редакторе");
+    (packageId: number): Promise<void> =>
+      guarded(async () => {
+        beginAction(packageId);
+        try {
+          const files = requireFs();
+          if (!(await files.exists(packageId))) {
+            throw new Error("каталог пакета не найден в редакторе");
+          }
+          const snapshot = await files.snapshot(packageId);
+          loadedRef.current.set(packageId, { revision: 0, files: snapshot });
+          setAction(packageId, {
+            notice:
+              "Существующий каталог подключён к пакету. Emit опубликует его файлы.",
+          });
+          await refresh();
+        } catch (cause) {
+          if (cause instanceof EditorBridgeError) throw cause;
+          const message = `Не удалось подключить каталог пакета: ${errorMessage(cause)}`;
+          setAction(packageId, { error: message });
+          throw new Error(message);
+        } finally {
+          endAction(packageId);
         }
-        const snapshot = await files.snapshot(packageId);
-        loadedRef.current.set(packageId, { revision: 0, files: snapshot });
-        setAction(packageId, {
-          notice:
-            "Существующий каталог подключён к пакету. Emit опубликует его файлы.",
-        });
-        await refresh();
-      } catch (cause) {
-        const message = `Не удалось подключить каталог пакета: ${errorMessage(cause)}`;
-        setAction(packageId, { error: message });
-        throw new Error(message);
-      } finally {
-        endAction(packageId);
-      }
-    },
-    [beginAction, endAction, refresh, setAction],
+      }),
+    [beginAction, endAction, guarded, refresh, setAction],
   );
 
   const emitPackage = React.useCallback(
-    async (
+    (
       packageId: number,
       options: { force?: boolean } = {},
-    ): Promise<void> => {
-      const files = requireFs();
-      const baseline = loadedRef.current.get(packageId);
-      if (!baseline) {
-        throw new Error(
-          "Пакет не загружен в редактор: Emit доступен только для загруженного пакета",
-        );
-      }
+    ): Promise<void> =>
+      guarded(async () => {
+        const files = requireFs();
+        const baseline = loadedRef.current.get(packageId);
+        if (!baseline) {
+          throw new Error(
+            "Пакет не загружен в редактор: Emit доступен только для загруженного пакета",
+          );
+        }
 
-      const remote = remoteRef.current.get(packageId);
-      if (
-        !options.force &&
-        remote &&
-        remote.revision > baseline.revision
-      ) {
-        throw new NewerRevisionError(
-          packageId,
-          baseline.revision,
-          remote.revision,
-        );
-      }
+        const remote = remoteRef.current.get(packageId);
+        if (
+          !options.force &&
+          remote &&
+          remote.revision > baseline.revision
+        ) {
+          throw new NewerRevisionError(
+            packageId,
+            baseline.revision,
+            remote.revision,
+          );
+        }
 
-      beginAction(packageId);
-      try {
-        const result = await publishPackageFiles(
-          packageId,
-          files,
-          (current, total) =>
-            setAction(packageId, { progress: { current, total } }),
-        );
-        const snapshot = await files.snapshot(packageId);
-        loadedRef.current.set(packageId, {
-          revision: result.revision.revision,
-          files: snapshot,
-        });
-        setAction(packageId, {
-          notice: `Опубликована ревизия ${result.revision.revision}: ${result.uploaded} файл(ов).`,
-        });
-        await refresh();
-      } catch (cause) {
-        if (cause instanceof NewerRevisionError) throw cause;
-        const message = `Не удалось опубликовать пакет: ${errorMessage(cause)}`;
-        setAction(packageId, { error: message });
-        throw new Error(message);
-      } finally {
-        endAction(packageId);
-      }
-    },
-    [beginAction, endAction, refresh, setAction],
+        beginAction(packageId);
+        try {
+          const result = await publishPackageFiles(
+            packageId,
+            files,
+            (current, total) =>
+              setAction(packageId, { progress: { current, total } }),
+          );
+          const snapshot = await files.snapshot(packageId);
+          loadedRef.current.set(packageId, {
+            revision: result.revision.revision,
+            files: snapshot,
+          });
+          setAction(packageId, {
+            notice: `Опубликована ревизия ${result.revision.revision}: ${result.uploaded} файл(ов).`,
+          });
+          await refresh();
+        } catch (cause) {
+          if (cause instanceof NewerRevisionError) throw cause;
+          if (cause instanceof EditorBridgeError) throw cause;
+          const message = `Не удалось опубликовать пакет: ${errorMessage(cause)}`;
+          setAction(packageId, { error: message });
+          throw new Error(message);
+        } finally {
+          endAction(packageId);
+        }
+      }),
+    [beginAction, endAction, guarded, refresh, setAction],
   );
 
   return {
@@ -681,7 +850,7 @@ export function useRoomPackages(
     error,
     actions,
     actionFor,
-    beforeEditorStart,
+    afterEditorStart,
     refresh,
     createPackage,
     downloadPackage,

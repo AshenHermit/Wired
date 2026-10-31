@@ -13,11 +13,14 @@ import { getGodotProjectInfo } from "@/api/services/godot-game";
 
 export function GodotEditor({
   roomId,
-  beforeStart,
+  afterStart,
 }: {
   roomId: number;
-  /** Runs after the project download and before the editor starts. */
-  beforeStart?: (editor: GodotEditorInstance) => Promise<void>;
+  /**
+   * Runs after the editor reported ready. Must not delay `ready`: the panel
+   * uses it to connect the packages bridge in the background.
+   */
+  afterStart?: (editor: GodotEditorInstance) => void;
 }) {
   const editorInstanceRef = React.useRef<GodotEditorInstance | null>(null);
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
@@ -38,8 +41,10 @@ export function GodotEditor({
         await editor.init();
         const projectInfo = await getGodotProjectInfo();
         await editor.downloadProject(projectInfo);
-        await beforeStart?.(editor);
         await editor.start();
+        // The editor is already ready here; connecting the package bridge is
+        // deliberately fire-and-forget so it can never block the first frame.
+        afterStart?.(editor);
       } catch (error) {
         setErrorMessage(
           error instanceof Error ? error.message : "Не удалось запустить редактор."
@@ -47,7 +52,7 @@ export function GodotEditor({
         setStatus("error");
       }
     },
-    [beforeStart, roomId]
+    [afterStart, roomId]
   );
   const handleFailure = React.useCallback((message: string) => {
     setErrorMessage(message);
