@@ -30,9 +30,14 @@ var _packages: PackagesManager
 
 func _ready() -> void:
 	var cfg := _read_config()
+	var room := str(cfg.get("room", DEFAULT_ROOM))
+	# The game services exist before a package can register anything.
+	_setup_services()
+	# Every overlay Control lets the mouse reach the game viewport.
+	_setup_ui_input_passthrough()
 	# The room is part of the package directory, so it has to be known before
 	# the loader is configured.
-	_setup_packages(str(cfg.get("room", DEFAULT_ROOM)))
+	_setup_packages(room)
 	_net.status_changed.connect(_on_status_changed)
 	_net.log_line.connect(_on_log_line)
 	_net.authenticated.connect(_on_authenticated)
@@ -48,12 +53,37 @@ func _ready() -> void:
 		await _run_client(cfg)
 
 
+## Publishes the services packages reach through the `Global` autoload. The
+## registry is owned by the scene, so it is freed together with it.
+func _setup_services() -> void:
+	var registry := WiredPackageRegistry.new()
+	registry.name = "PackageRegistry"
+	add_child(registry)
+	Global.package_registry = registry
+	Global.register_scene_services(
+		$Game/SubViewport/StaticWorld,
+		$Game/SubViewport/DynamicWorld,
+		$Game/SubViewport/Players,
+		_net
+	)
+	$Game/SubViewport/StaticWorld.setup(registry)
+
+
+## Authored overlay controls already ignore the mouse, but `RichTextLabel`
+## creates its scrollbar at runtime: enforce the rule for generated controls too,
+## otherwise clicks over the log never reach the aim cursor.
+func _setup_ui_input_passthrough() -> void:
+	for child: Node in $UI.find_children("*", "Control", true, false):
+		(child as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+
 ## Both runtime modes load published package files over plain HTTP, so the
 ## loader is created before the network starts.
 func _setup_packages(room: String) -> void:
 	_packages = PackagesManager.new()
 	_packages.name = "Packages"
 	add_child(_packages)
+	Global.packages = _packages
 	_packages.configure(_api_url(), room)
 	# Lives under Main: a package scene must never become the whole game scene.
 	var reloader := PackageReloader.new()

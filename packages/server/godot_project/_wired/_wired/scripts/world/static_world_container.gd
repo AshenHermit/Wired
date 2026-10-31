@@ -1,0 +1,116 @@
+extends Node
+class_name StaticWorldContainer
+
+## Local-only owner of the static scenes that packages register for a room.
+##
+## Static content is built from `WiredPackageRegistry` descriptors and never
+## replicated: every peer instantiates the same scenes from the same registry.
+## Each package root is tagged with `_wired_package_id` (its owning package) and
+## `_wired_registered = true`, so `PackageReloader` can tell registry-owned
+## roots from nodes authored in `main.tscn`, and `clear()` can replace exactly
+## the children this container created.
+##
+## Spawn markers are `Marker2D`/`Marker3D` nodes in the `wired_player_spawn`
+## group or with `wired_player_spawn = true` metadata. They are collected
+## recursively in tree order and indexed across both dimensions: index `i` is
+## the same marker for both getters, a `Marker3D` projects to `Vector2(x, y)`
+## and a `Marker2D` lifts to `Vector3(x, y, 0)`. An out-of-range index or a
+## world without markers returns the zero vector.
+
+const META_PACKAGE_ID := "_wired_package_id"
+const META_REGISTERED := "_wired_registered"
+const META_SPAWN := "wired_player_spawn"
+const SPAWN_GROUP := &"wired_player_spawn"
+
+var _registry: WiredPackageRegistry = null
+
+
+## Attaches the registry this container builds from. Replacing the registry
+## takes effect on the next `rebuild()`.
+func setup(registry: WiredPackageRegistry) -> void:
+	_registry = registry
+
+
+## Replaces every registry-owned child with the current static registrations,
+## in the registry's deterministic order. A registration without a context or a
+## scene that fails to load is skipped: one broken package must not empty the
+## rest of the world.
+func rebuild() -> void:
+	clear()
+	if _registry == null:
+		return
+	for descriptor: Dictionary in _registry.get_static_scenes():
+		var package_id := str(descriptor.get("package_id", ""))
+		var path := str(descriptor.get("path", ""))
+		var context := _registry.get_context(package_id)
+		if context == null:
+			push_warning(
+				"WIRED_STATIC_WORLD_SKIPPED package=%s path=%s reason=no_context"
+				% [package_id, path]
+			)
+			continue
+		var instance := context.instantiate(path)
+		if instance == null:
+			# WiredPackageContext already reported why it failed.
+			continue
+		instance.set_meta(META_PACKAGE_ID, package_id)
+		instance.set_meta(META_REGISTERED, true)
+		add_child(instance)
+
+
+## Removes only the children created by `rebuild()`. Nodes authored directly in
+## the static world scene (a camera or an environment, for example) are kept.
+func clear() -> void:
+	for child: Node in get_children():
+		if bool(child.get_meta(META_REGISTERED, false)):
+			# Detach first so a rebuild in the same frame does not see the old
+			# nodes while `queue_free()` waits for the end of the frame.
+			remove_child(child)
+			child.queue_free()
+
+
+## Spawn position of the `index`-th marker in the 2D plane.
+func get_spawn_position_2d(index: int = 0) -> Vector2:
+	var marker := _spawn_marker(index)
+	var marker_2d := marker as Marker2D
+	if marker_2d != null:
+		return marker_2d.global_position
+	var marker_3d := marker as Marker3D
+	if marker_3d != null:
+		return Vector2(marker_3d.global_position.x, marker_3d.global_position.y)
+	return Vector2.ZERO
+
+
+## Spawn position of the `index`-th marker in 3D space.
+func get_spawn_position_3d(index: int = 0) -> Vector3:
+	var marker := _spawn_marker(index)
+	var marker_3d := marker as Marker3D
+	if marker_3d != null:
+		return marker_3d.global_position
+	var marker_2d := marker as Marker2D
+	if marker_2d != null:
+		return Vector3(marker_2d.global_position.x, marker_2d.global_position.y, 0.0)
+	return Vector3.ZERO
+
+
+## The `index`-th spawn marker in tree order, or `null` when there is none.
+func _spawn_marker(index: int) -> Node:
+	if index < 0:
+		return null
+	var found := 0
+	for node: Node in find_children("*", "", true, false):
+		if not _is_spawn_marker(node):
+			continue
+		if found == index:
+			return node
+		found += 1
+	return null
+
+
+## A marker counts when it is a 2D/3D marker and opts in through either the
+## group or the metadata; the group survives scene instancing, the metadata is
+## easier to spot in the inspector.
+func _is_spawn_marker(node: Node) -> bool:
+	if not (node is Marker2D or node is Marker3D):
+		return false
+	return node.is_in_group(SPAWN_GROUP) or bool(node.get_meta(META_SPAWN, false))

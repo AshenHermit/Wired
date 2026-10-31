@@ -1,0 +1,15 @@
+[gd_scene format=3]
+
+[node name="StaticRoot" type="Node"]
+
+[node name="Spawn" type="Marker2D" parent="." groups=["wired_player_spawn"]]
+position = Vector2(48, 96)
+
+[node name="Props" type="Node" parent="."]
+
+[node name="Spawn3D" type="Marker3D" parent="Props"]
+position = Vector3(1, 2, 3)
+metadata/wired_player_spawn = true
+
+[node name="Decoration" type="Marker2D" parent="Props"]
+position = Vector2(7, 7)
