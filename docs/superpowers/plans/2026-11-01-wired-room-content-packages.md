@@ -878,9 +878,11 @@ git commit -m "feat(example): add wired platformer package entry"
 
 **Interfaces:**
 - Consumes: все предыдущие задачи.
-- Produces: подтверждённый сценарий «пакет опубликован → два клиента → движение, камера, толкание, краты с импульсом, рестарт».
+- Produces: подтверждённый сценарий «пакет опубликован → два клиента → движение, камера, толкание, краты с импульсом, рестарт». **Ручной сценарий двумя клиентами не выполнен** (см. Verification notes), автоматические проверки и экспорт — пройдены.
 
 - [x] **Step 1: Run all automated checks**
+
+Все команды `godot` ниже запускать только скачанным 4.7.2: `packages\server\godot_runtime\4.7.2-stable-win32-x64\Godot.exe`. Системный `godot` из PATH (4.6.2) не подходит: проект объявляет `config/features` `"4.7"`.
 
 ```bash
 pnpm --filter server exec jest game-room.service.spec
@@ -949,8 +951,9 @@ git commit -m "docs: record room content package verification"
   - `pnpm fetch:runtime` — 4.7.2-stable (win32-x64) уже установлен.
   - `pnpm fetch:templates` — Web-шаблоны 4.7.2-stable найдены в
     `C:\Users\hermit\AppData\Roaming\Godot\export_templates\4.7.2.stable`.
-  - `pnpm export:game` — exit 0; `packages/server/game_export/web` обновлён (`index.pck` 130 564 B,
-    `index.wasm` 38 820 072 B).
+  - `pnpm export:game` — exit 0; экспорт собран скачанным `Godot.exe` **4.7.2** (в `packages/server/.env`
+    `GODOT_RUNTIME_PATH` не задан, поэтому скрипт взял runtime из `runtime.json`); `packages/server/game_export/web`
+    обновлён (`index.pck` 130 564 B, `index.wasm` 38 820 072 B).
   - `GET /game-export/index.html` на уже запущенном сервере — 200 с `Cross-Origin-Opener-Policy: same-origin`
     и `Cross-Origin-Embedder-Policy: require-corp`.
 - **Step 3 — ручная проверка двумя клиентами: NOT EXECUTED.** Причины и ограничения стенда:
@@ -958,27 +961,41 @@ git commit -m "docs: record room content package verification"
     Chrome был авторизован, публичная Godot-комната `godot test` (id 7) существовала;
   - шаг требует создать и опубликовать пакет `wired-platformer` в общей БД (`DB_SYNC=1`, shared Postgres)
     и скопировать файлы через WASM-редактор; одноразового окружения нет, данные общего стенда не изменялись;
-  - два независимых клиента (разные окна/профили с одновременным вводом) недоступны: Browser MCP управляет
-    одним Chrome-профилем и одной активной вкладкой; две вкладки одного профиля не дают одновременный
-    клавиатурный/мышиный ввод и не воспроизводят сценарий брифа.
-  - Оставшиеся шаги: (1) `pnpm dev:server` + frontend на `:3001`; (2) комната → Packages → создать
-    `wired-platformer`, перенести файлы из `packages/server/godot_project/examples/wired-platformer` в
-    `packages/<id>` через редактор, Emit; (3) открыть Game tab в двух окнах/профилях; (4) проверить отдельные
-    камеры, движение и прыжок, видимость игроков, толкание при столкновении, спавн квадрата ЛКМ из тела игрока
-    в сторону курсора, наличие импульса, лимит 8 и cooldown 250 мс; (5) перезапустить runtime и открыть снова —
-    квадраты восстановлены на местах без повторного импульса, игроки спавнятся после применения пакета;
-    (6) подключить третьего клиента позже — он получает текущие квадраты и игроков без дублей.
+  - два независимых клиента с одновременным вводом недоступны **в рамках этой автоматизированной проверки**:
+    Browser MCP управляет одним Chrome-профилем и одной активной вкладкой; две вкладки одного профиля не дают
+    одновременный клавиатурный/мышиный ввод. Человек может выполнить шаг по инструкции ниже.
+  - Оставшиеся шаги (самодостаточный прогон, не трогая shared Postgres):
+    1. Поднять одноразовый локальный Postgres и прописать в `packages/server/.env` его
+       `DB_HOST=localhost`, `DB_PORT=<локальный порт>`, `DB_SYNC=1` (плюс отдельные `DB_NAME`/`DB_USER`/
+       `DB_PASSWORD`); shared instance из текущего `.env` не использовать. Затем `pnpm dev:server` и
+       frontend на `:3001`.
+    2. Создать свежую комнату типа `godot` (а не переиспользовать `godot test`, id 7, из shared БД) →
+       **Packages** → создать `wired-platformer`, перенести файлы из
+       `packages/server/godot_project/examples/wired-platformer` в `packages/<id>` через редактор, нажать **Emit**.
+    3. Открыть **Game** tab в двух независимых авторизованных клиентах: обычное окно и incognito либо второй
+       Chrome-профиль на `http://localhost:3001` (каждый клиент логинится отдельно и получает свой ticket).
+    4. Проверить отдельные камеры, движение и прыжок, видимость игроков, толкание при столкновении, спавн
+       квадрата ЛКМ из тела игрока в сторону курсора, наличие импульса, лимит 8 и cooldown 250 мс.
+    5. Перезапустить runtime (закрыть комнату/дождаться idle) и открыть снова — квадраты восстановлены на
+       местах без повторного импульса, игроки спавнятся после применения пакета.
+    6. Подключить третьего клиента позже — он получает текущие квадраты и игроков без дублей.
   - Ожидаемые наблюдения совпадают с `Expected` шага 3. Автоматически косвенно покрыты: сохранение/восстановление
     без повторного импульса и порядок `restore_pending` (`dynamic_world_smoke`), толкание (`player_push_smoke`),
     камера (`camera_follow_smoke`), прицел и импульс (`wired_aim_smoke`), контракт примера
     (`example_package_contract_smoke`). Late join через `MultiplayerSpawner` остаётся непроверенным вживую.
-- **Отклонения от спеки:** не обнаружены; статус спеки не менялся.
-- **Замечание окружения:** поставляемый `Godot_v4.7.2-stable_win64_console.exe` не запускается, так как ищет
-  отсутствующий `Godot_v4.7.2-stable_win64.exe`; headless-проверки запускались напрямую через `Godot.exe`.
-  На сервер это не влияет: `runtime.json` указывает на `Godot.exe`.
+- **Отклонения от спеки:** функциональных отклонений не обнаружено; статус спеки не менялся.
+- **Известная проблема репозитория (не upstream Godot):** `packages/server/scripts/lib/runtime-install.mjs:132-134`
+  переименовывает распакованный `Godot_v4.7.2-stable_win64.exe` в `Godot.exe`, но оставляет консольный launcher
+  `Godot_v4.7.2-stable_win64_console.exe` искать старое companion-имя `Godot_v4.7.2-stable_win64.exe`, поэтому
+  консольная обёртка не стартует. Это отклонение/known issue нашего репозитория, а не дефект дистрибутива Godot.
+  `runtime.json`, сервер и все прогоны выше используют `Godot.exe` 4.7.2 и работают; при этом
+  `GODOT_RUNTIME_PATH=<...>\Godot_v4.7.2-stable_win64_console.exe` на Windows сейчас сломан. Исправление
+  установщика — отдельный follow-up; в Task 10 код не менялся.
+- **`AGENTS.md` устарел:** там указано 31 suite / 314 tests, текущий прогон — 320 tests (1 skipped).
+  `AGENTS.md` вне области Task 10 и не правился.
 
 ## Self-Review Notes
 
 - Spec coverage: backend readiness (Task 1), registry/static world (Tasks 2–4), network readiness/actions (Task 5), player spawn/components (Task 6), body/camera/push (Task 7), dynamic world/crate/aim/save (Task 8), example package (Task 9), verification (Task 10).
 - Type consistency: `WiredPackageRegistry` descriptors use `path`; `WiredPackageContext.instantiate(relative_path)`; `PlayersManager.build_player(data, registry)`; `DynamicWorldContainer.spawn_entity(qualified_type, data)`; `WiredPlayerComponent.request_action(local_name, payload)` квалифицирует действие, `WiredPlayer.request_action(qualified_action, payload)` принимает уже квалифицированное имя.
-- Review Focus tests are placed in Task 1, Task 5/6, Task 8, and Task 10.
+- Review Focus tests are placed in Task 1, Task 5/6, Task 8, and Task 10. Ручной сценарий двумя клиентами в Task 10 **не выполнен** — см. Verification notes; не считать его пройденным.
