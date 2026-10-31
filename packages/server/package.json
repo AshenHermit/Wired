@@ -20,7 +20,9 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "probe:multiplayer": "node scripts/godot-multiplayer-probe.mjs",
-    "export:game": "node scripts/export-godot-web.mjs"
+    "export:game": "node scripts/export-godot-web.mjs",
+    "fetch:editor": "node scripts/fetch-godot-editor.mjs",
+    "test:scripts": "node --test scripts/lib/*.test.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

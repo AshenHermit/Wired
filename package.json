@@ -13,6 +13,7 @@
     "check-types:frontend": "pnpm --filter frontend check-types",
     "build:shared": "pnpm --filter shared build:types",
     "export:game": "pnpm --filter server export:game",
+    "fetch:editor": "pnpm --filter server fetch:editor",
     "build": "pnpm run --recursive build",
     "clean": "pnpm run --recursive clean"
   },
