@@ -8,7 +8,6 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "@/utils/sha256";
 import type { GodotEditorInstance } from "./GodotEditorInstance";
-import type { EmscriptenFs } from "./godot-packages-fs";
 import {
   LocalChangesError,
   NewerRevisionError,
@@ -33,7 +32,7 @@ import * as packagesApi from "@/api/services/scripting-packages";
 
 const encoder = new TextEncoder();
 
-class FakeFs implements EmscriptenFs {
+class FakeFs {
   files = new Map<string, Uint8Array>();
   dirs = new Set<string>(["/"]);
   reads = 0;

@@ -1,13 +1,16 @@
 import { PackageFileEntry, PackageManifest } from "@wired-io/shared";
 import { sha256Hex } from "@/utils/sha256";
+import type { EditorBridgeClient } from "./editor-bridge";
 
 /**
- * Typed access to the Godot editor file system.
+ * Typed access to the package files of the running Godot editor.
  *
- * The custom editor build exposes the Emscripten file system of the running
- * editor instance (`instance.editor.rtenv.FS`). Writing there changes the
- * project inside the browser sandbox only: it is a draft source for package
- * files and never touches the sources on the server disk.
+ * The shell never touches the editor file system directly: every read and
+ * write goes through the Wired editor plugin over the request/response bridge.
+ * The plugin owns the directory swap (staging directory, rollback to the
+ * previous directory) and filters editor metadata (`.uid`, `.import`, dot
+ * paths), so this layer only validates package-relative paths and maps bridge
+ * payloads into typed values.
  *
  * Every path handled here is relative to the managed package directory
  * (`<project>/packages/<packageId>`), so a package revision can never read or
@@ -21,23 +24,11 @@ export class GodotFsError extends Error {
   }
 }
 
-/** The subset of the Emscripten FS used by the package bridge. */
-export type EmscriptenFs = {
-  readFile(path: string): Uint8Array;
-  writeFile(path: string, data: Uint8Array): void;
-  mkdirTree(path: string): void;
-  readdir(path: string): string[];
-  stat(path: string): { mode: number; size: number };
-  unlink(path: string): void;
-  rmdir?(path: string): void;
-  rename(oldPath: string, newPath: string): void;
-  syncfs?(populate: boolean, callback: (error?: unknown) => void): void;
-};
-
 /**
  * Files the Godot editor generates next to package sources (`.gd.uid`,
- * `*.import`, `.godot/`). They belong to the machine that produced them, so
- * they are neither published nor replaced by a synchronized revision.
+ * `*.import`, `.godot/`). The plugin keeps them out of `snapshot`, `collect`
+ * and `replace`; this predicate is exported for callers that show a path to the
+ * user or decide what a package revision owns.
  */
 export function isEditorMetadataPath(filepath: string): boolean {
   const segments = filepath.split("/");
@@ -47,27 +38,11 @@ export function isEditorMetadataPath(filepath: string): boolean {
 
 export const PACKAGES_DIR = "packages";
 
-const S_IFMT = 0o170000;
-const S_IFDIR = 0o040000;
-
-function isDirectory(fs: EmscriptenFs, path: string): boolean {
-  try {
-    return (fs.stat(path).mode & S_IFMT) === S_IFDIR;
-  } catch {
-    return false;
-  }
-}
-
-function dirname(path: string): string {
-  const index = path.lastIndexOf("/");
-  return index <= 0 ? "/" : path.slice(0, index);
-}
-
 /**
  * Validates a package-relative path and returns it unchanged. Mirrors the
- * server-side rules: `/`-separated, no absolute paths, no `.`/`..`, no empty
- * segments. The server is the authority; this is the second line of defense
- * before touching the editor file system.
+ * server-side and plugin-side rules: `/`-separated, no absolute paths, no
+ * `.`/`..`, no empty segments. The plugin is the authority; this is the second
+ * line of defense before a path is handed to the engine.
  */
 export function assertRelativePackagePath(relativePath: string): string {
   if (typeof relativePath !== "string" || relativePath.length === 0) {
@@ -94,326 +69,183 @@ export type CollectedPackageFile = {
   contents: Uint8Array;
 };
 
-export class PackageFileSystem {
-  constructor(
-    private readonly fs: EmscriptenFs,
-    private readonly projectRoot: string,
-  ) {
-    if (!fs) {
-      throw new GodotFsError(
-        "Файловая система Godot-редактора ещё не готова: дождитесь загрузки проекта",
-      );
-    }
-  }
+/** The editor instance: only the write primitive packages need. */
+export type PackageEngine = {
+  copyToFS(path: string, data: Uint8Array): void;
+};
 
-  get packagesRoot(): string {
-    return `${this.projectRoot}/${PACKAGES_DIR}`;
-  }
-
-  packageDir(packageId: number): string {
-    if (!Number.isInteger(packageId) || packageId <= 0) {
-      throw new GodotFsError(`Invalid package id: ${packageId}`);
-    }
-    return `${this.packagesRoot}/${packageId}`;
-  }
-
-  resolve(packageId: number, filepath: string): string {
-    return `${this.packageDir(packageId)}/${assertRelativePackagePath(filepath)}`;
-  }
-
-  async listFiles(packageId: number): Promise<string[]> {
-    return this.walk(packageId, "");
-  }
-
-  /** Whether the managed package directory is present in the editor FS. */
-  exists(packageId: number): boolean {
-    return isDirectory(this.fs, this.packageDir(packageId));
-  }
-
-  /**
-   * Creates the package directory without touching any other package. A newly
-   * created room package starts as an empty directory the user can fill in.
-   */
-  async createPackageDir(packageId: number): Promise<void> {
-    try {
-      this.fs.mkdirTree(this.packageDir(packageId));
-    } catch (error) {
-      throw new GodotFsError(
-        `Package ${packageId}: cannot create the package directory: ${errorMessage(error)}`,
-      );
-    }
-    await this.sync();
-  }
-
-  readFile(packageId: number, filepath: string): Uint8Array {
-    const path = this.resolve(packageId, filepath);
-    try {
-      return this.fs.readFile(path);
-    } catch {
-      throw new GodotFsError(
-        `Package ${packageId}: file ${filepath} does not exist in the editor file system`,
-      );
-    }
-  }
-
-  writeFile(packageId: number, filepath: string, contents: Uint8Array): void {
-    const path = this.resolve(packageId, filepath);
-    try {
-      this.fs.mkdirTree(dirname(path));
-      this.fs.writeFile(path, contents);
-    } catch (error) {
-      throw new GodotFsError(
-        `Package ${packageId}: cannot write ${filepath}: ${errorMessage(error)}`,
-      );
-    }
-  }
-
-  deleteFile(packageId: number, filepath: string): void {
-    this.fs.unlink(this.resolve(packageId, filepath));
-  }
-
-  /**
-   * Deletes every package file that is not in `keepPaths`. Only the managed
-   * package directory is touched, so files of other packages and the project
-   * itself are never affected.
-   */
-  async prune(packageId: number, keepPaths: string[]): Promise<string[]> {
-    const keep = new Set(
-      keepPaths.map((path) => assertRelativePackagePath(path)),
-    );
-    const existing = await this.listFiles(packageId);
-    const stale = existing.filter((path) => !keep.has(path));
-    for (const path of stale) {
-      this.deleteFile(packageId, path);
-    }
-    this.removeEmptyDirectories(packageId);
-    return stale;
-  }
-
-  async deletePackage(packageId: number): Promise<void> {
-    await this.prune(packageId, []);
-    const dir = this.packageDir(packageId);
-    if (this.fs.rmdir && isDirectory(this.fs, dir)) {
-      this.fs.rmdir(dir);
-    }
-  }
-
-  /** Reads every package file together with its size and sha256. */
-  async collectFiles(packageId: number): Promise<CollectedPackageFile[]> {
-    const filepaths = (await this.listFiles(packageId)).filter(
-      (filepath) => !isEditorMetadataPath(filepath),
-    );
-    const collected: CollectedPackageFile[] = [];
-    for (const filepath of filepaths) {
-      const contents = this.readFile(packageId, filepath);
-      collected.push({
-        entry: {
-          filepath,
-          size: contents.byteLength,
-          sha256: await sha256Hex(contents),
-        },
-        contents,
-      });
-    }
-    return collected;
-  }
-
-  /**
-   * Hashes of the source files currently in the package directory. Used to
-   * detect local edits before a published revision replaces the directory.
-   */
-  async snapshot(packageId: number): Promise<Record<string, string>> {
-    const snapshot: Record<string, string> = {};
-    for (const file of await this.collectFiles(packageId)) {
-      snapshot[file.entry.filepath] = file.entry.sha256;
-    }
-    return snapshot;
-  }
-
-  /**
-   * Replaces the whole package directory in one swap, so a failure in the
-   * middle of a synchronisation never leaves a mix of two revisions.
-   *
-   * Editor metadata (`.uid`, `.import`, dotfiles) of the existing revision is
-   * carried over: it belongs to this machine's import cache, not to the
-   * published package.
-   */
-  async replaceContents(
+export type PackageFileSystem = {
+  exists(packageId: number): Promise<boolean>;
+  createPackageDir(packageId: number): Promise<void>;
+  snapshot(packageId: number): Promise<Record<string, string>>;
+  collectFiles(packageId: number): Promise<CollectedPackageFile[]>;
+  replaceContents(
     packageId: number,
     contents: Map<string, Uint8Array>,
-  ): Promise<{ written: string[]; deleted: string[] }> {
-    const root = this.packageDir(packageId);
-    const staging = this.stagingDir(packageId);
-    const previous = this.previousDir(packageId);
+  ): Promise<{ written: string[]; deleted: string[] }>;
+  deletePackage(packageId: number): Promise<void>;
+  sync(): Promise<void>;
+  packageDir(packageId: number): string;
+};
 
-    this.removeTree(staging);
-    this.removeTree(previous);
-    this.fs.mkdirTree(staging);
+/** Payloads the plugin answers with; `contents_base64` is its wire name. */
+type ExistsPayload = { exists: boolean };
+type SnapshotPayload = { files: Record<string, string> };
+type CollectPayload = { files: CollectedFilePayload[] };
+type CollectedFilePayload = {
+  filepath: string;
+  size: number;
+  sha256: string;
+  contents_base64: string;
+};
+type PrepareReplacePayload = { staging_path: string };
+type ReplacePayload = { written: string[]; deleted: string[] };
 
-    const written: string[] = [];
-    for (const [filepath, data] of contents) {
-      const path = this.resolve(packageId, filepath);
-      const target = `${staging}${path.slice(root.length)}`;
-      try {
-        this.fs.mkdirTree(dirname(target));
-        this.fs.writeFile(target, data);
-      } catch (error) {
-        this.removeTree(staging);
-        throw new GodotFsError(
-          `Package ${packageId}: cannot stage ${filepath}: ${errorMessage(error)}`,
-        );
-      }
-      written.push(filepath);
-    }
-
-    const existing = isDirectory(this.fs, root)
-      ? await this.listFiles(packageId)
-      : [];
-    for (const filepath of existing) {
-      if (!isEditorMetadataPath(filepath)) continue;
-      const data = this.readFile(packageId, filepath);
-      const target = `${staging}/${filepath}`;
-      this.fs.mkdirTree(dirname(target));
-      this.fs.writeFile(target, data);
-    }
-
-    const deleted = existing.filter(
-      (filepath) =>
-        !contents.has(filepath) && !isEditorMetadataPath(filepath),
-    );
-
-    if (existing.length > 0) {
-      try {
-        this.fs.rename(root, previous);
-      } catch (error) {
-        this.removeTree(staging);
-        throw new GodotFsError(
-          `Package ${packageId}: cannot replace the package directory: ${errorMessage(error)}`,
-        );
-      }
-    }
-
-    try {
-      this.fs.rename(staging, root);
-    } catch (error) {
-      if (isDirectory(this.fs, previous)) {
-        this.fs.rename(previous, root);
-      }
-      this.removeTree(staging);
-      throw new GodotFsError(
-        `Package ${packageId}: cannot apply the new revision: ${errorMessage(error)}`,
-      );
-    }
-
-    this.removeTree(previous);
-    return { written: written.sort(), deleted };
+function decodeBase64(contentsBase64: string): Uint8Array {
+  const binary = atob(contentsBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
   }
-
-  /**
-   * Persists the in-memory file system to IndexedDB, so written package files
-   * survive an editor or page restart.
-   */
-  async sync(): Promise<void> {
-    const syncfs = this.fs.syncfs;
-    if (!syncfs) return;
-    await new Promise<void>((resolve, reject) => {
-      syncfs.call(this.fs, false, (error) => {
-        if (error) {
-          reject(
-            new GodotFsError(
-              `Cannot persist the editor file system: ${errorMessage(error)}`,
-            ),
-          );
-          return;
-        }
-        resolve();
-      });
-    });
-  }
-
-  private walk(packageId: number, prefix: string): string[] {
-    const root = this.packageDir(packageId);
-    const dir = prefix ? `${root}/${prefix}` : root;
-    if (!isDirectory(this.fs, dir)) return [];
-
-    const files: string[] = [];
-    for (const name of this.fs.readdir(dir)) {
-      if (name === "." || name === "..") continue;
-      const relative = prefix ? `${prefix}/${name}` : name;
-      if (isDirectory(this.fs, `${root}/${relative}`)) {
-        files.push(...this.walk(packageId, relative));
-      } else {
-        files.push(relative);
-      }
-    }
-    return files.sort();
-  }
-
-  private packageSwapDir(packageId: number, suffix: string): string {
-    return `${this.packagesRoot}/.${packageId}.${suffix}`;
-  }
-
-  private stagingDir(packageId: number): string {
-    return this.packageSwapDir(packageId, "staging");
-  }
-
-  private previousDir(packageId: number): string {
-    return this.packageSwapDir(packageId, "previous");
-  }
-
-  private removeTree(path: string): void {
-    if (!isDirectory(this.fs, path)) {
-      try {
-        this.fs.unlink(path);
-      } catch {
-        // Missing files are already in the desired state.
-      }
-      return;
-    }
-    for (const name of this.fs.readdir(path)) {
-      if (name === "." || name === "..") continue;
-      this.removeTree(`${path}/${name}`);
-    }
-    this.fs.rmdir?.(path);
-  }
-
-  private removeEmptyDirectories(packageId: number): void {
-    const root = this.packageDir(packageId);
-    const visit = (dir: string) => {
-      for (const name of this.fs.readdir(dir)) {
-        if (name === "." || name === "..") continue;
-        const path = `${dir}/${name}`;
-        if (isDirectory(this.fs, path)) visit(path);
-      }
-      if (dir !== root && this.fs.readdir(dir).length === 0) {
-        this.fs.rmdir?.(dir);
-      }
-    };
-    if (isDirectory(this.fs, root)) visit(root);
-  }
+  return bytes;
 }
 
-export function createPackageFileSystem(instance: {
-  editor?: unknown;
-  rootPath?: string;
-  projectInfo?: { name: string } | null;
+/**
+ * Creates the package file system of the running editor.
+ *
+ * `getEngine` is read on every replacement instead of being captured once: the
+ * editor instance is recreated when the page restarts the engine, and writes
+ * must reach the live one.
+ */
+export function createPackageFileSystem({
+  bridge,
+  getEngine,
+  projectRoot,
+}: {
+  bridge: EditorBridgeClient;
+  getEngine: () => PackageEngine;
+  projectRoot: string;
 }): PackageFileSystem {
-  const fs = (instance?.editor as { rtenv?: { FS?: EmscriptenFs } } | undefined)
-    ?.rtenv?.FS;
-  if (!fs) {
-    throw new GodotFsError(
-      "Файловая система Godot-редактора ещё не готова: дождитесь загрузки проекта",
-    );
-  }
-  if (!instance.rootPath || !instance.projectInfo?.name) {
+  if (!projectRoot) {
     throw new GodotFsError(
       "Проект Godot ещё не загружен в редактор: пакеты недоступны",
     );
   }
-  return new PackageFileSystem(
-    fs,
-    `${instance.rootPath}/${instance.projectInfo.name}`,
-  );
+
+  const assertPackageId = (packageId: number): number => {
+    if (!Number.isInteger(packageId) || packageId <= 0) {
+      throw new GodotFsError(`Invalid package id: ${packageId}`);
+    }
+    return packageId;
+  };
+
+  const packageDir = (packageId: number): string =>
+    `${projectRoot}/${PACKAGES_DIR}/${assertPackageId(packageId)}`;
+
+  const sync = async (): Promise<void> => {
+    await bridge.call("sync", {});
+  };
+
+  return {
+    packageDir,
+
+    async exists(packageId) {
+      assertPackageId(packageId);
+      const { exists: result } = await bridge.call<ExistsPayload>("exists", {
+        packageId,
+      });
+      return result;
+    },
+
+    /**
+     * Creates the package directory without touching any other package. A newly
+     * created room package starts as an empty directory the user can fill in.
+     */
+    async createPackageDir(packageId) {
+      assertPackageId(packageId);
+      await bridge.call("createDir", { packageId });
+      await sync();
+    },
+
+    /** Hashes of the source files currently in the package directory. */
+    async snapshot(packageId) {
+      assertPackageId(packageId);
+      const { files } = await bridge.call<SnapshotPayload>("snapshot", {
+        packageId,
+      });
+      return files;
+    },
+
+    /** Reads every package file the plugin collected, with size and sha256. */
+    async collectFiles(packageId) {
+      assertPackageId(packageId);
+      const { files } = await bridge.call<CollectPayload>("collect", {
+        packageId,
+      });
+      return files.map((file) => {
+        const contentsBase64 = file.contents_base64;
+        return {
+          entry: {
+            filepath: assertRelativePackagePath(file.filepath),
+            size: file.size,
+            sha256: file.sha256,
+          },
+          contents: decodeBase64(contentsBase64),
+        };
+      });
+    },
+
+    /**
+     * Replaces the whole package directory in one swap.
+     *
+     * The plugin prepares a staging directory, the revision is copied there,
+     * and only then does the plugin rename it into place. A failure while
+     * staging or swapping leaves the previous revision untouched and never
+     * reaches `sync`.
+     */
+    async replaceContents(packageId, contents) {
+      assertPackageId(packageId);
+      const staged = [...contents].map(([filepath, data]) => ({
+        filepath: assertRelativePackagePath(filepath),
+        data,
+      }));
+
+      const { staging_path: stagingPath } =
+        await bridge.call<PrepareReplacePayload>("prepareReplace", {
+          packageId,
+        });
+
+      const engine = getEngine();
+      if (!engine) {
+        throw new GodotFsError(
+          "Файловая система Godot-редактора ещё не готова: дождитесь загрузки проекта",
+        );
+      }
+      for (const { filepath, data } of staged) {
+        try {
+          engine.copyToFS(`${stagingPath}/${filepath}`, data);
+        } catch (error) {
+          throw new GodotFsError(
+            `Package ${packageId}: cannot stage ${filepath}: ${errorMessage(error)}`,
+          );
+        }
+      }
+
+      const result = await bridge.call<ReplacePayload>("replace", {
+        packageId,
+      });
+      await sync();
+      return { written: result.written, deleted: result.deleted };
+    },
+
+    async deletePackage(packageId) {
+      assertPackageId(packageId);
+      await bridge.call("delete", { packageId });
+      await sync();
+    },
+
+    sync,
+  };
 }
 
 export type ApplyPackageRevisionOptions = {
@@ -429,8 +261,7 @@ export type ApplyPackageRevisionOptions = {
  * Every file is downloaded and verified in memory first: if any file is
  * missing, truncated or has a wrong hash, nothing is written and the previous
  * revision stays intact. Only after the whole manifest verifies are the files
- * written, stale files inside the package directory pruned, and the result
- * persisted.
+ * written; `replaceContents` swaps the directory and persists the result.
  */
 export async function applyPackageRevision({
   files,
@@ -462,13 +293,7 @@ export async function applyPackageRevision({
     onProgress?.(index + 1, total);
   }
 
-  const { written, deleted } = await files.replaceContents(
-    manifest.packageId,
-    verified,
-  );
-  await files.sync();
-
-  return { written, deleted };
+  return files.replaceContents(manifest.packageId, verified);
 }
 
 function errorMessage(error: unknown): string {

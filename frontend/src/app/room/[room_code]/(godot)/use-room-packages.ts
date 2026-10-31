@@ -179,7 +179,9 @@ function buildEntries(
     const loadedState = loaded.get(pkg.id) ?? null;
     const remoteState = remote.get(pkg.id) ?? null;
     const snapshot = snapshots.get(pkg.id) ?? {};
-    const inEditor = files?.exists(pkg.id) ?? false;
+    // The bridge-backed `exists` is async; Task 5 awaits it in `load` and
+    // passes the resulting set here. Until then this stays a truthy check.
+    const inEditor = Boolean((files?.exists(pkg.id) as unknown) ?? false);
     const localChanges = loadedState
       ? changedPackageFiles(loadedState.files, snapshot)
       : Object.keys(snapshot);
@@ -407,7 +409,8 @@ export function useRoomPackages(
   const beforeEditorStart = React.useCallback(
     async (editor: GodotEditorInstance): Promise<void> => {
       try {
-        filesRef.current = createPackageFileSystem(editor);
+        // Task 5 passes `{bridge, getEngine, projectRoot}` here.
+        filesRef.current = createPackageFileSystem(editor as never);
         setFsReady(true);
       } catch (cause) {
         // A package problem must not prevent the editor from opening.

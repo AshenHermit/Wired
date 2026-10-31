@@ -1,6 +1,9 @@
 import { PackageFileEntry, PackageManifest, PackageRevision } from "@wired-io/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { PackageFileSystem } from "./godot-packages-fs";
+import {
+  type CollectedPackageFile,
+  type PackageFileSystem,
+} from "./godot-packages-fs";
 import {
   planPackageSync,
   publishPackageFiles,
@@ -20,97 +23,86 @@ vi.mock("@/api/services/scripting-packages", () => ({
 
 import * as api from "@/api/services/scripting-packages";
 
-/** In-memory Emscripten FS stand-in, see godot-packages-fs.test.ts. */
-class FakeFs {
-  files = new Map<string, Uint8Array>();
-  dirs = new Set<string>(["/"]);
-
-  mkdirTree(path: string) {
-    let current = "";
-    for (const part of path.split("/").filter(Boolean)) {
-      current += `/${part}`;
-      this.dirs.add(current);
-    }
-  }
-
-  writeFile(path: string, data: Uint8Array) {
-    const index = path.lastIndexOf("/");
-    const dir = index <= 0 ? "/" : path.slice(0, index);
-    if (!this.dirs.has(dir)) throw new Error(`ENOENT: ${dir}`);
-    this.files.set(path, Uint8Array.from(data));
-  }
-
-  readFile(path: string) {
-    const data = this.files.get(path);
-    if (!data) throw new Error(`ENOENT: ${path}`);
-    return Uint8Array.from(data);
-  }
-
-  readdir(path: string) {
-    const prefix = path.endsWith("/") ? path : `${path}/`;
-    const names = new Set<string>();
-    for (const entry of [...this.dirs, ...this.files.keys()]) {
-      if (entry === path || !entry.startsWith(prefix)) continue;
-      names.add(entry.slice(prefix.length).split("/")[0]);
-    }
-    return [...names];
-  }
-
-  stat(path: string) {
-    if (this.dirs.has(path)) return { mode: 0o040755, size: 0 };
-    const data = this.files.get(path);
-    if (!data) throw new Error(`ENOENT: ${path}`);
-    return { mode: 0o100644, size: data.byteLength };
-  }
-
-  unlink(path: string) {
-    this.files.delete(path);
-  }
-
-  rmdir(path: string) {
-    this.dirs.delete(path);
-  }
-
-  rename(oldPath: string, newPath: string) {
-    const prefix = `${oldPath}/`;
-    this.mkdirTree(newPath);
-    for (const dir of [...this.dirs]) {
-      if (!dir.startsWith(prefix)) continue;
-      this.dirs.delete(dir);
-      this.mkdirTree(`${newPath}/${dir.slice(prefix.length)}`);
-    }
-    for (const file of [...this.files.keys()]) {
-      if (!file.startsWith(prefix)) continue;
-      const contents = this.files.get(file)!;
-      this.files.delete(file);
-      const target = `${newPath}/${file.slice(prefix.length)}`;
-      this.mkdirTree(target.slice(0, target.lastIndexOf("/")));
-      this.files.set(target, contents);
-    }
-    this.dirs.delete(oldPath);
-  }
-
-  put(path: string, content: string) {
-    this.mkdirTree(path.slice(0, path.lastIndexOf("/")));
-    this.files.set(path, new TextEncoder().encode(content));
-  }
-
-  read(path: string) {
-    return new TextDecoder().decode(this.readFile(path));
-  }
-
-  has(path: string) {
-    return this.files.has(path);
-  }
-}
-
 const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 const projectRoot = "/home/web_user/Wired";
 
+/** Package files by package id and package-relative path. */
+type PackageTree = Map<number, Map<string, string>>;
+
+function put(
+  tree: PackageTree,
+  packageId: number,
+  filepath: string,
+  contents: string
+): void {
+  const files = tree.get(packageId) ?? new Map<string, string>();
+  files.set(filepath, contents);
+  tree.set(packageId, files);
+}
+
+/**
+ * In-memory stand-in for `PackageFileSystem`. The bridge and the editor plugin
+ * are covered by `godot-packages-fs.test.ts`; here only the calls `package-sync`
+ * makes matter, so every method is a spy backed by a simple package tree.
+ */
 function makeFiles() {
-  const fs = new FakeFs();
-  fs.put(`${projectRoot}/project.godot`, "config_version=5");
-  return { fs, files: new PackageFileSystem(fs, projectRoot) };
+  const tree: PackageTree = new Map();
+
+  const files: PackageFileSystem = {
+    packageDir: vi.fn(
+      (packageId: number) => `${projectRoot}/packages/${packageId}`
+    ),
+    exists: vi.fn(async (packageId: number) => tree.has(packageId)),
+    createPackageDir: vi.fn(async (packageId: number) => {
+      tree.set(packageId, new Map());
+    }),
+    snapshot: vi.fn(async (packageId: number) => {
+      const hashes: Record<string, string> = {};
+      for (const [filepath, contents] of tree.get(packageId) ?? []) {
+        hashes[filepath] = await sha256Hex(encoder.encode(contents));
+      }
+      return hashes;
+    }),
+    collectFiles: vi.fn(async (packageId: number) => {
+      const collected: CollectedPackageFile[] = [];
+      const packageFiles = tree.get(packageId) ?? new Map<string, string>();
+      for (const filepath of [...packageFiles.keys()].sort()) {
+        const contents = encoder.encode(packageFiles.get(filepath) ?? "");
+        collected.push({
+          entry: {
+            filepath,
+            size: contents.byteLength,
+            sha256: await sha256Hex(contents),
+          },
+          contents,
+        });
+      }
+      return collected;
+    }),
+    replaceContents: vi.fn(
+      async (packageId: number, contents: Map<string, Uint8Array>) => {
+        const next = new Map<string, string>();
+        for (const [filepath, bytes] of contents) {
+          next.set(filepath, decoder.decode(bytes));
+        }
+        const previous = tree.get(packageId) ?? new Map<string, string>();
+        tree.set(packageId, next);
+        return {
+          written: [...next.keys()].sort(),
+          deleted: [...previous.keys()]
+            .filter((filepath) => !next.has(filepath))
+            .sort(),
+        };
+      }
+    ),
+    deletePackage: vi.fn(async (packageId: number) => {
+      tree.delete(packageId);
+    }),
+    sync: vi.fn(async () => {}),
+  };
+
+  return { tree, files };
 }
 
 async function entry(filepath: string, content: string): Promise<PackageFileEntry> {
@@ -136,9 +128,9 @@ describe("publishPackageFiles", () => {
   });
 
   it("uploads every file of the package directory and publishes the revision", async () => {
-    const { files } = makeFiles();
-    files.writeFile(5, "scripts/hero.gd", encoder.encode("extends Node"));
-    files.writeFile(5, "scenes/hero.tscn", encoder.encode("[gd_scene]"));
+    const { tree, files } = makeFiles();
+    put(tree, 5, "scripts/hero.gd", "extends Node");
+    put(tree, 5, "scenes/hero.tscn", "[gd_scene]");
     vi.mocked(api.createPackageRevision).mockResolvedValue(revision(3, "draft"));
     vi.mocked(api.uploadRevisionFileAsUint8Array).mockImplementation(
       async (_packageId, _revision, file) => ({
@@ -152,6 +144,7 @@ describe("publishPackageFiles", () => {
 
     const result = await publishPackageFiles(5, files);
 
+    expect(files.collectFiles).toHaveBeenCalledWith(5);
     expect(api.createPackageRevision).toHaveBeenCalledWith(5, {
       files: [
         await entry("scenes/hero.tscn", "[gd_scene]"),
@@ -175,8 +168,8 @@ describe("publishPackageFiles", () => {
   });
 
   it("stops before publishing when the server stored a different file", async () => {
-    const { files } = makeFiles();
-    files.writeFile(5, "scripts/hero.gd", encoder.encode("extends Node"));
+    const { tree, files } = makeFiles();
+    put(tree, 5, "scripts/hero.gd", "extends Node");
     vi.mocked(api.createPackageRevision).mockResolvedValue(revision(3, "draft"));
     vi.mocked(api.uploadRevisionFileAsUint8Array).mockResolvedValue({
       size: 99,
@@ -202,7 +195,7 @@ describe("syncPackageRevision", () => {
   });
 
   it("downloads the latest manifest and applies it to the editor file system", async () => {
-    const { fs, files } = makeFiles();
+    const { tree, files } = makeFiles();
     const hero = await entry("scripts/hero.gd", "extends Node");
     const manifest: PackageManifest = {
       packageId: 5,
@@ -221,15 +214,13 @@ describe("syncPackageRevision", () => {
 
     expect(api.getRevisionFile).toHaveBeenCalledWith(5, 4, "scripts/hero.gd");
     expect(result.written).toEqual(["scripts/hero.gd"]);
-    expect(fs.read(`${projectRoot}/packages/5/scripts/hero.gd`)).toBe(
-      "extends Node"
-    );
-    expect(fs.has(`${projectRoot}/project.godot`)).toBe(true);
+    expect(files.replaceContents).toHaveBeenCalledWith(5, expect.any(Map));
+    expect(tree.get(5)?.get("scripts/hero.gd")).toBe("extends Node");
   });
 
   it("keeps the previous files when a download is corrupt", async () => {
-    const { fs, files } = makeFiles();
-    fs.put(`${projectRoot}/packages/5/scripts/hero.gd`, "extends Node");
+    const { tree, files } = makeFiles();
+    put(tree, 5, "scripts/hero.gd", "extends Node");
     const hero = await entry("scripts/hero.gd", "extends Node");
     vi.mocked(api.getPackageManifest).mockResolvedValue({
       packageId: 5,
@@ -245,9 +236,8 @@ describe("syncPackageRevision", () => {
 
     await expect(syncPackageRevision(5, files)).rejects.toThrow(/size|sha256/i);
 
-    expect(fs.read(`${projectRoot}/packages/5/scripts/hero.gd`)).toBe(
-      "extends Node"
-    );
+    expect(tree.get(5)?.get("scripts/hero.gd")).toBe("extends Node");
+    expect(files.replaceContents).not.toHaveBeenCalled();
   });
 });
 
@@ -373,8 +363,8 @@ describe("reconcilePackageRevision", () => {
   });
 
   it("keeps local edits and reports a conflict instead of overwriting", async () => {
-    const { fs, files } = makeFiles();
-    fs.put(`${projectRoot}/packages/5/hero.gd`, "local draft");
+    const { tree, files } = makeFiles();
+    put(tree, 5, "hero.gd", "local draft");
     vi.mocked(api.getPackageManifest).mockResolvedValue(
       manifestOf(4, { "hero.gd": await sha256Hex(encoder.encode("published")) })
     );
@@ -388,13 +378,14 @@ describe("reconcilePackageRevision", () => {
     });
 
     expect(result.status).toBe("conflict");
-    expect(fs.read(`${projectRoot}/packages/5/hero.gd`)).toBe("local draft");
+    expect(tree.get(5)?.get("hero.gd")).toBe("local draft");
+    expect(files.replaceContents).not.toHaveBeenCalled();
     expect(api.getRevisionFile).not.toHaveBeenCalled();
   });
 
   it("replaces local files when the user explicitly forces the revision", async () => {
-    const { fs, files } = makeFiles();
-    fs.put(`${projectRoot}/packages/5/hero.gd`, "local draft");
+    const { tree, files } = makeFiles();
+    put(tree, 5, "hero.gd", "local draft");
     vi.mocked(api.getPackageManifest).mockResolvedValue(
       manifestOf(4, { "hero.gd": await sha256Hex(encoder.encode("published")) })
     );
@@ -410,6 +401,9 @@ describe("reconcilePackageRevision", () => {
     );
 
     expect(result.status).toBe("applied");
-    expect(fs.read(`${projectRoot}/packages/5/hero.gd`)).toBe("published");
+    expect(tree.get(5)?.get("hero.gd")).toBe("published");
+    expect(vi.mocked(files.snapshot).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(files.replaceContents).mock.invocationCallOrder[0]
+    );
   });
 });

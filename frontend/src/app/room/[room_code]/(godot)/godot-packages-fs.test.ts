@@ -1,372 +1,291 @@
 import { PackageFileEntry, PackageManifest } from "@wired-io/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
+  EditorBridgeOperationError,
+  type EditorBridgeClient,
+} from "./editor-bridge";
+import {
   GodotFsError,
-  PackageFileSystem,
   applyPackageRevision,
-  type EmscriptenFs,
+  assertRelativePackagePath,
+  createPackageFileSystem,
+  type PackageEngine,
+  type PackageFileSystem,
 } from "./godot-packages-fs";
 import { sha256Hex } from "@/utils/sha256";
 
-/**
- * Minimal in-memory stand-in for the Emscripten FS exposed by the Godot editor
- * build. It mirrors the semantics that matter here: writeFile does not create
- * missing directories, readdir lists direct children, and stat reports the
- * mode bits that separate directories from files.
- */
-class FakeFs implements EmscriptenFs {
-  files = new Map<string, Uint8Array>();
-  dirs = new Set<string>(["/"]);
-  syncCalls = 0;
-  failWrites: (path: string) => boolean = () => false;
-
-  private addDir(path: string) {
-    const parts = path.split("/").filter(Boolean);
-    let current = "";
-    for (const part of parts) {
-      current += `/${part}`;
-      this.dirs.add(current);
-    }
-  }
-
-  mkdirTree(path: string) {
-    this.addDir(path);
-  }
-
-  writeFile(path: string, data: Uint8Array) {
-    if (!this.dirs.has(dirname(path))) {
-      throw new Error(`ENOENT: no such directory ${dirname(path)}`);
-    }
-    if (this.failWrites(path)) {
-      throw new Error(`ENOSPC: cannot write ${path}`);
-    }
-    this.files.set(path, Uint8Array.from(data));
-  }
-
-  readFile(path: string) {
-    const data = this.files.get(path);
-    if (!data) throw new Error(`ENOENT: no such file ${path}`);
-    return Uint8Array.from(data);
-  }
-
-  readdir(path: string) {
-    if (!this.dirs.has(path)) throw new Error(`ENOENT: ${path}`);
-    const prefix = path.endsWith("/") ? path : `${path}/`;
-    const names = new Set<string>();
-    for (const entry of [...this.dirs, ...this.files.keys()]) {
-      if (entry === path || !entry.startsWith(prefix)) continue;
-      names.add(entry.slice(prefix.length).split("/")[0]);
-    }
-    return [...names];
-  }
-
-  stat(path: string) {
-    if (this.dirs.has(path)) return { mode: 0o040755, size: 0 };
-    const data = this.files.get(path);
-    if (!data) throw new Error(`ENOENT: ${path}`);
-    return { mode: 0o100644, size: data.byteLength };
-  }
-
-  unlink(path: string) {
-    if (!this.files.delete(path)) throw new Error(`ENOENT: ${path}`);
-  }
-
-  rmdir(path: string) {
-    if (!this.dirs.delete(path)) throw new Error(`ENOENT: ${path}`);
-  }
-
-  rename(oldPath: string, newPath: string) {
-    if (!this.dirs.has(oldPath) && !this.files.has(oldPath)) {
-      throw new Error(`ENOENT: ${oldPath}`);
-    }
-    const prefix = `${oldPath}/`;
-    for (const dir of [...this.dirs]) {
-      if (dir === oldPath) {
-        this.dirs.delete(dir);
-        this.addDir(newPath);
-      } else if (dir.startsWith(prefix)) {
-        this.dirs.delete(dir);
-        this.addDir(`${newPath}/${dir.slice(prefix.length)}`);
-      }
-    }
-    for (const file of [...this.files.keys()]) {
-      if (!file.startsWith(prefix)) continue;
-      const contents = this.files.get(file)!;
-      this.files.delete(file);
-      const target = `${newPath}/${file.slice(prefix.length)}`;
-      this.addDir(dirname(target));
-      this.files.set(target, contents);
-    }
-  }
-
-  syncfs(populate: boolean, callback: (error?: unknown) => void) {
-    this.syncCalls += 1;
-    expect(populate).toBe(false);
-    callback();
-  }
-
-  put(path: string, content: string) {
-    this.addDir(dirname(path));
-    this.files.set(path, new TextEncoder().encode(content));
-  }
-
-  read(path: string) {
-    return new TextDecoder().decode(this.readFile(path));
-  }
-
-  has(path: string) {
-    return this.files.has(path);
-  }
-}
-
-function dirname(path: string) {
-  const index = path.lastIndexOf("/");
-  return index <= 0 ? "/" : path.slice(0, index);
-}
-
+const projectRoot = "/home/web_user/Wired";
+const stagingPath = `${projectRoot}/packages/.7.staging`;
 const encoder = new TextEncoder();
 const data = (value: string) => encoder.encode(value);
 
-function makeFs() {
-  const fs = new FakeFs();
-  fs.put("/home/web_user/Wired/project.godot", "config_version=5");
-  fs.put("/home/web_user/Wired/_wired/scripts/global/global.gd", "extends Node");
-  return { fs, files: new PackageFileSystem(fs, "/home/web_user/Wired") };
+type Handler = (params: Record<string, unknown>) => unknown;
+
+function makeEngine(tree: Map<string, Uint8Array>, order: string[]): PackageEngine {
+  return {
+    copyToFS: vi.fn((path: string, contents: Uint8Array) => {
+      order.push(`copy:${path}`);
+      tree.set(path.replace(`${projectRoot}/`, ""), contents);
+    }),
+  };
 }
 
-const entry = async (filepath: string, content: string): Promise<PackageFileEntry> => ({
-  filepath,
-  size: data(content).byteLength,
-  sha256: await sha256Hex(data(content)),
+/**
+ * Stands in for the editor plugin. Handlers answer with the exact payloads the
+ * GDScript plugin sends; every bridge call and every engine write is recorded
+ * in `order` so a test can assert the sequence of a replacement.
+ */
+function makeWorkspace(overrides: Record<string, Handler> = {}) {
+  const tree = new Map<string, Uint8Array>();
+  const order: string[] = [];
+  const syncHandler = vi.fn();
+  let engine = makeEngine(tree, order);
+
+  const handlers: Record<string, Handler> = {
+    exists: () => ({ exists: true }),
+    snapshot: () => ({ files: {} }),
+    collect: () => ({ files: [] }),
+    prepareReplace: () => ({ staging_path: stagingPath }),
+    replace: () => ({ written: [], deleted: [] }),
+    createDir: () => ({}),
+    delete: () => ({}),
+    sync: () => {
+      syncHandler();
+      return {};
+    },
+    ...overrides,
+  };
+
+  const bridge = {
+    call: vi.fn(async (op: string, params: Record<string, unknown> = {}) => {
+      order.push(op);
+      const handler = handlers[op];
+      if (!handler) throw new Error(`unexpected operation: ${op}`);
+      return handler(params);
+    }),
+  } as unknown as EditorBridgeClient;
+
+  const files: PackageFileSystem = createPackageFileSystem({
+    bridge,
+    getEngine: () => engine,
+    projectRoot,
+  });
+
+  return {
+    files,
+    bridge,
+    tree,
+    order,
+    syncHandler,
+    get engine() {
+      return engine;
+    },
+    swapEngine(next: PackageEngine) {
+      engine = next;
+    },
+  };
+}
+
+describe("assertRelativePackagePath", () => {
+  it("rejects unsafe package paths", () => {
+    for (const path of ["../x", "/x", "a\\b"]) {
+      expect(() => assertRelativePackagePath(path)).toThrow(GodotFsError);
+    }
+  });
 });
 
 describe("PackageFileSystem", () => {
-  it("creates an empty package directory and persists it", async () => {
-    const { fs, files } = makeFs();
-
-    await files.createPackageDir(3);
-
-    expect(fs.dirs.has("/home/web_user/Wired/packages/3")).toBe(true);
-    expect(fs.syncCalls).toBe(1);
-    await expect(files.listFiles(3)).resolves.toEqual([]);
-  });
-
-  it("reports whether a package directory exists", () => {
-    const { files } = makeFs();
-
-    expect(files.exists(3)).toBe(false);
-    files.writeFile(3, "hero.gd", data("extends Node"));
-    expect(files.exists(3)).toBe(true);
-  });
-
-  it("writes and reads nested package files", () => {
-    const { fs, files } = makeFs();
-
-    files.writeFile(3, "scripts/hero.gd", data("extends Node"));
-
-    expect(fs.read("/home/web_user/Wired/packages/3/scripts/hero.gd")).toBe(
-      "extends Node"
-    );
-    expect([...files.readFile(3, "scripts/hero.gd")]).toEqual([
-      ...data("extends Node"),
-    ]);
-  });
-
-  it("refuses paths that leave the package directory", () => {
-    const { files } = makeFs();
-
-    expect(() => files.writeFile(3, "../4/hero.gd", data("x"))).toThrow(
-      GodotFsError
-    );
-    expect(() => files.writeFile(3, "/etc/passwd", data("x"))).toThrow(
-      GodotFsError
-    );
-    expect(() => files.readFile(3, "a/../../b.gd")).toThrow(GodotFsError);
-  });
-
-  it("lists package files recursively as sorted relative paths", async () => {
-    const { files } = makeFs();
-    files.writeFile(3, "scenes/b.tscn", data("b"));
-    files.writeFile(3, "scripts/hero.gd", data("hero"));
-    files.writeFile(3, "package.json", data("{}"));
-
-    await expect(files.listFiles(3)).resolves.toEqual([
-      "package.json",
-      "scenes/b.tscn",
-      "scripts/hero.gd",
-    ]);
-  });
-
-  it("lists nothing for a package that was never written", async () => {
-    const { files } = makeFs();
-    await expect(files.listFiles(9)).resolves.toEqual([]);
-  });
-
-  it("reports a missing file with a readable error", () => {
-    const { files } = makeFs();
-    expect(() => files.readFile(3, "missing.gd")).toThrow(GodotFsError);
-  });
-
-  it("prunes stale files only inside the managed package directory", async () => {
-    const { fs, files } = makeFs();
-    files.writeFile(3, "keep.gd", data("keep"));
-    files.writeFile(3, "old/stale.gd", data("stale"));
-    files.writeFile(4, "other-package.gd", data("other"));
-
-    const deleted = await files.prune(3, ["keep.gd"]);
-
-    expect(deleted).toEqual(["old/stale.gd"]);
-    expect(await files.listFiles(3)).toEqual(["keep.gd"]);
-    expect(fs.has("/home/web_user/Wired/packages/4/other-package.gd")).toBe(
-      true
-    );
-    expect(fs.has("/home/web_user/Wired/project.godot")).toBe(true);
-    expect(fs.has("/home/web_user/Wired/_wired/scripts/global/global.gd")).toBe(
-      true
-    );
-  });
-
-  it("removes directories that became empty after pruning", async () => {
-    const { fs, files } = makeFs();
-    files.writeFile(3, "old/deep/stale.gd", data("stale"));
-
-    await files.prune(3, []);
-
-    expect(fs.dirs.has("/home/web_user/Wired/packages/3/old/deep")).toBe(false);
-    expect(fs.dirs.has("/home/web_user/Wired/packages/3/old")).toBe(false);
-    expect(fs.dirs.has("/home/web_user/Wired/packages/3")).toBe(true);
-  });
-
-  it("collects every package file with its size and sha256", async () => {
-    const { files } = makeFs();
-    files.writeFile(3, "scripts/hero.gd", data("extends Node"));
+  it("decodes base64 from collect", async () => {
+    const { files, bridge } = makeWorkspace({
+      collect: () => ({
+        files: [
+          {
+            filepath: "main.gd",
+            size: 4,
+            sha256: "a".repeat(64),
+            contents_base64: btoa("test"),
+          },
+        ],
+      }),
+    });
 
     const collected = await files.collectFiles(3);
 
-    expect(collected.map((file) => file.entry)).toEqual([
-      {
-        filepath: "scripts/hero.gd",
-        size: "extends Node".length,
-        sha256: await sha256Hex(data("extends Node")),
-      },
-    ]);
-    expect([...collected[0].contents]).toEqual([...data("extends Node")]);
-  });
-
-  it("snapshots source hashes without editor metadata", async () => {
-    const { files } = makeFs();
-    files.writeFile(3, "hero.gd", data("extends Node"));
-    files.writeFile(3, "hero.gd.uid", data("uid"));
-
-    const snapshot = await files.snapshot(3);
-
-    expect(snapshot).toEqual({
-      "hero.gd": await sha256Hex(data("extends Node")),
+    expect(bridge.call).toHaveBeenCalledWith("collect", { packageId: 3 });
+    expect(collected).toHaveLength(1);
+    expect(collected[0].entry).toEqual({
+      filepath: "main.gd",
+      size: 4,
+      sha256: "a".repeat(64),
     });
+    expect([...collected[0].contents]).toEqual([116, 101, 115, 116]);
   });
 
-  it("flushes writes to the persistent file system", async () => {    const { fs, files } = makeFs();
-    await files.sync();
-    expect(fs.syncCalls).toBe(1);
+  it("writes staging then swaps", async () => {
+    const { files, tree, order } = makeWorkspace({
+      replace: () => ({ written: ["main.gd", "scenes/a.tscn"], deleted: ["old.gd"] }),
+    });
+
+    const result = await files.replaceContents(
+      7,
+      new Map([
+        ["main.gd", data("main")],
+        ["scenes/a.tscn", data("[gd_scene]")],
+      ]),
+    );
+
+    expect(result).toEqual({
+      written: ["main.gd", "scenes/a.tscn"],
+      deleted: ["old.gd"],
+    });
+    expect(tree.get("packages/.7.staging/main.gd")).toEqual(data("main"));
+    expect(tree.get("packages/.7.staging/scenes/a.tscn")).toEqual(
+      data("[gd_scene]"),
+    );
+    expect(order).toEqual([
+      "prepareReplace",
+      `copy:${stagingPath}/main.gd`,
+      `copy:${stagingPath}/scenes/a.tscn`,
+      "replace",
+      "sync",
+    ]);
   });
 
-  it("fails clearly when the editor file system is not ready", () => {
-    expect(() => new PackageFileSystem(undefined as never, "/x")).toThrow(
-      GodotFsError
+  it("surfaces a missing staging directory", async () => {
+    const { files, order } = makeWorkspace({
+      replace: () => {
+        throw new EditorBridgeOperationError("staging не найден");
+      },
+    });
+
+    await expect(
+      files.replaceContents(7, new Map([["main.gd", data("main")]])),
+    ).rejects.toThrow("staging не найден");
+
+    expect(order).not.toContain("sync");
+  });
+
+  it("keeps editor metadata out of collect", async () => {
+    const entries = [
+      {
+        filepath: "hero.gd",
+        size: 4,
+        sha256: "1".repeat(64),
+        contents_base64: btoa("hero"),
+      },
+      {
+        filepath: "hero.gd.uid",
+        size: 3,
+        sha256: "2".repeat(64),
+        contents_base64: btoa("uid"),
+      },
+      {
+        filepath: ".godot/cache",
+        size: 5,
+        sha256: "3".repeat(64),
+        contents_base64: btoa("cache"),
+      },
+    ];
+    const { files, bridge } = makeWorkspace({ collect: () => ({ files: entries }) });
+
+    const collected = await files.collectFiles(7);
+
+    // Filtering is the plugin's job: whatever it collected is passed through.
+    expect(bridge.call).toHaveBeenCalledTimes(1);
+    expect(collected.map((file) => file.entry.filepath)).toEqual([
+      "hero.gd",
+      "hero.gd.uid",
+      ".godot/cache",
+    ]);
+    expect([...collected[2].contents]).toEqual([...data("cache")]);
+  });
+
+  it("reads existence and snapshot hashes from the bridge", async () => {
+    const hashes = { "main.gd": "a".repeat(64) };
+    const { files, bridge } = makeWorkspace({
+      exists: () => ({ exists: false }),
+      snapshot: () => ({ files: hashes }),
+    });
+
+    await expect(files.exists(4)).resolves.toBe(false);
+    await expect(files.snapshot(4)).resolves.toEqual(hashes);
+    expect(bridge.call).toHaveBeenCalledWith("exists", { packageId: 4 });
+    expect(bridge.call).toHaveBeenCalledWith("snapshot", { packageId: 4 });
+  });
+
+  it("creates and deletes the package directory through the bridge", async () => {
+    const { files, order, syncHandler } = makeWorkspace();
+
+    await files.createPackageDir(4);
+    await files.deletePackage(4);
+
+    expect(order).toEqual(["createDir", "sync", "delete", "sync"]);
+    expect(syncHandler).toHaveBeenCalledTimes(2);
+    expect(files.packageDir(4)).toBe(`${projectRoot}/packages/4`);
+  });
+
+  it("uses the live engine", async () => {
+    const workspace = makeWorkspace();
+    const firstEngine = workspace.engine;
+    const nextEngine = makeEngine(workspace.tree, workspace.order);
+    workspace.swapEngine(nextEngine);
+
+    await workspace.files.replaceContents(
+      7,
+      new Map([["main.gd", data("main")]]),
+    );
+
+    expect(firstEngine.copyToFS).not.toHaveBeenCalled();
+    expect(nextEngine.copyToFS).toHaveBeenCalledWith(
+      `${stagingPath}/main.gd`,
+      data("main"),
+    );
+    expect(workspace.tree.get("packages/.7.staging/main.gd")).toEqual(
+      data("main"),
     );
   });
 });
 
 describe("applyPackageRevision", () => {
   const manifest: PackageManifest = {
-    packageId: 3,
+    packageId: 7,
     name: "Heroes",
     revision: 2,
     files: [],
     totalSize: 0,
-    publishedAt: "2026-10-29T00:00:00.000Z",
+    publishedAt: "2026-10-31T00:00:00.000Z",
   };
 
-  it("writes verified files and prunes files of the previous revision", async () => {
-    const { files } = makeFs();
-    files.writeFile(3, "old.gd", data("old"));
-    const hero = await entry("scripts/hero.gd", "extends Node");
-    const scene = await entry("scenes/hero.tscn", "[gd_scene]");
+  it("does not write when applyPackageRevision fails verification", async () => {
+    const hero: PackageFileEntry = {
+      filepath: "scripts/hero.gd",
+      size: data("extends Node").byteLength,
+      sha256: "0".repeat(64),
+    };
+    const { files, bridge, engine, order } = makeWorkspace();
 
-    const result = await applyPackageRevision({
-      files,
-      manifest: { ...manifest, files: [hero, scene] },
-      download: async (filepath) =>
-        data(filepath === hero.filepath ? "extends Node" : "[gd_scene]"),
+    await expect(
+      applyPackageRevision({
+        files,
+        manifest: { ...manifest, files: [hero] },
+        download: async () => data("extends Node"),
+      }),
+    ).rejects.toThrow(/sha256/i);
+
+    expect(bridge.call).not.toHaveBeenCalled();
+    expect(engine.copyToFS).not.toHaveBeenCalled();
+    expect(order).toEqual([]);
+  });
+
+  it("applies a verified revision through replaceContents", async () => {
+    const hero: PackageFileEntry = {
+      filepath: "scripts/hero.gd",
+      size: data("extends Node").byteLength,
+      sha256: await sha256Hex(data("extends Node")),
+    };
+    const { files, engine } = makeWorkspace({
+      replace: () => ({ written: ["scripts/hero.gd"], deleted: [] }),
     });
-
-    expect(result.written).toEqual(["scenes/hero.tscn", "scripts/hero.gd"]);
-    expect(result.deleted).toEqual(["old.gd"]);
-    expect(await files.listFiles(3)).toEqual([
-      "scenes/hero.tscn",
-      "scripts/hero.gd",
-    ]);
-  });
-
-  it("changes nothing when a downloaded file does not match its hash", async () => {
-    const { files } = makeFs();
-    files.writeFile(3, "keep.gd", data("keep"));
-    const hero = await entry("scripts/hero.gd", "extends Node");
-
-    await expect(
-      applyPackageRevision({
-        files,
-        manifest: { ...manifest, files: [hero] },
-        download: async () => data("tamperedNode"),
-      })
-    ).rejects.toThrow(/sha-?256/i);
-
-    expect(await files.listFiles(3)).toEqual(["keep.gd"]);
-  });
-
-  it("changes nothing when a downloaded file has the wrong size", async () => {
-    const { files } = makeFs();
-    const hero = await entry("scripts/hero.gd", "extends Node");
-
-    await expect(
-      applyPackageRevision({
-        files,
-        manifest: { ...manifest, files: [hero] },
-        download: async () => data("extends Node!"),
-      })
-    ).rejects.toThrow(/size/i);
-
-    expect(await files.listFiles(3)).toEqual([]);
-  });
-
-  it("keeps the previous revision when staging fails in the middle", async () => {
-    const { fs, files } = makeFs();
-    files.writeFile(3, "keep.gd", data("keep"));
-    const first = await entry("a.gd", "a");
-    const last = await entry("z.gd", "z");
-    fs.failWrites = (path) => path.endsWith("/z.gd");
-
-    await expect(
-      applyPackageRevision({
-        files,
-        manifest: { ...manifest, files: [first, last] },
-        download: async (filepath) =>
-          data(filepath === first.filepath ? "a" : "z"),
-      })
-    ).rejects.toThrow(GodotFsError);
-
-    expect(await files.listFiles(3)).toEqual(["keep.gd"]);
-    expect([...fs.files.keys()].filter((path) => path.includes(".staging"))).toEqual(
-      []
-    );
-  });
-
-  it("carries editor metadata over and never publishes it", async () => {
-    const { files } = makeFs();
-    files.writeFile(3, "hero.gd", data("old"));
-    files.writeFile(3, "hero.gd.uid", data("uid-local"));
-    files.writeFile(3, "art.png.import", data("[remap]"));
-    const hero = await entry("hero.gd", "extends Node");
 
     const result = await applyPackageRevision({
       files,
@@ -374,61 +293,10 @@ describe("applyPackageRevision", () => {
       download: async () => data("extends Node"),
     });
 
-    expect(result.deleted).toEqual([]);
-    expect(await files.listFiles(3)).toEqual([
-      "art.png.import",
-      "hero.gd",
-      "hero.gd.uid",
-    ]);
-    expect([...files.readFile(3, "hero.gd.uid")]).toEqual([
-      ...data("uid-local"),
-    ]);
-  });
-
-  it("collects only package sources, not editor metadata", async () => {
-    const { files } = makeFs();
-    files.writeFile(3, "hero.gd", data("extends Node"));
-    files.writeFile(3, "hero.gd.uid", data("uid"));
-    files.writeFile(3, "art.png.import", data("[remap]"));
-    files.writeFile(3, ".godot/cache", data("cache"));
-
-    const collected = await files.collectFiles(3);
-
-    expect(collected.map((file) => file.entry.filepath)).toEqual(["hero.gd"]);
-  });
-
-  it("prunes nothing outside the package when the manifest is empty", async () => {
-    const { fs, files } = makeFs();
-    files.writeFile(3, "old.gd", data("old"));
-
-    await applyPackageRevision({
-      files,
-      manifest: { ...manifest, files: [] },
-      download: vi.fn(),
-    });
-
-    expect(await files.listFiles(3)).toEqual([]);
-    expect(fs.has("/home/web_user/Wired/project.godot")).toBe(true);
-  });
-
-  it("reports download progress per file", async () => {
-    const { files } = makeFs();
-    const hero = await entry("scripts/hero.gd", "extends Node");
-    const scene = await entry("scenes/hero.tscn", "[gd_scene]");
-    const onProgress = vi.fn();
-
-    await applyPackageRevision({
-      files,
-      manifest: { ...manifest, files: [hero, scene] },
-      download: async (filepath) =>
-        data(filepath === hero.filepath ? "extends Node" : "[gd_scene]"),
-      onProgress,
-    });
-
-    expect(onProgress.mock.calls).toEqual([
-      [0, 2],
-      [1, 2],
-      [2, 2],
-    ]);
+    expect(result).toEqual({ written: ["scripts/hero.gd"], deleted: [] });
+    expect(engine.copyToFS).toHaveBeenCalledWith(
+      `${stagingPath}/scripts/hero.gd`,
+      data("extends Node"),
+    );
   });
 });
