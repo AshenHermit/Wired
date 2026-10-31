@@ -24,6 +24,18 @@ export function GodotEditor({
 }) {
   const editorInstanceRef = React.useRef<GodotEditorInstance | null>(null);
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  // The engine script is fetched once per document. `next/script` keeps that in
+  // a module-level cache and never fires `onLoad` again when the component
+  // re-mounts, so deriving readiness from `onLoad` alone left the editor stuck
+  // on "loading" after navigating out of the room and back. Read the global
+  // that the script defines and rely on `onReady`, which runs on every mount.
+  //
+  // The probe runs in an effect instead of a state initializer on purpose: the
+  // engine must be created by an effect that is *not* part of the initial mount,
+  // because React StrictMode double-invokes mount effects and the Godot glue
+  // keeps one shared `init` promise per document — a second instance created
+  // that way never gets its own engine ("Engine must be inited before copying
+  // files").
   const [scriptsLoaded, setScriptsLoaded] = React.useState(false);
   const [status, setStatus] = React.useState<EditorLoadStatus>("loading");
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
@@ -65,32 +77,49 @@ export function GodotEditor({
     setStatus("error");
   }, []);
 
+  // Callbacks are read through a ref: the packages hook recreates them between
+  // renders, and the editor must not be rebuilt just because a callback changed.
+  const callbacksRef = React.useRef({ loadEditor, handleFailure });
   React.useEffect(() => {
-    if (scriptsLoaded && canvasRef.current) {
-      const editor = new GodotEditorInstance();
-      editorInstanceRef.current = editor;
-      editor.events.addListener("onLoadStatusChange", setStatus);
-      editor.events.addListener("onProgressStatusChange", setProgressStatus);
-      editor.events.addListener("onProgressValueChange", setProgressValue);
-      editor.events.addListener("onFailure", handleFailure);
-      editor.setCanvas(canvasRef.current);
+    callbacksRef.current = { loadEditor, handleFailure };
+  }, [handleFailure, loadEditor]);
 
-      void loadEditor(editor);
-
-      return () => {
-        editor.events.removeAllListeners();
-        if (editorInstanceRef.current === editor) {
-          editorInstanceRef.current = null;
-        }
-      };
+  React.useEffect(() => {
+    if (typeof window.Engine !== "undefined") {
+      setScriptsLoaded(true);
     }
-  }, [handleFailure, loadEditor, scriptsLoaded]);
+  }, []);
+
+  React.useEffect(() => {
+    if (!scriptsLoaded || !canvasRef.current) {
+      return;
+    }
+    const canvas = canvasRef.current;
+    const editor = new GodotEditorInstance();
+    editorInstanceRef.current = editor;
+    editor.events.addListener("onLoadStatusChange", setStatus);
+    editor.events.addListener("onProgressStatusChange", setProgressStatus);
+    editor.events.addListener("onProgressValueChange", setProgressValue);
+    editor.events.addListener("onFailure", (message: string) =>
+      callbacksRef.current.handleFailure(message)
+    );
+    editor.setCanvas(canvas);
+
+    void callbacksRef.current.loadEditor(editor);
+
+    return () => {
+      editor.events.removeAllListeners();
+      if (editorInstanceRef.current === editor) {
+        editorInstanceRef.current = null;
+      }
+    };
+  }, [scriptsLoaded]);
 
   return (
     <>
       <Script
         src={`${GODOT_EDITOR_URL}/godot.editor.js`}
-        onLoad={() => setScriptsLoaded(true)}
+        onReady={() => setScriptsLoaded(true)}
       />
       <div className="absolute top-0 left-0 w-full h-full">
         <canvas
