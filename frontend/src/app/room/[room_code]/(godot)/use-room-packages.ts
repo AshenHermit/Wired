@@ -550,7 +550,10 @@ export function useRoomPackages(
       if (cause instanceof EditorBridgeError) {
         dropBridge(cause);
       } else {
+        // Not a transport loss, so no readiness drop and no transport message,
+        // but the initial path must not dead-end: the loop re-probes.
         setError(`Пакеты недоступны: ${errorMessage(cause)}`);
+        startReconnectLoop();
       }
       return false;
     }
@@ -563,7 +566,7 @@ export function useRoomPackages(
     setError(null);
     void refresh();
     return true;
-  }, [dropBridge, refresh, stopReconnectLoop]);
+  }, [dropBridge, refresh, startReconnectLoop, stopReconnectLoop]);
 
   React.useEffect(() => {
     connectRef.current = connect;

@@ -596,6 +596,41 @@ describe("useRoomPackages", () => {
     }
   });
 
+  it("retries when the initial probe is rejected by the plugin", async () => {
+    vi.useFakeTimers();
+    try {
+      bridgeWith();
+      fs.sync.mockRejectedValueOnce(
+        new EditorBridgeOperationError("sync не выполнен"),
+      );
+      const { result, unmount } = renderHook(() =>
+        useRoomPackages(1, ONE_PACKAGE),
+      );
+      await act(async () => {
+        result.current.afterEditorStart(makeEditor());
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      // A rejected operation is not a transport loss: it is reported as a
+      // package problem and readiness stays false…
+      expect(result.current.fsReady).toBe(false);
+      expect(result.current.error).toContain("Пакеты недоступны");
+      expect(result.current.error).toContain("sync не выполнен");
+
+      // …and the initial connect path keeps retrying, like a loop tick does.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(result.current.fsReady).toBe(true);
+      expect(result.current.error).toBeNull();
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps readiness when the plugin rejects a single operation", async () => {
     const { result, unmount } = await startHook();
     fs.put(5, HERO, "local draft");
