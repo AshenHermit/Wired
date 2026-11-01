@@ -68,6 +68,7 @@ func _run() -> void:
 	_test_hot_reload_rebuilds_live_components()
 	_test_removed_component_state_survives_until_the_package_returns()
 	_test_purge_package_drops_parked_component_state()
+	_test_purge_missing_packages_keeps_listed_packages()
 	_test_spawn_waits_for_both_gates_and_routes_actions()
 	_test_disconnect_despawns_the_player()
 	_test_spawner_parents_the_spawned_player()
@@ -654,6 +655,77 @@ func _test_purge_package_drops_parked_component_state() -> void:
 	)
 
 
+## `room-packages` prunes parked component state by the authoritative id list:
+## a listed package keeps its state on a live player, an unlisted one loses it.
+func _test_purge_missing_packages_keeps_listed_packages() -> void:
+	var registry := _make_two_package_registry(42, 99)
+	var manager := _make_live_manager(registry)
+	var player := _first_live_player(manager)
+	if player == null:
+		return
+	var keys := {}
+	for component: WiredPlayerComponent in player.components:
+		keys[component.package_id] = component.state_key()
+	_check(
+		keys.has("42") and keys.has("99"),
+		"the purge-missing test needs a component per package, got %s"
+		% [keys.keys()],
+	)
+	if not (keys.has("42") and keys.has("99")):
+		return
+
+	# Unregister both packages: each component's last state is parked on the
+	# player, which is exactly the state `room-packages` is allowed to prune.
+	registry.clear_package("42")
+	registry.clear_package("99")
+	manager.rebuild_live_components()
+	var parked: Dictionary = player.save_state().get("components", {})
+	_check(
+		parked.has(keys["42"]) and parked.has(keys["99"]),
+		"the purge-missing test needs parked state for both packages, got %s"
+		% [parked.keys()],
+	)
+
+	manager.purge_missing_packages(PackedStringArray(["42"]))
+	parked = player.save_state().get("components", {})
+	_check(
+		parked.has(keys["42"]),
+		"a listed package must keep its parked component state, got %s"
+		% [parked.keys()],
+	)
+	_check(
+		not parked.has(keys["99"]),
+		"an unlisted package must lose its parked component state, got %s"
+		% [parked.keys()],
+	)
+
+	# A player waiting for its next spawn keeps its record in `_saved_states`;
+	# the same authoritative list has to prune that state as well.
+	manager.load_state(
+		{
+			"players": [
+				{
+					"player_id": 8,
+					"components": {keys["42"]: {}, keys["99"]: {}},
+				},
+			],
+		}
+	)
+	manager.purge_missing_packages(PackedStringArray(["42"]))
+	var saved: Dictionary = manager._saved_states.get(8, {})
+	var saved_components: Dictionary = saved.get("components", {})
+	_check(
+		saved_components.has(keys["42"]),
+		"a listed package must keep its saved component state, got %s"
+		% [saved_components.keys()],
+	)
+	_check(
+		not saved_components.has(keys["99"]),
+		"an unlisted package must lose its saved component state, got %s"
+		% [saved_components.keys()],
+	)
+
+
 func _test_spawn_waits_for_both_gates_and_routes_actions() -> void:
 	var registry := _make_registry()
 	var net := WiredNetwork.new()
@@ -983,6 +1055,26 @@ func _make_numeric_registry(package_id: int) -> WiredPackageRegistry:
 	registration.package_id = id
 	registration.add_player_component(
 		COMPONENT_SCENE, {"order": 10, "authority": "server"}
+	)
+	registry.add_registration(registration)
+	return registry
+
+
+func _make_two_package_registry(
+	first_id: int, second_id: int
+) -> WiredPackageRegistry:
+	var registry := _make_numeric_registry(first_id)
+	if first_id == second_id:
+		return registry
+	var id := str(second_id)
+	var context := WiredPackageContext.new()
+	context.package_id = id
+	context.root_path = FIXTURE_ROOT
+	registry.register_context(id, context)
+	var registration := WiredPackageRegistration.new()
+	registration.package_id = id
+	registration.add_player_component(
+		COMPONENT_SCENE, {"order": 20, "authority": "server"}
 	)
 	registry.add_registration(registration)
 	return registry

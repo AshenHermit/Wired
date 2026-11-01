@@ -47,6 +47,16 @@ class FakeDynamicEntity extends Node:
 		}
 
 
+## Records the parsed id list that `_apply_room_packages` hands to the players
+## manager, so the suite proves both purges receive the same authoritative list.
+class FakePlayersManager extends PlayersManager:
+
+	var purged_missing: Array = []
+
+	func purge_missing_packages(package_ids: PackedStringArray) -> void:
+		purged_missing.append(package_ids)
+
+
 ## Source of the package-op probe. It must be compiled at runtime: this suite is
 ## the `--script` entry point, so a parse-time `extends` of `main_scene.gd` is
 ## resolved before the `Global` autoload exists and fails with
@@ -196,6 +206,21 @@ func make_stubs() -> void:
 """
 
 
+## Source of the room-packages probe. Runtime compilation is needed for the same
+## reason as the other probes; only the two collaborators are replaced, and the
+## real dynamic world is kept so its parked records stay observable.
+const ROOM_PACKAGES_PROBE_SOURCE := """
+extends "res://_wired/scripts/main_scene.gd"
+
+func _ready() -> void:
+	pass
+
+func make_stubs(world: DynamicWorldContainer, players: PlayersManager) -> void:
+	_dynamic_world = world
+	_players = players
+"""
+
+
 func _initialize() -> void:
 	_run.call_deferred()
 
@@ -204,6 +229,7 @@ func _run() -> void:
 	_test_main_scene_uses_the_authored_dynamic_spawner()
 	_test_save_and_load_round_trip()
 	_test_parked_dynamic_records_are_saved_and_reseeded()
+	_test_room_packages_purges_only_unlisted_ids()
 	await _test_package_ops_are_serialized()
 	await _test_world_snapshot_waits_for_a_running_package_op()
 	await _test_reconcile_unloads_a_package_missing_from_the_server()
@@ -360,6 +386,49 @@ func _test_parked_dynamic_records_are_saved_and_reseeded() -> void:
 		"the restored entity must keep its saved id, got %s"
 		% [reloaded._entities.keys()],
 	)
+
+
+## `room-packages <csv>` carries the authoritative publish list: parked records
+## of every package the room still lists must survive, records of a package that
+## is gone must be dropped. Parse quirks of the wire format must not change it.
+func _test_room_packages_purges_only_unlisted_ids() -> void:
+	var probe: Variant = _make_room_packages_probe()
+	if probe == null:
+		return
+	var world := probe._dynamic_world as DynamicWorldContainer
+	var players: Variant = probe._players
+	world.seed_pending(_room_package_records(10))
+
+	probe._apply_room_packages("42,43")
+
+	var kept := _pending_packages(world)
+	_check(
+		kept.has(42) and kept.has(43),
+		"room-packages must keep the parked records of every listed package, got %s"
+		% [kept],
+	)
+	_check(
+		not kept.has(99),
+		"room-packages must drop the parked record of an unlisted package, got %s"
+		% [kept],
+	)
+	_check(
+		players.purged_missing == [PackedStringArray(["42", "43"])],
+		"room-packages must hand the parsed ids to the players manager, got %s"
+		% [players.purged_missing],
+	)
+
+	# The command is a comma-separated wire string: surrounding spaces and empty
+	# entries must be ignored instead of inventing or losing a package.
+	world.seed_pending(_room_package_records(20))
+	probe._apply_room_packages(" 42 , ,43 ")
+	kept = _pending_packages(world)
+	_check(
+		kept.has(42) and kept.has(43) and not kept.has(99),
+		"spaces and empty entries must not change the parsed package list, got %s"
+		% [kept],
+	)
+	probe.free()
 
 
 ## The queue is the only entry point that mutates packages, so a suspended apply
@@ -751,6 +820,46 @@ func _make_entry_probe() -> Variant:
 	probe.make_stubs()
 	root.add_child(probe)
 	return probe
+
+
+## Compiles the room-packages probe (see `ROOM_PACKAGES_PROBE_SOURCE`) and wires
+## a real dynamic world, whose parked records the suite inspects, plus a
+## recording players manager so both purges are proven to receive the same ids.
+func _make_room_packages_probe() -> Variant:
+	var script := GDScript.new()
+	script.source_code = ROOM_PACKAGES_PROBE_SOURCE
+	var err := script.reload()
+	_check(err == OK, "the room-packages probe must compile, err=%d" % err)
+	if err != OK:
+		return null
+	var probe: Variant = script.new()
+	_check(probe != null, "the room-packages probe must instantiate")
+	if probe == null:
+		return null
+	var players := FakePlayersManager.new()
+	_owned.append(players)
+	probe.make_stubs(_new_world(), players)
+	return probe
+
+
+## Three parked records, one per package, with entity ids that stay unique when
+## the suite seeds the world a second time.
+func _room_package_records(first_entity_id: int) -> Array:
+	return [
+		{"entity_id": first_entity_id, "type_id": "42/x", "state": {}},
+		{"entity_id": first_entity_id + 1, "type_id": "43/y", "state": {}},
+		{"entity_id": first_entity_id + 2, "type_id": "99/z", "state": {}},
+	]
+
+
+## Numeric package ids of the parked records, in record order.
+func _pending_packages(world: DynamicWorldContainer) -> Array:
+	var ids: Array = []
+	for record: Dictionary in world.pending_records():
+		var prefix := str(record.get("type_id", "")).get_slice("/", 0)
+		if prefix.is_valid_int():
+			ids.append(prefix.to_int())
+	return ids
 
 
 ## Frees the entry probe's stubs before the probe itself: they are not children,
