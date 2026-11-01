@@ -44,8 +44,62 @@ func _initialize() -> void:
 func _run() -> void:
 	_test_late_client_is_repaired_once()
 	_test_snapshot_package_map_guard()
+	_test_empty_component_has_no_sync()
+	_test_preloaded_client_builds_sync_before_snapshot()
 	_free_owned()
 	_finish()
+
+
+func _test_empty_component_has_no_sync() -> void:
+	var empty := WiredPlayerComponent.new()
+	root.add_child(empty)
+	_check(
+		empty.get_node_or_null("Sync") == null,
+		"a component without replicated properties must not create a synchronizer"
+	)
+	empty.queue_free()
+
+
+func _test_preloaded_client_builds_sync_before_snapshot() -> void:
+	var registry := _make_full_registry()
+	var players := _make_players(registry)
+	var player := players._spawn_player(
+		{
+			"player_id": 9,
+			"peer_id": 9,
+			"name": "preloaded",
+			"spawn_position_2d": Vector2(10, 20),
+		}
+	) as WiredPlayer
+	_check(
+		player != null,
+		"a preloaded client must build the player immediately"
+	)
+	if player == null:
+		return
+	_check(
+		player.components.size() == 1,
+		"the preloaded player must have its registered component"
+	)
+	if player.components.is_empty():
+		return
+	var component := player.components[0]
+	var sync := component.get_node_or_null("Sync") as MultiplayerSynchronizer
+	_check(
+		sync != null,
+		"the preloaded component must create its synchronizer before replication starts"
+	)
+	if sync != null:
+		_check(
+			sync.replication_config.get_properties().size() == 1,
+			"the synchronizer must replicate the declared body property"
+		)
+	var body := component.get_node_or_null("Body") as Node2D
+	_check(body != null, "the preloaded component must keep its body node")
+	_check(
+		player.get_anchor_position_2d() == Vector2(10, 20),
+		"the preloaded player must start at the spawn anchor"
+	)
 
 
 func _test_late_client_is_repaired_once() -> void:

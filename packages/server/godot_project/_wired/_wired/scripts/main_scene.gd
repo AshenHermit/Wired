@@ -501,6 +501,7 @@ func _run_client(cfg: Dictionary) -> void:
 		if not _packages.set_api_base(api_base):
 			_fail("Invalid API base received from the Wired host")
 			return
+		cfg["packages"] = bridge_config.get("packages", [])
 	if str(cfg.url).is_empty():
 		_fail("No game endpoint: pass --url or open the Game tab")
 		return
@@ -510,6 +511,33 @@ func _run_client(cfg: Dictionary) -> void:
 	# Web clients learn the room from the host bridge, after the loader was
 	# configured; apply it before anything touches package files.
 	_packages.set_room(str(cfg.get("room", "")))
+	# Preload the room's current package revisions before the WebSocket opens.
+	# MultiplayerSpawner replays spawn packets immediately after connect; if the
+	# registry is still empty then, the spawned players and entities have no
+	# synchronizers and the spawn packet's sync net IDs are discarded.
+	for entry: Variant in cfg.get("packages", []):
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
+		var package_entry: Dictionary = entry
+		var package_id := int(package_entry.get("packageId", 0))
+		var revision := int(package_entry.get("revision", 0))
+		if package_id <= 0 or revision <= 0:
+			continue
+		print(
+			"WIRED_CLIENT_PACKAGE_PRELOAD package=%d revision=%d"
+			% [package_id, revision]
+		)
+		var preload_result: Dictionary = await _packages.sync_package(package_id, revision)
+		if bool(preload_result.get("ok", false)):
+			print(
+				"WIRED_CLIENT_PACKAGE_PRELOAD_OK package=%d revision=%d"
+				% [package_id, int(preload_result.get("revision", revision))]
+			)
+		else:
+			print(
+				"WIRED_CLIENT_PACKAGE_PRELOAD_FAILED package=%d revision=%d error=%s"
+				% [package_id, revision, str(preload_result.get("error", ""))]
+			)
 	print("WIRED_CLIENT_STARTING room=%s url=%s" % [cfg.room, cfg.url])
 	_bridge_status("connecting", str(cfg.url))
 	var err := _net.start_client(

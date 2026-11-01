@@ -23,6 +23,7 @@ export type GameConfigurePayload = {
    * URLs relatively: the host tells the engine where `/api` lives.
    */
   apiBase: string;
+  packages: Array<{ packageId: number; revision: number }>;
 };
 
 export type GameStatusStage =

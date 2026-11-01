@@ -1,15 +1,17 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import type { Room } from "@wired-io/shared";
+import type { Room, RoomPackagesStatus } from "@wired-io/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createGameConnection,
   getGameRoomStatus,
+  getRoomPackages,
 } from "@/api/services/godot-game";
 import { GameTab } from "./GameTab";
 
 vi.mock("@/api/services/godot-game", () => ({
   createGameConnection: vi.fn(),
   getGameRoomStatus: vi.fn(),
+  getRoomPackages: vi.fn(),
 }));
 
 const room = { id: 8 } as Room;
@@ -56,6 +58,11 @@ describe("GameTab bridge", () => {
   beforeEach(() => {
     vi.mocked(createGameConnection).mockReset();
     vi.mocked(getGameRoomStatus).mockReset();
+    vi.mocked(getRoomPackages).mockReset();
+    vi.mocked(getRoomPackages).mockResolvedValue({
+      roomId: 8,
+      packages: [{ packageId: 20, revision: 2 }],
+    } as unknown as RoomPackagesStatus);
     vi.mocked(getGameRoomStatus).mockResolvedValue({
       roomId: 8,
       state: "running",
@@ -95,6 +102,7 @@ describe("GameTab bridge", () => {
           payload: expect.objectContaining({
             ticket: "one-time-ticket",
             apiBase: `${window.location.origin}/api`,
+            packages: [{ packageId: 20, revision: 2 }],
           }),
         }),
         window.location.origin,

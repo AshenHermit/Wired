@@ -5,6 +5,7 @@ import React from "react";
 import {
   createGameConnection,
   getGameRoomStatus,
+  getRoomPackages,
 } from "@/api/services/godot-game";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -111,6 +112,10 @@ export function GameTab({ room }: { room: Room }) {
     const attemptAtStart = attempt;
     try {
       update("requesting", "Запрашиваем подключение к комнате…");
+      const packageStatus = await getRoomPackages(room.id);
+      const packages = packageStatus.packages
+        .filter(({ revision }) => revision > 0)
+        .map(({ packageId, revision }) => ({ packageId, revision }));
       const connection = await createGameConnection(room.id);
       if (
         disposedRef.current ||
@@ -134,6 +139,7 @@ export function GameTab({ room }: { room: Room }) {
         // The Web build cannot guess the backend: it is proxied under the same
         // prefix that serves the Game tab.
         apiBase: `${window.location.origin}${API_PREFIX}`,
+        packages,
       });
       clearHandshakeTimer();
       handshakeTimerRef.current = window.setTimeout(() => {

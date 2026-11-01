@@ -58,6 +58,12 @@ func _ready() -> void:
 ## relative to the entity root (`RigidBody2D:position`), which is why the
 ## synchronizer's `root_path` points at the entity.
 func _create_synchronizer() -> void:
+	var properties := _wired_replicated_properties()
+	if properties.is_empty():
+		var existing := get_node_or_null(SYNC_NAME) as MultiplayerSynchronizer
+		if existing != null:
+			existing.queue_free()
+		return
 	var sync := get_node_or_null(SYNC_NAME) as MultiplayerSynchronizer
 	var created := false
 	if sync == null:
@@ -67,7 +73,7 @@ func _create_synchronizer() -> void:
 	sync.root_path = NodePath("..")
 	var config := SceneReplicationConfig.new()
 	var seen: Dictionary = {}
-	for property: String in _wired_replicated_properties():
+	for property: String in properties:
 		if property.is_empty() or seen.has(property):
 			continue
 		seen[property] = true

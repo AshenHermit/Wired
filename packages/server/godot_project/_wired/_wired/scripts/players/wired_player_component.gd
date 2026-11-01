@@ -130,6 +130,16 @@ func spawn_dynamic(local_type: String, data: Dictionary = {}) -> Node:
 ## Property paths are relative to the component (`Body:position`), which is why
 ## the synchronizer's `root_path` points at its parent.
 func _create_synchronizer() -> void:
+	var properties := _wired_replicated_properties()
+	if properties.is_empty():
+		# A component without replicated properties (a camera, an input
+		# handler) must not advertise a synchronizer. The peer that owns it
+		# would otherwise send a path cache for a node the other peers never
+		# built, and the receiver logs `Node not found: .../Sync`.
+		var existing := get_node_or_null(SYNC_NAME) as MultiplayerSynchronizer
+		if existing != null:
+			existing.queue_free()
+		return
 	var sync := get_node_or_null(SYNC_NAME) as MultiplayerSynchronizer
 	var created := false
 	if sync == null:
@@ -139,7 +149,7 @@ func _create_synchronizer() -> void:
 	sync.root_path = NodePath("..")
 	var config := SceneReplicationConfig.new()
 	var seen: Dictionary = {}
-	for property: String in _wired_replicated_properties():
+	for property: String in properties:
 		if property.is_empty() or seen.has(property):
 			continue
 		seen[property] = true
