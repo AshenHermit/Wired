@@ -6,6 +6,7 @@ import {
   DownloadIcon,
   FolderOpenIcon,
   Loader2Icon,
+  MoreHorizontalIcon,
   PackageIcon,
   PlusIcon,
   PowerIcon,
@@ -15,6 +16,13 @@ import {
   UploadIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/animate-ui/components/radix/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -251,34 +259,6 @@ function PackageCard({
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            disabled={disabled || entry.publishedRevision === null}
-            onClick={() => onDownload(entry)}
-            title={
-              entry.publishedRevision === null
-                ? "У пакета нет опубликованной ревизии"
-                : "Скачать опубликованную ревизию в редактор"
-            }
-          >
-            <DownloadIcon className="size-4" />
-            Скачать в редактор
-          </Button>
-          {entry.inEditor && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={disabled}
-              onClick={() => onRemove(entry)}
-              title="Удалить каталог только этого пакета из редактора"
-            >
-              <Trash2Icon className="size-4" />
-              Убрать из редактора
-            </Button>
-          )}
           {!entry.loaded &&
             entry.inEditor &&
             entry.localChanges.length > 0 && (
@@ -294,21 +274,6 @@ function PackageCard({
                 Использовать каталог
               </Button>
             )}
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            disabled={disabled}
-            onClick={() => onToggle(entry)}
-            title={
-              entry.enabled
-                ? "Убрать пакет из запущенной игры, не удаляя файлы"
-                : "Вернуть пакет в игру и в runtime комнаты"
-            }
-          >
-            <PowerIcon className="size-4" />
-            {entry.enabled ? "Отключить" : "Включить"}
-          </Button>
           {entry.enabled && (
             <Button
               type="button"
@@ -329,17 +294,53 @@ function PackageCard({
               Emit
             </Button>
           )}
-          <Button
-            type="button"
-            size="sm"
-            variant="destructive"
-            disabled={disabled}
-            onClick={() => onDelete(entry)}
-            title="Удалить пакет из комнаты навсегда вместе с ревизиями и артефактами"
-          >
-            <Trash2Icon className="size-4" />
-            Удалить из комнаты
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                aria-label="Действия с пакетом"
+                title="Действия с пакетом"
+              >
+                <MoreHorizontalIcon className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem
+                disabled={disabled || entry.publishedRevision === null}
+                onSelect={() => onDownload(entry)}
+              >
+                <DownloadIcon className="size-4" />
+                Скачать в редактор
+              </DropdownMenuItem>
+              {entry.inEditor && (
+                <DropdownMenuItem
+                  disabled={disabled}
+                  onSelect={() => onRemove(entry)}
+                >
+                  <Trash2Icon className="size-4" />
+                  Убрать из редактора
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                disabled={disabled}
+                onSelect={() => onToggle(entry)}
+              >
+                <PowerIcon className="size-4" />
+                {entry.enabled ? "Отключить" : "Включить"}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={disabled}
+                onSelect={() => onDelete(entry)}
+              >
+                <Trash2Icon className="size-4" />
+                Удалить из комнаты
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 

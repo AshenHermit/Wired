@@ -57,6 +57,15 @@ function controller(
   return { ...base, ...overrides };
 }
 
+async function openPackageActions() {
+  fireEvent.pointerDown(
+    screen.getByRole("button", { name: "Действия с пакетом" }),
+    { button: 0 },
+  );
+  const menu = await screen.findByRole("menu");
+  return within(menu);
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -137,9 +146,8 @@ describe("PackagesTab", () => {
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /скачать в редактор/i }),
-    );
+    const menu = await openPackageActions();
+    fireEvent.click(menu.getByRole("menuitem", { name: /скачать в редактор/i }));
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/локальные изменения/i)).toBeTruthy();
@@ -163,9 +171,8 @@ describe("PackagesTab", () => {
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /скачать в редактор/i }),
-    );
+    const menu = await openPackageActions();
+    fireEvent.click(menu.getByRole("menuitem", { name: /скачать в редактор/i }));
 
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "Отмена" }));
@@ -186,9 +193,8 @@ describe("PackagesTab", () => {
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /убрать из редактора/i }),
-    );
+    const menu = await openPackageActions();
+    fireEvent.click(menu.getByRole("menuitem", { name: /убрать из редактора/i }));
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/Удалить каталог пакета/)).toBeTruthy();
@@ -318,6 +324,20 @@ describe("PackagesTab", () => {
     expect(screen.getByText(/Пакет отключён в комнате/)).toBeTruthy();
   });
 
+  it("keeps Emit and Использовать каталог outside the actions menu", () => {
+    render(
+      <PackagesTab
+        packages={controller({ entries: [entry({ loaded: false, localChanges: ["a.gd"] })] })}
+        authorId={1}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /emit/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /использовать каталог/i })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /скачать в редактор/i }),
+    ).toBeNull();
+  });
+
   it("confirms permanent deletion in a dialog", async () => {
     const deletePackage = vi.fn().mockResolvedValue(undefined);
     render(
@@ -330,9 +350,8 @@ describe("PackagesTab", () => {
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Удалить из комнаты" }),
-    );
+    const menu = await openPackageActions();
+    fireEvent.click(menu.getByRole("menuitem", { name: "Удалить из комнаты" }));
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/#42/)).toBeTruthy();
