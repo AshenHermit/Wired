@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { Repository } from 'typeorm';
+import { FindOperator, Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { PackageDeliveryService } from 'src/scripting-packages/package-delivery.service';
@@ -52,14 +52,15 @@ describe('PackageSyncService', () => {
     published = new Map();
     publishRevision(42, 3);
     revisions = {
-      find: jest.fn(
-        async () =>
+      find: jest.fn(() =>
+        Promise.resolve(
           [...published.entries()]
             .sort(([, a], [, b]) => b.revision - a.revision)
             .map(([packageId, entry]) => ({
               package: { id: packageId },
               ...entry,
             })) as unknown as ScriptingPackageRevision[],
+        ),
       ),
     };
     runtime = {
@@ -541,10 +542,13 @@ describe('PackageSyncService', () => {
     const statuses = await service.getStatuses('7');
 
     expect(revisions.find).toHaveBeenCalledTimes(1);
-    expect(revisions.find.mock.calls[0][0]).toMatchObject({
-      where: { package: { id: expect.anything() }, status: 'published' },
-      order: { revision: 'DESC' },
-    });
+    const options = revisions.find.mock.calls[0][0]!;
+    const packageFilter = (
+      options.where as { package: { id: FindOperator<number> } }
+    ).package.id;
+    expect(packageFilter).toBeInstanceOf(FindOperator);
+    expect(packageFilter.value).toEqual([42, 43, 44]);
+    expect(options.order).toEqual({ revision: 'DESC' });
     expect(
       statuses.map((status) => [status.packageId, status.revision]),
     ).toEqual([
