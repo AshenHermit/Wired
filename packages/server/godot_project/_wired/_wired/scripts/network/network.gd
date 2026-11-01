@@ -40,6 +40,11 @@ signal peer_left(peer_id: int)
 const PROTOCOL_VERSION := 1
 const AUTH_TIMEOUT_SEC := 5.0
 const SERVER_PEER_ID := 1
+## Godot's WebSocket default is 64 KiB. A background tab throttles the main
+## loop while spawner/synchronizer packets keep arriving; the default buffer
+## overflows and drops packets, which desynchronizes every live entity. 4 MiB
+## keeps normal tab switches lossless and gives the focus resync time to run.
+const NETWORK_BUFFER_SIZE := 4 * 1024 * 1024
 
 var mode := ""
 var room_code := ""
@@ -60,12 +65,73 @@ var _used_nonces: Dictionary = {}
 var _package_revisions: Dictionary = {}
 # server: peer -> { package_id: {revision, state} }
 var _package_reports: Dictionary = {}
+# Web only: keep the JS callback and bridge alive for the life of the game.
+var _web_bridge: Object = null
+var _visibility_callback: Variant = null
 
 
 func _enter_tree() -> void:
 	get_tree().set_multiplayer(
 		MultiplayerAPI.create_default_interface(), NodePath("/root")
 	)
+
+
+## A hidden tab stops processing packets, and Godot drops whatever does not fit
+## in the WebSocket buffers. Returning to the tab is the recovery point: request
+## an authoritative snapshot so the client repairs entities that lost updates.
+## The Web export reports focus through `NOTIFICATION_WM_WINDOW_FOCUS_IN`;
+## `NOTIFICATION_APPLICATION_FOCUS_IN` is only emitted by desktop platforms.
+## `request_world_snapshot` is a no-op outside an authenticated client.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_WINDOW_FOCUS_IN and mode == "client":
+		request_world_snapshot()
+
+
+## Web only: `NOTIFICATION_WM_WINDOW_FOCUS_IN` is tied to the canvas, so a tab
+## switch does not emit it. `visibilitychange` is the reliable browser signal;
+## it fires on the document even when the canvas never receives focus.
+func _install_web_visibility_listener() -> void:
+	if not OS.has_feature("web"):
+		return
+	var bridge: Object = Engine.get_singleton("JavaScriptBridge")
+	if bridge == null:
+		print("WIRED_VISIBILITY_LISTENER_UNAVAILABLE reason=no_bridge")
+		return
+	var document: Object = bridge.get_interface("document")
+	if document == null:
+		print("WIRED_VISIBILITY_LISTENER_UNAVAILABLE reason=no_document")
+		return
+	_web_bridge = bridge
+	_visibility_callback = bridge.create_callback(_on_visibility_changed)
+	document.addEventListener("visibilitychange", _visibility_callback)
+	print("WIRED_VISIBILITY_LISTENER_READY")
+
+
+func _on_visibility_changed(_args: Array) -> void:
+	if _web_bridge == null:
+		return
+	var document: Object = _web_bridge.get_interface("document")
+	if document == null:
+		return
+	# Leave the JavaScript callback stack before sending the RPC.
+	call_deferred("_handle_visibility", not bool(document.hidden))
+
+
+## The visible transition is the recovery point: the hidden tab may have
+## dropped synchronizer/spawner packets. Hidden itself sends nothing.
+func _handle_visibility(visible: bool) -> void:
+	if visible and mode == "client":
+		request_world_snapshot()
+
+
+func _exit_tree() -> void:
+	if _web_bridge == null or _visibility_callback == null:
+		return
+	var document: Object = _web_bridge.get_interface("document")
+	if document != null:
+		document.removeEventListener("visibilitychange", _visibility_callback)
+	_visibility_callback = null
+	_web_bridge = null
 
 
 func _process(_delta: float) -> void:
@@ -90,7 +156,7 @@ func start_server(
 	mode = "server"
 	room_code = room
 	_ticket_secret = secret
-	var peer := WebSocketMultiplayerPeer.new()
+	var peer := _make_peer()
 	var err := peer.create_server(port, bind_address)
 	if err != OK:
 		print("WIRED_SERVER_ERROR create_server err=%d" % err)
@@ -518,6 +584,16 @@ func get_server_seq() -> int:
 	return _server_seq
 
 
+## Both modes create their peer through here so the buffers cannot drift apart.
+## The sizes must be set before `create_client`/`create_server`, which propagate
+## them to the underlying WebSocket peer.
+func _make_peer() -> WebSocketMultiplayerPeer:
+	var peer := WebSocketMultiplayerPeer.new()
+	peer.inbound_buffer_size = NETWORK_BUFFER_SIZE
+	peer.outbound_buffer_size = NETWORK_BUFFER_SIZE
+	return peer
+
+
 # --- client ---------------------------------------------------------------
 
 
@@ -529,6 +605,9 @@ func start_client(
 	probe_action := false
 ) -> Error:
 	mode = "client"
+	# The Web singleton is only guaranteed once the scene is ready, so install
+	# the tab listener here rather than in `_enter_tree`.
+	_install_web_visibility_listener()
 	room_code = room
 	_ticket = ticket
 	_send_hello = send_hello
@@ -537,7 +616,7 @@ func start_client(
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
 	multiplayer.connection_failed.connect(_on_connection_failed)
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
-	var peer := WebSocketMultiplayerPeer.new()
+	var peer := _make_peer()
 	var err := peer.create_client(url)
 	if err != OK:
 		print("WIRED_CLIENT_ERROR create_client err=%d" % err)

@@ -23,7 +23,102 @@ func _run() -> void:
 	_test_network_api_surface()
 	_test_packages_ready_emits_once()
 	_test_gameplay_rpcs_require_authentication()
+	_test_network_buffer_configuration()
+	_test_focus_in_requests_snapshot()
+	_test_visibility_requests_snapshot()
 	_finish()
+
+
+## A background tab throttles the engine while WebSocket packets keep arriving.
+## The default 64 KiB inbound buffer overflows and Godot drops packets, so both
+## peers must be created with a much larger buffer.
+func _test_network_buffer_configuration() -> void:
+	var net := WiredNetwork.new()
+	var peer := net._make_peer()
+	_check(
+		peer.inbound_buffer_size == WiredNetwork.NETWORK_BUFFER_SIZE,
+		"inbound buffer must be raised from the 64 KiB default, got %d"
+		% peer.inbound_buffer_size,
+	)
+	_check(
+		peer.outbound_buffer_size == WiredNetwork.NETWORK_BUFFER_SIZE,
+		"outbound buffer must be raised from the 64 KiB default, got %d"
+		% peer.outbound_buffer_size,
+	)
+	_check(
+		WiredNetwork.NETWORK_BUFFER_SIZE >= 4 * 1024 * 1024,
+		"the network buffer must hold at least 4 MiB",
+	)
+	peer.close()
+	net.free()
+
+
+## Focus returning to a client tab is the recovery point: buffered packets may
+## have been dropped while the tab was hidden, so the client asks for a fresh
+## authoritative world snapshot. The Web export reports this through the window
+## focus notification, not the desktop application focus notification.
+func _test_focus_in_requests_snapshot() -> void:
+	var net := FocusProbe.new()
+	net.mode = "client"
+	net._notification(Node.NOTIFICATION_WM_WINDOW_FOCUS_IN)
+	_check(
+		net.snapshot_requests == 1,
+		"window focus-in must request one world snapshot, got %d"
+		% net.snapshot_requests,
+	)
+	net._notification(Node.NOTIFICATION_WM_WINDOW_FOCUS_OUT)
+	net._notification(0)
+	_check(
+		net.snapshot_requests == 1,
+		"focus-out and unrelated notifications must not request a snapshot",
+	)
+	net.mode = "server"
+	net._notification(Node.NOTIFICATION_WM_WINDOW_FOCUS_IN)
+	_check(
+		net.snapshot_requests == 1,
+		"a server must never request a client snapshot",
+	)
+	net.free()
+
+
+## A browser tab switch does not focus the canvas, so the window-focus
+## notification is not enough. `visibilitychange` is the reliable Web signal:
+## the client resyncs only when the document becomes visible again.
+func _test_visibility_requests_snapshot() -> void:
+	var net := FocusProbe.new()
+	_check(
+		net.has_method("_handle_visibility"),
+		"the browser visibility handler must exist",
+	)
+	if not net.has_method("_handle_visibility"):
+		net.free()
+		return
+	net.mode = "client"
+	net._handle_visibility(true)
+	_check(
+		net.snapshot_requests == 1,
+		"becoming visible must request one world snapshot, got %d"
+		% net.snapshot_requests,
+	)
+	net._handle_visibility(false)
+	_check(
+		net.snapshot_requests == 1,
+		"becoming hidden must not request a snapshot",
+	)
+	net.mode = "server"
+	net._handle_visibility(true)
+	_check(
+		net.snapshot_requests == 1,
+		"a server must never request a snapshot on visibility change",
+	)
+	net.free()
+
+
+class FocusProbe extends WiredNetwork:
+	var snapshot_requests := 0
+
+	func request_world_snapshot() -> void:
+		snapshot_requests += 1
 
 
 func _test_readiness_matrix() -> void:

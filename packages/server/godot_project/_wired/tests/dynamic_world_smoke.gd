@@ -43,6 +43,7 @@ func _run() -> void:
 	_test_persist_false_is_live_but_not_saved()
 	_test_non_server_authority_is_rejected()
 	_test_snapshot_apply_is_idempotent()
+	_test_snapshot_updates_existing_entity_state()
 	_test_registry_roots_are_tagged_as_registered()
 	_free_owned()
 	_finish()
@@ -564,6 +565,50 @@ func _test_snapshot_apply_is_idempotent() -> void:
 		_check(
 			body != null and body.position == Vector2(21, 22),
 			"the snapshot entity must load its final state, got %s"
+			% (body.position if body != null else Vector2.ZERO),
+		)
+
+
+## A repeated snapshot is not only idempotent: it is the client's repair path
+## after dropped synchronizer packets, so an already-tracked entity must adopt
+## the fresh authoritative state instead of being skipped.
+func _test_snapshot_updates_existing_entity_state() -> void:
+	var registry := _make_registry()
+	var server := _make_world()
+	server.setup(registry, null)
+	var source := server.spawn_entity(
+		CRATE_TYPE, {"state": {"position": [10.0, 20.0]}}
+	)
+	_check(source != null, "the snapshot refresh test needs a server entity")
+	if source == null:
+		return
+	var snapshot := server.snapshot_state()
+	var client := _make_world()
+	client.setup(registry, null)
+	client.apply_snapshot(snapshot)
+	var entity := client._entities.get(source.entity_id) as WiredDynamicEntity
+	_check(entity != null, "the first snapshot must create the entity")
+	if entity == null:
+		return
+	var instance_id := entity.get_instance_id()
+	# The server moved the crate while the client was not processing packets.
+	snapshot[0]["state"]["position"] = [30.0, 40.0]
+	client.apply_snapshot(snapshot)
+	var refreshed := client._entities.get(source.entity_id) as WiredDynamicEntity
+	_check(
+		refreshed != null and refreshed.get_instance_id() == instance_id,
+		"a repeated snapshot must refresh the existing entity, not replace it",
+	)
+	_check(
+		_live_entities(client).size() == 1,
+		"a repeated snapshot must not duplicate an existing entity, got %d"
+		% _live_entities(client).size(),
+	)
+	if refreshed != null:
+		var body := refreshed.get_node_or_null("RigidBody2D") as RigidBody2D
+		_check(
+			body != null and body.position == Vector2(30, 40),
+			"the existing entity must adopt the fresh snapshot state, got %s"
 			% (body.position if body != null else Vector2.ZERO),
 		)
 

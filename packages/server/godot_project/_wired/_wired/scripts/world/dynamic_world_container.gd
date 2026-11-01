@@ -219,6 +219,7 @@ func apply_snapshot(records: Array) -> void:
 		push_warning("WIRED_DYNAMIC_SNAPSHOT_SKIPPED reason=no_registry")
 		return
 	var applied := 0
+	var refreshed := 0
 	for record: Variant in records:
 		if typeof(record) != TYPE_DICTIONARY:
 			continue
@@ -228,6 +229,15 @@ func apply_snapshot(records: Array) -> void:
 		if entity_id <= 0 or type_id.is_empty():
 			continue
 		if _entities.has(entity_id):
+			# The snapshot is also the repair path after dropped synchronizer
+			# packets (a throttled background tab): an entity that already
+			# exists must adopt the fresh authoritative state.
+			var existing := _entities[entity_id] as WiredDynamicEntity
+			if existing != null and is_instance_valid(existing):
+				var state: Variant = source.get("state", {})
+				if typeof(state) == TYPE_DICTIONARY:
+					existing._wired_load_state(state)
+					refreshed += 1
 			continue
 		var payload := {
 			"entity_id": entity_id,
@@ -243,7 +253,10 @@ func apply_snapshot(records: Array) -> void:
 		add_child(entity)
 		_entities[entity_id] = entity
 		applied += 1
-	print("WIRED_DYNAMIC_SNAPSHOT_APPLIED entities=%d" % applied)
+	print(
+		"WIRED_DYNAMIC_SNAPSHOT_APPLIED entities=%d refreshed=%d"
+		% [applied, refreshed]
+	)
 
 
 ## Builds one entity from a spawn record without parenting it. `type_override`
