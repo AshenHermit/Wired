@@ -346,8 +346,15 @@ export class PackageStorageService {
     await this.removeDirectory(this.draftRevisionDir(packageId, revision));
   }
 
-  async discardPublished(packageId: number, revision: number): Promise<void> {
-    await this.removeDirectory(this.publishedRevisionDir(packageId, revision));
+  /**
+   * Removes every file the platform stored for a package: draft and published
+   * revisions, dependency pins and every runtime artifact of every room.
+   *
+   * The database row is deleted by the caller; without this the package
+   * directory (`revisions/<n>`, `runtime/v1/...`) would stay on disk forever.
+   */
+  async removePackage(packageId: number): Promise<void> {
+    await this.removeDirectory(this.packageRootDir(packageId));
   }
 
   private async removeDirectory(dir: string): Promise<void> {
