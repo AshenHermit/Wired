@@ -477,6 +477,30 @@ export class RoomRuntimeSession {
     return this.sendCommand(`package ${packageId} ${revision}`);
   }
 
+  /**
+   * Asks Godot to drop a package from the registry. `purge` also deletes the
+   * downloaded files, used when the package is deleted rather than disabled.
+   */
+  sendPackageUnload(packageId: number, purge: boolean): boolean {
+    if (!Number.isInteger(packageId) || packageId <= 0) {
+      return false;
+    }
+    return this.sendCommand(
+      purge ? `unload ${packageId} purge` : `unload ${packageId}`,
+    );
+  }
+
+  /** Tells Godot which packages still belong to the room after a deletion. */
+  sendRoomPackages(packageIds: number[]): boolean {
+    const ids = [...new Set(packageIds)];
+    if (ids.some((id) => !Number.isInteger(id) || id <= 0)) {
+      return false;
+    }
+    return this.sendCommand(
+      ids.length > 0 ? `room-packages ${ids.join(',')}` : 'room-packages',
+    );
+  }
+
   private handleExit(code: number | null, signal: NodeJS.Signals | null): void {
     const record = this.record;
     if (record.exitHandled) {

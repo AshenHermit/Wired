@@ -88,6 +88,24 @@ export class RoomRuntimeService implements OnModuleDestroy {
     return this.registry.get(roomId)?.sendPackage(packageId, revision) ?? false;
   }
 
+  /** Drops a package from a running room; `purge` also deletes its files. */
+  sendPackageUnload(
+    roomId: string,
+    packageId: number,
+    purge: boolean,
+  ): boolean {
+    return (
+      this.registry.get(roomId)?.sendPackageUnload(packageId, purge) ?? false
+    );
+  }
+
+  /** Sends the authoritative package list of a room to its running runtime. */
+  sendRoomPackages(roomId: string, packageIds: number[]): boolean {
+    return (
+      this.registry.get(roomId)?.sendRoomPackages(packageIds) ?? false
+    );
+  }
+
   async stopRoom(roomId: string, reason = 'requested'): Promise<void> {
     const session = this.registry.get(roomId);
     if (!session) {

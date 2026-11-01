@@ -679,6 +679,28 @@ describe('RoomRuntimeService', () => {
     expect(process.stdinText).toBe('package 42 3\n');
   });
 
+  it('sends unload with and without purge', async () => {
+    const { process } = await startRoom('room-1');
+
+    expect(service.sendPackageUnload('room-1', 42, false)).toBe(true);
+    expect(service.sendPackageUnload('room-1', 42, true)).toBe(true);
+    expect(service.sendPackageUnload('room-missing', 42, false)).toBe(false);
+    expect(service.sendPackageUnload('room-1', 0, false)).toBe(false);
+    await flushAsync();
+    expect(process.stdinText).toBe('unload 42\nunload 42 purge\n');
+  });
+
+  it('sends the full room package list and rejects invalid ids', async () => {
+    const { process } = await startRoom('room-1');
+
+    expect(service.sendRoomPackages('room-1', [3, 7, 3])).toBe(true);
+    expect(service.sendRoomPackages('room-1', [])).toBe(true);
+    expect(service.sendRoomPackages('room-1', [3, 0])).toBe(false);
+    expect(service.sendRoomPackages('room-missing', [3])).toBe(false);
+    await flushAsync();
+    expect(process.stdinText).toBe('room-packages 3,7\nroom-packages\n');
+  });
+
   it('logs an EPIPE from the runtime stdin instead of crashing the backend', async () => {
     const { process } = await startRoom('room-1');
     expect(service.sendPackage('room-1', 42, 3)).toBe(true);
