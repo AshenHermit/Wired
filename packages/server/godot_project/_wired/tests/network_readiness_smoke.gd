@@ -26,6 +26,7 @@ func _run() -> void:
 	_test_network_buffer_configuration()
 	_test_focus_in_requests_snapshot()
 	_test_visibility_requests_snapshot()
+	_test_remove_package_revision_forgets_the_entry()
 	_finish()
 
 
@@ -300,6 +301,18 @@ func _test_gameplay_rpcs_require_authentication() -> void:
 
 
 # --- assertions -----------------------------------------------------------
+
+
+func _test_remove_package_revision_forgets_the_entry() -> void:
+	var net := WiredNetwork.new()
+	net.mode = "server"
+	net._package_revisions[42] = 3
+	net.remove_package_revision(42)
+	_check(
+		not net.get_package_revisions().has(42),
+		"removed package must leave the revision map",
+	)
+	net.free()
 
 
 func _check(condition: bool, message: String) -> void:

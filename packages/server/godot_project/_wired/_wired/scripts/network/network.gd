@@ -56,6 +56,7 @@ const EVENT_PLAYER_JOINED := WiredProtocol.EVENT_PLAYER_JOINED
 const EVENT_PLAYER_READY := WiredProtocol.EVENT_PLAYER_READY
 const EVENT_PLAYER_LEFT := WiredProtocol.EVENT_PLAYER_LEFT
 const EVENT_PACKAGE_REVISION := WiredProtocol.EVENT_PACKAGE_REVISION
+const EVENT_PACKAGE_REMOVED := WiredProtocol.EVENT_PACKAGE_REMOVED
 const EVENT_WORLD_SNAPSHOT := WiredProtocol.EVENT_WORLD_SNAPSHOT
 const EVENT_ERROR := WiredProtocol.EVENT_ERROR
 
@@ -424,6 +425,23 @@ func set_package_revision(package_id: int, revision: int) -> void:
 	)
 	_broadcast_event(
 		{KEY_TYPE: EVENT_PACKAGE_REVISION, "package_id": package_id, "revision": revision}
+	)
+
+
+## Drops a package from the announced set and tells every client to unload it.
+## Reports of that package are erased too: readiness for a package that no
+## longer exists must not keep a peer from becoming ready.
+func remove_package_revision(package_id: int) -> void:
+	if mode != "server" or package_id <= 0:
+		return
+	if not _package_revisions.has(package_id):
+		return
+	_package_revisions.erase(package_id)
+	for peer_id in _package_reports:
+		_package_reports[peer_id].erase(package_id)
+	print("WIRED_PACKAGE_REVISION_REMOVED package=%d" % package_id)
+	_broadcast_event(
+		{KEY_TYPE: EVENT_PACKAGE_REMOVED, "package_id": package_id}
 	)
 
 

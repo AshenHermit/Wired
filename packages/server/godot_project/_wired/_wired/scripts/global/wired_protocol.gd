@@ -58,6 +58,9 @@ const EVENT_PLAYER_JOINED := "player_joined"
 const EVENT_PLAYER_READY := "player_ready"
 const EVENT_PLAYER_LEFT := "player_left"
 const EVENT_PACKAGE_REVISION := "package_revision"
+## A package left the room. Clients drop its content and request a fresh
+## world snapshot instead of waiting for a revision that will never come.
+const EVENT_PACKAGE_REMOVED := "package_removed"
 const EVENT_WORLD_SNAPSHOT := "world_snapshot"
 const EVENT_ERROR := "error"
 
@@ -74,6 +77,10 @@ const META_PACKAGE_ID := "_wired_package_id"
 const META_PACKAGE_SCENE := "_wired_package_scene"
 ## Revision the live scene was instantiated from.
 const META_PACKAGE_REVISION := "_wired_package_revision"
+## Artifact key of the runtime directory a live scene was instantiated from.
+## The revision alone is not enough to tell two builds of it apart: a republished
+## dependency keeps its revision and gets a new key.
+const META_PACKAGE_ARTIFACT_KEY := "_wired_package_artifact_key"
 ## Set on every root a container owns. Such a root must never be replaced by a
 ## generic reloader: its lifetime belongs to its container.
 const META_REGISTERED := "_wired_registered"

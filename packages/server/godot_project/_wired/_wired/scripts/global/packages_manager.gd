@@ -187,6 +187,23 @@ func applied_packages() -> Dictionary:
 	return result
 
 
+## Drops everything this process knows about a package. `purge` also removes
+## its downloaded directory: a disabled package keeps its files so enabling it
+## again is a cheap re-registration, a deleted one must not leave bytes behind.
+## Pending scene patches are dropped either way - they describe files that are
+## no longer applied.
+func forget_package(package_id: int, purge: bool = false) -> void:
+	_current_revisions.erase(package_id)
+	_current_artifact_keys.erase(package_id)
+	_scene_dependencies.erase(package_id)
+	_file_hashes.erase(package_id)
+	if purge:
+		_remove_tree(packages_dir(package_id))
+	print(
+		"WIRED_PACKAGES_FORGOTTEN package=%d purge=%s" % [package_id, purge]
+	)
+
+
 ## Dependencies of one scene of an applied artifact, as "<package id>:<filepath>"
 ## entries. Returns an empty array for an unknown package or scene.
 func scene_dependencies(package_id: int, scene_path: String) -> PackedStringArray:

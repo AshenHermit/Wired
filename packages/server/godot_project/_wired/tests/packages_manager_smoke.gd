@@ -56,6 +56,7 @@ func _run() -> void:
 		return
 	_test_runtime_path_and_changed_files()
 	_test_room_normalization()
+	_test_forget_package_clears_applied_state()
 	_manager = PackagesManager.new()
 	_manager.configure("http://127.0.0.1:1", ROOM)
 	# Apply-order diagnostics are off in a runtime build; this suite asserts the
@@ -100,6 +101,20 @@ func _test_interface() -> void:
 	_check(
 		manager.has_signal("package_applied"),
 		"PackagesManager.package_applied signal is missing"
+	)
+	manager.free()
+
+
+func _test_forget_package_clears_applied_state() -> void:
+	var manager := PackagesManager.new()
+	manager.set_room("77")
+	manager._current_revisions[42] = 3
+	manager._current_artifact_keys[42] = "abc"
+	manager.forget_package(42, false)
+	_check(manager.current_revision(42) == 0, "forget clears the revision")
+	_check(
+		manager.current_artifact_key(42).is_empty(),
+		"forget clears the artifact key",
 	)
 	manager.free()
 
