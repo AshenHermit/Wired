@@ -1040,6 +1040,51 @@ describe("useRoomPackages", () => {
     unmount();
   });
 
+  it("does not commit a superseded load into the package list", async () => {
+    const { result, unmount } = await startHook();
+
+    let resolveStale: (status: RoomPackagesStatus) => void = () => {};
+    vi.mocked(gameApi.getRoomPackages).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveStale = resolve;
+      }),
+    );
+    const stale = result.current.refresh();
+
+    // The newer load wins and publishes package 6.
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValueOnce(
+      roomStatus([
+        { id: 5, revision: 2 },
+        { id: 6, revision: 4 },
+      ]),
+    );
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    // The stale response carries a package the newer one never saw.
+    await act(async () => {
+      resolveStale(
+        roomStatus([
+          { id: 5, revision: 2 },
+          { id: 7, revision: 1 },
+        ]),
+      );
+      await stale;
+    });
+
+    const ids = () => result.current.entries.map((item) => item.packageId);
+    expect(ids()).toEqual([5, 6]);
+
+    // The stale load must not have leaked into the package list either: a
+    // later refresh still does not resurrect package 7.
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(ids()).toEqual([5, 6]);
+    unmount();
+  });
+
   it("adds newly published room packages from the status endpoint", async () => {
     vi.mocked(gameApi.getRoomPackages).mockResolvedValue(
       roomStatus([

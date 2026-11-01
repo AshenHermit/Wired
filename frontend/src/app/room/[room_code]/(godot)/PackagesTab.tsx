@@ -63,6 +63,61 @@ function confirmation(pkg: RoomPackageEntry, changes: string[], verb: string) {
   return `В пакете «${pkg.name}» есть локальные изменения: ${files}${rest}.\n\n${verb}?`;
 }
 
+function newerRevisionConfirmation(
+  pkg: RoomPackageEntry,
+  error: NewerRevisionError,
+): string {
+  return (
+    `В пакете «${pkg.name}» уже опубликована ревизия ${error.publishedRevision}, ` +
+    `а в редакторе ${
+      error.loadedRevision === null || error.loadedRevision === 0
+        ? "ревизия не загружена"
+        : `ревизия ${error.loadedRevision}`
+    }.\n\n` +
+    `Emit опубликует файлы из редактора как новую ревизию и заменит ` +
+    `опубликованную ревизию ${error.publishedRevision}. Продолжить?`
+  );
+}
+
+type ForceableAction = (
+  packageId: number,
+  options?: { force?: boolean },
+) => Promise<void>;
+
+/**
+ * Wraps one package action with the shared "confirm → retry force" policy:
+ * download, remove and emit all fail once on local changes (or a newer
+ * published revision), ask the user, and repeat only after a confirmation.
+ */
+function useConfirmedAction(): (
+  entry: RoomPackageEntry,
+  action: ForceableAction,
+  describeConflict: (error: unknown) => string | null,
+) => Promise<void> {
+  return React.useCallback(
+    async (
+      entry: RoomPackageEntry,
+      action: ForceableAction,
+      describeConflict: (error: unknown) => string | null,
+    ): Promise<void> => {
+      try {
+        await action(entry.packageId);
+      } catch (error) {
+        const question = describeConflict(error);
+        if (question === null || !window.confirm(question)) {
+          return;
+        }
+        try {
+          await action(entry.packageId, { force: true });
+        } catch {
+          // The panel already shows the error of the failed action.
+        }
+      }
+    },
+    [],
+  );
+}
+
 function PackageCard({
   entry,
   packages,
@@ -258,89 +313,48 @@ export function PackagesTab({
   const [creating, setCreating] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
 
-  const handleDownload = React.useCallback(
-    async (entry: RoomPackageEntry) => {
-      try {
-        await packages.downloadPackage(entry.packageId);
-      } catch (error) {
-        if (!(error instanceof LocalChangesError)) return;
-        if (
-          !window.confirm(
-            confirmation(
+  const runConfirmed = useConfirmedAction();
+
+  const handleDownload = (entry: RoomPackageEntry) => {
+    void runConfirmed(
+      entry,
+      packages.downloadPackage,
+      (error) =>
+        error instanceof LocalChangesError
+          ? confirmation(
               entry,
               error.files,
               "Заменить локальные файлы опубликованной ревизией",
-            ),
-          )
-        ) {
-          return;
-        }
-        try {
-          await packages.downloadPackage(entry.packageId, { force: true });
-        } catch {
-          // The panel already shows the error of the failed action.
-        }
-      }
-    },
-    [packages],
-  );
+            )
+          : null,
+    );
+  };
 
-  const handleRemove = React.useCallback(
-    async (entry: RoomPackageEntry) => {
-      try {
-        await packages.removePackage(entry.packageId);
-      } catch (error) {
-        if (!(error instanceof LocalChangesError)) return;
-        if (
-          !window.confirm(
-            confirmation(
+  const handleRemove = (entry: RoomPackageEntry) => {
+    void runConfirmed(
+      entry,
+      packages.removePackage,
+      (error) =>
+        error instanceof LocalChangesError
+          ? confirmation(
               entry,
               error.files,
               "Удалить каталог пакета из редактора вместе с локальными файлами",
-            ),
-          )
-        ) {
-          return;
-        }
-        try {
-          await packages.removePackage(entry.packageId, { force: true });
-        } catch {
-          // The panel already shows the error of the failed action.
-        }
-      }
-    },
-    [packages],
-  );
+            )
+          : null,
+    );
+  };
 
-  const handleEmit = React.useCallback(
-    async (entry: RoomPackageEntry) => {
-      try {
-        await packages.emitPackage(entry.packageId);
-      } catch (error) {
-        if (!(error instanceof NewerRevisionError)) return;
-        if (
-          !window.confirm(
-            `В пакете «${entry.name}» уже опубликована ревизия ${error.publishedRevision}, ` +
-              `а в редакторе ${
-                error.loadedRevision === null || error.loadedRevision === 0
-                  ? "ревизия не загружена"
-                  : `ревизия ${error.loadedRevision}`
-              }.\n\n` +
-              `Emit опубликует файлы из редактора как новую ревизию и заменит ` +
-              `опубликованную ревизию ${error.publishedRevision}. Продолжить?`,
-          )
-        ) {
-          return;
-        }
-        try {
-          await packages.emitPackage(entry.packageId, { force: true });
-        } catch {
-          // The panel already shows the error of the failed action.
-        }
-      }
-    },
-    [packages],
-  );
+  const handleEmit = (entry: RoomPackageEntry) => {
+    void runConfirmed(
+      entry,
+      packages.emitPackage,
+      (error) =>
+        error instanceof NewerRevisionError
+          ? newerRevisionConfirmation(entry, error)
+          : null,
+    );
+  };
 
   const handleCreate = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -464,14 +478,14 @@ export function PackagesTab({
                 key={entry.packageId}
                 entry={entry}
                 packages={packages}
-                onDownload={(pkg) => void handleDownload(pkg)}
-                onRemove={(pkg) => void handleRemove(pkg)}
+                onDownload={handleDownload}
+                onRemove={handleRemove}
                 onAdopt={(pkg) =>
                   void packages.adoptPackage(pkg.packageId).catch(() => {
                     // The panel already shows the error of the failed action.
                   })
                 }
-                onEmit={(pkg) => void handleEmit(pkg)}
+                onEmit={handleEmit}
               />
             ))}
           </ul>
