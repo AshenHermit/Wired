@@ -109,6 +109,11 @@ export class SyncRecordStore {
   removePeer(roomId: string, peer: number): void {
     this.peersByRoom.get(roomId)?.delete(peer);
   }
+
+  /** Drops a package record, e.g. after the package was disabled or deleted. */
+  remove(roomId: string, packageId: number): boolean {
+    return this.recordsByKey.delete(SyncRecordStore.key(roomId, packageId));
+  }
 }
 
 const EMPTY_PEERS: ReadonlySet<number> = new Set<number>();

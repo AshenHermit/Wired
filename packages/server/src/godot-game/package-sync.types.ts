@@ -11,6 +11,15 @@ export interface PackageRevisionDispatcher {
    * one, since their runtime artifacts embed its bytes.
    */
   revisionPublished(packageId: number, revision: number): Promise<void>;
+
+  /**
+   * Applies a new `enabled` flag: disabling unloads the package from the room
+   * runtime, enabling reconciles its latest published revision back in.
+   */
+  packageEnabledChanged(packageId: number): Promise<void>;
+
+  /** Removes a deleted package from the room runtime and deletes its files. */
+  packageRemoved(packageId: number, roomId: number): void;
 }
 
 export const PACKAGE_REVISION_DISPATCHER = Symbol(

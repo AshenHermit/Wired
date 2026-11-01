@@ -254,8 +254,9 @@ export type PackageClientSyncStatus = {
 export type PackageSyncStatus = {
   packageId: number;
   name: string;
+  enabled: boolean;
   revision: number;
-  publishedAt: string;
+  publishedAt: string | null;
   state: PackageRevisionSyncState;
   runtime: PackageRuntimeSyncStatus;
   clients: PackageClientSyncStatus[];

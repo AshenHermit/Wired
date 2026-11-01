@@ -16,15 +16,32 @@ export class StatusReporter {
   toStatus(
     pkg: ScriptingPackage,
     roomId: string,
-    revision: number,
-    publishedAt: Date,
+    revision: number | null,
+    publishedAt: Date | null,
   ): PackageSyncStatus {
-    const record = this.store.get(roomId, pkg.id);
     const base = {
       packageId: pkg.id,
       name: pkg.name,
-      publishedAt: publishedAt.toISOString(),
+      enabled: pkg.enabled !== false,
+      publishedAt: publishedAt ? publishedAt.toISOString() : null,
     };
+
+    if (revision === null) {
+      return {
+        ...base,
+        revision: 0,
+        state: 'published',
+        runtime: {
+          state: 'pending',
+          revision: 0,
+          error: null,
+          updatedAt: null,
+        },
+        clients: [],
+      };
+    }
+
+    const record = this.store.get(roomId, pkg.id);
 
     if (!record || record.revision !== revision) {
       return {

@@ -229,6 +229,7 @@ function roomStatus(
     packages: packages.map(({ id, revision }) => ({
       packageId: id,
       name: id === 5 ? "Demo" : "Other",
+      enabled: true,
       revision,
       publishedAt: "2026-10-30T10:00:00.000Z",
       state: "published",

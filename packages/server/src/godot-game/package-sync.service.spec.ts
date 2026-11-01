@@ -23,6 +23,8 @@ describe('PackageSyncService', () => {
   let published: Map<number, { revision: number; publishedAt: Date }>;
   let runtime: {
     sendPackage: jest.Mock;
+    sendPackageUnload: jest.Mock;
+    sendRoomPackages: jest.Mock;
     getRuntime: jest.Mock;
     setObserver: jest.Mock;
   };
@@ -65,6 +67,8 @@ describe('PackageSyncService', () => {
     };
     runtime = {
       sendPackage: jest.fn().mockReturnValue(true),
+      sendPackageUnload: jest.fn().mockReturnValue(true),
+      sendRoomPackages: jest.fn().mockReturnValue(true),
       getRuntime: jest.fn().mockReturnValue({ state: 'running' }),
       setObserver: jest.fn(),
     };
@@ -579,5 +583,88 @@ describe('PackageSyncService', () => {
     expect(runtime.sendPackage).toHaveBeenCalledTimes(2);
     expect(runtime.sendPackage).toHaveBeenCalledWith('7', 42, 3);
     expect(runtime.sendPackage).toHaveBeenCalledWith('7', 43, 2);
+  });
+
+  it('deactivates a disabled package and drops its record', async () => {
+    await service.revisionPublished(42, 3);
+    expect(
+      (service as unknown as { store: SyncRecordStore }).store.get('7', 42),
+    ).toBeDefined();
+
+    packages.findOne.mockResolvedValue({
+      ...roomPackage,
+      enabled: false,
+    } as unknown as ScriptingPackage);
+
+    await service.packageEnabledChanged(42);
+
+    expect(runtime.sendPackageUnload).toHaveBeenCalledWith('7', 42, false);
+    expect(
+      (service as unknown as { store: SyncRecordStore }).store.get('7', 42),
+    ).toBeUndefined();
+  });
+
+  it('reconciles an enabled package from its latest published revision', async () => {
+    packages.findOne.mockResolvedValue({
+      ...roomPackage,
+      enabled: true,
+    } as unknown as ScriptingPackage);
+
+    await service.packageEnabledChanged(42);
+
+    expect(runtime.sendPackage).toHaveBeenCalledWith('7', 42, 3);
+  });
+
+  it('purges a removed package', () => {
+    service.packageRemoved(42, 7);
+
+    expect(runtime.sendPackageUnload).toHaveBeenCalledWith('7', 42, true);
+  });
+
+  it('reports disabled and unpublished packages with the enabled flag', async () => {
+    packages.find.mockResolvedValue([
+      { ...roomPackage, enabled: false },
+      { id: 43, name: 'Draft', room: { id: 7 }, enabled: true },
+    ] as unknown as ScriptingPackage[]);
+
+    const statuses = await service.getStatuses('7');
+
+    expect(statuses).toEqual([
+      expect.objectContaining({
+        packageId: 42,
+        enabled: false,
+        revision: 3,
+        publishedAt: '2026-10-30T09:00:00.000Z',
+      }),
+      expect.objectContaining({
+        packageId: 43,
+        enabled: true,
+        revision: 0,
+        publishedAt: null,
+      }),
+    ]);
+  });
+
+  it('does not dispatch a published revision of a disabled package', async () => {
+    packages.findOne.mockResolvedValue({
+      ...roomPackage,
+      enabled: false,
+    } as unknown as ScriptingPackage);
+
+    await service.revisionPublished(42, 3);
+
+    expect(runtime.sendPackage).not.toHaveBeenCalled();
+  });
+
+  it('announces all room package ids including disabled ones on runtime ready', async () => {
+    packages.find.mockResolvedValue([
+      { ...roomPackage, enabled: true },
+      { id: 43, name: 'Off', room: { id: 7 }, enabled: false },
+    ] as unknown as ScriptingPackage[]);
+
+    service.onRuntimeReady('7');
+    await flushAsync();
+
+    expect(runtime.sendRoomPackages).toHaveBeenCalledWith('7', [42, 43]);
   });
 });

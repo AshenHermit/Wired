@@ -90,6 +90,13 @@ export class PackageSyncService
       return;
     }
 
+    if (pkg.enabled === false) {
+      this.logger.log(
+        `Package ${packageId} is disabled; revision ${revision} stays published only`,
+      );
+      return;
+    }
+
     if (pkg.room) {
       this.dispatchOwnRevision(packageId, String(pkg.room.id), revision);
     } else {
@@ -103,22 +110,19 @@ export class PackageSyncService
 
   /** Latest published revision per package of the room plus target states. */
   async getStatuses(roomId: string): Promise<PackageSyncStatus[]> {
-    const packages = await this.roomPackages(roomId);
+    const packages = await this.roomPackages(roomId, false);
     const latest = await this.latestPublishedRevisions(
       packages.map((pkg) => pkg.id),
     );
     const statuses: PackageSyncStatus[] = [];
     for (const pkg of packages) {
       const revision = latest.get(pkg.id);
-      if (!revision?.publishedAt) {
-        continue;
-      }
       statuses.push(
         this.reporter.toStatus(
           pkg,
           roomId,
-          revision.revision,
-          revision.publishedAt,
+          revision?.revision ?? null,
+          revision?.publishedAt ?? null,
         ),
       );
     }
@@ -159,6 +163,43 @@ export class PackageSyncService
     }
   }
 
+  // --- lifecycle ----------------------------------------------------------
+
+  /**
+   * Applies a PATCH of the `enabled` flag: a disabled package is unloaded from
+   * the runtime and forgotten, an enabled one is reconciled back in.
+   */
+  async packageEnabledChanged(packageId: number): Promise<void> {
+    const pkg = await this.packages.findOne({
+      where: { id: packageId },
+      relations: { room: true },
+    });
+    if (!pkg) {
+      this.logger.warn(`Cannot toggle enabled: package ${packageId} not found`);
+      return;
+    }
+    if (!pkg.room) {
+      return;
+    }
+    const roomId = String(pkg.room.id);
+    if (pkg.enabled === false) {
+      this.store.remove(roomId, packageId);
+      this.runtime.sendPackageUnload(roomId, packageId, false);
+      this.logger.log(`Package ${packageId} disabled in room ${roomId}`);
+      return;
+    }
+    await this.reconcileRoom(roomId);
+    this.logger.log(`Package ${packageId} enabled in room ${roomId}`);
+  }
+
+  /** Applies a DELETE: the package and its files leave the room runtime. */
+  packageRemoved(packageId: number, roomId: number): void {
+    const id = String(roomId);
+    this.store.remove(id, packageId);
+    this.runtime.sendPackageUnload(id, packageId, true);
+    this.logger.log(`Package ${packageId} removed from room ${id}`);
+  }
+
   // --- RuntimeObserver ----------------------------------------------------
 
   onRuntimeReady(roomId: string): void {
@@ -170,6 +211,11 @@ export class PackageSyncService
     void this.reconcileRoom(roomId, true).catch((error: unknown) => {
       this.logger.error(
         `Failed to reconcile packages for room ${roomId}: ${this.errorMessage(error)}`,
+      );
+    });
+    void this.announceRoomPackages(roomId).catch((error: unknown) => {
+      this.logger.error(
+        `Failed to announce room packages for room ${roomId}: ${this.errorMessage(error)}`,
       );
     });
   }
@@ -290,9 +336,33 @@ export class PackageSyncService
 
   // --- internals ----------------------------------------------------------
 
-  /** Packages bound to the room, the only ones with a runtime to dispatch to. */
-  private roomPackages(roomId: string): Promise<ScriptingPackage[]> {
-    return this.packages.find({ where: { room: { id: Number(roomId) } } });
+  /**
+   * Packages bound to the room, the only ones with a runtime to dispatch to.
+   * `enabledOnly` is false for the panel listing, which also shows disabled
+   * packages so they can be downloaded or re-enabled.
+   */
+  private roomPackages(
+    roomId: string,
+    enabledOnly = true,
+  ): Promise<ScriptingPackage[]> {
+    return this.packages.find({
+      where: {
+        room: { id: Number(roomId) },
+        ...(enabledOnly ? { enabled: true } : {}),
+      },
+    });
+  }
+
+  /**
+   * Sends the authoritative package id list of the room to a fresh runtime,
+   * so it can drop save records of packages deleted while it was stopped.
+   */
+  private async announceRoomPackages(roomId: string): Promise<void> {
+    const packages = await this.roomPackages(roomId, false);
+    this.runtime.sendRoomPackages(
+      roomId,
+      packages.map((pkg) => pkg.id),
+    );
   }
 
   /**

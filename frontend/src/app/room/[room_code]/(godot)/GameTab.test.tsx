@@ -24,6 +24,40 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function apiError(status: number, code: string) {
+  return Object.assign(new Error(`HTTP ${status}`), {
+    response: {
+      status,
+      data: { statusCode: status, code, message: code },
+    },
+  });
+}
+
+function packageStatus(
+  runtimeState: "pending" | "applied" | "failed",
+): RoomPackagesStatus {
+  return {
+    roomId: 8,
+    packages: [
+      {
+        packageId: 20,
+        name: "Platformer",
+        enabled: true,
+        revision: 2,
+        publishedAt: "2026-01-01T00:00:00.000Z",
+        state: "published",
+        runtime: {
+          state: runtimeState,
+          revision: 2,
+          error: null,
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+        clients: [],
+      },
+    ],
+  };
+}
+
 function send(iframe: HTMLIFrameElement, data: unknown) {
   window.dispatchEvent(
     new MessageEvent("message", {
@@ -97,10 +131,7 @@ describe("GameTab bridge", () => {
     vi.mocked(createGameConnection).mockResolvedValue(connection);
     vi.mocked(getGameRoomStatus).mockReset();
     vi.mocked(getRoomPackages).mockReset();
-    vi.mocked(getRoomPackages).mockResolvedValue({
-      roomId: 8,
-      packages: [{ packageId: 20, revision: 2 }],
-    } as unknown as RoomPackagesStatus);
+    vi.mocked(getRoomPackages).mockResolvedValue(packageStatus("applied"));
     vi.mocked(getGameRoomStatus).mockResolvedValue({
       roomId: 8,
       state: "running",
@@ -278,6 +309,85 @@ describe("GameTab bridge", () => {
 
       expect(view.container.textContent).toContain("Игра недоступна");
       expect(view.container.textContent).toContain("Соединение потеряно");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows a cold runtime start and waits for it before asking for a ticket", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(getGameRoomStatus).mockResolvedValue({
+        roomId: 8,
+        state: "starting",
+        endpoint: null,
+        activePlayers: 0,
+        error: null,
+      });
+      const view = render(<GameTab room={room} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const iframe = view.container.querySelector("iframe") as HTMLIFrameElement;
+
+      send(iframe, {
+        source: "wired-game",
+        type: "wired:game-ready",
+        payload: {},
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(view.container.textContent).toContain("Сервер игры запускается…");
+      expect(createGameConnection).not.toHaveBeenCalled();
+
+      vi.mocked(getGameRoomStatus).mockResolvedValue({
+        roomId: 8,
+        state: "running",
+        endpoint: "ws://127.0.0.1:19100",
+        activePlayers: 0,
+        error: null,
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(createGameConnection).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats packages still applying as a wait, not as a fatal error", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(createGameConnection)
+        .mockRejectedValueOnce(apiError(409, "packages_pending"))
+        .mockResolvedValue(connection);
+      const view = render(<GameTab room={room} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const iframe = view.container.querySelector("iframe") as HTMLIFrameElement;
+      send(iframe, {
+        source: "wired-game",
+        type: "wired:game-ready",
+        payload: {},
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(view.container.textContent).toContain("Применяем пакеты комнаты…");
+      expect(view.container.textContent).not.toContain("Игра недоступна");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      expect(createGameConnection).toHaveBeenCalledTimes(2);
+      expect(view.container.textContent).not.toContain("Игра недоступна");
     } finally {
       vi.useRealTimers();
     }
