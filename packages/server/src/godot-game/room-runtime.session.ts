@@ -14,7 +14,7 @@ import { parseRuntimeLine, RuntimeLineEvent } from './room-runtime.line-parser';
 const FORCE_KILL_WAIT_MS = 2_000;
 const HANDSHAKE_LEASE_SLACK_MS = 5_000;
 // Keep in sync with AUTH_TIMEOUT_SEC in the Godot network script.
-const AUTH_TIMEOUT_SEC = 10;
+const AUTH_TIMEOUT_SEC = 5;
 
 export interface RoomRuntimeSessionOptions {
   roomId: string;

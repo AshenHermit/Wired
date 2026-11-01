@@ -84,11 +84,13 @@ export class GameRoomService {
     let connection: RoomConnection;
     try {
       connection = await this.runtime.getConnection(runtimeRoomId);
+      // Readiness can consume most of the original ticket's TTL. Refresh after
+      // the wait, not before, so the browser always receives a full window.
+      await this.waitForInitialPackages(runtimeRoomId);
+      connection = this.runtime.refreshConnection(runtimeRoomId);
     } catch (error) {
       throw this.toHttpException(error, runtimeRoomId);
     }
-
-    await this.waitForInitialPackages(runtimeRoomId);
 
     return {
       roomId: room.id,

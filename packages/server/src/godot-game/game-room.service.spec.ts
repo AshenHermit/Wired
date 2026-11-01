@@ -84,13 +84,21 @@ const status = (overrides: StatusOverrides = {}): PackageSyncStatus => {
 
 describe('GameRoomService', () => {
   let rooms: { findOne: jest.Mock };
-  let runtime: { getConnection: jest.Mock; getRuntime: jest.Mock };
+  let runtime: {
+    getConnection: jest.Mock;
+    refreshConnection: jest.Mock;
+    getRuntime: jest.Mock;
+  };
   let packageSync: { getStatuses: jest.Mock };
   let service: GameRoomService;
 
   const create = (limit = 20) => {
     rooms = { findOne: jest.fn() };
-    runtime = { getConnection: jest.fn(), getRuntime: jest.fn() };
+    runtime = {
+      getConnection: jest.fn(),
+      refreshConnection: jest.fn(),
+      getRuntime: jest.fn(),
+    };
     packageSync = { getStatuses: jest.fn(async () => []) };
     const configService = {
       godotRuntime: { ticketRateLimit: limit, ticketRateLimitWindowMs: 60_000 },
@@ -103,6 +111,7 @@ describe('GameRoomService', () => {
     );
     rooms.findOne.mockResolvedValue(room());
     runtime.getConnection.mockResolvedValue(connection());
+    runtime.refreshConnection.mockReturnValue(connection());
   };
 
   beforeEach(() => {
@@ -220,6 +229,37 @@ describe('GameRoomService', () => {
 
     expect(result.ticket).toBe('ticket-value');
     expect(packageSync.getStatuses).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes the ticket after a readiness wait consumed its TTL', async () => {
+    packageSync.getStatuses
+      .mockResolvedValueOnce([status({ runtime: { state: 'pending' } })])
+      .mockResolvedValueOnce([status({ runtime: { state: 'applied' } })]);
+    runtime.refreshConnection.mockReturnValue({
+      ...connection(),
+      ticket: 'fresh-ticket',
+      ticketExpiresAt: 1_800_000_600,
+    });
+
+    const result = await service.connect(user(1), 42);
+
+    expect(runtime.refreshConnection).toHaveBeenCalledWith('42');
+    expect(result.ticket).toBe('fresh-ticket');
+    expect(result.ticketExpiresAt).toBe(1_800_000_600);
+  });
+
+  it('does not refresh a ticket when the readiness wait times out', async () => {
+    jest.useFakeTimers();
+    packageSync.getStatuses.mockResolvedValue([
+      status({ runtime: { state: 'pending' } }),
+    ]);
+
+    const promise = service.connect(user(1), 42);
+    const rejection = expect(promise).rejects.toMatchObject({ status: 409 });
+    await jest.advanceTimersByTimeAsync(10_100);
+    await rejection;
+
+    expect(runtime.refreshConnection).not.toHaveBeenCalled();
   });
 
   it('does not wait for clients', async () => {
