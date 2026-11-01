@@ -82,12 +82,20 @@ export function useDraggablePanel({
   }, [initialPosition]);
 
   const pointerIdRef = React.useRef<number | null>(null);
+  const captureElementRef = React.useRef<HTMLButtonElement | null>(null);
   const startPointerRef = React.useRef<PanelPosition>({ x: 0, y: 0 });
   const startPositionRef = React.useRef<PanelPosition>({ x: 0, y: 0 });
 
   const updatePosition = React.useCallback((next: PanelPosition) => {
     positionRef.current = next;
     setPosition(next);
+  }, []);
+
+  const applyDragPosition = React.useCallback((next: PanelPosition) => {
+    positionRef.current = next;
+    if (panelRef.current) {
+      panelRef.current.style.transform = `translate3d(${next.x}px, ${next.y}px, 0)`;
+    }
   }, []);
 
   const getBounds = React.useCallback(() => {
@@ -154,6 +162,7 @@ export function useDraggablePanel({
 
       event.preventDefault();
       event.currentTarget.setPointerCapture?.(event.pointerId);
+      captureElementRef.current = event.currentTarget;
 
       pointerIdRef.current = event.pointerId;
       startPointerRef.current = { x: event.clientX, y: event.clientY };
@@ -164,7 +173,7 @@ export function useDraggablePanel({
   );
 
   const handlePointerMove = React.useCallback(
-    (event: React.PointerEvent<HTMLButtonElement>) => {
+    (event: { pointerId: number; clientX: number; clientY: number }) => {
       if (pointerIdRef.current !== event.pointerId) {
         return;
       }
@@ -173,30 +182,51 @@ export function useDraggablePanel({
         x: startPositionRef.current.x + (event.clientX - startPointerRef.current.x),
         y: startPositionRef.current.y + (event.clientY - startPointerRef.current.y),
       });
-      updatePosition(next);
+      applyDragPosition(next);
     },
-    [clampToViewport, updatePosition],
+    [applyDragPosition, clampToViewport],
   );
 
   const finishDrag = React.useCallback(
-    (event: React.PointerEvent<HTMLButtonElement>) => {
+    (event: { pointerId: number }) => {
       if (pointerIdRef.current !== event.pointerId) {
         return;
       }
 
-      if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
+      const captureElement = captureElementRef.current;
+      if (captureElement?.hasPointerCapture?.(event.pointerId)) {
+        captureElement.releasePointerCapture(event.pointerId);
       }
-
+      captureElementRef.current = null;
       pointerIdRef.current = null;
       setIsDragging(false);
 
       if (positionRef.current) {
+        setPosition(positionRef.current);
         persist(positionRef.current);
       }
     },
     [persist],
   );
+
+  React.useEffect(() => {
+    if (!isDragging) {
+      return;
+    }
+
+    const handleMove = (event: PointerEvent) => handlePointerMove(event);
+    const handleEnd = (event: PointerEvent) => finishDrag(event);
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleEnd);
+    window.addEventListener("pointercancel", handleEnd);
+
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleEnd);
+      window.removeEventListener("pointercancel", handleEnd);
+    };
+  }, [finishDrag, handlePointerMove, isDragging]);
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLButtonElement>) => {

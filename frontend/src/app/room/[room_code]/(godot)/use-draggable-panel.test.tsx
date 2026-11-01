@@ -43,12 +43,23 @@ afterEach(() => {
   rectSpy.mockRestore();
 });
 
-function Harness({ initial }: { initial?: (v: { width: number; height: number }) => { x: number; y: number } }) {
-  const { panelRef, style } = useDraggablePanel({
+function Harness({
+  initial,
+  onRender,
+}: {
+  initial?: (v: { width: number; height: number }) => { x: number; y: number };
+  onRender?: () => void;
+}) {
+  const { panelRef, gripProps, style } = useDraggablePanel({
     storageKey: ROOM_TABS_POSITION_KEY,
     initialPosition: initial ?? (() => ({ x: 0, y: 0 })),
   });
-  return <div data-testid="panel" ref={panelRef} style={style} />;
+  onRender?.();
+  return (
+    <div data-testid="panel" ref={panelRef} style={style}>
+      <button type="button" data-testid="grip" {...gripProps} />
+    </div>
+  );
 }
 
 describe("clampPanelPosition", () => {
@@ -115,5 +126,96 @@ describe("useDraggablePanel", () => {
     expect(screen.getByTestId("panel").style.transform).toBe(
       "translate3d(400px, 0px, 0)",
     );
+  });
+
+  it("tracks the pointer outside the grip and persists on release", () => {
+    render(<Harness initial={() => ({ x: 100, y: 50 })} />);
+    const grip = screen.getByTestId("grip");
+
+    fireEvent.pointerDown(grip, {
+      pointerId: 1,
+      button: 0,
+      clientX: 100,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(document, {
+      pointerId: 1,
+      clientX: 150,
+      clientY: 120,
+    });
+
+    expect(screen.getByTestId("panel").style.transform).toBe(
+      "translate3d(150px, 70px, 0)",
+    );
+    expect(localStorage.getItem(ROOM_TABS_POSITION_KEY)).toBeNull();
+
+    fireEvent.pointerUp(document, { pointerId: 1 });
+
+    expect(localStorage.getItem(ROOM_TABS_POSITION_KEY)).toBe(
+      JSON.stringify({ x: 150, y: 70 }),
+    );
+  });
+
+  it("clamps a drag at the viewport edges", () => {
+    render(<Harness initial={() => ({ x: 700, y: 700 })} />);
+    const grip = screen.getByTestId("grip");
+
+    fireEvent.pointerDown(grip, {
+      pointerId: 1,
+      button: 0,
+      clientX: 100,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(document, {
+      pointerId: 1,
+      clientX: 600,
+      clientY: 600,
+    });
+
+    expect(screen.getByTestId("panel").style.transform).toBe(
+      "translate3d(800px, 764px, 0)",
+    );
+  });
+
+  it("moves with arrow keys, using Shift for a fine step", () => {
+    render(<Harness initial={() => ({ x: 100, y: 50 })} />);
+    const grip = screen.getByTestId("grip");
+
+    fireEvent.keyDown(grip, { key: "ArrowRight" });
+    fireEvent.keyDown(grip, { key: "ArrowRight", shiftKey: true });
+
+    expect(screen.getByTestId("panel").style.transform).toBe(
+      "translate3d(111px, 50px, 0)",
+    );
+    expect(localStorage.getItem(ROOM_TABS_POSITION_KEY)).toBe(
+      JSON.stringify({ x: 111, y: 50 }),
+    );
+  });
+
+  it("does not re-render on every pointer move", () => {
+    const onRender = vi.fn();
+    render(<Harness initial={() => ({ x: 100, y: 50 })} onRender={onRender} />);
+    const grip = screen.getByTestId("grip");
+
+    fireEvent.pointerDown(grip, {
+      pointerId: 1,
+      button: 0,
+      clientX: 100,
+      clientY: 100,
+    });
+    const rendersAfterPointerDown = onRender.mock.calls.length;
+
+    fireEvent.pointerMove(document, {
+      pointerId: 1,
+      clientX: 120,
+      clientY: 110,
+    });
+    fireEvent.pointerMove(document, {
+      pointerId: 1,
+      clientX: 140,
+      clientY: 120,
+    });
+
+    expect(onRender.mock.calls.length).toBe(rendersAfterPointerDown);
   });
 });

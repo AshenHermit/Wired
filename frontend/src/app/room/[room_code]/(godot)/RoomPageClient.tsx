@@ -81,6 +81,12 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
             </TabsTrigger>
           </TabsList>
         </div>
+        {isDragging && (
+          <div
+            aria-hidden="true"
+            className="fixed inset-0 z-20 cursor-grabbing"
+          />
+        )}
         <TabsContents
           className="w-full !h-full relative"
           motionDivProps={{
