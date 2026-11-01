@@ -17,7 +17,9 @@ describe('PackageSyncService', () => {
   let packages: jest.Mocked<
     Pick<Repository<ScriptingPackage>, 'find' | 'findOne'>
   >;
-  let revisions: jest.Mocked<Pick<Repository<ScriptingPackageRevision>, 'find'>>;
+  let revisions: jest.Mocked<
+    Pick<Repository<ScriptingPackageRevision>, 'find'>
+  >;
   let published: Map<number, { revision: number; publishedAt: Date }>;
   let runtime: {
     sendPackage: jest.Mock;
@@ -50,13 +52,14 @@ describe('PackageSyncService', () => {
     published = new Map();
     publishRevision(42, 3);
     revisions = {
-      find: jest.fn(async () =>
-        [...published.entries()]
-          .sort(([, a], [, b]) => b.revision - a.revision)
-          .map(([packageId, entry]) => ({
-            package: { id: packageId },
-            ...entry,
-          })) as unknown as ScriptingPackageRevision[],
+      find: jest.fn(
+        async () =>
+          [...published.entries()]
+            .sort(([, a], [, b]) => b.revision - a.revision)
+            .map(([packageId, entry]) => ({
+              package: { id: packageId },
+              ...entry,
+            })) as unknown as ScriptingPackageRevision[],
       ),
     };
     runtime = {
@@ -542,13 +545,13 @@ describe('PackageSyncService', () => {
       where: { package: { id: expect.anything() }, status: 'published' },
       order: { revision: 'DESC' },
     });
-    expect(statuses.map((status) => [status.packageId, status.revision])).toEqual(
-      [
-        [42, 7],
-        [43, 2],
-        [44, 11],
-      ],
-    );
+    expect(
+      statuses.map((status) => [status.packageId, status.revision]),
+    ).toEqual([
+      [42, 7],
+      [43, 2],
+      [44, 11],
+    ]);
   });
 
   it('does not query revisions when the room has no packages', async () => {
