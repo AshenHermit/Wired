@@ -64,6 +64,10 @@ export class ScriptingPackage {
   @Column({ type: 'jsonb', default: [] })
   physicalFiles: PhysicalFile[];
 
+  @ApiProperty({ description: 'package is active in its room' })
+  @Column({ default: true })
+  enabled: boolean;
+
   @ApiProperty({ description: 'package author', type: () => User })
   @ManyToOne(() => User, (user) => user.scriptingPackages, { nullable: true })
   author?: User | null;

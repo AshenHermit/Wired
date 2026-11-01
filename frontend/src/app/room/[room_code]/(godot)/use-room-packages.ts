@@ -171,6 +171,7 @@ function packageFromStatus(status: PackageSyncStatus): ScriptingPackage {
     name: status.name,
     version: "",
     description: "",
+    enabled: true,
     dependencies: [],
     scripts: [],
     createdAt: timestamp,

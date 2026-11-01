@@ -11,7 +11,7 @@ import { Type } from 'class-transformer';
 import { ScriptFile } from 'src/database/entities/scripting-package.entity';
 import { PhysicalFile } from '@wired-io/shared';
 
-class ScriptFileDto implements ScriptFile {
+export class ScriptFileDto implements ScriptFile {
   @ApiProperty({ example: 'main.ts', description: 'Script file path' })
   @IsString()
   filepath: string;
@@ -24,7 +24,7 @@ class ScriptFileDto implements ScriptFile {
   script: string;
 }
 
-class PhysicalFileDto implements PhysicalFile {
+export class PhysicalFileDto implements PhysicalFile {
   @ApiProperty({ example: 'main.ts', description: 'Physical file path' })
   @IsString()
   filepath: string;

@@ -112,6 +112,7 @@ export type ScriptingPackage = {
   name: string;
   version: string;
   description: string;
+  enabled: boolean;
   dependencies: string[];
   scripts: ScriptFile[];
   createdAt: string;
@@ -147,7 +148,9 @@ export type CreateScriptingPackagePayload = {
 };
 
 export type UpdateScriptingPackagePayload =
-  Partial<CreateScriptingPackagePayload>;
+  Partial<CreateScriptingPackagePayload> & {
+    enabled?: boolean;
+  };
 
 export type CreateUserPayload = {
   email: string;

@@ -188,6 +188,7 @@ function roomPackage(id: number, name: string): ScriptingPackage {
     name,
     version: "0.1.0",
     description: "",
+    enabled: true,
     dependencies: [],
     scripts: [],
     createdAt: "2026-10-30T10:00:00.000Z",
