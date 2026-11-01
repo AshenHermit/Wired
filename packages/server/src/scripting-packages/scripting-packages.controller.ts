@@ -5,6 +5,8 @@ import {
   Delete,
   Get,
   Header,
+  NotFoundException,
+  Optional,
   Param,
   ParseIntPipe,
   Patch,
@@ -15,11 +17,13 @@ import {
   StreamableFile,
   UnauthorizedException,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { createReadStream } from 'fs';
+import { once } from 'events';
 import { Response } from 'express';
 import {
   CreatePackageRevisionPayload,
@@ -36,6 +40,8 @@ import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
 import { UseAuthGuard, UseSilentAuthGuard } from 'src/auth/jwt-auth.guard';
 import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 import { MAX_PACKAGE_FILE_SIZE } from './package-manifest';
+import { ArtifactBuildRateLimiter } from './artifact-build.rate-limiter';
+import { RoomMembershipGuard } from './guards/room-membership.guard';
 
 @ApiTags('scripting-packages')
 @Controller('scripting-packages')
@@ -45,6 +51,10 @@ export class ScriptingPackagesController {
     private readonly revisionsService: PackageRevisionsService,
     private readonly delivery: PackageDeliveryService,
     private readonly readUrls: PackageReadUrlService,
+    // Optional so the controller keeps working in modules that do not register
+    // the limiter; the default instance reads its config from the environment.
+    @Optional()
+    private readonly buildLimiter: ArtifactBuildRateLimiter = new ArtifactBuildRateLimiter(),
   ) {}
 
   @ApiOkResponse({ type: [ScriptingPackage] })
@@ -190,12 +200,20 @@ export class ScriptingPackagesController {
   // gzipping this JSON. Godot's Web HTTPRequest receives an already-decoded
   // body but still sees `Content-Encoding: gzip` and fails to decompress it.
   @Header('Cache-Control', 'no-store, no-transform')
+  // The membership guard is listed above the auth decorator on purpose:
+  // decorators apply bottom-up, so JwtAuthGuard is registered (and therefore
+  // runs) first and `req.user` is populated before the membership lookup.
+  @UseGuards(RoomMembershipGuard)
+  @UseAuthGuard()
   @Get(':id/revisions/:revision/runtime-manifest')
   async runtimeManifest(
     @Param('id', ParseIntPipe) id: number,
     @Param('revision', ParseIntPipe) revision: number,
     @Query('room', ParseIntPipe) room: number,
   ): Promise<PackageRuntimeManifest> {
+    // A manifest miss builds a whole artifact on disk, so throttle it per
+    // (package, revision, room) before the service is allowed to build.
+    this.buildLimiter.assertAllowed(id, revision, room);
     return this.delivery.getRuntimeManifest(id, revision, room);
   }
 
@@ -203,6 +221,8 @@ export class ScriptingPackagesController {
     description: 'Raw contents of a runtime artifact file',
     schema: { type: 'string', format: 'binary' },
   })
+  @UseGuards(RoomMembershipGuard)
+  @UseAuthGuard()
   @Get(':id/revisions/:revision/runtime-files/*path')
   async runtimeFile(
     @Param('id', ParseIntPipe) id: number,
@@ -236,15 +256,24 @@ export class ScriptingPackagesController {
       filepath,
     );
 
-    // Stream from disk instead of buffering the file in memory. A file can
-    // disappear between stat and open, so destroy the response on stream
-    // error rather than leaving the client hanging on an unhandled 'error'.
+    // `resolveRuntimeFile` stats the file, but pruning can delete it before the
+    // stream opens. Wait for 'open' so that race is a controlled 404 instead of
+    // an unhandled 'error' on a response that was never sent.
     const stream = createReadStream(file.path);
+    try {
+      await once(stream, 'open');
+    } catch {
+      stream.destroy();
+      throw new NotFoundException('package_artifact_file_missing');
+    }
+
     res.set({
       'Content-Type': 'application/octet-stream',
       'Content-Length': String(file.size),
       'Cache-Control': 'no-store',
     });
+    // The file can still disappear mid-stream; destroying the response is the
+    // only correct answer once headers are on the wire.
     stream.on('error', () => res.destroy());
     stream.pipe(res);
   }

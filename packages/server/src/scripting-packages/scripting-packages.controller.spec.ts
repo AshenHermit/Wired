@@ -1,8 +1,14 @@
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
+  INestApplication,
+  NotFoundException,
   StreamableFile,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import {
   PackageFileEntry,
   PackageManifest,
@@ -10,9 +16,17 @@ import {
 } from '@wired-io/shared';
 import { PassThrough } from 'stream';
 import { Response } from 'express';
+import { randomUUID } from 'crypto';
+import { tmpdir } from 'os';
+import path from 'path';
+import request from 'supertest';
+import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
+import { Room } from 'src/database/entities/room.entity';
+import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { User } from 'src/database/entities/user.entity';
 import { ScriptingPackagesController } from './scripting-packages.controller';
+import { ArtifactBuildRateLimiter } from './artifact-build.rate-limiter';
 import { PackageDeliveryService } from './package-delivery.service';
 import { PackageReadUrlService } from './package-read-url.service';
 import { PackageRevisionsService } from './package-revisions.service';
@@ -39,6 +53,7 @@ describe('ScriptingPackagesController revisions API', () => {
   let revisionsService: Record<string, jest.Mock>;
   let delivery: Record<string, jest.Mock>;
   let readUrls: { verifyToken: jest.Mock };
+  let buildLimiter: { assertAllowed: jest.Mock };
   let response: Response & { set: jest.Mock };
   let controller: ScriptingPackagesController;
 
@@ -64,6 +79,7 @@ describe('ScriptingPackagesController revisions API', () => {
       ),
     };
     readUrls = { verifyToken: jest.fn(() => true) };
+    buildLimiter = { assertAllowed: jest.fn() };
     response = Object.assign(new PassThrough(), {
       set: jest.fn(),
     }) as unknown as Response & { set: jest.Mock };
@@ -72,6 +88,7 @@ describe('ScriptingPackagesController revisions API', () => {
       revisionsService as unknown as PackageRevisionsService,
       delivery as unknown as PackageDeliveryService,
       readUrls as unknown as PackageReadUrlService,
+      buildLimiter as unknown as ArtifactBuildRateLimiter,
     );
   });
 
@@ -286,5 +303,202 @@ describe('ScriptingPackagesController revisions API', () => {
       'Content-Length': '3',
       'Cache-Control': 'no-store',
     });
+  });
+
+  it('rate-limits artifact builds before touching the delivery service', async () => {
+    buildLimiter.assertAllowed.mockImplementation(() => {
+      throw new HttpException(
+        'artifact_build_rate_limited',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    });
+
+    await expect(controller.runtimeManifest(5, 3, 7)).rejects.toBeInstanceOf(
+      HttpException,
+    );
+    expect(buildLimiter.assertAllowed).toHaveBeenCalledWith(5, 3, 7);
+    expect(delivery.getRuntimeManifest).not.toHaveBeenCalled();
+  });
+
+  it('passes the artifact identity to the rate limiter', async () => {
+    delivery.getRuntimeManifest.mockResolvedValue({ packageId: 5 });
+
+    await controller.runtimeManifest(5, 3, 7);
+
+    expect(buildLimiter.assertAllowed).toHaveBeenCalledWith(5, 3, 7);
+    expect(delivery.getRuntimeManifest).toHaveBeenCalledWith(5, 3, 7);
+  });
+
+  it('returns a controlled 404 when the runtime file vanished before streaming', async () => {
+    delivery.resolveRuntimeFile.mockResolvedValueOnce({
+      path: path.join(tmpdir(), `wired-missing-${randomUUID()}.bin`),
+      size: 3,
+    });
+
+    await expect(
+      controller.runtimeFile(
+        5,
+        3,
+        ['a.gd'],
+        7,
+        'k'.repeat(64),
+        'good',
+        response,
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('ScriptingPackagesController runtime endpoint authorization', () => {
+  const roomId = 7;
+  const packageId = 5;
+  const revision = 3;
+  const artifactKey = 'k'.repeat(64);
+
+  let app: INestApplication;
+  let authenticatedUser: { id: number } | null;
+  let delivery: {
+    getRuntimeManifest: jest.Mock;
+    resolveRuntimeFile: jest.Mock;
+  };
+  let rooms: { findOne: jest.Mock };
+  let packages: { findOne: jest.Mock };
+
+  beforeAll(async () => {
+    delivery = {
+      getRuntimeManifest: jest.fn(() =>
+        Promise.resolve({
+          packageId,
+          revision,
+          roomId,
+        }),
+      ),
+      resolveRuntimeFile: jest.fn(() =>
+        Promise.resolve({
+          path: __filename,
+          size: 3,
+        }),
+      ),
+    };
+    rooms = {
+      findOne: jest.fn((options: { where: { id: number } }) =>
+        Promise.resolve(
+          options.where.id === roomId
+            ? { id: roomId, author: { id: 42 }, contributors: [] }
+            : null,
+        ),
+      ),
+    };
+    packages = {
+      findOne: jest.fn((options: { where: { id: number } }) =>
+        Promise.resolve(
+          options.where.id === packageId
+            ? { id: packageId, room: { id: roomId } }
+            : null,
+        ),
+      ),
+    };
+
+    const moduleRef = await Test.createTestingModule({
+      controllers: [ScriptingPackagesController],
+      providers: [
+        {
+          provide: ScriptingPackagesService,
+          useValue: { assertPackageEditing: jest.fn() },
+        },
+        {
+          provide: PackageRevisionsService,
+          useValue: {
+            getManifest: jest.fn(),
+            getManifestForRevision: jest.fn(),
+          },
+        },
+        { provide: PackageDeliveryService, useValue: delivery },
+        {
+          provide: PackageReadUrlService,
+          useValue: { verifyToken: () => true },
+        },
+        { provide: getRepositoryToken(Room), useValue: rooms },
+        { provide: getRepositoryToken(ScriptingPackage), useValue: packages },
+      ],
+    })
+      .overrideGuard(JwtAuthGuard)
+      .useValue({
+        canActivate: (context: {
+          switchToHttp: () => {
+            getRequest: () => { user?: unknown };
+          };
+        }) => {
+          if (!authenticatedUser) {
+            throw new UnauthorizedException();
+          }
+          context.switchToHttp().getRequest().user = authenticatedUser;
+          return true;
+        },
+      })
+      .compile();
+
+    app = moduleRef.createNestApplication();
+    await app.init();
+  });
+
+  afterAll(async () => {
+    await app?.close();
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    authenticatedUser = { id: 42 };
+  });
+
+  const manifestUrl = `/scripting-packages/${packageId}/revisions/${revision}/runtime-manifest?room=${roomId}`;
+  const fileUrl = `/scripting-packages/${packageId}/revisions/${revision}/runtime-files/a.gd?room=${roomId}&key=${artifactKey}&token=good`;
+
+  it('rejects an anonymous runtime manifest with 401', async () => {
+    authenticatedUser = null;
+
+    await request(app.getHttpServer()).get(manifestUrl).expect(401);
+    expect(delivery.getRuntimeManifest).not.toHaveBeenCalled();
+  });
+
+  it('rejects an anonymous runtime file with 401', async () => {
+    authenticatedUser = null;
+
+    await request(app.getHttpServer()).get(fileUrl).expect(401);
+    expect(delivery.resolveRuntimeFile).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-member runtime manifest with 403', async () => {
+    authenticatedUser = { id: 99 };
+
+    await request(app.getHttpServer()).get(manifestUrl).expect(403);
+    expect(delivery.getRuntimeManifest).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-member runtime file with 403', async () => {
+    authenticatedUser = { id: 99 };
+
+    await request(app.getHttpServer()).get(fileUrl).expect(403);
+    expect(delivery.resolveRuntimeFile).not.toHaveBeenCalled();
+  });
+
+  it('rejects a package that is not attached to the requested room', async () => {
+    packages.findOne.mockResolvedValueOnce({
+      id: packageId,
+      room: { id: roomId + 1 },
+    });
+
+    await request(app.getHttpServer()).get(manifestUrl).expect(403);
+    expect(delivery.getRuntimeManifest).not.toHaveBeenCalled();
+  });
+
+  it('serves the runtime manifest to a room member', async () => {
+    await request(app.getHttpServer()).get(manifestUrl).expect(200);
+
+    expect(delivery.getRuntimeManifest).toHaveBeenCalledWith(
+      packageId,
+      revision,
+      roomId,
+    );
   });
 });
