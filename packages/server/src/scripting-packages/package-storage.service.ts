@@ -131,7 +131,13 @@ export class PackageStorageService {
           revision: dependencyRevision,
         })),
     });
-    const staging = target + '.' + process.pid + '-' + randomBytes(4).toString('hex') + '.tmp';
+    const staging =
+      target +
+      '.' +
+      process.pid +
+      '-' +
+      randomBytes(4).toString('hex') +
+      '.tmp';
     try {
       await writeFile(staging, body, 'utf8');
       await rename(staging, target);
@@ -153,7 +159,10 @@ export class PackageStorageService {
     let body: unknown;
     try {
       body = JSON.parse(
-        await readFile(this.pinnedDependenciesPath(packageId, revision), 'utf8'),
+        await readFile(
+          this.pinnedDependenciesPath(packageId, revision),
+          'utf8',
+        ),
       );
     } catch {
       return null;

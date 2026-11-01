@@ -206,9 +206,7 @@ export class PackageRevisionsService {
    * is held exactly while another instance verifies and moves the bytes.
    * A database error must not block uploads, so it counts as "not publishing".
    */
-  private async isPublishLockedElsewhere(
-    packageId: number,
-  ): Promise<boolean> {
+  private async isPublishLockedElsewhere(packageId: number): Promise<boolean> {
     if (!this.dataSource) {
       return false;
     }

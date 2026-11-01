@@ -250,7 +250,11 @@ describe('PackageRevisionsService', () => {
       ]);
       repository.findOne.mockImplementation(
         async (opts: {
-          where: { package: { id: number }; revision?: number; status?: string };
+          where: {
+            package: { id: number };
+            revision?: number;
+            status?: string;
+          };
         }) => {
           if (opts.where.package.id === 7) {
             return row;
@@ -284,9 +288,7 @@ describe('PackageRevisionsService', () => {
       storage.readPublishedFile.mockResolvedValue(
         Buffer.from('preload("res://packages/6/lib.gd")'),
       );
-      storage.writePinnedDependencies.mockRejectedValue(
-        new Error('disk full'),
-      );
+      storage.writePinnedDependencies.mockRejectedValue(new Error('disk full'));
 
       await expect(service.publish(7, 3)).resolves.toMatchObject({
         status: 'published',
@@ -478,8 +480,7 @@ describe('PackageRevisionsService', () => {
     let runner: { connect: jest.Mock; query: jest.Mock; release: jest.Mock };
     let dataSource: { createQueryRunner: jest.Mock };
 
-    const lockSql =
-      'SELECT pg_try_advisory_lock(hashtext($1)) AS locked';
+    const lockSql = 'SELECT pg_try_advisory_lock(hashtext($1)) AS locked';
     const unlockSql = 'SELECT pg_advisory_unlock(hashtext($1))';
     const lockKey = 'wired.package-publish:7';
 

@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, Logger, NotFoundException } from '@nestjs/common';
 import { PackageFileEntry } from '@wired-io/shared';
 import { Repository } from 'typeorm';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';

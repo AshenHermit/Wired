@@ -148,7 +148,11 @@ describe('PackageClosureResolver', () => {
     } as unknown as ScriptingPackageRevision;
   }
 
-  function definePackage(id: number, name: string, roomId: number | null): void {
+  function definePackage(
+    id: number,
+    name: string,
+    roomId: number | null,
+  ): void {
     packages.push({ id, name, room: roomId === null ? null : { id: roomId } });
   }
 
@@ -224,10 +228,9 @@ describe('PackageClosureResolver', () => {
       const builder =
         revisionsRepository.createQueryBuilder.mock.results[0].value;
       expect(builder.distinctOn).toHaveBeenCalledWith(['package.id']);
-      expect(builder.where).toHaveBeenCalledWith(
-        'revision.status = :status',
-        { status: 'published' },
-      );
+      expect(builder.where).toHaveBeenCalledWith('revision.status = :status', {
+        status: 'published',
+      });
       expect(builder.andWhere).toHaveBeenCalledWith(
         'revision.publishedAt IS NOT NULL',
       );
