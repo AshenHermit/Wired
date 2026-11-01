@@ -36,6 +36,39 @@ const DEFAULT_AUTHORITY := "server"
 const DEFAULT_PLAYER_ID := 1
 const SPAWN_OFFSET_STEP_2D := 48.0
 const SPAWN_OFFSET_STEP_3D := 48.0
+## A slot is owned only by a live player, so a reconnect after the previous
+## player left reuses the intended marker instead of walking one step further.
+## A spawn point also has to be free of bodies: a CharacterBody2D spawned inside
+## a crate is depenetrated by the first `move_and_slide`, which looks like a
+## teleport. The search shifts the slot in deterministic steps and falls back to
+## the marker only when every candidate is blocked.
+const SPAWN_CLEARANCE_RADIUS := 16.0
+const SPAWN_OFFSETS_2D := [
+	Vector2(0, 0),
+	Vector2(1, 0),
+	Vector2(-1, 0),
+	Vector2(0, -1),
+	Vector2(0, 1),
+	Vector2(1, -1),
+	Vector2(-1, -1),
+	Vector2(1, 1),
+	Vector2(-1, 1),
+	Vector2(2, 0),
+	Vector2(-2, 0),
+]
+const SPAWN_OFFSETS_3D := [
+	Vector3(0, 0, 0),
+	Vector3(1, 0, 0),
+	Vector3(-1, 0, 0),
+	Vector3(0, 0, 1),
+	Vector3(0, 0, -1),
+	Vector3(1, 0, 1),
+	Vector3(-1, 0, 1),
+	Vector3(1, 0, -1),
+	Vector3(-1, 0, -1),
+	Vector3(2, 0, 0),
+	Vector3(-2, 0, 0),
+]
 ## Set on a player root this peer created from a late-join snapshot instead of
 ## receiving it from the spawner. Nothing else owns its lifetime here.
 const META_SNAPSHOT_REPAIR := "_wired_snapshot_repair"
@@ -47,6 +80,9 @@ var _spawner: MultiplayerSpawner = null
 var _authenticated: Dictionary = {}
 # peer_id -> WiredPlayer
 var _spawned: Dictionary = {}
+# peer_id -> spawn slot of the live player. A slot is released on despawn, so a
+# reconnect does not inherit the ever-growing index of its player id.
+var _spawn_slots: Dictionary = {}
 # player_id -> saved player state, applied on (re)spawn
 var _saved_states: Dictionary = {}
 # One diagnostic is enough: spawn lookups happen twice per player.
@@ -276,6 +312,7 @@ func forget_player(player_id: int) -> void:
 		if not is_instance_valid(player) or player.player_id != player_id:
 			continue
 		_spawned.erase(peer_id)
+		_spawn_slots.erase(peer_id)
 		# A spawner-tracked root frees itself; a repaired one is ours alone.
 		if (
 			bool(player.get_meta(META_SNAPSHOT_REPAIR, false))
@@ -342,6 +379,9 @@ func _components_match(player: WiredPlayer) -> bool:
 
 
 func _rebuild_components(player: WiredPlayer) -> void:
+	# Park first: a component whose package was removed is not rebuilt, so its
+	# last state must survive on the player until the package returns.
+	player.park_component_states()
 	for component: WiredPlayerComponent in player.components:
 		if is_instance_valid(component):
 			# Detach first so the component stops processing this frame and a
@@ -364,21 +404,25 @@ func spawn_player(peer_id: int) -> void:
 		return
 	if _network != null and not _network.is_peer_packages_ready(peer_id):
 		return
-	var data := _spawn_data(peer_id)
+	var slot := _claim_spawn_slot(peer_id)
+	var data := _spawn_data(peer_id, slot)
 	if _spawner != null:
 		var node := _spawner.spawn(data)
 		if node == null:
+			_release_spawn_slot(peer_id)
 			push_warning(
 				"WIRED_PLAYER_SPAWN_FAILED peer=%d reason=spawner_rejected"
 				% peer_id
 			)
 		return
-	_spawn_player(data)
+	if _spawn_player(data) == null:
+		_release_spawn_slot(peer_id)
 
 
 func despawn_player(peer_id: int) -> void:
 	var player := get_player_by_peer(peer_id)
 	_spawned.erase(peer_id)
+	_spawn_slots.erase(peer_id)
 	if player == null:
 		return
 	# Freeing the node in the tree both releases it locally and tells the
@@ -450,6 +494,39 @@ func load_state(state: Dictionary) -> void:
 			_saved_states[player_id] = record
 
 
+## Drops parked component state of a permanently deleted package, on live
+## players and on players that are waiting for their next spawn.
+func purge_package(package_id: int) -> void:
+	var key := str(package_id)
+	var peer_ids := _spawned.keys()
+	for peer_id: Variant in peer_ids:
+		var player: WiredPlayer = _spawned[peer_id]
+		if is_instance_valid(player):
+			player.purge_package(key)
+	for player_id: Variant in _saved_states.keys():
+		var state: Dictionary = _saved_states[player_id]
+		var components: Dictionary = state.get("components", {})
+		for component_key: String in components.keys():
+			if component_key.begins_with(key + ":"):
+				components.erase(component_key)
+
+
+## Drops parked component state of every package that is not in the room any
+## more. `room-packages` carries the authoritative id list.
+func purge_missing_packages(package_ids: PackedStringArray) -> void:
+	var peer_ids := _spawned.keys()
+	for peer_id: Variant in peer_ids:
+		var player: WiredPlayer = _spawned[peer_id]
+		if is_instance_valid(player):
+			player.keep_only_packages(package_ids)
+	for player_id: Variant in _saved_states.keys():
+		var state: Dictionary = _saved_states[player_id]
+		var components: Dictionary = state.get("components", {})
+		for component_key: String in components.keys():
+			if not package_ids.has(component_key.get_slice(":", 0)):
+				components.erase(component_key)
+
+
 func _on_peer_authenticated(peer_id: int, player_id: int, name: String) -> void:
 	_authenticated[peer_id] = {
 		WiredProtocol.KEY_PLAYER_ID: player_id,
@@ -494,22 +571,128 @@ func _try_spawn(peer_id: int) -> void:
 	spawn_player(peer_id)
 
 
-func _spawn_data(peer_id: int) -> Dictionary:
+func _spawn_data(peer_id: int, slot: int) -> Dictionary:
 	var info: Dictionary = _authenticated[peer_id]
 	var player_id := int(info.get(WiredProtocol.KEY_PLAYER_ID, DEFAULT_PLAYER_ID))
-	var index := maxi(player_id - 1, 0)
 	return {
 		WiredProtocol.KEY_PLAYER_ID: player_id,
 		WiredProtocol.KEY_PEER_ID: peer_id,
 		WiredProtocol.KEY_NAME: str(info.get(WiredProtocol.KEY_NAME, "")),
-		WiredProtocol.KEY_SPAWN_POSITION_2D: _spawn_position_2d(index),
-		WiredProtocol.KEY_SPAWN_POSITION_3D: _spawn_position_3d(index),
+		WiredProtocol.KEY_SPAWN_POSITION_2D: _clear_spawn_position_2d(
+			_spawn_position_2d(slot), slot
+		),
+		WiredProtocol.KEY_SPAWN_POSITION_3D: _clear_spawn_position_3d(
+			_spawn_position_3d(slot), slot
+		),
 	}
 
 
-## Markers are indexed by join order. When a world has fewer markers than
-## players, later players share the first marker with a small deterministic
-## offset instead of stacking on one point.
+## Lowest slot not owned by a live player. A reconnect after the only player
+## left therefore reuses the first marker instead of taking the next offset.
+func _claim_spawn_slot(peer_id: int) -> int:
+	var used: Dictionary = {}
+	for other_peer: Variant in _spawned:
+		if int(other_peer) == peer_id:
+			continue
+		var slot: Variant = _spawn_slots.get(other_peer)
+		if slot != null:
+			used[int(slot)] = true
+	var slot := 0
+	while used.has(slot):
+		slot += 1
+	_spawn_slots[peer_id] = slot
+	return slot
+
+
+func _release_spawn_slot(peer_id: int) -> void:
+	_spawn_slots.erase(peer_id)
+
+
+## Deterministic candidate search around the marker. The first free position is
+## used, so a body already standing on the marker (a persisted crate, another
+## player) never receives the new character inside itself.
+func _clear_spawn_position_2d(base: Vector2, slot: int) -> Vector2:
+	var space := _space_state_2d()
+	if space == null:
+		return base
+	for offset: Vector2 in SPAWN_OFFSETS_2D:
+		var candidate := base + offset * SPAWN_OFFSET_STEP_2D
+		if _is_spawn_clear_2d(space, candidate):
+			if candidate != base:
+				print(
+					"WIRED_PLAYER_SPAWN_SHIFTED slot=%d axis=2d base=%s position=%s"
+					% [slot, base, candidate]
+				)
+			return candidate
+	push_warning(
+		"WIRED_PLAYER_SPAWN_BLOCKED slot=%d axis=2d base=%s" % [slot, base]
+	)
+	return base
+
+
+func _clear_spawn_position_3d(base: Vector3, slot: int) -> Vector3:
+	var space := _space_state_3d()
+	if space == null:
+		return base
+	for offset: Vector3 in SPAWN_OFFSETS_3D:
+		var candidate := base + offset * SPAWN_OFFSET_STEP_3D
+		if _is_spawn_clear_3d(space, candidate):
+			if candidate != base:
+				print(
+					"WIRED_PLAYER_SPAWN_SHIFTED slot=%d axis=3d base=%s position=%s"
+					% [slot, base, candidate]
+				)
+			return candidate
+	push_warning(
+		"WIRED_PLAYER_SPAWN_BLOCKED slot=%d axis=3d base=%s" % [slot, base]
+	)
+	return base
+
+
+func _is_spawn_clear_2d(
+	space: PhysicsDirectSpaceState2D, position: Vector2
+) -> bool:
+	var params := PhysicsShapeQueryParameters2D.new()
+	var shape := CircleShape2D.new()
+	shape.radius = SPAWN_CLEARANCE_RADIUS
+	params.shape = shape
+	params.transform = Transform2D(0.0, position)
+	params.collide_with_bodies = true
+	params.collide_with_areas = false
+	return space.intersect_shape(params, 1).is_empty()
+
+
+func _is_spawn_clear_3d(
+	space: PhysicsDirectSpaceState3D, position: Vector3
+) -> bool:
+	var params := PhysicsShapeQueryParameters3D.new()
+	var shape := SphereShape3D.new()
+	shape.radius = SPAWN_CLEARANCE_RADIUS
+	params.shape = shape
+	params.transform = Transform3D(Basis.IDENTITY, position)
+	params.collide_with_bodies = true
+	params.collide_with_areas = false
+	return space.intersect_shape(params, 1).is_empty()
+
+
+func _space_state_2d() -> PhysicsDirectSpaceState2D:
+	var viewport := get_viewport()
+	if viewport == null or viewport.world_2d == null:
+		return null
+	return viewport.world_2d.direct_space_state
+
+
+func _space_state_3d() -> PhysicsDirectSpaceState3D:
+	var viewport := get_viewport()
+	if viewport == null or viewport.world_3d == null:
+		return null
+	return viewport.world_3d.direct_space_state
+
+
+## Markers are indexed by the live spawn slot. When a world has fewer markers
+## than players, later players share the first marker with a small deterministic
+## offset instead of stacking on one point. `_claim_spawn_slot` releases the
+## slot when its player leaves, so a reconnect does not drift one step per try.
 func _spawn_position_2d(index: int) -> Vector2:
 	var world := _static_world()
 	if world == null or not world.has_method("get_spawn_position_2d"):

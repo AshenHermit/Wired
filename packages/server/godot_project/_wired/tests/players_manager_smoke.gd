@@ -66,9 +66,13 @@ func _run() -> void:
 	_test_non_finite_input_is_rejected()
 	_test_build_player_tags_components_as_registered()
 	_test_hot_reload_rebuilds_live_components()
+	_test_removed_component_state_survives_until_the_package_returns()
+	_test_purge_package_drops_parked_component_state()
 	_test_spawn_waits_for_both_gates_and_routes_actions()
 	_test_disconnect_despawns_the_player()
 	_test_spawner_parents_the_spawned_player()
+	_test_reconnect_reuses_the_free_spawn_slot()
+	await _test_spawn_avoids_an_occupied_marker()
 	_free_owned()
 	_finish()
 
@@ -586,6 +590,70 @@ func _test_hot_reload_rebuilds_live_components() -> void:
 	)
 
 
+## A component whose package left the registry keeps its last state on the
+## player, so re-registering the package restores the component where it was.
+func _test_removed_component_state_survives_until_the_package_returns() -> void:
+	var registry := _make_registry()
+	var manager := _make_live_manager(registry)
+	var player := _first_live_player(manager)
+	if player == null or player.components.is_empty():
+		_check(false, "the parked-state test needs a live component")
+		return
+	var component: Variant = player.components[0]
+	component.body.position = Vector2(5, 6)
+	var key: String = component.state_key()
+
+	registry.clear_package(PACKAGE_ID)
+	manager.rebuild_live_components()
+	_check(
+		player.components.is_empty(),
+		"a component of an unregistered package must leave the player",
+	)
+	var parked: Dictionary = player.save_state().get("components", {})
+	_check(parked.has(key), "the removed component state must be parked")
+	_check(
+		parked.get(key, {}).get("body_position", []) == [5.0, 6.0],
+		"the parked state must be the component's last state",
+	)
+
+	_register_component_package(registry)
+	manager.rebuild_live_components()
+	_check(
+		player.components.size() == 1,
+		"the restored package must rebuild its component, got %d"
+		% player.components.size(),
+	)
+	if player.components.size() == 1:
+		var restored: Variant = player.components[0]
+		_check(
+			restored.body.position == Vector2(5, 6),
+			"the parked state must return with the package",
+		)
+
+
+## Deleting a package must not leave its parked component state behind.
+func _test_purge_package_drops_parked_component_state() -> void:
+	var registry := _make_numeric_registry(42)
+	var manager := _make_live_manager(registry)
+	var player := _first_live_player(manager)
+	if player == null or player.components.is_empty():
+		_check(false, "the purge test needs a live component")
+		return
+	var component: Variant = player.components[0]
+	var key: String = component.state_key()
+	registry.clear_package("42")
+	manager.rebuild_live_components()
+	_check(
+		player.save_state().get("components", {}).has(key),
+		"the purge test needs parked state",
+	)
+	manager.purge_package(42)
+	_check(
+		not player.save_state().get("components", {}).has(key),
+		"purging a package must drop its parked component state",
+	)
+
+
 func _test_spawn_waits_for_both_gates_and_routes_actions() -> void:
 	var registry := _make_registry()
 	var net := WiredNetwork.new()
@@ -772,6 +840,152 @@ func _test_spawner_parents_the_spawned_player() -> void:
 
 
 # --- helpers --------------------------------------------------------------
+
+
+## A reconnect after the only player left must land on the first marker again,
+## not one 48 px slot further. The spawn slot is owned by live players only.
+func _test_reconnect_reuses_the_free_spawn_slot() -> void:
+	var world := _make_spawn_world(Vector2(48, 96))
+	var global := root.get_node_or_null("Global")
+	var previous_world: Variant = global.get("static_world") if global != null else null
+	if global != null:
+		global.set("static_world", world)
+	var manager := PlayersManager.new()
+	root.add_child(manager)
+	_owned.append(manager)
+	manager.setup(_make_registry(), null, null)
+	manager._authenticated[5] = {
+		WiredProtocol.KEY_PLAYER_ID: 9,
+		WiredProtocol.KEY_NAME: "eve",
+	}
+	manager.spawn_player(5)
+	var first := manager.get_player_by_peer(5)
+	_check(
+		first != null and first.spawn_position_2d == Vector2(48, 96),
+		"the first player must spawn at the marker, got %s"
+		% (first.spawn_position_2d if first != null else "null"),
+	)
+	manager.despawn_player(5)
+	manager._authenticated[6] = {
+		WiredProtocol.KEY_PLAYER_ID: 10,
+		WiredProtocol.KEY_NAME: "frank",
+	}
+	manager.spawn_player(6)
+	var second := manager.get_player_by_peer(6)
+	_check(
+		second != null and second.spawn_position_2d == Vector2(48, 96),
+		"a reconnect after the previous player left must reuse the first slot, got %s"
+		% (second.spawn_position_2d if second != null else "null"),
+	)
+	if global != null:
+		global.set("static_world", previous_world)
+
+
+## A spawn point occupied by a body must shift to the next deterministic slot:
+## spawning a CharacterBody2D inside a crate makes the physics engine depenetrate
+## it on the first slide, which players perceive as being thrown away.
+func _test_spawn_avoids_an_occupied_marker() -> void:
+	var world := _make_spawn_world(Vector2(48, 96))
+	var global := root.get_node_or_null("Global")
+	var previous_world: Variant = global.get("static_world") if global != null else null
+	if global != null:
+		global.set("static_world", world)
+
+	var blocker := StaticBody2D.new()
+	var collision := CollisionShape2D.new()
+	var box := RectangleShape2D.new()
+	box.size = Vector2(40, 40)
+	collision.shape = box
+	blocker.add_child(collision)
+	blocker.position = Vector2(48, 96)
+	root.add_child(blocker)
+	_owned.append(blocker)
+	await physics_frame
+
+	var manager := PlayersManager.new()
+	root.add_child(manager)
+	_owned.append(manager)
+	manager.setup(_make_registry(), null, null)
+	manager._authenticated[5] = {
+		WiredProtocol.KEY_PLAYER_ID: 9,
+		WiredProtocol.KEY_NAME: "eve",
+	}
+	manager.spawn_player(5)
+	var player := manager.get_player_by_peer(5)
+	_check(player != null, "the clearance test needs a spawned player")
+	if player != null:
+		_check(
+			player.spawn_position_2d != Vector2(48, 96),
+			"an occupied marker must shift the spawn, got %s"
+			% player.spawn_position_2d,
+		)
+		_check(
+			player.spawn_position_2d.distance_to(Vector2(48, 96)) >= 47.0,
+			"the shifted spawn must clear the blocker by one slot step, got %s"
+			% player.spawn_position_2d,
+		)
+	if global != null:
+		global.set("static_world", previous_world)
+
+
+func _make_spawn_world(position: Vector2) -> StaticWorldContainer:
+	var world := StaticWorldContainer.new()
+	root.add_child(world)
+	_owned.append(world)
+	var marker := Marker2D.new()
+	marker.position = position
+	marker.add_to_group(&"wired_player_spawn")
+	world.add_child(marker)
+	return world
+
+
+func _make_live_manager(registry: WiredPackageRegistry) -> PlayersManager:
+	var manager := PlayersManager.new()
+	root.add_child(manager)
+	_owned.append(manager)
+	manager.setup(registry, null, null)
+	manager._authenticated[1] = {
+		WiredProtocol.KEY_PLAYER_ID: 7,
+		WiredProtocol.KEY_NAME: "bob",
+	}
+	manager.spawn_player(1)
+	return manager
+
+
+func _first_live_player(manager: PlayersManager) -> WiredPlayer:
+	var player := manager.get_player_by_peer(1)
+	_check(player != null, "the fixture manager must spawn a player for peer 1")
+	return player
+
+
+func _register_component_package(registry: WiredPackageRegistry) -> void:
+	var context := WiredPackageContext.new()
+	context.package_id = PACKAGE_ID
+	context.root_path = FIXTURE_ROOT
+	registry.register_context(PACKAGE_ID, context)
+	var registration := WiredPackageRegistration.new()
+	registration.package_id = PACKAGE_ID
+	registration.add_player_component(
+		COMPONENT_SCENE, {"order": 10, "authority": "server"}
+	)
+	registry.add_registration(registration)
+
+
+func _make_numeric_registry(package_id: int) -> WiredPackageRegistry:
+	var registry := WiredPackageRegistry.new()
+	_registries.append(registry)
+	var id := str(package_id)
+	var context := WiredPackageContext.new()
+	context.package_id = id
+	context.root_path = FIXTURE_ROOT
+	registry.register_context(id, context)
+	var registration := WiredPackageRegistration.new()
+	registration.package_id = id
+	registration.add_player_component(
+		COMPONENT_SCENE, {"order": 10, "authority": "server"}
+	)
+	registry.add_registration(registration)
+	return registry
 
 
 func _make_registry(include_local := false) -> WiredPackageRegistry:

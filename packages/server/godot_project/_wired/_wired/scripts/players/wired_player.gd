@@ -45,6 +45,11 @@ var components: Array[WiredPlayerComponent] = []
 
 var _anchor_position_2d := Vector2.ZERO
 var _anchor_position_3d := Vector3.ZERO
+## Component state of packages that are no longer registered, keyed by
+## `<package_id>:<relative_path>`. It is written by the manager before a rebuild
+## and merged back into `save_state()`, so disabling a package parks its state
+## instead of losing it.
+var _parked_component_states: Dictionary = {}
 var _action_handlers: Dictionary = {}
 var _last_input_seq := 0
 var _input_seq := 0
@@ -183,8 +188,32 @@ func request_action(qualified_action: String, payload: Dictionary = {}) -> void:
 	network.send_player_action(qualified_action, payload)
 
 
+## Captures the state of the live components before a rebuild detaches them.
+## The manager calls this only when the registry changed, so a component whose
+## package was removed keeps its last state until the package returns.
+func park_component_states() -> void:
+	for component: WiredPlayerComponent in components:
+		if not is_instance_valid(component):
+			continue
+		_parked_component_states[component.state_key()] = component._wired_save_state()
+
+
+## Drops parked state that belonged to a permanently deleted package.
+func purge_package(package_id: String) -> void:
+	for key: String in _parked_component_states.keys():
+		if key.begins_with(package_id + ":"):
+			_parked_component_states.erase(key)
+
+
+## Drops parked state of every package that is not in the room any more.
+func keep_only_packages(package_ids: PackedStringArray) -> void:
+	for key: String in _parked_component_states.keys():
+		if not package_ids.has(key.get_slice(":", 0)):
+			_parked_component_states.erase(key)
+
+
 func save_state() -> Dictionary:
-	var component_states: Dictionary = {}
+	var component_states: Dictionary = _parked_component_states.duplicate(true)
 	for component: WiredPlayerComponent in components:
 		if not is_instance_valid(component):
 			continue
@@ -226,12 +255,25 @@ func load_state(state: Dictionary) -> void:
 	var records: Variant = state.get("components", {})
 	if typeof(records) == TYPE_DICTIONARY:
 		var keyed: Dictionary = records
+		var live_keys: Dictionary = {}
 		for component: WiredPlayerComponent in components:
 			if not is_instance_valid(component):
 				continue
-			var component_state: Variant = keyed.get(component.state_key(), null)
+			var state_key := component.state_key()
+			live_keys[state_key] = true
+			var component_state: Variant = keyed.get(state_key, null)
 			if typeof(component_state) == TYPE_DICTIONARY:
 				component._wired_load_state(component_state)
+		# Keys without a live component belong to a package that is currently
+		# not registered; keep them parked so re-enabling restores the state.
+		_parked_component_states.clear()
+		for key: Variant in keyed.keys():
+			var parked_key := str(key)
+			if live_keys.has(parked_key):
+				continue
+			var parked_state: Variant = keyed[key]
+			if typeof(parked_state) == TYPE_DICTIONARY:
+				_parked_component_states[parked_key] = parked_state
 		return
 	if not (records is Array):
 		return
