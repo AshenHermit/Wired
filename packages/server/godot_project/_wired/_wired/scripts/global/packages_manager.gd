@@ -917,6 +917,11 @@ func _fetch(path: String) -> Dictionary:
 func _request(path: String) -> Dictionary:
 	var http := HTTPRequest.new()
 	http.timeout = 30.0
+	# The browser already decompresses gzip responses before Godot sees them.
+	# Leaving this on makes the web build try to gunzip the decoded body and
+	# fail with `request failed (8)` / stream_peer_gzip when a proxy (Next.js
+	# in dev, nginx in production) compresses a large JSON manifest.
+	http.accept_gzip = false
 	add_child(http)
 	# HTTPRequest builds its client only after entering the tree.
 	if is_inside_tree():

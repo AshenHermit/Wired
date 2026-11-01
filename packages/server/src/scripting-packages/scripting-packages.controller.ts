@@ -186,7 +186,10 @@ export class ScriptingPackagesController {
   }
 
   @ApiOkResponse({ description: 'Signed runtime manifest for a room' })
-  @Header('Cache-Control', 'no-store')
+  // `no-transform` keeps the Next.js dev proxy (and production proxies) from
+  // gzipping this JSON. Godot's Web HTTPRequest receives an already-decoded
+  // body but still sees `Content-Encoding: gzip` and fails to decompress it.
+  @Header('Cache-Control', 'no-store, no-transform')
   @Get(':id/revisions/:revision/runtime-manifest')
   async runtimeManifest(
     @Param('id', ParseIntPipe) id: number,
