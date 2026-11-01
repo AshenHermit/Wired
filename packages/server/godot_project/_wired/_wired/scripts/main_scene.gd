@@ -36,6 +36,10 @@ var _saved_dynamic_records: Array = []
 ## Client side: a snapshot whose package map did not match the local registry.
 ## It is retried after the next package application, never applied blindly.
 var _pending_world_snapshot: Dictionary = {}
+## Applied-package signature at the last snapshot request. A permanently
+## different closure must not turn into an endless request/response loop: a
+## fresh request is sent only when the local applied map actually changes.
+var _snapshot_request_signature := ""
 
 @onready var _net: WiredNetwork = $Net
 @onready var _status: Label = $UI/Margin/VBox/Status
@@ -223,9 +227,13 @@ func _apply_world_snapshot(snapshot: Dictionary) -> void:
 			"WIRED_WORLD_SNAPSHOT_DEFERRED reason=package_mismatch remote=%s local=%s"
 			% [remote_packages, local_packages]
 		)
-		_net.request_world_snapshot()
+		var signature := str(local_packages)
+		if _snapshot_request_signature != signature:
+			_snapshot_request_signature = signature
+			_net.request_world_snapshot()
 		return
 	_pending_world_snapshot = {}
+	_snapshot_request_signature = ""
 	var players: Variant = snapshot.get("players", [])
 	if players is Array and _players != null:
 		_players.apply_snapshot(players)
