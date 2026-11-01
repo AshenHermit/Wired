@@ -6,8 +6,12 @@ import {
   getGameRoomStatus,
   getRoomPackages,
 } from "@/api/services/godot-game";
-import { GameTab } from "./GameTab";
-
+import {
+  GameTab,
+  activePackages,
+  packagesAreApplied,
+  packagesFailed,
+} from "./GameTab";
 vi.mock("@/api/services/godot-game", () => ({
   createGameConnection: vi.fn(),
   getGameRoomStatus: vi.fn(),
@@ -422,5 +426,92 @@ describe("GameTab bridge", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+function statusOf(
+  packages: RoomPackagesStatus["packages"],
+): RoomPackagesStatus {
+  return { roomId: 8, packages };
+}
+
+function pkg(
+  overrides: Partial<RoomPackagesStatus["packages"][number]> = {},
+): RoomPackagesStatus["packages"][number] {
+  return {
+    packageId: 1,
+    name: "Package",
+    enabled: true,
+    revision: 1,
+    publishedAt: null,
+    state: "published",
+    runtime: {
+      state: "pending",
+      revision: 1,
+      error: null,
+      updatedAt: null,
+    },
+    clients: [],
+    ...overrides,
+  };
+}
+
+describe("package readiness helpers", () => {
+  it("ignores disabled and unpublished packages when judging readiness", () => {
+    const status = statusOf([
+      pkg({ packageId: 1, enabled: false, revision: 3 }),
+      pkg({ packageId: 2, enabled: true, revision: 0 }),
+    ]);
+
+    expect(packagesAreApplied(status)).toBe(true);
+    expect(packagesFailed(status)).toBe(false);
+  });
+
+  it("passes only enabled published packages to the bridge config", () => {
+    expect(
+      activePackages(
+        statusOf([
+          pkg({ packageId: 1, enabled: false, revision: 3 }),
+          pkg({ packageId: 2, enabled: true, revision: 0 }),
+          pkg({ packageId: 3, enabled: true, revision: 4 }),
+        ]),
+      ),
+    ).toEqual([{ packageId: 3, revision: 4 }]);
+  });
+
+  it("keeps a package pending while the runtime is on an older revision", () => {
+    const status = statusOf([
+      pkg({
+        packageId: 3,
+        revision: 4,
+        runtime: {
+          state: "applied",
+          revision: 3,
+          error: null,
+          updatedAt: null,
+        },
+      }),
+    ]);
+
+    expect(packagesAreApplied(status)).toBe(false);
+    expect(packagesFailed(status)).toBe(false);
+  });
+
+  it("reports failure only for active packages", () => {
+    const status = statusOf([
+      pkg({
+        packageId: 1,
+        enabled: false,
+        revision: 3,
+        runtime: {
+          state: "failed",
+          revision: 3,
+          error: "boom",
+          updatedAt: null,
+        },
+      }),
+    ]);
+
+    expect(packagesFailed(status)).toBe(false);
   });
 });

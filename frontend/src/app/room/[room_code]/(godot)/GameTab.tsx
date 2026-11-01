@@ -1,6 +1,10 @@
 "use client";
 
-import { Room } from "@wired-io/shared";
+import {
+  Room,
+  type GameRoomRuntimeStatus,
+  type RoomPackagesStatus,
+} from "@wired-io/shared";
 import React from "react";
 import {
   createGameConnection,
@@ -36,6 +40,12 @@ const MAX_AUTO_RETRIES = 3;
 const LOAD_TIMEOUT_MS = 120_000;
 const HANDSHAKE_TIMEOUT_MS = 15_000;
 const STATUS_POLL_MS = 5_000;
+// A cold runtime start has to launch Godot and apply every package revision
+// before the backend can mint a usable ticket. The connection flow waits for
+// that instead of turning a normal startup into "Игра недоступна".
+const CONNECTION_WAIT_MS = 90_000;
+const RUNTIME_POLL_MS = 1_000;
+const CONNECTION_RETRY_MS = 2_000;
 // A ready frame that stops answering for this long is treated as a crashed
 // WASM engine. The backend status poll can stay healthy while the engine is
 // dead, so liveness has to be observed on the frame itself.
@@ -84,6 +94,7 @@ type GameAction =
   | { type: "frame-ready" }
   | { type: "configured-sent"; attempt: number }
   | { type: "configured" }
+  | { type: "connection-wait"; attempt: number; message: string }
   | { type: "status"; stage: GameStatusStage; detail?: string }
   | { type: "game-error"; message: string }
   | { type: "event"; name: string; players?: number }
@@ -201,6 +212,20 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         message: "Тикет принят игрой…",
         acknowledged: true,
       };
+    case "connection-wait":
+      // The ticket has not been handed to the frame yet, so this only updates
+      // progress. Once `configured-sent` moved the phase to the handshake, the
+      // connection is owned by the frame and a late status poll must not move
+      // it backwards.
+      if (
+        state.attempt !== action.attempt ||
+        state.phase === "error" ||
+        state.phase === "handshake"
+      ) {
+        return state;
+      }
+      if (state.message === action.message) return state;
+      return { ...state, message: action.message };
     case "status": {
       if (state.phase === "error") return state;
       const sent = state.sentAttempt === state.attempt;
@@ -242,6 +267,9 @@ function gameReducer(state: GameState, action: GameAction): GameState {
       }
     }
     case "game-error":
+      // Keep the first, actionable error: a frame that times out waiting for a
+      // ticket must not overwrite the host's own startup error a minute later.
+      if (state.phase === "error") return state;
       return fail(state, action.message || "Ошибка игры");
     case "event":
       return {
@@ -288,6 +316,138 @@ function gameReducer(state: GameState, action: GameAction): GameState {
     default:
       return state;
   }
+}
+
+/**
+ * Errors that mean "the runtime is still coming up": the next tick must poll
+ * its state and retry instead of failing the whole Game tab.
+ */
+const RETRYABLE_CONNECTION_CODES = new Set([
+  "packages_pending",
+  "room_stopping",
+  "room_not_running",
+  "handshake_window_expired",
+]);
+
+const CONNECTION_MESSAGE_BY_CODE: Record<string, string> = {
+  packages_pending: "Применяем пакеты комнаты…",
+  room_stopping: "Сервер игры перезапускается…",
+  room_not_running: "Запускаем сервер игры…",
+  handshake_window_expired: "Сервер игры перезапускается…",
+};
+
+const FATAL_CONNECTION_MESSAGE_BY_CODE: Record<string, string> = {
+  packages_failed: "Не удалось применить пакеты комнаты. Нажмите «Повторить».",
+  start_failed:
+    "Сервер игры не смог запуститься. Проверьте логи backend и нажмите «Повторить».",
+  config: "Сервер игры не настроен на этом backend.",
+  ticket_secret_missing: "Сервер игры не настроен на этом backend.",
+};
+
+type ConnectionFailure = {
+  retryable: boolean;
+  message: string;
+  retryAfterMs: number;
+};
+
+/** Keeps the structured backend `code` available to the retry loop. */
+function describeConnectionFailure(error: unknown): ConnectionFailure {
+  const response = (
+    error as {
+      response?: {
+        status?: number;
+        data?: { code?: unknown; retryAfterSeconds?: unknown };
+      };
+    }
+  ).response;
+  const data = response?.data;
+  const code = typeof data?.code === "string" ? data.code : "";
+  const fallback =
+    error instanceof Error ? error.message : "Не удалось подключиться к игре";
+
+  if (response?.status === 429) {
+    const retryAfterSeconds = Number(data?.retryAfterSeconds);
+    const seconds =
+      Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+        ? retryAfterSeconds
+        : 5;
+    return {
+      retryable: true,
+      message: `Слишком много попыток. Повторяем через ${seconds} с…`,
+      retryAfterMs: seconds * 1_000,
+    };
+  }
+  if (RETRYABLE_CONNECTION_CODES.has(code)) {
+    return {
+      retryable: true,
+      message: CONNECTION_MESSAGE_BY_CODE[code] ?? "Сервер игры ещё запускается…",
+      retryAfterMs: CONNECTION_RETRY_MS,
+    };
+  }
+  return {
+    retryable: false,
+    message: FATAL_CONNECTION_MESSAGE_BY_CODE[code] ?? fallback,
+    retryAfterMs: 0,
+  };
+}
+
+/** Human-readable runtime stage shown while the ticket is being obtained. */
+function runtimeMessage(
+  status: GameRoomRuntimeStatus,
+  packagesApplied: boolean,
+  appliedPackages: number,
+  totalPackages: number,
+): string {
+  switch (status.state) {
+    case "starting":
+      return "Сервер игры запускается…";
+    case "stopping":
+      return "Сервер игры перезапускается…";
+    case "running":
+      if (packagesApplied) return "Сервер игры готов. Запрашиваем подключение…";
+      return totalPackages > 0
+        ? `Применяем пакеты комнаты (${appliedPackages}/${totalPackages})…`
+        : "Готовим мир комнаты…";
+    case "failed":
+      return "Сервер игры перезапускается…";
+    default:
+      return "Запускаем сервер игры…";
+  }
+}
+
+export type ActivePackage = { packageId: number; revision: number };
+
+/**
+ * Packages that take part in the running game: an unpublished package has no
+ * revision to apply and a disabled one is intentionally out of the room.
+ */
+export function activePackages(
+  packages: RoomPackagesStatus,
+): ActivePackage[] {
+  return packages.packages
+    .filter((entry) => entry.enabled && entry.revision > 0)
+    .map(({ packageId, revision }) => ({ packageId, revision }));
+}
+
+export function packagesAreApplied(packages: RoomPackagesStatus): boolean {
+  const active = activePackages(packages);
+  if (active.length === 0) return true;
+  return active.every(({ packageId, revision }) => {
+    const status = packages.packages.find(
+      (entry) => entry.packageId === packageId,
+    );
+    return (
+      status?.runtime.state === "applied" &&
+      status.runtime.revision >= revision
+    );
+  });
+}
+
+export function packagesFailed(packages: RoomPackagesStatus): boolean {
+  const active = new Set(activePackages(packages).map(({ packageId }) => packageId));
+  return packages.packages.some(
+    (entry) => active.has(entry.packageId) && entry.runtime.state === "failed",
+  );
 }
 
 /**
@@ -343,43 +503,150 @@ export function GameTab({ room }: { room: Room }) {
   }, [attempt]);
 
   // One ticket per ready frame. `ticketRequest` is cleared by every action that
-  // invalidates the pending request, which cancels this effect.
+  // invalidates the pending request, which cancels this effect. A cold runtime
+  // start is not an error: poll its state and retry until it is ready, then
+  // hand the fresh ticket to the frame.
   React.useEffect(() => {
     const request = state.ticketRequest;
     if (request === null) {
       return;
     }
     let cancelled = false;
+    const sleep = (ms: number) =>
+      new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+    const waitMessage = (message: string) => {
+      if (!cancelled) {
+        dispatch({ type: "connection-wait", attempt: request, message });
+      }
+    };
+
+    const readRuntime = async () => {
+      const [status, packages] = await Promise.all([
+        getGameRoomStatus(room.id),
+        getRoomPackages(room.id),
+      ]);
+      return { status, packages };
+    };
+
+    const describeRuntime = (
+      status: GameRoomRuntimeStatus,
+      packages: RoomPackagesStatus,
+    ) => {
+      const active = activePackages(packages);
+      const total = active.length;
+      const applied = active.filter(({ packageId, revision }) => {
+        const entry = packages.packages.find(
+          (pkg) => pkg.packageId === packageId,
+        );
+        return (
+          entry?.runtime.state === "applied" &&
+          entry.runtime.revision >= revision
+        );
+      }).length;
+      waitMessage(
+        runtimeMessage(status, packagesAreApplied(packages), applied, total),
+      );
+    };
+
+    const waitForRuntime = async (deadline: number) => {
+      for (;;) {
+        const { status, packages } = await readRuntime();
+        describeRuntime(status, packages);
+        if (cancelled) return;
+        if (packagesFailed(packages)) {
+          throw new Error(
+            "Не удалось применить пакеты комнаты. Нажмите «Повторить».",
+          );
+        }
+        if (status.state === "running" && packagesAreApplied(packages)) return;
+        // Idle, stopped and crashed runtimes are all restarted by the POST
+        // below. Only `starting`/`stopping` and package application are states
+        // this loop has to wait out.
+        if (
+          status.state === "idle" ||
+          status.state === "stopped" ||
+          status.state === "failed"
+        ) {
+          return;
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(
+            "Сервер игры не запустился за 90 секунд. Нажмите «Повторить».",
+          );
+        }
+        await sleep(RUNTIME_POLL_MS);
+        if (cancelled) return;
+      }
+    };
 
     void (async () => {
+      const deadline = Date.now() + CONNECTION_WAIT_MS;
       try {
-        const packageStatus = await getRoomPackages(room.id);
-        const packages = packageStatus.packages
-          .filter(({ revision }) => revision > 0)
-          .map(({ packageId, revision }) => ({ packageId, revision }));
-        const connection = await createGameConnection(room.id);
-        if (cancelled) {
-          return;
+        for (;;) {
+          await waitForRuntime(deadline);
+          if (cancelled) return;
+
+          // The POST is what starts a stopped runtime and waits for its first
+          // package pass. Keep the overlay informative while it is in flight.
+          const poller = window.setInterval(() => {
+            void readRuntime()
+              .then(({ status, packages }) => describeRuntime(status, packages))
+              .catch(() => {
+                // The request itself owns the real error.
+              });
+          }, RUNTIME_POLL_MS);
+
+          try {
+            const packageStatus = await getRoomPackages(room.id);
+            const packages = activePackages(packageStatus);
+            const connection = await createGameConnection(room.id);
+            if (cancelled) {
+              return;
+            }
+            const frame = iframeRef.current;
+            if (!frame?.contentWindow) {
+              dispatch({
+                type: "ticket-failed",
+                message: "Фрейм игры не готов. Нажмите «Повторить».",
+              });
+              return;
+            }
+            dispatch({ type: "configured-sent", attempt: request });
+            postGameConfigure(frame, {
+              endpoint: connection.endpoint,
+              ticket: connection.ticket,
+              room: connection.roomId,
+              // The Web build cannot guess the backend: it is proxied under the
+              // same prefix that serves the Game tab.
+              apiBase: `${window.location.origin}${API_PREFIX}`,
+              apiToken: readAccessToken() ?? "",
+              packages,
+            });
+            return;
+          } catch (error) {
+            if (cancelled) {
+              return;
+            }
+            const failure = describeConnectionFailure(error);
+            if (!failure.retryable || Date.now() >= deadline) {
+              dispatch({
+                type: "ticket-failed",
+                message: failure.retryable
+                  ? "Сервер игры не запустился за 90 секунд. Нажмите «Повторить»."
+                  : failure.message,
+              });
+              return;
+            }
+            waitMessage(failure.message);
+            await sleep(failure.retryAfterMs);
+          } finally {
+            window.clearInterval(poller);
+          }
+          if (cancelled) {
+            return;
+          }
         }
-        const frame = iframeRef.current;
-        if (!frame?.contentWindow) {
-          dispatch({
-            type: "ticket-failed",
-            message: "Фрейм игры не готов. Нажмите «Повторить».",
-          });
-          return;
-        }
-        dispatch({ type: "configured-sent", attempt: request });
-        postGameConfigure(frame, {
-          endpoint: connection.endpoint,
-          ticket: connection.ticket,
-          room: connection.roomId,
-          // The Web build cannot guess the backend: it is proxied under the
-          // same prefix that serves the Game tab.
-          apiBase: `${window.location.origin}${API_PREFIX}`,
-          apiToken: readAccessToken() ?? "",
-          packages,
-        });
       } catch (error) {
         if (cancelled) {
           return;
