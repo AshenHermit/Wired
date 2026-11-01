@@ -23,6 +23,13 @@ export type GameConfigurePayload = {
    * URLs relatively: the host tells the engine where `/api` lives.
    */
   apiBase: string;
+  /**
+   * Access token of the logged-in user. The package runtime routes are
+   * authenticated, and the Web build has no other way to send the cookie as a
+   * bearer header. It never leaves the same-origin iframe.
+   */
+  apiToken: string;
+  packages: Array<{ packageId: number; revision: number }>;
 };
 
 export type GameStatusStage =

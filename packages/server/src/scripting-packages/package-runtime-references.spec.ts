@@ -129,6 +129,32 @@ describe('package runtime references', () => {
     ).toThrow('package_reference_not_rewritable:99');
   });
 
+  it('rejects reference paths with backslash separators', () => {
+    // Godot always addresses package files with `/`; a `\` is a Windows path
+    // that would escape the artifact layout or silently address another file.
+    expect(() =>
+      collectPackageReferences('preload("res://packages/5/a\\b.gd")'),
+    ).toThrow('package_reference_invalid_path:a\\b.gd');
+    expect(() =>
+      collectPackageReferences('preload("res://packages/5/a\\\\b.gd")'),
+    ).toThrow('package_reference_invalid_path:a\\\\b.gd');
+    expect(() =>
+      collectPackageReferences('preload("res://packages/5/..\\\\6/x.gd")'),
+    ).toThrow('package_reference_invalid_path');
+  });
+
+  it('rewritePackageReferences rejects backslash separators', () => {
+    const revisions = new Map([[5, 3]]);
+    const keys = new Map([[5, 'k5']]);
+    expect(() =>
+      rewritePackageReferences('preload("res://packages/5/a\\b.gd")', {
+        roomId: 7,
+        revisionByPackage: revisions,
+        artifactKeyByPackage: keys,
+      }),
+    ).toThrow('package_reference_invalid_path:a\\b.gd');
+  });
+
   it('rejects reference paths containing a "." or ".." segment', () => {
     expect(() =>
       collectPackageReferences('preload("res://packages/5/./hero.gd")'),

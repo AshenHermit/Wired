@@ -13,6 +13,10 @@ extends EditorPlugin
 ## Every request runs deferred: the callback itself only validates the
 ## arguments, so no filesystem work happens while JavaScript is still on the
 ## stack.
+##
+## The plugin also adds the editor menu item [constant DELETE_SELECTED_ITEM],
+## which deletes the selected files and directories inside `res://packages/<id>`
+## without going through the shell.
 
 ## Operations the shell may request. `sync` flushes the Emscripten filesystem
 ## and does not touch [WiredPackageFs].
@@ -24,8 +28,11 @@ const VALID_OPS := [
 	"prepareReplace",
 	"replace",
 	"delete",
+	"deleteFiles",
 	"sync",
 ]
+
+const DELETE_SELECTED_ITEM := "Wired: удалить выбранные файлы пакета"
 
 var _bridge: Object = null
 var _rescan_callback: Variant = null
@@ -33,6 +40,7 @@ var _request_callback: Variant = null
 
 
 func _enter_tree() -> void:
+	add_tool_menu_item(DELETE_SELECTED_ITEM, _on_delete_selected_pressed)
 	if not OS.has_feature("web"):
 		return
 
@@ -60,6 +68,7 @@ func _enter_tree() -> void:
 
 
 func _exit_tree() -> void:
+	remove_tool_menu_item(DELETE_SELECTED_ITEM)
 	if not OS.has_feature("web"):
 		return
 
@@ -86,6 +95,79 @@ func _scan_filesystem() -> void:
 	if filesystem == null:
 		return
 	filesystem.scan()
+
+
+## Deletes the selected package files locally. The selection is grouped by
+## package id because [method WiredPackageFs.op_delete_files] works one package
+## at a time.
+func _on_delete_selected_pressed() -> void:
+	var groups := {}
+	for path: String in EditorInterface.get_selected_paths():
+		var package_id := _package_id_of_path(path)
+		if package_id < 0:
+			continue
+		if not groups.has(package_id):
+			groups[package_id] = []
+		(groups[package_id] as Array).append(path)
+	if groups.is_empty():
+		_notify(
+			"Wired: выберите файлы или каталоги внутри res://packages/<id>/",
+			EditorToaster.SEVERITY_WARNING
+		)
+		return
+
+	var deleted: Array[String] = []
+	var errors: Array[String] = []
+	for package_id: int in groups:
+		var result := WiredPackageFs.op_delete_files(package_id, groups[package_id] as Array)
+		if result.has("error"):
+			errors.append(str(result["error"]))
+			continue
+		for path: String in result.get("deleted", []):
+			deleted.append(path)
+
+	var filesystem := EditorInterface.get_resource_filesystem()
+	if filesystem != null:
+		filesystem.scan()
+
+	# Deletions happen in the Web editor's in-memory filesystem; without a flush
+	# to IndexedDB a reload would bring the deleted files back. Only the local
+	# menu needs this: the `deleteFiles` op is synced by its shell caller.
+	if OS.has_feature("web"):
+		JavaScriptBridge.force_fs_sync()
+
+	if not errors.is_empty():
+		_notify(
+			"Wired: не удалось удалить: %s" % ", ".join(PackedStringArray(errors)),
+			EditorToaster.SEVERITY_WARNING
+		)
+		return
+	_notify("Wired: удалено файлов и каталогов: %d" % deleted.size())
+
+
+## Package id of an editor path under `res://packages/<id>/...`, or -1.
+func _package_id_of_path(path: String) -> int:
+	var prefix := WiredPackageFs.packages_root() + "/"
+	if not path.begins_with(prefix):
+		return -1
+	var rest := path.substr(prefix.length())
+	var slash := rest.find("/")
+	if slash <= 0:
+		return -1
+	var id_text := rest.substr(0, slash)
+	if not id_text.is_valid_int():
+		return -1
+	var package_id := int(id_text)
+	return package_id if WiredPackageFs.is_valid_id(package_id) else -1
+
+
+## Editor toast when the version has one, otherwise a console line.
+func _notify(message: String, severity: int = EditorToaster.SEVERITY_INFO) -> void:
+	var toaster := EditorInterface.get_editor_toaster()
+	if toaster != null:
+		toaster.push_toast(message, severity)
+		return
+	print(message)
 
 
 func _on_bridge_request(args: Array) -> void:
@@ -137,6 +219,12 @@ func _handle_request(request_id: int, op: String, params: Dictionary) -> void:
 			result = WiredPackageFs.op_replace(package_id)
 		"delete":
 			result = WiredPackageFs.op_delete(package_id)
+		"deleteFiles":
+			var raw_paths: Variant = params.get("paths", null)
+			if not raw_paths is Array:
+				_respond_error(request_id, "deleteFiles ожидает массив paths")
+				return
+			result = WiredPackageFs.op_delete_files(package_id, raw_paths as Array)
 		"sync":
 			JavaScriptBridge.force_fs_sync()
 			result = {}

@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PackageFileEntry, PackageRevision } from '@wired-io/shared';
+import { DataSource } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { sha256Hex } from './package-hash';
@@ -52,6 +53,7 @@ describe('PackageRevisionsService', () => {
     discardDraft: jest.Mock;
     readPublishedFile: jest.Mock;
     resolvePublishedFile: jest.Mock;
+    writePinnedDependencies: jest.Mock;
   };
   let service: PackageRevisionsService;
   let dispatcher: { revisionPublished: jest.Mock };
@@ -83,6 +85,7 @@ describe('PackageRevisionsService', () => {
         path: '/tmp/a.txt',
         size: 1,
       })),
+      writePinnedDependencies: jest.fn(async () => undefined),
     };
     service = new PackageRevisionsService(
       repository as never,
@@ -239,6 +242,57 @@ describe('PackageRevisionsService', () => {
       expect(published.status).toBe('published');
       expect(published.publishedAt).toEqual(expect.any(String));
       expect(dispatcher.revisionPublished).toHaveBeenCalledWith(7, 3);
+    });
+
+    it('records the dependency revisions resolved at publish time', async () => {
+      const row = draftRow(3, [
+        file('main.gd', 'preload("res://packages/6/lib.gd")'),
+      ]);
+      repository.findOne.mockImplementation(
+        async (opts: {
+          where: {
+            package: { id: number };
+            revision?: number;
+            status?: string;
+          };
+        }) => {
+          if (opts.where.package.id === 7) {
+            return row;
+          }
+          if (
+            opts.where.package.id === 6 &&
+            opts.where.status === 'published'
+          ) {
+            return { revision: 9 };
+          }
+          return null;
+        },
+      );
+      storage.readPublishedFile.mockResolvedValue(
+        Buffer.from('preload("res://packages/6/lib.gd")'),
+      );
+
+      await service.publish(7, 3);
+
+      expect(storage.writePinnedDependencies).toHaveBeenCalledWith(
+        7,
+        3,
+        new Map([[6, 9]]),
+      );
+    });
+
+    it('keeps the publication even when the pins cannot be recorded', async () => {
+      repository.findOne.mockResolvedValue(
+        draftRow(3, [file('main.gd', 'preload("res://packages/6/lib.gd")')]),
+      );
+      storage.readPublishedFile.mockResolvedValue(
+        Buffer.from('preload("res://packages/6/lib.gd")'),
+      );
+      storage.writePinnedDependencies.mockRejectedValue(new Error('disk full'));
+
+      await expect(service.publish(7, 3)).resolves.toMatchObject({
+        status: 'published',
+      });
     });
 
     it('returns the fixed revision even when runtime dispatch fails', async () => {
@@ -420,5 +474,107 @@ describe('PackageRevisionsService', () => {
     await expect(
       service.uploadFile(7, 3, 'a.txt', Buffer.from('a')),
     ).resolves.toBeDefined();
+  });
+
+  describe('advisory publish lock', () => {
+    let runner: { connect: jest.Mock; query: jest.Mock; release: jest.Mock };
+    let dataSource: { createQueryRunner: jest.Mock };
+
+    const lockSql = 'SELECT pg_try_advisory_lock(hashtext($1)) AS locked';
+    const unlockSql = 'SELECT pg_advisory_unlock(hashtext($1))';
+    const lockKey = 'wired.package-publish:7';
+
+    function makeService() {
+      return new PackageRevisionsService(
+        repository as never,
+        packagesService as unknown as ScriptingPackagesService,
+        storage as unknown as PackageStorageService,
+        dispatcher as unknown as PackageRevisionDispatcher,
+        dataSource as unknown as DataSource,
+      );
+    }
+
+    beforeEach(() => {
+      runner = {
+        connect: jest.fn(async () => undefined),
+        query: jest.fn(async () => [{ locked: true }]),
+        release: jest.fn(async () => undefined),
+      };
+      dataSource = { createQueryRunner: jest.fn(() => runner) };
+    });
+
+    it('takes and releases a Postgres advisory lock while publishing', async () => {
+      repository.findOne.mockResolvedValue(draftRow(3, [file('a.txt', 'a')]));
+      const service = makeService();
+
+      await service.publish(7, 3);
+
+      expect(runner.query).toHaveBeenCalledWith(lockSql, [lockKey]);
+      expect(runner.query).toHaveBeenCalledWith(unlockSql, [lockKey]);
+      expect(runner.release).toHaveBeenCalled();
+    });
+
+    it('rejects a publication that another instance already holds', async () => {
+      repository.findOne.mockResolvedValue(draftRow(3, [file('a.txt', 'a')]));
+      runner.query.mockResolvedValue([{ locked: false }]);
+      const service = makeService();
+
+      await expect(service.publish(7, 3)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(storage.publishRevision).not.toHaveBeenCalled();
+      expect(runner.release).toHaveBeenCalled();
+    });
+
+    it('treats a lock held elsewhere as publishing for draft creation', async () => {
+      runner.query.mockResolvedValue([{ locked: false }]);
+      const service = makeService();
+
+      await expect(
+        service.createDraft(7, { files: [file('a.txt', 'a')] }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(repository.save).not.toHaveBeenCalled();
+    });
+
+    it('treats a lock held elsewhere as publishing for uploads', async () => {
+      repository.findOne.mockResolvedValue(draftRow(3, [file('a.txt', 'a')]));
+      runner.query.mockResolvedValue([{ locked: false }]);
+      const service = makeService();
+
+      await expect(
+        service.uploadFile(7, 3, 'a.txt', Buffer.from('a')),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(storage.saveDraftFile).not.toHaveBeenCalled();
+    });
+
+    it('releases the probe lock it managed to take', async () => {
+      const service = makeService();
+
+      await expect(
+        service.createDraft(7, { files: [file('a.txt', 'a')] }),
+      ).resolves.toMatchObject({ revision: 1 });
+      expect(runner.query).toHaveBeenCalledWith(unlockSql, [lockKey]);
+    });
+
+    it('still publishes when the lock cannot be taken because of a DB error', async () => {
+      repository.findOne.mockResolvedValue(draftRow(3, [file('a.txt', 'a')]));
+      runner.query.mockRejectedValue(new Error('connection reset'));
+      const service = makeService();
+
+      await expect(service.publish(7, 3)).resolves.toMatchObject({
+        status: 'published',
+      });
+      expect(storage.publishRevision).toHaveBeenCalled();
+      expect(runner.release).toHaveBeenCalled();
+    });
+
+    it('keeps working without a DataSource', async () => {
+      repository.findOne.mockResolvedValue(draftRow(3, [file('a.txt', 'a')]));
+
+      await expect(service.publish(7, 3)).resolves.toMatchObject({
+        status: 'published',
+      });
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+    });
   });
 });

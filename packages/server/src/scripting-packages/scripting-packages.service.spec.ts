@@ -170,4 +170,68 @@ describe('ScriptingPackagesService', () => {
       expect(roomsRepository.findOne).not.toHaveBeenCalled();
     });
   });
+
+  describe('remove', () => {
+    function makeService(options: {
+      pkg?: unknown;
+      affected?: number;
+      removePackage?: jest.Mock;
+    }) {
+      const packagesRepository = {
+        findOne: jest.fn(async () =>
+          options.pkg !== undefined ? options.pkg : { id: 10 },
+        ),
+        delete: jest.fn(async () => ({ affected: options.affected ?? 1 })),
+      };
+      const storage = {
+        removePackage: options.removePackage ?? jest.fn(async () => undefined),
+      };
+      return {
+        packagesRepository,
+        storage,
+        service: new ScriptingPackagesService(
+          packagesRepository as never,
+          {} as never,
+          storage as never,
+        ),
+      };
+    }
+
+    it('deletes the package row and every stored file of the package', async () => {
+      const { service, packagesRepository, storage } = makeService({});
+
+      await service.remove(10);
+
+      expect(packagesRepository.delete).toHaveBeenCalledWith(10);
+      expect(storage.removePackage).toHaveBeenCalledWith(10);
+    });
+
+    it('does not touch the disk when the package does not exist', async () => {
+      const { service, storage } = makeService({ pkg: null });
+
+      await expect(service.remove(10)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(storage.removePackage).not.toHaveBeenCalled();
+    });
+
+    it('reports a missing row without removing files', async () => {
+      const { service, storage } = makeService({ affected: 0 });
+
+      await expect(service.remove(10)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(storage.removePackage).not.toHaveBeenCalled();
+    });
+
+    it('keeps the deletion when the files cannot be removed', async () => {
+      const { service } = makeService({
+        removePackage: jest.fn(async () => {
+          throw new Error('disk busy');
+        }),
+      });
+
+      await expect(service.remove(10)).resolves.toBeUndefined();
+    });
+  });
 });

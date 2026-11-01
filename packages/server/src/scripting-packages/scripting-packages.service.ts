@@ -1,7 +1,9 @@
 import {
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -11,14 +13,19 @@ import { Room } from 'src/database/entities/room.entity';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
 import { canEditRoom } from 'src/rooms/room-access';
+import { PackageStorageService } from './package-storage.service';
 
 @Injectable()
 export class ScriptingPackagesService {
+  private readonly logger = new Logger(ScriptingPackagesService.name);
+
   constructor(
     @InjectRepository(ScriptingPackage)
     private readonly packagesRepository: Repository<ScriptingPackage>,
     @InjectRepository(Room)
     private readonly roomsRepository: Repository<Room>,
+    @Optional()
+    private readonly storage?: PackageStorageService,
   ) {}
 
   assertPackageCreation(user: User, dto: CreateScriptingPackageDto): void {
@@ -162,11 +169,28 @@ export class ScriptingPackagesService {
     return this.findOne(saved.id);
   }
 
+  /**
+   * Deletes the package row and then every stored file of the package. The
+   * revision rows cascade with the package, but nothing on disk does: without
+   * the cleanup `revisions/<n>` and `runtime/v1/<room>/...` stay orphaned.
+   *
+   * The row is authoritative, so a disk failure is logged instead of turning a
+   * completed deletion into an error.
+   */
   async remove(id: number): Promise<void> {
     await this.findOne(id);
     const result = await this.packagesRepository.delete(id);
     if (!result.affected) {
       throw new NotFoundException(`ScriptingPackage with id=${id} not found`);
+    }
+    try {
+      await this.storage?.removePackage(id);
+    } catch (error) {
+      this.logger.warn(
+        `ScriptingPackage ${id} was deleted but its files were not removed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
 }

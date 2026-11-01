@@ -1,0 +1,17 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://tests/fixtures/dynamic_root/crate.gd" id="1_crate"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_crate"]
+size = Vector2(32, 32)
+
+[node name="Crate" type="Node"]
+script = ExtResource("1_crate")
+
+[node name="RigidBody2D" type="RigidBody2D" parent="."]
+
+[node name="Sprite" type="Polygon2D" parent="RigidBody2D"]
+polygon = PackedVector2Array(-16, -16, 16, -16, 16, 16, -16, 16)
+
+[node name="Collision" type="CollisionShape2D" parent="RigidBody2D"]
+shape = SubResource("RectangleShape2D_crate")

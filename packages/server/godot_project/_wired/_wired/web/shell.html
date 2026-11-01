@@ -157,6 +157,17 @@
 						typeof payload.apiBase === 'string'
 							? sameOriginApiBase(payload.apiBase)
 							: '';
+					// Access token of the logged-in user. The package routes are
+					// authenticated, so the engine must send it as a bearer
+					// header. Anything that does not look like a token is
+					// dropped instead of reaching the engine.
+					var apiToken =
+						typeof payload.apiToken === 'string'
+							? payload.apiToken.trim()
+							: '';
+					if (apiToken.length > 4096 || /\s/.test(apiToken)) {
+						apiToken = '';
+					}
 
 					if (!/^wss?:\/\/\S+$/.test(endpoint)) {
 						return false;
@@ -166,6 +177,15 @@
 					}
 					if (!Number.isInteger(room) || room <= 0) {
 						return false;
+					}
+					var packages = [];
+					if (Array.isArray(payload.packages)) {
+						packages = payload.packages.filter(function (pkg) {
+							return pkg && Number.isInteger(pkg.packageId) && pkg.packageId > 0 &&
+								Number.isInteger(pkg.revision) && pkg.revision > 0;
+						}).map(function (pkg) {
+							return { packageId: pkg.packageId, revision: pkg.revision };
+						});
 					}
 					// A second configuration needs a fresh engine instance:
 					// tickets are single-use, so silently replacing it would
@@ -181,7 +201,9 @@
 						endpoint: endpoint,
 						ticket: ticket,
 						room: room,
-						apiBase: apiBase
+						apiBase: apiBase,
+						apiToken: apiToken,
+						packages: packages
 					};
 					post('wired:game-configured', { room: room });
 					return true;

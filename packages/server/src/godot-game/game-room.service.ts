@@ -7,7 +7,11 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { GameRoomConnection, GameRoomRuntimeStatus, RoomPackagesStatus } from '@wired-io/shared';
+import {
+  GameRoomConnection,
+  GameRoomRuntimeStatus,
+  RoomPackagesStatus,
+} from '@wired-io/shared';
 import { Room } from 'src/database/entities/room.entity';
 import { User } from 'src/database/entities/user.entity';
 import { RoomsService } from 'src/rooms/rooms.service';
@@ -22,7 +26,6 @@ const STATUS_BY_ERROR: Record<RoomRuntimeErrorCode, HttpStatus> = {
   invalid_room: HttpStatus.BAD_REQUEST,
   config: HttpStatus.SERVICE_UNAVAILABLE,
   ticket_secret_missing: HttpStatus.SERVICE_UNAVAILABLE,
-  room_starting: HttpStatus.CONFLICT,
   room_stopping: HttpStatus.CONFLICT,
   room_not_running: HttpStatus.CONFLICT,
   handshake_window_expired: HttpStatus.CONFLICT,
@@ -37,13 +40,15 @@ const MESSAGE_BY_ERROR: Record<RoomRuntimeErrorCode, string> = {
   invalid_room: 'Invalid room identifier',
   config: 'The Godot runtime is not configured on this server',
   ticket_secret_missing: 'Game tickets are not configured on this server',
-  room_starting: 'The room runtime is starting; retry shortly',
   room_stopping: 'The room runtime is stopping; retry shortly',
   room_not_running: 'The room runtime is not running',
   handshake_window_expired:
     'The connection window expired; retry to restart the room',
   start_failed: 'The Godot runtime for this room failed to start',
 };
+
+const PACKAGE_READY_TIMEOUT_MS = 10_000;
+const PACKAGE_READY_POLL_MS = 100;
 
 @Injectable()
 export class GameRoomService {
@@ -80,7 +85,15 @@ export class GameRoomService {
     const runtimeRoomId = String(room.id);
     let connection: RoomConnection;
     try {
+      // `getConnection` starts or reuses the runtime and mints the only ticket
+      // of this call. Starting the process is what makes the room apply its
+      // packages, so the mint happens before the readiness wait; re-minting
+      // afterwards would discard the first ticket and can stop the runtime
+      // through the handshake window. The ticket TTL (60s by default) is
+      // comfortably larger than the bounded readiness wait (10s), so the
+      // browser still receives a usable window.
       connection = await this.runtime.getConnection(runtimeRoomId);
+      await this.waitForInitialPackages(runtimeRoomId);
     } catch (error) {
       throw this.toHttpException(error, runtimeRoomId);
     }
@@ -124,6 +137,37 @@ export class GameRoomService {
       roomId: room.id,
       packages: await this.packageSync.getStatuses(String(room.id)),
     };
+  }
+
+  private async waitForInitialPackages(roomId: string): Promise<void> {
+    const deadline = Date.now() + PACKAGE_READY_TIMEOUT_MS;
+    for (;;) {
+      const statuses = await this.packageSync.getStatuses(roomId);
+      if (statuses.some((s) => s.runtime.state === 'failed')) {
+        throw new HttpException(
+          {
+            statusCode: 502,
+            code: 'packages_failed',
+            message: 'Room packages failed to apply',
+          },
+          HttpStatus.BAD_GATEWAY,
+        );
+      }
+      if (statuses.every((s) => s.runtime.state === 'applied')) return;
+      if (Date.now() >= deadline) {
+        throw new HttpException(
+          {
+            statusCode: 409,
+            code: 'packages_pending',
+            message: 'Room packages are still applying; retry shortly',
+          },
+          HttpStatus.CONFLICT,
+        );
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, PACKAGE_READY_POLL_MS),
+      );
+    }
   }
 
   private async assertCanPlay(

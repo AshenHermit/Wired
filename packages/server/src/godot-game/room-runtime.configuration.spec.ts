@@ -1,6 +1,7 @@
 import { AppConfigService } from 'src/config/config.service';
 import { GodotRuntimeConfig } from './room-runtime.types';
 import { RoomRuntimeConfiguration } from './room-runtime.configuration';
+import { verifyRuntimeServiceToken } from './runtime-service-token';
 
 const config: GodotRuntimeConfig = {
   executablePath: 'C:/godot/godot.exe',
@@ -57,5 +58,18 @@ describe('RoomRuntimeConfiguration', () => {
 
     expect(options.args.join(' ')).not.toContain('secret');
     expect(options.env?.WIRED_GAME_TICKET_SECRET).toBe('secret');
+  });
+
+  it('injects a room-scoped runtime API token', () => {
+    const options = configuration.createSpawnOptions(config, 'room-1', 19101);
+    const token = options.env?.WIRED_RUNTIME_API_TOKEN;
+
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(verifyRuntimeServiceToken('secret', 'room-1', `Bearer ${token}`)).toBe(
+      true,
+    );
+    expect(verifyRuntimeServiceToken('secret', 'room-2', `Bearer ${token}`)).toBe(
+      false,
+    );
   });
 });

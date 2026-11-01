@@ -10,16 +10,16 @@ import {
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-export const TEMPLATES_VERSION = '4.7.2-stable';
-export const TEMPLATES_DIRECTORY = '4.7.2.stable';
+export const TEMPLATES_VERSION = '4.8-beta2';
+export const TEMPLATES_DIRECTORY = '4.8.beta2';
 export const WEB_TEMPLATES = ['web_debug.zip', 'web_release.zip'];
 
 export const TEMPLATES_ASSET = Object.freeze({
-  name: 'Godot_v4.7.2-stable_export_templates.tpz',
-  size: 1_281_349_702,
-  sha256:
-    'f298490b8d44d934be425a5a65a51bf15f422428b229a06a6e11d9ffea248011',
-  url: 'https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz',
+  name: 'Godot_v4.8-beta2_export_templates.tpz',
+  size: 1_349_622_957,
+  sha512:
+    '260de4173d9bb366110dab4f35e42e39f2eace62f29e082d6630bc5c6ea790ef92f51a9145ffbca2c0ffe97a60da46019c6780d7f88569932cd3237284085c0e',
+  url: 'https://github.com/godotengine/godot-builds/releases/download/4.8-beta2/Godot_v4.8-beta2_export_templates.tpz',
 });
 
 function isFile(target) {
@@ -66,10 +66,10 @@ export function verifyTemplatesArchive(buffer, asset = TEMPLATES_ASSET) {
       `Неверный размер архива шаблонов: ожидалось ${asset.size} байт, получено ${buffer.length}`,
     );
   }
-  const digest = createHash('sha256').update(buffer).digest('hex');
-  if (digest !== asset.sha256) {
+  const digest = createHash('sha512').update(buffer).digest('hex');
+  if (digest !== asset.sha512) {
     throw new Error(
-      `Неверная sha256 архива шаблонов: ожидалось ${asset.sha256}, получено ${digest}`,
+      `Неверная sha512 архива шаблонов: ожидалось ${asset.sha512}, получено ${digest}`,
     );
   }
 }

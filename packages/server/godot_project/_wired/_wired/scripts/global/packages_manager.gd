@@ -27,6 +27,10 @@ class_name PackagesManager
 ##
 ## Manifests and files travel over plain HTTP, separately from the multiplayer
 ## WebSocket traffic.
+##
+## Three responsibilities were extracted, so this script stays about the apply
+## state machine: `PackageManifest` (parsing/validation), `AssetDeriver` (the
+## runtime form of raw assets) and `ArtifactStore` (staging, swap, pruning).
 
 signal package_applied(package_id: int, revision: int, changed_files: PackedStringArray)
 signal package_failed(package_id: int, error: String)
@@ -35,23 +39,12 @@ const PROTOCOL_VERSION := 1
 const DEFAULT_API_URL := "http://127.0.0.1:3000"
 const PACKAGES_ROOT := "user://wired/rooms"
 const UNASSIGNED_ROOM := "_unknown"
-const STAGING_DIR := ".staging"
-const PREVIOUS_DIR := ".previous"
-const MAX_FILES := 2000
-const MAX_FILE_SIZE := 64 * 1024 * 1024
-## Artifact keys are sha256 hex digests on the backend; this is the local guard
-## for a path segment. Everything else makes the artifact unusable.
-const ARTIFACT_KEY_LENGTH := 64
-## Raw image extensions that get a runtime texture next to the file.
-const TEXTURE_EXTENSIONS := ["png", "jpg", "jpeg", "webp", "bmp"]
-## Raw audio extensions and the stream class each one loads into.
-const AUDIO_STREAM_TYPES := {
-	"wav": "AudioStreamWAV",
-	"ogg": "AudioStreamOggVorbis",
-	"mp3": "AudioStreamMP3",
-}
 ## How long a sync waits for another coroutine that is applying the same package.
 const APPLY_LOCK_TIMEOUT_MS := 300_000
+## A lock held longer than this is leaked: the applying coroutine aborted (an
+## engine error inside `await` never resumes, so no cleanup line can run), and a
+## waiter must take over instead of blocking the package for the full timeout.
+const APPLY_LOCK_STALE_MS := 30_000
 
 ## Result of trying to take the per-package apply lock.
 enum ApplyLock { ACQUIRED, WAITED, TIMEOUT }
@@ -59,9 +52,17 @@ enum ApplyLock { ACQUIRED, WAITED, TIMEOUT }
 var base_url := DEFAULT_API_URL
 ## Room code the loader works for. Safe as a single path segment.
 var room := UNASSIGNED_ROOM
+## Credential sent as `Authorization: Bearer` on package requests. The server
+## runtime receives a room-scoped service token from the backend; the web client
+## receives the logged-in user's access token from the host bridge.
+var api_token := ""
 ## Test seam: when set, replaces the HTTP transport. It receives the relative
 ## request path and must return the same shape as `_request`.
 var request_override: Callable = Callable()
+## Test seam: when true, `_sync_package` records package ids in apply order.
+## Disabled by default: the apply path is not a place for diagnostics nobody
+## asked for, and a headless test can opt in explicitly.
+var trace_sync_order := false
 
 # package id -> applied revision
 var _current_revisions: Dictionary = {}
@@ -71,16 +72,17 @@ var _current_artifact_keys: Dictionary = {}
 var _scene_dependencies: Dictionary = {}
 # package id -> { filepath: sha256 } of the applied runtime artifact
 var _file_hashes: Dictionary = {}
-# package id -> true while a coroutine is applying a revision of that package
+# package id -> Time.get_ticks_msec() while a coroutine applies that package
 var _applying: Dictionary = {}
-## Raw asset extension -> {kind, suffix, type}. `kind` selects the derivation
-## helper, `suffix` names the derived file next to the raw one and `type` is the
-## resource class the sidecar declares. Built from the tables above, so a raw
-## format is declared exactly once.
-var _asset_derivations: Dictionary = _build_asset_derivations()
-## Test seam: package ids in the order their files were applied. Dependencies
-## are appended before the package that depends on them.
+## File-system side of an artifact. The root is resolved lazily, so a room
+## change needs no reconfiguration.
+var _artifacts: ArtifactStore
+## Test seam, only filled while `trace_sync_order` is true.
 var _sync_order: Array = []
+
+
+func _init() -> void:
+	_artifacts = ArtifactStore.new(Callable(self, "packages_root"))
 
 
 ## Called by the runtime entry point once the backend API URL and the room are
@@ -97,6 +99,12 @@ func configure(url: String, room_id: String = "") -> void:
 
 ## Sets the room without touching the API URL. Ignored when the code is empty.
 ## Applied state belongs to one room, so a real change starts from scratch.
+## Sets the credential used by every package request. An empty value leaves
+## requests unauthenticated, which only works for routes that do not require auth.
+func set_api_token(token: String) -> void:
+	api_token = token.strip_edges()
+
+
 func set_room(room_id: String) -> void:
 	var sanitized := _sanitize_room(room_id)
 	if sanitized.is_empty() or sanitized == room:
@@ -129,7 +137,7 @@ func packages_root() -> String:
 
 
 func packages_dir(package_id: int) -> String:
-	return packages_root().path_join(str(package_id))
+	return _artifacts.package_dir(package_id)
 
 
 ## Directory of one applied artifact. An empty `artifact_key` falls back to the
@@ -141,7 +149,7 @@ func revision_dir(
 	var key := artifact_key
 	if key.is_empty() and current_revision(package_id) == revision:
 		key = current_artifact_key(package_id)
-	return packages_dir(package_id).path_join(_revision_dir_name(revision, key))
+	return _artifacts.revision_dir(package_id, revision, key)
 
 
 ## Absolute (user://) location of a file of an applied runtime artifact.
@@ -150,19 +158,6 @@ func runtime_path(
 	package_id: int, revision: int, filepath: String, artifact_key: String = ""
 ) -> String:
 	return revision_dir(package_id, revision, artifact_key).path_join(filepath)
-
-
-func _revision_dir_name(revision: int, artifact_key: String) -> String:
-	if artifact_key.is_empty():
-		return str(revision)
-	return "%d-%s" % [revision, artifact_key]
-
-
-## Revision encoded in a `<revision>` or `<revision>-<artifact_key>` directory
-## name, or 0 for anything else (staging, `.previous`, arbitrary files).
-func _revision_of_dir_name(name: String) -> int:
-	var base := name.get_slice("-", 0)
-	return base.to_int() if base.is_valid_int() else 0
 
 
 ## Revision currently materialized for a package, or 0 when it was never
@@ -175,6 +170,21 @@ func current_revision(package_id: int) -> int:
 ## empty string when it was never applied by this process.
 func current_artifact_key(package_id: int) -> String:
 	return str(_current_artifact_keys.get(package_id, ""))
+
+
+## Every package applied by this process: `{id: {revision, artifact_key}}`.
+## The late-join snapshot compares this map with the peer's local map, because a
+## same-revision dependency publish changes the artifact key without changing
+## the revision number.
+func applied_packages() -> Dictionary:
+	var result := {}
+	for package_id: Variant in _current_revisions:
+		var id := int(package_id)
+		result[str(id)] = {
+			"revision": int(_current_revisions[package_id]),
+			"artifact_key": str(_current_artifact_keys.get(package_id, "")),
+		}
+	return result
 
 
 ## Dependencies of one scene of an applied artifact, as "<package id>:<filepath>"
@@ -215,9 +225,9 @@ func instantiate_scene(package_id: int, scene_path: String, revision: int = 0) -
 	var scene := packed.instantiate()
 	if scene == null:
 		return null
-	scene.set_meta("_wired_package_id", package_id)
-	scene.set_meta("_wired_package_scene", scene_path)
-	scene.set_meta("_wired_package_revision", applied)
+	scene.set_meta(WiredProtocol.META_PACKAGE_ID, package_id)
+	scene.set_meta(WiredProtocol.META_PACKAGE_SCENE, scene_path)
+	scene.set_meta(WiredProtocol.META_PACKAGE_REVISION, applied)
 	return scene
 
 
@@ -268,10 +278,7 @@ func fetch_runtime_manifest(package_id: int, revision: int) -> Dictionary:
 		)
 		return {"ok": false, "error": "runtime manifest is not a JSON object", "manifest": {}}
 	var manifest: Dictionary = parsed
-	if (
-		int(manifest.get("packageId", 0)) != package_id
-		or int(manifest.get("revision", 0)) != revision
-	):
+	if not PackageManifest.matches_revision(manifest, package_id, revision):
 		return {
 			"ok": false,
 			"error": "runtime manifest does not match the requested revision",
@@ -346,13 +353,17 @@ func _sync_package_chain(
 	# a newer one; an equal one is only skipped for a caller that had to wait,
 	# because a fresh call must still refresh a changed artifact.
 	var applied_revision := maxi(
-		current_revision(package_id), _highest_revision_on_disk(package_id, 0)
+		current_revision(package_id), _artifacts.highest_revision(package_id)
 	)
 	if applied_revision > revision or (lock == ApplyLock.WAITED and applied_revision == revision):
 		_release_apply_lock(package_id)
 		applied[package_id] = applied_revision
 		return _skipped(applied_revision, current_artifact_key(package_id))
 	var result := await _sync_package(package_id, revision, chain, applied)
+	# Always released, successful or not: a failure result must not keep the
+	# package locked. An *aborted* coroutine cannot reach this line, so the lock
+	# also carries an acquisition timestamp and `_acquire_apply_lock` takes over
+	# a leaked one after `APPLY_LOCK_STALE_MS`.
 	_release_apply_lock(package_id)
 	if not bool(result.get("ok", false)):
 		return _report_failure(
@@ -366,23 +377,41 @@ func _sync_package_chain(
 	return result
 
 
-## Takes the per-package apply lock. ACQUIRED means the lock was free, WAITED
-## means another coroutine's apply finished first, TIMEOUT means it never did.
+## Takes the per-package apply lock. ACQUIRED means the lock was free (or was
+## left behind by an aborted coroutine), WAITED means another coroutine's apply
+## finished first, TIMEOUT means it never did.
 func _acquire_apply_lock(package_id: int) -> int:
 	if not _applying.has(package_id):
-		_applying[package_id] = true
+		_applying[package_id] = Time.get_ticks_msec()
 		return ApplyLock.ACQUIRED
 	var deadline := Time.get_ticks_msec() + APPLY_LOCK_TIMEOUT_MS
 	while _applying.has(package_id):
+		if _apply_lock_is_stale(package_id):
+			push_warning(
+				"WIRED_PACKAGES_LOCK_STALE package=%d reason=apply_aborted" % package_id
+			)
+			_applying[package_id] = Time.get_ticks_msec()
+			return ApplyLock.ACQUIRED
 		if Time.get_ticks_msec() >= deadline:
 			return ApplyLock.TIMEOUT
 		await _wait_idle_frame()
-	_applying[package_id] = true
+	_applying[package_id] = Time.get_ticks_msec()
 	return ApplyLock.WAITED
 
 
 func _release_apply_lock(package_id: int) -> void:
 	_applying.erase(package_id)
+
+
+func _apply_lock_is_stale(package_id: int) -> bool:
+	if not _applying.has(package_id):
+		return false
+	var acquired := int(_applying.get(package_id, 0))
+	if acquired <= 0:
+		# A lock without a usable timestamp can never become valid again, so a
+		# waiter treats it as abandoned instead of blocking on it.
+		return true
+	return Time.get_ticks_msec() - acquired >= APPLY_LOCK_STALE_MS
 
 
 func _wait_idle_frame() -> void:
@@ -423,24 +452,12 @@ func _sync_package(
 			revision,
 		)
 	var manifest: Dictionary = manifest_result.get("manifest", {})
-	var artifact_key := str(manifest.get("artifactKey", ""))
-	if not _is_valid_artifact_key(artifact_key):
-		return _failure(
-			"runtime manifest of package %d has no valid artifact key" % package_id,
-			revision,
-		)
-	var declared: Variant = manifest.get("files", [])
-	if typeof(declared) != TYPE_ARRAY:
-		return _failure(
-			"runtime manifest of package %d has no file list" % package_id, revision
-		)
-	if declared.size() > MAX_FILES:
-		return _failure("package %d declares too many files" % package_id, revision)
-	var token := _download_token(manifest)
-	if token.is_empty():
-		return _failure(
-			"runtime manifest of package %d has no download token" % package_id, revision
-		)
+	var validated := PackageManifest.validate_runtime(manifest, package_id)
+	if not bool(validated.get("ok", false)):
+		return _failure(str(validated.get("error", "")), revision)
+	var artifact_key := str(validated.get("artifact_key", ""))
+	var declared: Array = validated.get("files", [])
+	var token := str(validated.get("token", ""))
 
 	# Dependencies first: their files have to exist before a dependent scene is
 	# loaded, and the manifest pins each of them to an exact revision and key.
@@ -451,8 +468,8 @@ func _sync_package(
 	)
 	if not dependency_error.is_empty():
 		return _failure(dependency_error, revision)
-	# Test seam: records the apply order (dependencies before dependents).
-	_sync_order.append(package_id)
+	if trace_sync_order:
+		_sync_order.append(package_id)
 
 	# 1. Download and verify everything in memory before touching the disk.
 	var download := await _download_files(
@@ -467,20 +484,20 @@ func _sync_package(
 	# its raw images and audio, then swap. The final directory is keyed, so a
 	# refreshed closure never overwrites the bytes of the previous one.
 	var target_dir := revision_dir(package_id, revision, artifact_key)
-	var staging_error := _stage_files(package_id, verified)
+	var staging_error := _artifacts.stage(package_id, verified)
 	if not staging_error.is_empty():
 		return _failure(staging_error, revision)
-	var derive_result := _derive_assets(
-		packages_dir(package_id).path_join(STAGING_DIR),
+	var derive_result := AssetDeriver.derive(
+		_artifacts.staging_dir(package_id),
 		target_dir,
 		verified.map(func(file: Dictionary) -> String: return str(file.filepath)),
 	)
 	if not bool(derive_result.get("ok", false)):
 		# Nothing derived stays in staging, so dropping it keeps the current
 		# artifact untouched.
-		_remove_tree(packages_dir(package_id).path_join(STAGING_DIR))
+		_artifacts.remove_tree(_artifacts.staging_dir(package_id))
 		return _failure(str(derive_result.get("error", "")), revision)
-	var swap_error := _swap_revision(package_id, revision, artifact_key)
+	var swap_error := _artifacts.swap(package_id, revision, artifact_key)
 	if not swap_error.is_empty():
 		return _failure(swap_error, revision)
 
@@ -490,7 +507,7 @@ func _sync_package(
 	var changed := _changed_files(_file_hashes.get(package_id, {}), hashes)
 	_current_revisions[package_id] = revision
 	_current_artifact_keys[package_id] = artifact_key
-	_scene_dependencies[package_id] = _scene_map(manifest)
+	_scene_dependencies[package_id] = PackageManifest.scene_map(manifest)
 	_file_hashes[package_id] = hashes
 
 	print(
@@ -536,19 +553,14 @@ func _latest_revision(package_id: int) -> Dictionary:
 func _sync_dependencies(
 	package_id: int, manifest: Dictionary, chain: Array, applied: Dictionary
 ) -> String:
-	var dependencies: Variant = manifest.get("dependencies", [])
-	if typeof(dependencies) != TYPE_ARRAY:
-		return "runtime manifest of package %d has no dependency list" % package_id
-	for dependency: Variant in dependencies:
-		if typeof(dependency) != TYPE_DICTIONARY:
-			return "package %d has a malformed dependency entry" % package_id
-		var dependency_id := int(dependency.get("packageId", 0))
+	var declared := PackageManifest.validate_dependencies(manifest, package_id)
+	if not bool(declared.get("ok", false)):
+		return str(declared.get("error", ""))
+	var dependencies: Array = declared.get("dependencies", [])
+	for dependency: Dictionary in dependencies:
+		var dependency_id := int(dependency.get("package_id", 0))
 		var dependency_revision := int(dependency.get("revision", 0))
-		if dependency_id <= 0 or dependency_revision <= 0:
-			return "package %d has a malformed dependency entry" % package_id
-		if not _is_valid_artifact_key(str(dependency.get("artifactKey", ""))):
-			return "package %d has a malformed dependency artifact key" % package_id
-		var expected_key := str(dependency.get("artifactKey", ""))
+		var expected_key := str(dependency.get("artifact_key", ""))
 		if int(applied.get(dependency_id, 0)) >= dependency_revision:
 			var applied_key := current_artifact_key(dependency_id)
 			if not applied_key.is_empty() and applied_key != expected_key:
@@ -579,17 +591,11 @@ func _sync_dependencies(
 	return ""
 
 
-func _download_token(manifest: Dictionary) -> String:
-	var download: Variant = manifest.get("download", {})
-	if typeof(download) != TYPE_DICTIONARY:
-		return ""
-	return str(download.get("token", ""))
-
-
 ## Downloads and verifies an artifact's files in memory. The manifest hashes
 ## describe the rewritten artifact, so they are verified as they arrive. The
 ## artifact key is part of the URL: the backend resolves exactly this artifact
-## and never re-resolves the closure between two file requests.
+## and never re-resolves the closure between two file requests. `declared` is
+## already validated by `PackageManifest`, so every entry is safe to use.
 func _download_files(
 	package_id: int,
 	revision: int,
@@ -599,32 +605,16 @@ func _download_files(
 ) -> Dictionary:
 	var files: Array = []
 	var hashes: Dictionary = {}
-	for item: Variant in declared:
-		if typeof(item) != TYPE_DICTIONARY:
-			return {"ok": false, "error": "package %d has a malformed manifest entry" % package_id}
+	for item: Dictionary in declared:
 		var filepath := str(item.get("filepath", ""))
-		var path_error := _validate_relative_path(filepath)
-		if not path_error.is_empty():
-			return {"ok": false, "error": path_error}
 		var expected_size := int(item.get("size", -1))
-		var expected_hash := str(item.get("sha256", "")).to_lower()
-		if expected_size < 0 or expected_size > MAX_FILE_SIZE:
-			return {
-				"ok": false,
-				"error": "package %d: invalid size for %s" % [package_id, filepath],
-			}
-		if expected_hash.length() != 64:
-			return {
-				"ok": false,
-				"error": "package %d: invalid sha256 for %s" % [package_id, filepath],
-			}
-
+		var expected_hash := str(item.get("sha256", ""))
 		var download := await _fetch(
 			"/scripting-packages/%d/revisions/%d/runtime-files/%s?room=%d&key=%s&token=%s"
 			% [
 				package_id,
 				revision,
-				_encode_path(filepath),
+				PackageManifest.encode_path(filepath),
 				_room_id(),
 				artifact_key.uri_encode(),
 				token.uri_encode(),
@@ -654,218 +644,6 @@ func _download_files(
 	return {"ok": true, "error": "", "files": files, "hashes": hashes}
 
 
-## Writes the verified files into the staging directory. Returns an empty string
-## on success; a partially written staging directory is always removed.
-func _stage_files(package_id: int, files: Array) -> String:
-	var staging := packages_dir(package_id).path_join(STAGING_DIR)
-	_remove_tree(staging)
-	for file: Dictionary in files:
-		var target := staging.path_join(str(file.filepath))
-		var dir_error := DirAccess.make_dir_recursive_absolute(target.get_base_dir())
-		if dir_error != OK:
-			_remove_tree(staging)
-			return (
-				"package %d: cannot create %s: %s"
-				% [package_id, target.get_base_dir(), error_string(dir_error)]
-			)
-		var handle := FileAccess.open(target, FileAccess.WRITE)
-		if handle == null:
-			_remove_tree(staging)
-			return (
-				"package %d: cannot write %s: %s"
-				% [package_id, target, error_string(FileAccess.get_open_error())]
-			)
-		handle.store_buffer(file.body)
-		handle.close()
-	return ""
-
-
-## Builds the runtime form of every raw image and audio file of a staged
-## revision and writes an `.import` sidecar that remaps the raw path to it.
-##
-## The runtime only ever sees files as they were published, so nothing imported
-## them beforehand: the texture or stream is saved next to the raw file and
-## `ResourceLoader.load("<file>")` reads it through the sidecar. The sidecar's
-## `path` points at `final_dir`, because staging is renamed there after
-## derivation. Derived files are runtime-only: they never enter the manifest,
-## the hashes or the publish flow, and other file types are left untouched.
-## A file whose derived name is already declared by the artifact is skipped, so
-## derivation never overwrites a published file.
-##
-## Returns {ok: bool, error: String}. A failure removes everything derived by
-## this call, so the caller can drop staging as a whole.
-func _derive_assets(staging: String, final_dir: String, filepaths: Array) -> Dictionary:
-	# Derived names must never replace a file the artifact already declares.
-	var declared := {}
-	for filepath: Variant in filepaths:
-		declared[str(filepath)] = true
-	var derived := PackedStringArray()
-	for filepath: Variant in filepaths:
-		var path := str(filepath)
-		var derivation: Dictionary = _asset_derivations.get(
-			path.get_extension().to_lower(), {}
-		)
-		if derivation.is_empty():
-			continue
-		var suffix := str(derivation.get("suffix", ""))
-		var sidecar_name := path + ".import"
-		if declared.has(path + suffix) or declared.has(sidecar_name):
-			continue
-		var target := staging.path_join(path + suffix)
-		var type := str(derivation.get("type", ""))
-		var ok := false
-		# The dispatch table names the helper; an unknown kind stays a failure
-		# instead of falling back to audio.
-		match str(derivation.get("kind", "")):
-			"texture":
-				ok = _derive_texture(staging.path_join(path), target)
-			"audio":
-				ok = _derive_audio(staging.path_join(path), target, type)
-		if not ok:
-			_remove_files(derived)
-			return {"ok": false, "error": "asset_derive_failed:%s" % path}
-		# Both names are recorded before the sidecar write, so neither the derived
-		# resource nor a half-written sidecar can survive a failure.
-		var sidecar := staging.path_join(sidecar_name)
-		derived.append(target)
-		derived.append(sidecar)
-		if not _write_import(sidecar, type, final_dir.path_join(path + suffix)):
-			_remove_files(derived)
-			return {"ok": false, "error": "asset_derive_failed:%s" % path}
-	return {"ok": true, "error": ""}
-
-
-## Extension dispatch table: every raw asset extension mapped to the kind of
-## derivation, the suffix of the derived file and the sidecar's resource class.
-func _build_asset_derivations() -> Dictionary:
-	var table := {}
-	for extension: String in TEXTURE_EXTENSIONS:
-		table[extension] = {
-			"kind": "texture", "suffix": ".image.res", "type": "ImageTexture"
-		}
-	for extension: String in AUDIO_STREAM_TYPES:
-		table[extension] = {
-			"kind": "audio",
-			"suffix": ".audio.res",
-			"type": AUDIO_STREAM_TYPES[extension],
-		}
-	return table
-
-
-## Saves the texture of a raw image file. Returns false when the bytes are not
-## a readable image or the derived resource cannot be written.
-func _derive_texture(source: String, target: String) -> bool:
-	var image := Image.load_from_file(source)
-	if image == null:
-		return false
-	return ResourceSaver.save(ImageTexture.create_from_image(image), target) == OK
-
-
-## Saves the stream of a raw audio file as `type` (`AudioStreamWAV`, ...).
-## Returns false when the bytes are not a readable stream of that class.
-func _derive_audio(source: String, target: String, type: String) -> bool:
-	var stream: AudioStream = null
-	match type:
-		"AudioStreamWAV":
-			stream = AudioStreamWAV.load_from_file(source)
-		"AudioStreamOggVorbis":
-			stream = AudioStreamOggVorbis.load_from_file(source)
-		"AudioStreamMP3":
-			stream = AudioStreamMP3.load_from_file(source)
-	if stream == null:
-		return false
-	return ResourceSaver.save(stream, target) == OK
-
-
-## Writes the sidecar that makes `ResourceLoader.load()` read the raw path as the
-## derived resource. `resource_path` is the final location, because staging is
-## renamed after derivation. Every asset keeps the `importer="texture"` marker
-## the plan pins for the runtime remap, audio included; `path` selects the
-## derived resource at runtime.
-func _write_import(path: String, type: String, resource_path: String) -> bool:
-	var handle := FileAccess.open(path, FileAccess.WRITE)
-	if handle == null:
-		return false
-	handle.store_string(
-		'[remap]\n\nimporter="texture"\ntype="%s"\npath="%s"\n' % [type, resource_path]
-	)
-	var write_error := handle.get_error()
-	handle.close()
-	return write_error == OK
-
-
-## Replaces the keyed artifact directory only after the staged copy is complete,
-## so a failed swap keeps a working package on disk. Returns an empty string on
-## success.
-func _swap_revision(package_id: int, revision: int, artifact_key: String) -> String:
-	var target_dir := revision_dir(package_id, revision, artifact_key)
-	var staging := packages_dir(package_id).path_join(STAGING_DIR)
-	var backup_dir := packages_dir(package_id).path_join(PREVIOUS_DIR)
-	_remove_tree(backup_dir)
-	# Re-applying the same artifact (a retry) overwrites it; move the old copy
-	# aside first so it survives a failed rename.
-	if DirAccess.dir_exists_absolute(target_dir):
-		var backup_error := DirAccess.rename_absolute(target_dir, backup_dir)
-		if backup_error != OK:
-			_remove_tree(staging)
-			return (
-				"package %d: cannot replace revision %d: %s"
-				% [package_id, revision, error_string(backup_error)]
-			)
-
-	var rename_error := DirAccess.rename_absolute(staging, target_dir)
-	if rename_error != OK:
-		if DirAccess.dir_exists_absolute(backup_dir):
-			DirAccess.rename_absolute(backup_dir, target_dir)
-		_remove_tree(staging)
-		return (
-			"package %d: cannot publish revision %d: %s"
-			% [package_id, revision, error_string(rename_error)]
-		)
-
-	_remove_tree(backup_dir)
-	_prune_revisions(package_id, revision, target_dir.get_file())
-	return ""
-
-
-## Keeps the applied artifact and the newest other revision on disk. Older
-## artifacts of the same revision are removed: their bytes belong to a closure
-## that is no longer pinned. Deriving the previous revision from the directory
-## instead of memory keeps it correct after a restart and after a same-revision
-## refresh. Only numeric/artifact directories of this package are removed, so no
-## other project file is touched.
-func _prune_revisions(package_id: int, keep_revision: int, keep_dir_name: String) -> void:
-	var keep_previous := _highest_revision_on_disk(package_id, keep_revision)
-	var root := packages_dir(package_id)
-	var dir := DirAccess.open(root)
-	if dir == null:
-		return
-	for name: String in dir.get_directories():
-		if name == STAGING_DIR or name == PREVIOUS_DIR:
-			continue
-		var value := _revision_of_dir_name(name)
-		if value <= 0:
-			continue
-		if name == keep_dir_name:
-			continue
-		if value == keep_previous:
-			continue
-		_remove_tree(root.path_join(name))
-
-
-## Highest numeric revision directory of a package, ignoring `exclude`.
-func _highest_revision_on_disk(package_id: int, exclude: int) -> int:
-	var highest := 0
-	var dir := DirAccess.open(packages_dir(package_id))
-	if dir == null:
-		return highest
-	for name: String in dir.get_directories():
-		var value := _revision_of_dir_name(name)
-		if value != 0 and value != exclude:
-			highest = maxi(highest, value)
-	return highest
-
-
 ## File paths of `new` whose hash is missing or different in `old`, sorted.
 func _changed_files(old: Dictionary, new: Dictionary) -> PackedStringArray:
 	var changed := PackedStringArray()
@@ -875,13 +653,6 @@ func _changed_files(old: Dictionary, new: Dictionary) -> PackedStringArray:
 			changed.append(key)
 	changed.sort()
 	return changed
-
-
-func _scene_map(manifest: Dictionary) -> Dictionary:
-	var scenes: Variant = manifest.get("sceneDependencies", {})
-	if typeof(scenes) != TYPE_DICTIONARY:
-		return {}
-	return scenes
 
 
 ## Test seam wrapper: lets the smoke test supply responses without network.
@@ -902,11 +673,19 @@ func _fetch(path: String) -> Dictionary:
 func _request(path: String) -> Dictionary:
 	var http := HTTPRequest.new()
 	http.timeout = 30.0
+	# The browser already decompresses gzip responses before Godot sees them.
+	# Leaving this on makes the web build try to gunzip the decoded body and
+	# fail with `request failed (8)` / stream_peer_gzip when a proxy (Next.js
+	# in dev, nginx in production) compresses a large JSON manifest.
+	http.accept_gzip = false
 	add_child(http)
 	# HTTPRequest builds its client only after entering the tree.
 	if is_inside_tree():
 		await get_tree().process_frame
-	var error := http.request(base_url + path)
+	var headers := PackedStringArray()
+	if not api_token.is_empty():
+		headers.append("Authorization: Bearer %s" % api_token)
+	var error := http.request(base_url + path, headers)
 	if error != OK:
 		http.queue_free()
 		return {"ok": false, "status": 0, "error": error_string(error), "body": PackedByteArray()}
@@ -967,38 +746,6 @@ func _sanitize_room(room_id: String) -> String:
 	return out
 
 
-## A backend artifact key is a lowercase sha256 hex digest. It becomes a path
-## segment, so anything else is rejected before it reaches the file system.
-func _is_valid_artifact_key(value: String) -> bool:
-	if value.length() != ARTIFACT_KEY_LENGTH:
-		return false
-	for index in value.length():
-		var ch := value[index]
-		if not ((ch >= "0" and ch <= "9") or (ch >= "a" and ch <= "f")):
-			return false
-	return true
-
-
-func _validate_relative_path(filepath: String) -> String:
-	if filepath.is_empty():
-		return "package manifest contains an empty file path"
-	if filepath.begins_with("/") or filepath.contains("\\"):
-		return "package manifest contains an unsafe path: %s" % filepath
-	for part: String in filepath.split("/"):
-		if part.is_empty() or part == "." or part == "..":
-			return "package manifest contains an unsafe path: %s" % filepath
-	if filepath.contains(":"):
-		return "package manifest contains an unsafe path: %s" % filepath
-	return ""
-
-
-func _encode_path(filepath: String) -> String:
-	var encoded := PackedStringArray()
-	for part: String in filepath.split("/"):
-		encoded.append(part.uri_encode())
-	return "/".join(encoded)
-
-
 func _sha256(data: PackedByteArray) -> String:
 	var context := HashingContext.new()
 	context.start(HashingContext.HASH_SHA256)
@@ -1006,30 +753,15 @@ func _sha256(data: PackedByteArray) -> String:
 	return context.finish().hex_encode()
 
 
-func _remove_files(paths: PackedStringArray) -> void:
-	for path: String in paths:
-		DirAccess.remove_absolute(path)
-
-
+## Kept as a thin seam for callers and tests that prune by path; the store owns
+## the implementation.
 func _remove_tree(path: String) -> void:
-	var dir := DirAccess.open(path)
-	if dir == null:
-		return
-	# Collect names first: deleting while enumerating can skip entries.
-	var names := PackedStringArray()
-	dir.list_dir_begin()
-	var name := dir.get_next()
-	while not name.is_empty():
-		names.append(name)
-		name = dir.get_next()
-	dir.list_dir_end()
-	for child_name: String in names:
-		var child := path.path_join(child_name)
-		if DirAccess.dir_exists_absolute(child):
-			_remove_tree(child)
-		else:
-			DirAccess.remove_absolute(child)
-	DirAccess.remove_absolute(path)
+	_artifacts.remove_tree(path)
+
+
+## Kept as a thin seam for tests that inspect the on-disk layout.
+func _revision_of_dir_name(name: String) -> int:
+	return ArtifactStore.revision_of_dir_name(name)
 
 
 func _failure(message: String, revision: int = 0) -> Dictionary:

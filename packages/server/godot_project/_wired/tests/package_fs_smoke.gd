@@ -3,9 +3,14 @@ extends SceneTree
 ## Headless smoke test for the package file operations of the editor bridge.
 ##
 ## `WiredPackageFs` owns `res://packages` inside the editor project: it reports
-## the current files, stages a replacement, swaps it in atomically and deletes a
-## package. Editor metadata (dot directories, `*.uid`, `*.import`) is never part
-## of the reported tree but must survive a swap.
+## the current files, stages a replacement, swaps it in atomically, deletes a
+## package and deletes selected files or directories inside a package. Editor
+## metadata (dot directories, `*.uid`, `*.import`) is never part of the reported
+## tree but must survive a swap.
+##
+## `op_delete_files` runs against [member WiredPackageFs.root_override] here, so
+## the "editor paths" below use `package_dir(id)` instead of `res://packages/id`;
+## in production that helper returns exactly `res://packages/<id>`.
 ##
 ## The dot-prefixed scenarios (`DirAccess.include_hidden`) only exercise
 ## production semantics on a POSIX host or the web editor: on Windows a dotfile
@@ -38,6 +43,13 @@ func _initialize() -> void:
 	_test_collect_restores_previous()
 	_test_dot_dir_survives_replace()
 	_test_delete_with_dot_dir()
+	_test_delete_files_selected_file()
+	_test_delete_files_relative_path()
+	_test_delete_files_selected_directory()
+	_test_delete_files_keeps_metadata_of_selected_file()
+	_test_delete_files_outside_package()
+	_test_delete_files_traversal()
+	_test_delete_files_missing_path()
 	_test_valid_relative_path()
 	_cleanup_root()
 	_finish()
@@ -397,6 +409,225 @@ func _test_delete_with_dot_dir() -> void:
 		"op_delete must remove a package directory that contains .config",
 	)
 	_report("delete removes a package directory containing .config", problems)
+
+
+func _test_delete_files_selected_file() -> void:
+	var problems: Array = []
+	var package_id := 14
+	var root := WiredPackageFs.package_dir(package_id)
+	DirAccess.make_dir_recursive_absolute(root)
+	_write(root.path_join("static/platform.tscn"), "[gd_scene]\n")
+	_write(root.path_join("main.gd"), "extends Node\n")
+
+	var selected := WiredPackageFs.package_dir(package_id).path_join("static/platform.tscn")
+	var result := WiredPackageFs.op_delete_files(package_id, [selected])
+	_expect(problems, not result.has("error"), "op_delete_files failed: %s" % [result.get("error", "")])
+	_expect(
+		problems,
+		result.get("deleted", []) == [selected],
+		"deleted must report the editor path, got %s" % [result.get("deleted", [])],
+	)
+	_expect(
+		problems,
+		not FileAccess.file_exists(root.path_join("static/platform.tscn")),
+		"the selected file must be removed",
+	)
+	_expect(problems, FileAccess.file_exists(root.path_join("main.gd")), "unselected files must survive")
+	_report("delete_files removes a selected file", problems)
+
+
+func _test_delete_files_relative_path() -> void:
+	var problems: Array = []
+	var package_id := 15
+	var root := WiredPackageFs.package_dir(package_id)
+	DirAccess.make_dir_recursive_absolute(root)
+	_write(root.path_join("static/platform.tscn"), "[gd_scene]\n")
+
+	var result := WiredPackageFs.op_delete_files(package_id, ["static/platform.tscn"])
+	var expected := WiredPackageFs.package_dir(package_id).path_join("static/platform.tscn")
+	_expect(problems, not result.has("error"), "op_delete_files failed: %s" % [result.get("error", "")])
+	_expect(
+		problems,
+		result.get("deleted", []) == [expected],
+		"a relative path must be reported as an editor path, got %s" % [result.get("deleted", [])],
+	)
+	_expect(
+		problems,
+		not FileAccess.file_exists(root.path_join("static/platform.tscn")),
+		"the relative path must point at the package file",
+	)
+	_report("delete_files accepts a package-relative path", problems)
+
+
+func _test_delete_files_selected_directory() -> void:
+	var problems: Array = []
+	var package_id := 16
+	var root := WiredPackageFs.package_dir(package_id)
+	DirAccess.make_dir_recursive_absolute(root)
+	_write(root.path_join("levels/level1.tscn"), "[gd_scene]\n")
+	_write(root.path_join("levels/level1.tscn.uid"), "uid://level1")
+	_write(root.path_join("levels/.cache/level1.res"), "cache")
+	_write(root.path_join("levels/nested/level2.tscn"), "[gd_scene]\n")
+	_write(root.path_join("levels/nested/level2.tscn.import"), "[remap]\n")
+	_write(root.path_join("keep.gd"), "extends Node\n")
+
+	var selected := WiredPackageFs.package_dir(package_id).path_join("levels")
+	var result := WiredPackageFs.op_delete_files(package_id, [selected])
+	_expect(problems, not result.has("error"), "op_delete_files failed: %s" % [result.get("error", "")])
+	_expect(
+		problems,
+		result.get("deleted", []) == [selected],
+		"deleted must report the selected directory, got %s" % [result.get("deleted", [])],
+	)
+	_expect(
+		problems,
+		not DirAccess.dir_exists_absolute(root.path_join("levels")),
+		"the selected directory must be removed recursively",
+	)
+	_expect(
+		problems,
+		not FileAccess.file_exists(root.path_join("levels/nested/level2.tscn")),
+		"nested content must be removed with the directory",
+	)
+	_expect(
+		problems,
+		not FileAccess.file_exists(root.path_join("levels/.cache/level1.res")),
+		"nested dot metadata must be removed with the directory",
+	)
+	_expect(
+		problems,
+		not FileAccess.file_exists(root.path_join("levels/nested/level2.tscn.import")),
+		"nested .import sidecars must be removed with the directory",
+	)
+	_expect(problems, FileAccess.file_exists(root.path_join("keep.gd")), "unselected files must survive")
+	_report("delete_files removes a selected directory with its metadata", problems)
+
+
+func _test_delete_files_keeps_metadata_of_selected_file() -> void:
+	var problems: Array = []
+	var package_id := 17
+	var root := WiredPackageFs.package_dir(package_id)
+	DirAccess.make_dir_recursive_absolute(root)
+	_write(root.path_join("main.gd"), "extends Node\n")
+	_write(root.path_join("main.gd.uid"), "uid://main")
+	_write(root.path_join("main.gd.import"), "[remap]\n")
+	_write(root.path_join(".config/settings.tres"), "[gd_resource]\n")
+
+	var selected := WiredPackageFs.package_dir(package_id).path_join("main.gd")
+	var result := WiredPackageFs.op_delete_files(package_id, [selected])
+	_expect(problems, not result.has("error"), "op_delete_files failed: %s" % [result.get("error", "")])
+	_expect(
+		problems,
+		result.get("deleted", []) == [selected],
+		"deleted must report only the selected file, got %s" % [result.get("deleted", [])],
+	)
+	_expect(problems, not FileAccess.file_exists(root.path_join("main.gd")), "the selected file must be removed")
+	_expect(
+		problems,
+		FileAccess.file_exists(root.path_join("main.gd.uid")),
+		"the .uid sidecar must survive a single-file selection",
+	)
+	_expect(
+		problems,
+		FileAccess.file_exists(root.path_join("main.gd.import")),
+		"the .import sidecar must survive a single-file selection",
+	)
+	_expect(
+		problems,
+		FileAccess.file_exists(root.path_join(".config/settings.tres")),
+		"dot metadata must survive a single-file selection",
+	)
+	_report("delete_files keeps editor metadata when a single file is selected", problems)
+
+
+func _test_delete_files_outside_package() -> void:
+	var problems: Array = []
+	var package_id := 18
+	var root := WiredPackageFs.package_dir(package_id)
+	DirAccess.make_dir_recursive_absolute(root)
+	_write(root.path_join("keep.gd"), "extends Node\n")
+	var other := WiredPackageFs.packages_root().path_join("19/other.gd")
+	_write(other, "extends Node\n")
+
+	var rejected := [
+		WiredPackageFs.packages_root().path_join("19/other.gd"),
+		"res://other/other.gd",
+		"C:/Windows/win.ini",
+		"user://elsewhere/file.gd",
+	]
+	for path: String in rejected:
+		var result := WiredPackageFs.op_delete_files(package_id, [path])
+		_expect(problems, result.has("error"), "\"%s\" must be rejected, got %s" % [path, result])
+	_expect(
+		problems,
+		FileAccess.file_exists(other),
+		"a path in another package must not be deleted",
+	)
+	_expect(
+		problems,
+		FileAccess.file_exists(root.path_join("keep.gd")),
+		"the package must be untouched after rejected paths",
+	)
+
+	var root_result := WiredPackageFs.op_delete_files(package_id, [WiredPackageFs.package_dir(package_id)])
+	_expect(
+		problems,
+		String(root_result.get("error", "")).contains("delete"),
+		"deleting the package root must point at the whole-package delete, got %s" % [root_result],
+	)
+	_expect(
+		problems,
+		FileAccess.file_exists(root.path_join("keep.gd")),
+		"the package root must survive a rejected root deletion",
+	)
+	_report("delete_files rejects paths outside the package", problems)
+
+
+func _test_delete_files_traversal() -> void:
+	var problems: Array = []
+	var package_id := 19
+	var root := WiredPackageFs.package_dir(package_id)
+	DirAccess.make_dir_recursive_absolute(root)
+	_write(root.path_join("keep.gd"), "extends Node\n")
+	var victim := WiredPackageFs.packages_root().path_join("18/keep.gd")
+	_write(victim, "extends Node\n")
+
+	var rejected := [
+		"../18/keep.gd",
+		"a/../../18/keep.gd",
+		WiredPackageFs.package_dir(package_id).path_join("../18/keep.gd"),
+		"res://packages/%d/../../18/keep.gd" % package_id,
+	]
+	for path: String in rejected:
+		var result := WiredPackageFs.op_delete_files(package_id, [path])
+		_expect(problems, result.has("error"), "\"%s\" must be rejected as traversal, got %s" % [path, result])
+	_expect(problems, FileAccess.file_exists(victim), "traversal must not reach another package")
+	_expect(problems, FileAccess.file_exists(root.path_join("keep.gd")), "traversal must not delete package files")
+	_report("delete_files rejects traversal", problems)
+
+
+func _test_delete_files_missing_path() -> void:
+	var problems: Array = []
+	var package_id := 20
+	var root := WiredPackageFs.package_dir(package_id)
+	DirAccess.make_dir_recursive_absolute(root)
+	_write(root.path_join("keep.gd"), "extends Node\n")
+
+	var result := WiredPackageFs.op_delete_files(
+		package_id,
+		[
+			"missing.gd",
+			WiredPackageFs.package_dir(package_id).path_join("nested/missing.tscn"),
+		]
+	)
+	_expect(problems, not result.has("error"), "a missing path must not be an error, got %s" % [result])
+	_expect(
+		problems,
+		result.get("deleted", []) == [],
+		"missing paths must not be reported as deleted, got %s" % [result.get("deleted", [])],
+	)
+	_expect(problems, FileAccess.file_exists(root.path_join("keep.gd")), "the package must be untouched")
+	_report("delete_files ignores missing paths", problems)
 
 
 func _test_valid_relative_path() -> void:

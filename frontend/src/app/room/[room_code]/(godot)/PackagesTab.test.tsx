@@ -169,6 +169,31 @@ describe("PackagesTab", () => {
     expect(window.confirm).toHaveBeenCalled();
   });
 
+  it("asks before removing a package with local changes", async () => {
+    const removePackage = vi
+      .fn()
+      .mockRejectedValueOnce(new LocalChangesError(5, ["scripts/hero.gd"]))
+      .mockResolvedValueOnce(undefined);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(
+      <PackagesTab
+        authorId={42}
+        packages={controller({ removePackage })}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /убрать из редактора/i }),
+    );
+
+    await waitFor(() => expect(removePackage).toHaveBeenCalledTimes(2));
+    expect(removePackage).toHaveBeenLastCalledWith(5, { force: true });
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("Удалить каталог пакета"),
+    );
+  });
+
   it("creates a package for the current user", async () => {
     const createPackage = vi
       .fn()

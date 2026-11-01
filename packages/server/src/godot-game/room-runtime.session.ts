@@ -2,7 +2,7 @@ import { Logger } from '@nestjs/common';
 import { RoomRuntimeConfiguration } from './room-runtime.configuration';
 import { RoomRuntimeError } from './room-runtime.errors';
 import { RoomRuntimeLog } from './room-runtime.log';
-import { RoomRuntimeRegistry } from './room-runtime.registry';
+import type { RoomRuntimeRegistry } from './room-runtime.registry';
 import { RuntimeRecord } from './room-runtime.record';
 import {
   GodotRuntimeConfig,
@@ -13,8 +13,9 @@ import { parseRuntimeLine, RuntimeLineEvent } from './room-runtime.line-parser';
 
 const FORCE_KILL_WAIT_MS = 2_000;
 const HANDSHAKE_LEASE_SLACK_MS = 5_000;
-// Keep in sync with AUTH_TIMEOUT_SEC in the Godot network script.
-const AUTH_TIMEOUT_SEC = 10;
+// Keep in sync with AUTH_TIMEOUT_SEC in the Godot network script. The client
+// gets this long to finish the handshake after the ticket is minted.
+const AUTH_TIMEOUT_SEC = 5;
 
 export interface RoomRuntimeSessionOptions {
   roomId: string;
@@ -43,6 +44,8 @@ export interface RoomRuntimeSessionOptions {
  */
 export class RoomRuntimeSession {
   readonly record: RuntimeRecord;
+  /** Pipes that already carry the guard against an unhandled 'error' event. */
+  private readonly guardedPipes = new WeakSet<NodeJS.EventEmitter>();
 
   constructor(private readonly options: RoomRuntimeSessionOptions) {
     this.record = this.createRecord();
@@ -70,6 +73,15 @@ export class RoomRuntimeSession {
       this.record.state === 'running' ||
       this.record.state === 'stopping'
     );
+  }
+
+  /**
+   * True while a stop still has a live process to terminate. A runtime that
+   * was force-killed but survived is already `failed` and therefore inactive,
+   * yet it still holds its port until the real exit arrives.
+   */
+  canBeStopped(): boolean {
+    return !this.record.exitHandled;
   }
 
   info(): RoomRuntimeInfo {
@@ -151,17 +163,23 @@ export class RoomRuntimeSession {
 
   /**
    * Graceful stop: ask Godot to save state and exit over stdin, then force
-   * kill only after the configured grace period.
+   * kill only after the configured grace period. A runtime that already
+   * failed keeps no second grace period: it is killed right away, so a
+   * repeated stop can still reclaim the room and its port.
    */
   stop(reason = 'requested'): Promise<void> {
     const record = this.record;
-    if (record.state === 'stopped' || record.state === 'failed') {
-      return Promise.resolve();
-    }
     if (record.stopPromise) {
       return record.stopPromise;
     }
+    if (record.exitHandled) {
+      // Already finalized: the process is gone, so stopping again only has to
+      // hand the port back instead of trusting a stale reservation.
+      this.releasePort();
+      return Promise.resolve();
+    }
 
+    const force = record.state === 'failed';
     record.stopRequested = true;
     record.state = 'stopping';
     this.clearTimers();
@@ -176,7 +194,7 @@ export class RoomRuntimeSession {
       );
     }
 
-    record.stopPromise = this.performStop(reason).finally(() => {
+    record.stopPromise = this.performStop(reason, force).finally(() => {
       record.stopPromise = undefined;
     });
     return record.stopPromise;
@@ -205,8 +223,8 @@ export class RoomRuntimeSession {
   /**
    * A ticket minted near the end of the handshake lease would outlive the
    * runtime. Clamp it to the remaining window (the client has one second to
-   * send hello, then the 10s auth timeout), or fail explicitly when there is
-   * not enough time left for a handshake. Returns undefined for a runtime that
+   * connect, then the 5s auth timeout), or fail explicitly when there is not
+   * enough time left for a handshake. Returns undefined for a runtime that
    * already has players, in which case the idle timeout governs shutdown.
    */
   private ticketTtlSec(): number | undefined {
@@ -270,13 +288,11 @@ export class RoomRuntimeSession {
       startedAt: null,
       stoppedAt: null,
       exitCode: null,
-      exitSignal: null,
       error: null,
       activePlayers: 0,
       authenticatedPeers: new Set<number>(),
       handshakeLeaseUntil: 0,
       stopRequested: false,
-      forceKilled: false,
       readySettled: false,
       exitHandled: false,
       portReleased: false,
@@ -305,6 +321,25 @@ export class RoomRuntimeSession {
       for (const line of lines) {
         this.handleLine(line, source);
       }
+    });
+    // A runtime that exits mid-write makes the pipe emit 'error'
+    // asynchronously. Without a listener that is an uncaughtException and it
+    // would take the whole backend down, so a broken pipe is only logged.
+    this.guardPipe(stream, `${source} stream`);
+  }
+
+  /**
+   * Subscribes once to asynchronous pipe errors (EPIPE, "write after end",
+   * ECONNRESET). They arrive outside the write's try/catch, and an unhandled
+   * 'error' event on a stream is an uncaughtException.
+   */
+  private guardPipe(pipe: NodeJS.EventEmitter, label: string): void {
+    if (this.guardedPipes.has(pipe)) {
+      return;
+    }
+    this.guardedPipes.add(pipe);
+    pipe.on('error', (error: Error) => {
+      this.appendLog(`[wired] ${label} error: ${this.errorMessage(error)}`);
     });
   }
 
@@ -403,11 +438,22 @@ export class RoomRuntimeSession {
    */
   sendCommand(command: string): boolean {
     const record = this.record;
-    if (record.state !== 'running' || !record.process?.stdin) {
+    if (record.state !== 'running') {
+      return false;
+    }
+    const stdin = record.process?.stdin;
+    if (!stdin) {
+      return false;
+    }
+    this.guardPipe(stdin, 'control stdio');
+    // Re-check right before the write: the process may have exited (or the
+    // pipe closed) between the state check and this line.
+    if (record.state !== 'running' || !stdin.writable) {
+      this.appendLog('[wired] control write skipped: stdin is closed');
       return false;
     }
     try {
-      record.process.stdin.write(`${command}\n`);
+      stdin.write(`${command}\n`);
       this.appendLog(`[wired] control -> ${command}`);
       return true;
     } catch (error) {
@@ -438,7 +484,6 @@ export class RoomRuntimeSession {
     }
     record.exitHandled = true;
     record.exitCode = code;
-    record.exitSignal = signal;
     record.stoppedAt = new Date().toISOString();
     this.clearTimers();
     this.releasePort();
@@ -606,11 +651,11 @@ export class RoomRuntimeSession {
     this.scheduleIdleStop();
   }
 
-  private async performStop(reason: string): Promise<void> {
+  private async performStop(reason: string, force = false): Promise<void> {
     const record = this.record;
     const config = this.options.config;
     this.appendLog(
-      `[wired] stopping room=${record.roomId} port=${record.port} reason=${reason}`,
+      `[wired] stopping room=${record.roomId} port=${record.port} reason=${reason}${force ? ' (force)' : ''}`,
     );
 
     if (!record.process) {
@@ -621,25 +666,35 @@ export class RoomRuntimeSession {
       return;
     }
 
-    try {
-      record.process.stdin?.write('shutdown\n');
-    } catch (error) {
-      this.appendLog(
-        `[wired] failed to send shutdown command: ${this.errorMessage(error)}`,
-      );
+    if (!force) {
+      const stdin = record.process.stdin;
+      if (stdin) {
+        this.guardPipe(stdin, 'control stdio');
+      }
+      try {
+        if (stdin?.writable) {
+          stdin.write('shutdown\n');
+        }
+      } catch (error) {
+        this.appendLog(
+          `[wired] failed to send shutdown command: ${this.errorMessage(error)}`,
+        );
+      }
+
+      const exitedGracefully = await this.waitForExit(config.shutdownGraceMs);
+      if (exitedGracefully) {
+        return;
+      }
     }
 
-    const exitedGracefully = await this.waitForExit(config.shutdownGraceMs);
-    if (exitedGracefully) {
-      return;
-    }
-
-    record.forceKilled = true;
+    const graceNote = force
+      ? 'the previous stop did not terminate it'
+      : `graceful shutdown timed out after ${config.shutdownGraceMs}ms`;
     this.appendLog(
-      `[wired] graceful shutdown timed out after ${config.shutdownGraceMs}ms; forcing room=${record.roomId} port=${record.port}`,
+      `[wired] ${graceNote}; forcing room=${record.roomId} port=${record.port}`,
     );
     this.options.logger.warn(
-      `Forcing shutdown of room ${record.roomId} on port ${record.port} after ${config.shutdownGraceMs}ms grace period`,
+      `Forcing shutdown of room ${record.roomId} on port ${record.port}: ${graceNote}`,
     );
     try {
       record.process.kill();
@@ -656,6 +711,7 @@ export class RoomRuntimeSession {
       // reserved and the log open; the real exit callback finalizes the record.
       // A new runtime for the same room will therefore use another free port.
       this.appendLog(`[wired] ${record.error}`);
+      return;
     }
   }
 

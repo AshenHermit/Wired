@@ -13,9 +13,9 @@ import {
   EditorBridgeError,
   createEditorBridgeClient,
   requestEditorRescan,
-  waitForEditorBridge,
 } from "./editor-bridge";
 import {
+  GodotFsError,
   createPackageFileSystem,
   type PackageFileSystem,
 } from "./godot-packages-fs";
@@ -25,19 +25,10 @@ import {
   reconcilePackageRevision,
   type PackageBaseline,
 } from "./package-sync";
+import { useEditorBridge } from "./use-editor-bridge";
 
 /** How often the panel checks for a newer published revision. */
 const POLL_MS = 10_000;
-
-/**
- * How long the panel waits for the editor plugin to register its bridge before
- * it reports the packages as unavailable. The project itself is already
- * usable at that point: the editor starts before the plugin appears.
- */
-const BRIDGE_WAIT_MS = 120_000;
-
-/** How often a lost bridge is polled again. */
-const RECONNECT_MS = 2_000;
 
 export type RoomPackageStatus =
   | "not-loaded"
@@ -259,41 +250,136 @@ function buildEntries(
 }
 
 /**
+ * Every explicit action needs a connected package file system. The editor may
+ * not be ready yet when the panel renders, so this is reported as a plain
+ * error instead of a nullable type leaking into each action.
+ */
+function requireFileSystem(
+  files: PackageFileSystem | null,
+): PackageFileSystem {
+  if (!files) {
+    throw new Error("Редактор ещё не готов: дождитесь загрузки проекта Godot");
+  }
+  return files;
+}
+
+/**
+ * Everything the package panel renders is derived from this reducer. Only a
+ * load that still owns the newest request may dispatch: the previous
+ * implementation mutated a `packagesRef` before checking whether its request
+ * was still current, so a stale load could silently change the package list.
+ */
+type RoomPackagesState = {
+  packages: ScriptingPackage[];
+  entries: RoomPackageEntry[];
+  actions: Record<number, PackageActionState>;
+};
+
+type RoomPackagesAction =
+  | { type: "reset"; packages: ScriptingPackage[] }
+  | { type: "merged"; packages: ScriptingPackage[] }
+  | { type: "created"; package: ScriptingPackage }
+  | {
+      type: "loaded";
+      incoming: ScriptingPackage[];
+      remote: Map<number, PackageSyncStatus>;
+      baseline: Map<number, PackageBaseline>;
+      snapshots: Map<number, Record<string, string>>;
+      present: Set<number>;
+    }
+  | {
+      type: "action";
+      packageId: number;
+      patch: Partial<PackageActionState>;
+    };
+
+function roomPackagesReducer(
+  state: RoomPackagesState,
+  action: RoomPackagesAction,
+): RoomPackagesState {
+  switch (action.type) {
+    case "reset":
+      return {
+        packages: action.packages,
+        entries: [],
+        actions: {},
+      };
+    case "merged": {
+      const packages = mergePackages(state.packages, action.packages);
+      return packages === state.packages ? state : { ...state, packages };
+    }
+    case "created": {
+      const packages = mergePackages(state.packages, [action.package]);
+      return packages === state.packages ? state : { ...state, packages };
+    }
+    case "loaded": {
+      const packages = mergePackages(state.packages, action.incoming);
+      return {
+        ...state,
+        packages,
+        entries: buildEntries(
+          packages,
+          action.remote,
+          action.baseline,
+          action.snapshots,
+          action.present,
+        ),
+      };
+    }
+    case "action":
+      return {
+        ...state,
+        actions: {
+          ...state.actions,
+          [action.packageId]: {
+            ...IDLE_ACTION,
+            ...state.actions[action.packageId],
+            ...action.patch,
+          },
+        },
+      };
+    default:
+      return state;
+  }
+}
+
+/**
  * Package panel state for one room.
  *
  * Nothing is written into the editor file system automatically: the room's
  * packages are only listed, and a package enters the editor when the user
  * downloads it (or creates a new one). The loaded set intentionally lives in
  * memory only, so a page reload starts from an empty set again.
+ *
+ * Transport (editor instance, bridge wait, reconnect loop) lives in
+ * `useEditorBridge`; this hook owns the package data and the explicit actions.
  */
 export function useRoomPackages(
   roomId: number,
   roomPackages: ScriptingPackage[],
 ): RoomPackagesController {
-  const [packages, setPackages] = React.useState<ScriptingPackage[]>(
-    () => roomPackages,
-  );
-  const [entries, setEntries] = React.useState<RoomPackageEntry[]>([]);
-  const [fsReady, setFsReady] = React.useState(false);
+  const [state, dispatch] = React.useReducer(roomPackagesReducer, {
+    packages: roomPackages,
+    entries: [],
+    actions: {},
+  });
   const [statusLoaded, setStatusLoaded] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [actions, setActions] = React.useState<
-    Record<number, PackageActionState>
-  >({});
 
-  const packagesRef = React.useRef<ScriptingPackage[]>(packages);
   const loadedRef = React.useRef<Map<number, PackageBaseline>>(new Map());
   const snapshotsRef = React.useRef<Map<number, Record<string, string>>>(
     new Map(),
   );
   const remoteRef = React.useRef<Map<number, PackageSyncStatus>>(new Map());
   const inFlightRef = React.useRef<Set<number>>(new Set());
-  const filesRef = React.useRef<PackageFileSystem | null>(null);
-  const engineRef = React.useRef<GodotEditorInstance | null>(null);
-  const reconnectRef = React.useRef<number | null>(null);
-  const connectingRef = React.useRef(false);
   const mountedRef = React.useRef(false);
   const requestRef = React.useRef(0);
+  // Read-only mirror for asynchronous loads: the reducer stays the only writer
+  // of package state.
+  const stateRef = React.useRef(state);
+  React.useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   React.useEffect(() => {
     mountedRef.current = true;
@@ -302,72 +388,55 @@ export function useRoomPackages(
     };
   }, []);
 
-  React.useEffect(() => {
-    const merged = mergePackages(packagesRef.current, roomPackages);
-    if (merged === packagesRef.current) return;
-    packagesRef.current = merged;
-    setPackages(merged);
-  }, [roomPackages]);
+  const refreshRef = React.useRef<() => Promise<void>>(async () => {});
+
+  const transport = useEditorBridge({
+    createFiles: (editor, currentEditor) => {
+      const projectRoot = packageProjectRoot(editor);
+      if (!projectRoot) {
+        throw new GodotFsError("Проект Godot ещё не загружен в редактор");
+      }
+      return createPackageFileSystem({
+        bridge: createEditorBridgeClient(),
+        // Read at write time: the editor instance is recreated when the page
+        // restarts the engine, and package writes must reach the live one. The
+        // editor can also be reset between a revision download and the write,
+        // so a missing engine is a `GodotFsError`, never a raw `TypeError`.
+        getEngine: () => {
+          const current = currentEditor();
+          if (!current?.editor) {
+            throw new GodotFsError(
+              "Файловая система Godot-редактора ещё не готова: дождитесь загрузки проекта",
+            );
+          }
+          return current.editor;
+        },
+        projectRoot,
+      });
+    },
+    onConnected: () => {
+      void refreshRef.current();
+    },
+    onTransportError: (cause) => {
+      setError(`Мост редактора недоступен: ${errorMessage(cause)}`);
+    },
+    onConnectError: (message) => {
+      setError(message);
+    },
+  });
+  const { filesRef, dropTransport, guarded, reset: resetTransport } = transport;
 
   const setAction = React.useCallback(
     (packageId: number, patch: Partial<PackageActionState>) => {
-      setActions((previous) => ({
-        ...previous,
-        [packageId]: {
-          ...IDLE_ACTION,
-          ...previous[packageId],
-          ...patch,
-        },
-      }));
+      dispatch({ type: "action", packageId, patch });
     },
     [],
   );
 
   const actionFor = React.useCallback(
     (packageId: number): PackageActionState =>
-      actions[packageId] ?? IDLE_ACTION,
-    [actions],
-  );
-
-  /**
-   * A lost bridge is retried until the plugin registers itself again. The
-   * interval is owned by a ref, so repeated losses never stack loops.
-   */
-  const stopReconnectLoop = React.useCallback((): void => {
-    if (reconnectRef.current !== null) {
-      window.clearInterval(reconnectRef.current);
-      reconnectRef.current = null;
-    }
-  }, []);
-
-  const connectRef = React.useRef<() => Promise<boolean>>(async () => false);
-
-  const startReconnectLoop = React.useCallback((): void => {
-    // An action that rejects after unmount must not install an interval
-    // nothing would ever clear.
-    if (!mountedRef.current) return;
-    if (reconnectRef.current !== null) return;
-    reconnectRef.current = window.setInterval(() => {
-      if (window.__wiredEditorBridge?.request) {
-        void connectRef.current();
-      }
-    }, RECONNECT_MS);
-  }, []);
-
-  /**
-   * Transport loss only: the plugin is gone or silent, so every package action
-   * is refused until the bridge answers again. An operation the plugin rejected
-   * is a normal per-action failure and never lands here.
-   */
-  const dropBridge = React.useCallback(
-    (cause: unknown): void => {
-      if (!mountedRef.current) return;
-      filesRef.current = null;
-      setFsReady(false);
-      setError(`Мост редактора недоступен: ${errorMessage(cause)}`);
-      startReconnectLoop();
-    },
-    [startReconnectLoop],
+      state.actions[packageId] ?? IDLE_ACTION,
+    [state.actions],
   );
 
   const load = React.useCallback(
@@ -379,24 +448,17 @@ export function useRoomPackages(
         const remote = new Map(
           status.packages.map((pkg) => [pkg.packageId, pkg]),
         );
-        remoteRef.current = remote;
+        const incoming = status.packages.map(packageFromStatus);
 
-        let nextPackages = packagesRef.current;
-        const added = status.packages
-          .filter(
-            (pkg) => !nextPackages.some((existing) => existing.id === pkg.packageId),
-          )
-          .map(packageFromStatus);
-        if (added.length > 0) {
-          nextPackages = [...nextPackages, ...added];
-          packagesRef.current = nextPackages;
-        }
+        // `exists` is a bridge round-trip now, so ask once per load for every
+        // package the panel knows about and hand the set to `buildEntries`.
+        const known = new Map<number, ScriptingPackage>();
+        for (const pkg of stateRef.current.packages) known.set(pkg.id, pkg);
+        for (const pkg of incoming) known.set(pkg.id, pkg);
 
-        // `exists` is a bridge round-trip now, so ask once per load and hand
-        // the resulting set to `buildEntries`.
         const present = new Set<number>();
         if (files) {
-          for (const pkg of nextPackages) {
+          for (const pkg of known.values()) {
             try {
               if (await files.exists(pkg.id)) present.add(pkg.id);
             } catch (cause) {
@@ -411,7 +473,7 @@ export function useRoomPackages(
         let snapshots = snapshotsRef.current;
         if (files && local) {
           const fresh = new Map<number, Record<string, string>>();
-          for (const pkg of nextPackages) {
+          for (const pkg of known.values()) {
             try {
               fresh.set(pkg.id, await files.snapshot(pkg.id));
             } catch (cause) {
@@ -420,20 +482,23 @@ export function useRoomPackages(
             }
           }
           snapshots = fresh;
-          snapshotsRef.current = fresh;
         }
 
         if (!mountedRef.current || request !== requestRef.current) return;
-        if (added.length > 0) setPackages(nextPackages);
-        setEntries(
-          buildEntries(
-            nextPackages,
-            remote,
-            loadedRef.current,
-            snapshots,
-            present,
-          ),
-        );
+        // Commit the caches only from the load that still owns the request: a
+        // superseded response must not leak into later `buildEntries` calls.
+        remoteRef.current = remote;
+        if (files && local) {
+          snapshotsRef.current = snapshots;
+        }
+        dispatch({
+          type: "loaded",
+          incoming,
+          remote,
+          baseline: loadedRef.current,
+          snapshots,
+          present,
+        });
         setStatusLoaded(true);
         setError(null);
       } catch (cause) {
@@ -442,7 +507,7 @@ export function useRoomPackages(
         // would leave every later action hanging on a bridge that is gone.
         if (!mountedRef.current) return;
         if (cause instanceof EditorBridgeError) {
-          dropBridge(cause);
+          dropTransport(cause);
           return;
         }
         if (request !== requestRef.current) return;
@@ -451,7 +516,7 @@ export function useRoomPackages(
         );
       }
     },
-    [dropBridge, roomId],
+    [dropTransport, filesRef, roomId],
   );
 
   const refresh = React.useCallback(
@@ -459,35 +524,38 @@ export function useRoomPackages(
     [load],
   );
 
+  React.useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
+
+  // Packages created or published by another user enter the list from props.
+  React.useEffect(() => {
+    dispatch({ type: "merged", packages: roomPackages });
+  }, [roomPackages]);
+
   const roomIdRef = React.useRef(roomId);
   React.useEffect(() => {
     if (roomIdRef.current === roomId) return;
     roomIdRef.current = roomId;
     // An in-flight load belongs to the old room: invalidate it before clearing
     // so it can neither publish stale state nor keep a dead reconnect loop.
-    stopReconnectLoop();
-    engineRef.current = null;
+    resetTransport();
     requestRef.current += 1;
     loadedRef.current.clear();
     snapshotsRef.current.clear();
     remoteRef.current.clear();
     inFlightRef.current.clear();
-    filesRef.current = null;
-    packagesRef.current = roomPackages;
-    setPackages(roomPackages);
-    setEntries([]);
-    setActions({});
-    setFsReady(false);
+    dispatch({ type: "reset", packages: roomPackages });
     setStatusLoaded(false);
     setError(null);
-  }, [roomId, roomPackages, stopReconnectLoop]);
+  }, [resetTransport, roomId, roomPackages]);
 
   React.useEffect(() => {
     void refresh();
   }, [refresh]);
 
   React.useEffect(() => {
-    if (!fsReady) return;
+    if (!transport.fsReady) return;
     const tick = () => {
       if (document.visibilityState === "visible") {
         void load(false);
@@ -506,129 +574,7 @@ export function useRoomPackages(
       window.removeEventListener("focus", focus);
       document.removeEventListener("visibilitychange", focus);
     };
-  }, [fsReady, load, refresh]);
-
-  /**
-   * Connects the package file system to the plugin once it is reachable.
-   * Idempotent: the first successful connection wins and the reconnect loop
-   * stops. A registered bridge is probed with one real round-trip (`sync`)
-   * before readiness is declared, so a silent plugin cannot re-enable the
-   * panel. The editor is already usable at this point.
-   */
-  const connect = React.useCallback(async (): Promise<boolean> => {
-    if (filesRef.current) {
-      stopReconnectLoop();
-      return true;
-    }
-    // The initial wait and the 2 s loop can race; probe only once.
-    if (connectingRef.current) return false;
-    const editor = engineRef.current;
-    if (!editor || !window.__wiredEditorBridge?.request) return false;
-
-    const projectRoot = packageProjectRoot(editor);
-    if (!projectRoot) {
-      setError("Проект Godot ещё не загружен в редактор: пакеты недоступны");
-      return false;
-    }
-
-    connectingRef.current = true;
-    let files: PackageFileSystem;
-    try {
-      files = createPackageFileSystem({
-        bridge: createEditorBridgeClient(),
-        // Read at write time: the editor instance is recreated when the page
-        // restarts the engine, and package writes must reach the live one.
-        getEngine: () => engineRef.current!.editor,
-        projectRoot,
-      });
-    } catch (cause) {
-      // A package problem must not prevent the editor from opening.
-      connectingRef.current = false;
-      setError(`Пакеты недоступны: ${errorMessage(cause)}`);
-      return false;
-    }
-
-    try {
-      await files.sync();
-    } catch (cause) {
-      connectingRef.current = false;
-      if (cause instanceof EditorBridgeError) {
-        dropBridge(cause);
-      } else {
-        // Not a transport loss, so no readiness drop and no transport message,
-        // but the initial path must not dead-end: the loop re-probes.
-        setError(`Пакеты недоступны: ${errorMessage(cause)}`);
-        startReconnectLoop();
-      }
-      return false;
-    }
-
-    connectingRef.current = false;
-    if (!mountedRef.current) return false;
-    filesRef.current = files;
-    stopReconnectLoop();
-    setFsReady(true);
-    setError(null);
-    void refresh();
-    return true;
-  }, [dropBridge, refresh, startReconnectLoop, stopReconnectLoop]);
-
-  React.useEffect(() => {
-    connectRef.current = connect;
-  }, [connect]);
-
-  React.useEffect(() => () => stopReconnectLoop(), [stopReconnectLoop]);
-
-  /**
-   * Runs after the editor reported ready and waits for the plugin bridge in the
-   * background, so it never blocks the editor. A plugin that never appears is
-   * reported, but the reconnect loop keeps trying.
-   */
-  const afterEditorStart = React.useCallback(
-    (editor: GodotEditorInstance): void => {
-      engineRef.current = editor;
-      void (async () => {
-        try {
-          await waitForEditorBridge(BRIDGE_WAIT_MS);
-          if (!mountedRef.current) return;
-          await connect();
-        } catch {
-          if (!mountedRef.current) return;
-          setError("Мост редактора не появился: пакеты недоступны");
-          startReconnectLoop();
-        }
-      })();
-    },
-    [connect, startReconnectLoop],
-  );
-
-  /**
-   * Applies the transport policy around one action: only `EditorBridgeError`
-   * drops readiness; everything else is the action's own business.
-   */
-  const guarded = React.useCallback(
-    async <T,>(action: () => Promise<T>): Promise<T> => {
-      try {
-        return await action();
-      } catch (cause) {
-        if (cause instanceof EditorBridgeError) {
-          dropBridge(cause);
-        }
-        throw cause;
-      }
-    },
-    [dropBridge],
-  );
-
-  const requireFs = (): PackageFileSystem => {
-    const files = filesRef.current;
-    if (!files) {
-      throw new Error(
-        "Редактор ещё не готов: дождитесь загрузки проекта Godot",
-      );
-    }
-    return files;
-  };
+  }, [transport.fsReady, load, refresh]);
 
   const createPackage = React.useCallback(
     (
@@ -641,7 +587,7 @@ export function useRoomPackages(
         if (!trimmed) {
           throw new Error("Укажите имя пакета");
         }
-        const files = requireFs();
+        const files = requireFileSystem(filesRef.current);
         let created: ScriptingPackage;
         try {
           created = await createScriptingPackage({
@@ -664,16 +610,14 @@ export function useRoomPackages(
         }
 
         loadedRef.current.set(created.id, { revision: 0, files: {} });
-        const merged = mergePackages(packagesRef.current, [created]);
-        packagesRef.current = merged;
-        setPackages(merged);
+        dispatch({ type: "created", package: created });
         setAction(created.id, {
           notice: "Пакет создан. В редакторе появился пустой каталог пакета.",
         });
         await refresh();
         return created;
       }),
-    [guarded, refresh, roomId, setAction],
+    [filesRef, guarded, refresh, roomId, setAction],
   );
 
   const beginAction = React.useCallback(
@@ -708,7 +652,7 @@ export function useRoomPackages(
       guarded(async () => {
         beginAction(packageId);
         try {
-          const files = requireFs();
+          const files = requireFileSystem(filesRef.current);
           const baseline = loadedRef.current.get(packageId) ?? null;
           const current = await files.snapshot(packageId);
           const changed = baseline
@@ -749,7 +693,7 @@ export function useRoomPackages(
           endAction(packageId);
         }
       }),
-    [beginAction, endAction, guarded, refresh, setAction],
+    [beginAction, endAction, filesRef, guarded, refresh, setAction],
   );
 
   const removePackage = React.useCallback(
@@ -760,7 +704,7 @@ export function useRoomPackages(
       guarded(async () => {
         beginAction(packageId);
         try {
-          const files = requireFs();
+          const files = requireFileSystem(filesRef.current);
           if (!(await files.exists(packageId))) {
             loadedRef.current.delete(packageId);
             await refresh();
@@ -794,7 +738,7 @@ export function useRoomPackages(
           endAction(packageId);
         }
       }),
-    [beginAction, endAction, guarded, refresh, setAction],
+    [beginAction, endAction, filesRef, guarded, refresh, setAction],
   );
 
   const adoptPackage = React.useCallback(
@@ -802,7 +746,7 @@ export function useRoomPackages(
       guarded(async () => {
         beginAction(packageId);
         try {
-          const files = requireFs();
+          const files = requireFileSystem(filesRef.current);
           if (!(await files.exists(packageId))) {
             throw new Error("каталог пакета не найден в редакторе");
           }
@@ -822,7 +766,7 @@ export function useRoomPackages(
           endAction(packageId);
         }
       }),
-    [beginAction, endAction, guarded, refresh, setAction],
+    [beginAction, endAction, filesRef, guarded, refresh, setAction],
   );
 
   const emitPackage = React.useCallback(
@@ -831,7 +775,7 @@ export function useRoomPackages(
       options: { force?: boolean } = {},
     ): Promise<void> =>
       guarded(async () => {
-        const files = requireFs();
+        const files = requireFileSystem(filesRef.current);
         const baseline = loadedRef.current.get(packageId);
         if (!baseline) {
           throw new Error(
@@ -879,17 +823,17 @@ export function useRoomPackages(
           endAction(packageId);
         }
       }),
-    [beginAction, endAction, guarded, refresh, setAction],
+    [beginAction, endAction, filesRef, guarded, refresh, setAction],
   );
 
   return {
-    entries,
-    fsReady,
+    entries: state.entries,
+    fsReady: transport.fsReady,
     statusLoaded,
     error,
-    actions,
+    actions: state.actions,
     actionFor,
-    afterEditorStart,
+    afterEditorStart: transport.afterEditorStart,
     refresh,
     createPackage,
     downloadPackage,

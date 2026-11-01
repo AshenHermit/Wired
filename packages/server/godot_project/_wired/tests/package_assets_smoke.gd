@@ -3,8 +3,8 @@ extends SceneTree
 ## Headless smoke test for the runtime texture/audio derivation of packages.
 ##
 ## A package revision only carries the raw artifact: nothing imported its images
-## or sounds before they were published. `PackagesManager._derive_assets` writes
-## an `.image.res` / `.audio.res` next to each raw file plus an `.import` sidecar
+## or sounds before they were published. `AssetDeriver` writes an
+## `.image.res` / `.audio.res` next to each raw file plus an `.import` sidecar
 ## that remaps the raw path to it, so `ResourceLoader.load()` works at runtime.
 ##
 ## Run from the repository root:
@@ -32,14 +32,10 @@ func _initialize() -> void:
 
 func _run() -> void:
 	_remove_tree(ROOT)
-	var manager := PackagesManager.new()
-	_check(manager.has_method("_derive_assets"), "PackagesManager._derive_assets() is missing")
-	if manager.has_method("_derive_assets"):
-		_test_derives_texture_and_audio(manager)
-		_test_rejects_corrupt_asset(manager)
-		_test_sidecar_failure_rolls_back(manager)
-		_test_skips_declared_derived_names(manager)
-	manager.free()
+	_test_derives_texture_and_audio()
+	_test_rejects_corrupt_asset()
+	_test_sidecar_failure_rolls_back()
+	_test_skips_declared_derived_names()
 	_remove_tree(ROOT)
 	_finish()
 
@@ -47,7 +43,7 @@ func _run() -> void:
 # --- tests ----------------------------------------------------------------
 
 
-func _test_derives_texture_and_audio(manager: PackagesManager) -> void:
+func _test_derives_texture_and_audio() -> void:
 	_remove_tree(ROOT)
 	DirAccess.make_dir_recursive_absolute(STAGING)
 	_write_texture(STAGING.path_join(PNG_FILE))
@@ -55,7 +51,7 @@ func _test_derives_texture_and_audio(manager: PackagesManager) -> void:
 	_write_wav(STAGING.path_join(WAV_FILE))
 	_write_text(STAGING.path_join(SCRIPT_FILE), "extends Node\n")
 
-	var result: Dictionary = manager._derive_assets(
+	var result: Dictionary = AssetDeriver.derive(
 		STAGING, FINAL, [PNG_FILE, UPPER_FILE, WAV_FILE, SCRIPT_FILE]
 	)
 	_check(
@@ -128,7 +124,7 @@ func _test_derives_texture_and_audio(manager: PackagesManager) -> void:
 	)
 
 
-func _test_rejects_corrupt_asset(manager: PackagesManager) -> void:
+func _test_rejects_corrupt_asset() -> void:
 	# Godot's decoders print an error for the deliberately corrupt file; the
 	# checks below are what decides the result.
 	_remove_tree(ROOT)
@@ -136,7 +132,7 @@ func _test_rejects_corrupt_asset(manager: PackagesManager) -> void:
 	_write_texture(STAGING.path_join(GOOD_FILE))
 	_write_text(STAGING.path_join(BAD_FILE), "this is not a png")
 
-	var result: Dictionary = manager._derive_assets(
+	var result: Dictionary = AssetDeriver.derive(
 		STAGING, FINAL, [GOOD_FILE, BAD_FILE]
 	)
 	_check(not bool(result.get("ok", false)), "a corrupt image must fail the derivation")
@@ -162,14 +158,14 @@ func _test_rejects_corrupt_asset(manager: PackagesManager) -> void:
 
 
 ## A sidecar that cannot be written must not leave its derived resource behind.
-func _test_sidecar_failure_rolls_back(manager: PackagesManager) -> void:
+func _test_sidecar_failure_rolls_back() -> void:
 	_remove_tree(ROOT)
 	DirAccess.make_dir_recursive_absolute(STAGING)
 	_write_texture(STAGING.path_join(BLOCKED_FILE))
 	# A directory in the sidecar's place makes the write itself fail.
 	DirAccess.make_dir_recursive_absolute(STAGING.path_join(BLOCKED_FILE + ".import"))
 
-	var result: Dictionary = manager._derive_assets(STAGING, FINAL, [BLOCKED_FILE])
+	var result: Dictionary = AssetDeriver.derive(STAGING, FINAL, [BLOCKED_FILE])
 	_check(
 		not bool(result.get("ok", false)),
 		"an unwritable sidecar must fail the derivation"
@@ -187,7 +183,7 @@ func _test_sidecar_failure_rolls_back(manager: PackagesManager) -> void:
 
 
 ## A derived name must never overwrite a file the artifact itself declares.
-func _test_skips_declared_derived_names(manager: PackagesManager) -> void:
+func _test_skips_declared_derived_names() -> void:
 	_remove_tree(ROOT)
 	DirAccess.make_dir_recursive_absolute(STAGING)
 	_write_texture(STAGING.path_join(PNG_FILE))
@@ -195,7 +191,7 @@ func _test_skips_declared_derived_names(manager: PackagesManager) -> void:
 	_write_text(STAGING.path_join(PNG_FILE + ".import"), "declared sidecar\n")
 	_write_text(STAGING.path_join(WAV_FILE + ".audio.res"), "declared audio\n")
 
-	var result: Dictionary = manager._derive_assets(
+	var result: Dictionary = AssetDeriver.derive(
 		STAGING,
 		FINAL,
 		[PNG_FILE, WAV_FILE, PNG_FILE + ".import", WAV_FILE + ".audio.res"],

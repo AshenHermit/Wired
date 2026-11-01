@@ -4,7 +4,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PackageFileEntry } from '@wired-io/shared';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
 import { mkdir, readdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -238,6 +244,46 @@ describe('PackageStorageService', () => {
       await expect(storage.readPublishedFile(7, 1, 'a.txt')).resolves.toEqual(
         data,
       );
+    });
+  });
+
+  describe('removePackage', () => {
+    it('removes drafts, published revisions, pins and runtime artifacts', async () => {
+      const data = Buffer.from('payload');
+      await storage.saveDraftFile(7, 1, 'a.txt', data);
+      await storage.publishRevision(7, 1, [entry('a.txt', data)], commit);
+      await storage.writePinnedDependencies(7, 1, new Map([[8, 2]]));
+      await storage.saveDraftFile(7, 2, 'b.txt', Buffer.from('b'));
+      await mkdir(path.join(root, '7', 'runtime', 'v1', '5', '1', 'k'), {
+        recursive: true,
+      });
+      writeFileSync(
+        path.join(root, '7', 'runtime', 'v1', '5', '1', 'k', 'main.gd'),
+        'x',
+      );
+
+      await storage.removePackage(7);
+
+      expect(existsSync(path.join(root, '7'))).toBe(false);
+      await expect(storage.readPublishedFile(7, 1, 'a.txt')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('keeps other packages untouched', async () => {
+      const data = Buffer.from('payload');
+      await storage.saveDraftFile(7, 1, 'a.txt', data);
+      await storage.publishRevision(7, 1, [entry('a.txt', data)], commit);
+      await storage.saveDraftFile(8, 1, 'b.txt', Buffer.from('other'));
+
+      await storage.removePackage(7);
+
+      expect(existsSync(path.join(root, '8'))).toBe(true);
+      await expect(storage.listDraftFiles(8, 1)).resolves.toEqual(['b.txt']);
+    });
+
+    it('is idempotent for a package without files', async () => {
+      await expect(storage.removePackage(42)).resolves.toBeUndefined();
     });
   });
 

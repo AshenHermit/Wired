@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * Downloads the pinned official Godot 4.7.2 export templates and installs the
- * Web templates into Godot's per-user template directory.
+ * Downloads the pinned official Godot 4.8-beta2 export templates and installs
+ * the Web templates into Godot's per-user template directory.
  *
  * Run from the repository root:
  *   pnpm fetch:templates
  *
  * Only `web_debug.zip` and `web_release.zip` are extracted; the archive is
- * ~1.2 GiB and contains every platform. The archive size and sha256 are pinned
+ * ~1.3 GiB and contains every platform. The archive size and sha512 are pinned
  * in `lib/export-templates.mjs`.
  *
  * Usage:

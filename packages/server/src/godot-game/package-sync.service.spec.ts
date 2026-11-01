@@ -1,10 +1,11 @@
 import { Logger } from '@nestjs/common';
-import { Repository } from 'typeorm';
+import { FindOperator, Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { PackageDeliveryService } from 'src/scripting-packages/package-delivery.service';
 import { PackageSyncService } from './package-sync.service';
 import { RoomRuntimeService } from './room-runtime.service';
+import { SyncRecordStore } from './sync-record-store';
 
 const flushAsync = async (): Promise<void> => {
   for (let i = 0; i < 20; i += 1) {
@@ -17,8 +18,9 @@ describe('PackageSyncService', () => {
     Pick<Repository<ScriptingPackage>, 'find' | 'findOne'>
   >;
   let revisions: jest.Mocked<
-    Pick<Repository<ScriptingPackageRevision>, 'findOne'>
+    Pick<Repository<ScriptingPackageRevision>, 'find'>
   >;
+  let published: Map<number, { revision: number; publishedAt: Date }>;
   let runtime: {
     sendPackage: jest.Mock;
     getRuntime: jest.Mock;
@@ -33,16 +35,33 @@ describe('PackageSyncService', () => {
     room: { id: 7 },
   } as unknown as ScriptingPackage;
 
+  /** Latest published revision per package, as the batched query would return. */
+  const publishRevision = (
+    packageId: number,
+    revision: number,
+    publishedAt = new Date('2026-10-30T09:00:00.000Z'),
+  ): void => {
+    published.set(packageId, { revision, publishedAt });
+  };
+
   beforeEach(() => {
     packages = {
       find: jest.fn().mockResolvedValue([roomPackage]),
       findOne: jest.fn().mockResolvedValue(roomPackage),
     };
+    published = new Map();
+    publishRevision(42, 3);
     revisions = {
-      findOne: jest.fn().mockResolvedValue({
-        revision: 3,
-        publishedAt: new Date('2026-10-30T09:00:00.000Z'),
-      } as unknown as ScriptingPackageRevision),
+      find: jest.fn(() =>
+        Promise.resolve(
+          [...published.entries()]
+            .sort(([, a], [, b]) => b.revision - a.revision)
+            .map(([packageId, entry]) => ({
+              package: { id: packageId },
+              ...entry,
+            })) as unknown as ScriptingPackageRevision[],
+        ),
+      ),
     };
     runtime = {
       sendPackage: jest.fn().mockReturnValue(true),
@@ -127,10 +146,7 @@ describe('PackageSyncService', () => {
     packages.find.mockResolvedValue([
       { id: 99, name: 'Game' },
     ] as unknown as ScriptingPackage[]);
-    revisions.findOne.mockResolvedValue({
-      revision: 4,
-      publishedAt: new Date('2026-10-30T10:00:00.000Z'),
-    } as unknown as ScriptingPackageRevision);
+    publishRevision(99, 4, new Date('2026-10-30T10:00:00.000Z'));
 
     await service.revisionPublished(42, 3);
 
@@ -150,10 +166,7 @@ describe('PackageSyncService', () => {
     packages.find.mockResolvedValue([
       { id: 99, name: 'Game' },
     ] as unknown as ScriptingPackage[]);
-    revisions.findOne.mockResolvedValue({
-      revision: 4,
-      publishedAt: new Date('2026-10-30T09:00:00.000Z'),
-    } as unknown as ScriptingPackageRevision);
+    publishRevision(99, 4);
     delivery.findDependentRoomPackages.mockResolvedValue([
       { packageId: 99, roomId: 7, revision: 4 },
     ]);
@@ -171,19 +184,8 @@ describe('PackageSyncService', () => {
     });
     // The status above looks the same with or without a record, so read the
     // in-memory record itself to prove the publish created it.
-    const records = (
-      service as unknown as {
-        records: ReadonlyMap<
-          string,
-          {
-            revision: number;
-            runtimeState: string;
-            dispatchedAt: string | null;
-          }
-        >;
-      }
-    ).records;
-    expect(records.get('7:99')).toMatchObject({
+    const store = (service as unknown as { store: SyncRecordStore }).store;
+    expect(store.get('7', 99)).toMatchObject({
       revision: 4,
       runtimeState: 'pending',
       dispatchedAt: null,
@@ -243,10 +245,7 @@ describe('PackageSyncService', () => {
     await service.revisionPublished(42, 3);
     expect(runtime.sendPackage).toHaveBeenLastCalledWith('7', 99, 4);
 
-    revisions.findOne.mockResolvedValue({
-      revision: 5,
-      publishedAt: new Date('2026-10-30T10:00:00.000Z'),
-    } as unknown as ScriptingPackageRevision);
+    publishRevision(99, 5, new Date('2026-10-30T10:00:00.000Z'));
 
     await service.revisionPublished(42, 3);
 
@@ -266,10 +265,7 @@ describe('PackageSyncService', () => {
     packages.find.mockResolvedValue([
       { id: 99, name: 'Game' },
     ] as unknown as ScriptingPackage[]);
-    revisions.findOne.mockResolvedValue({
-      revision: 4,
-      publishedAt: new Date('2026-10-30T09:00:00.000Z'),
-    } as unknown as ScriptingPackageRevision);
+    publishRevision(99, 4);
     delivery.findDependentRoomPackages.mockResolvedValue([
       { packageId: 99, roomId: 7, revision: 4 },
     ]);
@@ -396,10 +392,7 @@ describe('PackageSyncService', () => {
 
   it('marks a record stale when a newer published revision exists', async () => {
     await service.revisionPublished(42, 3);
-    revisions.findOne.mockResolvedValue({
-      revision: 4,
-      publishedAt: new Date('2026-10-30T10:00:00.000Z'),
-    } as unknown as ScriptingPackageRevision);
+    publishRevision(42, 4, new Date('2026-10-30T10:00:00.000Z'));
 
     const status = (await service.getStatuses('7'))[0];
 
@@ -428,10 +421,7 @@ describe('PackageSyncService', () => {
 
   it('adopts a newer revision that the runtime confirmed', async () => {
     await service.revisionPublished(42, 3);
-    revisions.findOne.mockResolvedValue({
-      revision: 4,
-      publishedAt: new Date('2026-10-30T10:00:00.000Z'),
-    } as unknown as ScriptingPackageRevision);
+    publishRevision(42, 4, new Date('2026-10-30T10:00:00.000Z'));
 
     service.onPackagesApplied('7', 42, 4, 2);
 
@@ -515,5 +505,79 @@ describe('PackageSyncService', () => {
     service.onPeerLeft('7', 5);
 
     expect((await service.getStatuses('7'))[0].state).toBe('applied');
+  });
+
+  it('does not wait for peers of a previous runtime after it restarts', async () => {
+    await service.revisionPublished(42, 3);
+    service.onPackagesApplied('7', 42, 3, 1);
+    // Peer 5 belongs to the first process; it never sends `player_left` when
+    // the process dies, so the backend learns about the restart only from the
+    // next `ready` line.
+    service.onPeerAuthenticated('7', 5);
+    expect((await service.getStatuses('7'))[0].state).toBe('applied');
+
+    service.onRuntimeReady('7');
+    await flushAsync();
+    service.onPackagesApplied('7', 42, 3, 1);
+
+    // A new player joins the restarted runtime and is fully ready.
+    service.onPeerAuthenticated('7', 6);
+    service.onClientPackagesReady('7', 6, 42, 3);
+
+    const [status] = await service.getStatuses('7');
+    expect(status.state).toBe('ready');
+    expect(status.clients.map((client) => client.peer)).toEqual([6]);
+  });
+
+  it('loads the latest published revisions of every room package in one query', async () => {
+    packages.find.mockResolvedValue([
+      { id: 42, name: 'Demo package' },
+      { id: 43, name: 'Second package' },
+      { id: 44, name: 'Third package' },
+    ] as unknown as ScriptingPackage[]);
+    publishRevision(42, 7);
+    publishRevision(43, 2);
+    publishRevision(44, 11);
+
+    const statuses = await service.getStatuses('7');
+
+    expect(revisions.find).toHaveBeenCalledTimes(1);
+    const options = revisions.find.mock.calls[0][0]!;
+    const packageFilter = (
+      options.where as { package: { id: FindOperator<number> } }
+    ).package.id;
+    expect(packageFilter).toBeInstanceOf(FindOperator);
+    expect(packageFilter.value).toEqual([42, 43, 44]);
+    expect(options.order).toEqual({ revision: 'DESC' });
+    expect(
+      statuses.map((status) => [status.packageId, status.revision]),
+    ).toEqual([
+      [42, 7],
+      [43, 2],
+      [44, 11],
+    ]);
+  });
+
+  it('does not query revisions when the room has no packages', async () => {
+    packages.find.mockResolvedValue([] as unknown as ScriptingPackage[]);
+
+    await expect(service.getStatuses('7')).resolves.toEqual([]);
+    expect(revisions.find).not.toHaveBeenCalled();
+  });
+
+  it('reconciles every room package through a single revision query', async () => {
+    packages.find.mockResolvedValue([
+      { id: 42, name: 'Demo package' },
+      { id: 43, name: 'Second package' },
+    ] as unknown as ScriptingPackage[]);
+    publishRevision(42, 3);
+    publishRevision(43, 2);
+
+    await service.reconcileRoom('7');
+
+    expect(revisions.find).toHaveBeenCalledTimes(1);
+    expect(runtime.sendPackage).toHaveBeenCalledTimes(2);
+    expect(runtime.sendPackage).toHaveBeenCalledWith('7', 42, 3);
+    expect(runtime.sendPackage).toHaveBeenCalledWith('7', 43, 2);
   });
 });

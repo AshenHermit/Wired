@@ -1,15 +1,17 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import type { Room } from "@wired-io/shared";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import type { Room, RoomPackagesStatus } from "@wired-io/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createGameConnection,
   getGameRoomStatus,
+  getRoomPackages,
 } from "@/api/services/godot-game";
 import { GameTab } from "./GameTab";
 
 vi.mock("@/api/services/godot-game", () => ({
   createGameConnection: vi.fn(),
   getGameRoomStatus: vi.fn(),
+  getRoomPackages: vi.fn(),
 }));
 
 const room = { id: 8 } as Room;
@@ -52,10 +54,53 @@ const connection = {
   activePlayers: 0,
 };
 
+/**
+ * Drives the host through the whole handshake with fake timers. Mirrors what
+ * the exported build sends, so the heartbeat can be observed from `ready`.
+ */
+async function reachReady(view: ReturnType<typeof render>) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  const iframe = view.container.querySelector("iframe") as HTMLIFrameElement;
+  if (!iframe) {
+    throw new Error("iframe is not mounted");
+  }
+  send(iframe, { source: "wired-game", type: "wired:game-ready", payload: {} });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  send(iframe, {
+    source: "wired-game",
+    type: "wired:game-configured",
+    payload: { room: 8 },
+  });
+  send(iframe, {
+    source: "wired-game",
+    type: "wired:game-status",
+    payload: { stage: "authenticated", detail: "" },
+  });
+  send(iframe, {
+    source: "wired-game",
+    type: "wired:game-status",
+    payload: { stage: "ready", detail: "" },
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  return iframe;
+}
+
 describe("GameTab bridge", () => {
   beforeEach(() => {
     vi.mocked(createGameConnection).mockReset();
+    vi.mocked(createGameConnection).mockResolvedValue(connection);
     vi.mocked(getGameRoomStatus).mockReset();
+    vi.mocked(getRoomPackages).mockReset();
+    vi.mocked(getRoomPackages).mockResolvedValue({
+      roomId: 8,
+      packages: [{ packageId: 20, revision: 2 }],
+    } as unknown as RoomPackagesStatus);
     vi.mocked(getGameRoomStatus).mockResolvedValue({
       roomId: 8,
       state: "running",
@@ -95,6 +140,8 @@ describe("GameTab bridge", () => {
           payload: expect.objectContaining({
             ticket: "one-time-ticket",
             apiBase: `${window.location.origin}/api`,
+            apiToken: expect.any(String),
+            packages: [{ packageId: 20, revision: 2 }],
           }),
         }),
         window.location.origin,
@@ -165,5 +212,105 @@ describe("GameTab bridge", () => {
       window.location.origin,
     );
     expect(screen.getByText("Игра недоступна")).toBeTruthy();
+  });
+
+  it("reloads a ready frame whose engine stopped answering", async () => {
+    vi.useFakeTimers();
+    try {
+      const view = render(<GameTab room={room} />);
+      const iframe = await reachReady(view);
+      expect(view.container.textContent).toContain("Игроков: 1");
+
+      // No message from the frame for the whole heartbeat window: the backend
+      // poll keeps succeeding, but the host must stop trusting the engine.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      expect(view.container.textContent).not.toContain("Игроков: 1");
+      expect(view.container.textContent).toContain("Соединение потеряно");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(view.container.querySelector("iframe")).not.toBe(iframe);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up after three automatic reconnects", async () => {
+    vi.useFakeTimers();
+    try {
+      const view = render(<GameTab room={room} />);
+      let iframe = await reachReady(view);
+
+      for (let autoRetry = 1; autoRetry <= 3; autoRetry += 1) {
+        send(iframe, {
+          source: "wired-game",
+          type: "wired:game-status",
+          payload: { stage: "disconnected", detail: "" },
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(view.container.textContent).toContain(
+          `Автоматическая попытка ${autoRetry} из 3`,
+        );
+
+        // The backoff reloads the frame, but it never rejoins.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2 ** (autoRetry - 1) * 1_000);
+        });
+        const reloaded = view.container.querySelector("iframe");
+        expect(reloaded).not.toBeNull();
+        iframe = reloaded as HTMLIFrameElement;
+      }
+
+      send(iframe, {
+        source: "wired-game",
+        type: "wired:game-status",
+        payload: { stage: "disconnected", detail: "" },
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(view.container.textContent).toContain("Игра недоступна");
+      expect(view.container.textContent).toContain("Соединение потеряно");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pings a live ready frame and keeps it mounted", async () => {
+    vi.useFakeTimers();
+    try {
+      const view = render(<GameTab room={room} />);
+      const iframe = await reachReady(view);
+      const postMessage = vi.spyOn(iframe.contentWindow!, "postMessage");
+
+      // The frame answers every heartbeat by reporting its still-ready stage.
+      for (let beat = 0; beat < 4; beat += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(10_000);
+        });
+        send(iframe, {
+          source: "wired-game",
+          type: "wired:game-status",
+          payload: { stage: "ready", detail: "" },
+        });
+      }
+
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "wired-host", type: "wired:ping" }),
+        window.location.origin,
+      );
+      expect(view.container.querySelector("iframe")).toBe(iframe);
+      expect(view.container.textContent).toContain("Игроков: 1");
+      expect(view.container.textContent).not.toContain("Соединение потеряно");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
