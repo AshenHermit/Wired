@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   RoomPackageEntry,
@@ -129,7 +129,6 @@ describe("PackagesTab", () => {
         new LocalChangesError(5, ["scripts/hero.gd"]),
       )
       .mockResolvedValueOnce(undefined);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
 
     render(
       <PackagesTab
@@ -142,11 +141,12 @@ describe("PackagesTab", () => {
       screen.getByRole("button", { name: /скачать в редактор/i }),
     );
 
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/локальные изменения/i)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Продолжить" }));
+
     await waitFor(() => expect(downloadPackage).toHaveBeenCalledTimes(2));
     expect(downloadPackage).toHaveBeenLastCalledWith(5, { force: true });
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("локальные изменения"),
-    );
   });
 
   it("keeps local changes when the confirmation is declined", async () => {
@@ -155,7 +155,6 @@ describe("PackagesTab", () => {
       .mockRejectedValueOnce(
         new LocalChangesError(5, ["scripts/hero.gd"]),
       );
-    vi.spyOn(window, "confirm").mockReturnValue(false);
 
     render(
       <PackagesTab
@@ -168,8 +167,10 @@ describe("PackagesTab", () => {
       screen.getByRole("button", { name: /скачать в редактор/i }),
     );
 
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Отмена" }));
+
     await waitFor(() => expect(downloadPackage).toHaveBeenCalledTimes(1));
-    expect(window.confirm).toHaveBeenCalled();
   });
 
   it("asks before removing a package with local changes", async () => {
@@ -177,7 +178,6 @@ describe("PackagesTab", () => {
       .fn()
       .mockRejectedValueOnce(new LocalChangesError(5, ["scripts/hero.gd"]))
       .mockResolvedValueOnce(undefined);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
 
     render(
       <PackagesTab
@@ -190,11 +190,12 @@ describe("PackagesTab", () => {
       screen.getByRole("button", { name: /убрать из редактора/i }),
     );
 
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/Удалить каталог пакета/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Продолжить" }));
+
     await waitFor(() => expect(removePackage).toHaveBeenCalledTimes(2));
     expect(removePackage).toHaveBeenLastCalledWith(5, { force: true });
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("Удалить каталог пакета"),
-    );
   });
 
   it("creates a package for the current user", async () => {
@@ -275,7 +276,6 @@ describe("PackagesTab", () => {
       .fn()
       .mockRejectedValueOnce(new NewerRevisionError(5, 2, 3))
       .mockResolvedValueOnce(undefined);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
 
     render(
       <PackagesTab
@@ -295,10 +295,53 @@ describe("PackagesTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /emit/i }));
 
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/ревизия 3/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Продолжить" }));
+
     await waitFor(() => expect(emitPackage).toHaveBeenCalledTimes(2));
     expect(emitPackage).toHaveBeenLastCalledWith(5, { force: true });
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("ревизия 3"),
+  });
+
+  it("shows a disabled badge and hides Emit for a disabled package", () => {
+    render(
+      <PackagesTab
+        authorId={42}
+        packages={controller({
+          entries: [entry({ enabled: false, status: "disabled" })],
+        })}
+      />,
     );
+
+    expect(screen.getByText("отключён")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /emit/i })).toBeNull();
+    expect(screen.getByText(/Пакет отключён в комнате/)).toBeTruthy();
+  });
+
+  it("confirms permanent deletion in a dialog", async () => {
+    const deletePackage = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PackagesTab
+        authorId={42}
+        packages={controller({
+          entries: [entry({ packageId: 42 })],
+          deletePackage,
+        })}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Удалить из комнаты" }),
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/#42/)).toBeTruthy();
+    expect(deletePackage).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Удалить навсегда" }),
+    );
+
+    await waitFor(() => expect(deletePackage).toHaveBeenCalledWith(42));
   });
 });

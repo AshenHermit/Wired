@@ -8,12 +8,21 @@ import {
   Loader2Icon,
   PackageIcon,
   PlusIcon,
+  PowerIcon,
   RefreshCwIcon,
   Trash2Icon,
   TriangleAlertIcon,
   UploadIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/animate-ui/components/radix/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -81,6 +90,72 @@ function newerRevisionConfirmation(
   );
 }
 
+type ConfirmRequest = {
+  title: string;
+  description: React.ReactNode;
+  confirmLabel: string;
+  destructive?: boolean;
+  resolve: (value: boolean) => void;
+};
+
+type Confirm = (next: Omit<ConfirmRequest, "resolve">) => Promise<boolean>;
+
+/**
+ * Promise-based confirmation rendered with the animate-ui dialog, so the
+ * panel never falls back to the browser's blocking `window.confirm`.
+ */
+function useConfirmDialog(): { confirm: Confirm; dialog: React.ReactNode } {
+  const [request, setRequest] = React.useState<ConfirmRequest | null>(null);
+  const requestRef = React.useRef<ConfirmRequest | null>(null);
+
+  const confirm = React.useCallback<Confirm>((next) => {
+    return new Promise<boolean>((resolve) => {
+      const pending = { ...next, resolve };
+      requestRef.current = pending;
+      setRequest(pending);
+    });
+  }, []);
+
+  const close = React.useCallback((value: boolean) => {
+    const pending = requestRef.current;
+    requestRef.current = null;
+    setRequest(null);
+    pending?.resolve(value);
+  }, []);
+
+  const dialog = (
+    <Dialog
+      open={request !== null}
+      onOpenChange={(open) => {
+        if (!open) close(false);
+      }}
+    >
+      <DialogContent showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle>{request?.title}</DialogTitle>
+          <DialogDescription className="whitespace-pre-line">
+            {request?.description}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="flex !justify-between">
+          <Button type="button" variant="outline" onClick={() => close(false)}>
+            Отмена
+          </Button>
+          <Button
+            type="button"
+            variant={request?.destructive ? "destructive" : "default"}
+            onClick={() => close(true)}
+          >
+            {request?.confirmLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
+  return { confirm, dialog };
+}
+
 type ForceableAction = (
   packageId: number,
   options?: { force?: boolean },
@@ -91,7 +166,9 @@ type ForceableAction = (
  * download, remove and emit all fail once on local changes (or a newer
  * published revision), ask the user, and repeat only after a confirmation.
  */
-function useConfirmedAction(): (
+function useConfirmedAction(
+  confirm: Confirm,
+): (
   entry: RoomPackageEntry,
   action: ForceableAction,
   describeConflict: (error: unknown) => string | null,
@@ -106,9 +183,13 @@ function useConfirmedAction(): (
         await action(entry.packageId);
       } catch (error) {
         const question = describeConflict(error);
-        if (question === null || !window.confirm(question)) {
-          return;
-        }
+        if (question === null) return;
+        const accepted = await confirm({
+          title: "Продолжить?",
+          description: question,
+          confirmLabel: "Продолжить",
+        });
+        if (!accepted) return;
         try {
           await action(entry.packageId, { force: true });
         } catch {
@@ -116,7 +197,7 @@ function useConfirmedAction(): (
         }
       }
     },
-    [],
+    [confirm],
   );
 }
 
@@ -127,6 +208,8 @@ function PackageCard({
   onRemove,
   onAdopt,
   onEmit,
+  onToggle,
+  onDelete,
 }: {
   entry: RoomPackageEntry;
   packages: RoomPackagesController;
@@ -134,6 +217,8 @@ function PackageCard({
   onRemove: (entry: RoomPackageEntry) => void;
   onAdopt: (entry: RoomPackageEntry) => void;
   onEmit: (entry: RoomPackageEntry) => void;
+  onToggle: (entry: RoomPackageEntry) => void;
+  onDelete: (entry: RoomPackageEntry) => void;
 }) {
   const action = packages.actionFor(entry.packageId);
   const disabled = !packages.fsReady || action.busy;
@@ -212,25 +297,60 @@ function PackageCard({
           <Button
             type="button"
             size="sm"
-            disabled={disabled || !entry.loaded}
-            onClick={() => onEmit(entry)}
+            variant="secondary"
+            disabled={disabled}
+            onClick={() => onToggle(entry)}
             title={
-              entry.loaded
-                ? "Опубликовать файлы каталога пакета"
-                : "Сначала скачайте пакет в редактор"
+              entry.enabled
+                ? "Убрать пакет из запущенной игры, не удаляя файлы"
+                : "Вернуть пакет в игру и в runtime комнаты"
             }
           >
-            {action.busy ? (
-              <Loader2Icon className="size-4 animate-spin" />
-            ) : (
-              <UploadIcon className="size-4" />
-            )}
-            Emit
+            <PowerIcon className="size-4" />
+            {entry.enabled ? "Отключить" : "Включить"}
+          </Button>
+          {entry.enabled && (
+            <Button
+              type="button"
+              size="sm"
+              disabled={disabled || !entry.loaded}
+              onClick={() => onEmit(entry)}
+              title={
+                entry.loaded
+                  ? "Опубликовать файлы каталога пакета"
+                  : "Сначала скачайте пакет в редактор"
+              }
+            >
+              {action.busy ? (
+                <Loader2Icon className="size-4 animate-spin" />
+              ) : (
+                <UploadIcon className="size-4" />
+              )}
+              Emit
+            </Button>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            variant="destructive"
+            disabled={disabled}
+            onClick={() => onDelete(entry)}
+            title="Удалить пакет из комнаты навсегда вместе с ревизиями и артефактами"
+          >
+            <Trash2Icon className="size-4" />
+            Удалить из комнаты
           </Button>
         </div>
       </div>
 
-      {entry.backendState && (
+      {!entry.enabled && (
+        <div className="mt-3 text-xs text-white/45">
+          Пакет отключён в комнате и не участвует в игре. Файлы и ревизии
+          сохранены — пакет можно включить обратно.
+        </div>
+      )}
+
+      {entry.enabled && entry.backendState && (
         <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-white/55">
           <span>
             Сервер:{" "}
@@ -315,7 +435,8 @@ export function PackagesTab({
   const [creating, setCreating] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
 
-  const runConfirmed = useConfirmedAction();
+  const { confirm, dialog } = useConfirmDialog();
+  const runConfirmed = useConfirmedAction(confirm);
 
   const handleDownload = (entry: RoomPackageEntry) => {
     void runConfirmed(
@@ -356,6 +477,34 @@ export function PackagesTab({
           ? newerRevisionConfirmation(entry, error)
           : null,
     );
+  };
+
+  const handleToggle = (entry: RoomPackageEntry) => {
+    void packages
+      .setPackageEnabled(entry.packageId, !entry.enabled)
+      .catch(() => {
+        // The panel already shows the error of the failed action.
+      });
+  };
+
+  const handleDelete = async (entry: RoomPackageEntry) => {
+    const accepted = await confirm({
+      title: "Удалить пакет из комнаты?",
+      description: (
+        <>
+          Пакет <strong>{entry.name}</strong> (#{entry.packageId}) будет удалён
+          вместе с ревизиями и артефактами. Отменить это нельзя.
+        </>
+      ),
+      confirmLabel: "Удалить навсегда",
+      destructive: true,
+    });
+    if (!accepted) return;
+    try {
+      await packages.deletePackage(entry.packageId);
+    } catch {
+      // The panel already shows the error of the failed action.
+    }
   };
 
   const handleCreate = async (event: React.FormEvent) => {
@@ -488,10 +637,13 @@ export function PackagesTab({
                   })
                 }
                 onEmit={handleEmit}
+                onToggle={handleToggle}
+                onDelete={(pkg) => void handleDelete(pkg)}
               />
             ))}
           </ul>
         )}
+        {dialog}
       </div>
     </div>
   );
