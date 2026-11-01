@@ -14,6 +14,7 @@ extends SceneTree
 
 const FIXTURE_ROOT := "res://tests/fixtures/player_root"
 const COMPONENT_SCENE := "player_component.tscn"
+const EXTRA_COMPONENT_SCENE := "player_component_b.tscn"
 const PACKAGE_ID := "pkg.test"
 
 var _failures: PackedStringArray = []
@@ -409,7 +410,14 @@ func _test_save_and_load_state() -> void:
 ## Inserting or reordering two components must not move saved state between
 ## them: the key is `<package_id>:<relative_path>`, not the array index.
 func _test_component_state_key_survives_reorder() -> void:
-	var original := _make_two_package_registry(["pkg.a", "pkg.b"])
+	# Same package, two different scene paths: an insert at the front changes
+	# the array index of the old component without changing its package id.
+	var original := _make_component_registry(
+		[
+			{"path": COMPONENT_SCENE, "order": 10},
+			{"path": EXTRA_COMPONENT_SCENE, "order": 20},
+		]
+	)
 	var player := _build_player(original, 7, 1, Vector2.ZERO)
 	root.add_child(player)
 	if player.components.size() != 2:
@@ -421,7 +429,15 @@ func _test_component_state_key_survives_reorder() -> void:
 	second.body.position = Vector2(2, 2)
 	var saved := player.save_state()
 
-	var reordered := _make_two_package_registry(["pkg.b", "pkg.a"])
+	# The extra component is inserted before the original one. The old
+	# index-based loader would give the first saved record to the extra
+	# component because both belong to the same package.
+	var reordered := _make_component_registry(
+		[
+			{"path": EXTRA_COMPONENT_SCENE, "order": 5},
+			{"path": COMPONENT_SCENE, "order": 10},
+		]
+	)
 	var restored := _build_player(reordered, 7, 1, Vector2.ZERO)
 	root.add_child(restored)
 	if restored.components.size() != 2:
@@ -431,16 +447,16 @@ func _test_component_state_key_survives_reorder() -> void:
 	var positions := {}
 	for component: WiredPlayerComponent in restored.components:
 		var instance: Variant = component
-		positions[component.package_id] = instance.body.position
+		positions[component.relative_path] = instance.body.position
 	_check(
-		positions.get("pkg.a", Vector2.ZERO) == Vector2(1, 1),
-		"pkg.a state must follow pkg.a after reorder, got %s"
-		% positions.get("pkg.a", Vector2.ZERO),
+		positions.get(COMPONENT_SCENE, Vector2.ZERO) == Vector2(1, 1),
+		"the original component state must follow its scene path, got %s"
+		% positions.get(COMPONENT_SCENE, Vector2.ZERO),
 	)
 	_check(
-		positions.get("pkg.b", Vector2.ZERO) == Vector2(2, 2),
-		"pkg.b state must follow pkg.b after reorder, got %s"
-		% positions.get("pkg.b", Vector2.ZERO),
+		positions.get(EXTRA_COMPONENT_SCENE, Vector2.ZERO) == Vector2(2, 2),
+		"the inserted component state must follow its scene path, got %s"
+		% positions.get(EXTRA_COMPONENT_SCENE, Vector2.ZERO),
 	)
 
 
@@ -720,20 +736,20 @@ func _make_registry(include_local := false) -> WiredPackageRegistry:
 	return registry
 
 
-func _make_two_package_registry(
-	package_ids: Array
-) -> WiredPackageRegistry:
+func _make_component_registry(components: Array) -> WiredPackageRegistry:
 	var registry := WiredPackageRegistry.new()
 	_registries.append(registry)
-	for package_id: String in package_ids:
-		var context := WiredPackageContext.new()
-		context.package_id = package_id
-		context.root_path = FIXTURE_ROOT
-		registry.register_context(package_id, context)
-		var registration := WiredPackageRegistration.new()
-		registration.package_id = package_id
-		registration.add_player_component(COMPONENT_SCENE)
-		registry.add_registration(registration)
+	var context := WiredPackageContext.new()
+	context.package_id = PACKAGE_ID
+	context.root_path = FIXTURE_ROOT
+	registry.register_context(PACKAGE_ID, context)
+	var registration := WiredPackageRegistration.new()
+	registration.package_id = PACKAGE_ID
+	for descriptor: Dictionary in components:
+		registration.add_player_component(
+			str(descriptor["path"]), {"order": int(descriptor["order"])}
+		)
+	registry.add_registration(registration)
 	return registry
 
 
