@@ -7,7 +7,7 @@ Wired is a browser-based Godot game platform: Next.js frontend + NestJS API/asse
 - `frontend/` — Next.js 16 App Router, React 19, Tailwind v4, shadcn/ui (`components.json`, new-york style, animate-ui registry). `(browser)` group holds login/rooms; `room/[room_code]/(godot)/` holds the editor, Packages tab, and Game tab.
 - `packages/server/` — NestJS 11 + TypeORM/Postgres, Swagger at `/api/docs`. Entrypoints: `src/main.ts`, `src/app.module.ts`. Modules: `auth`, `users`, `rooms`, `scripting-packages`, `godot-editor-provider`, `godot-game` (room runtime, tickets, package sync, game export). `godot_game` is not a stub.
 - `packages/shared/` — only API types/payloads (`src/api/types.ts`), imported via tsconfig path aliases. No runtime package build is needed for dev; `build:types` emits declarations only.
-- `packages/server/godot_editor/` is **not committed**: `pnpm fetch:editor` downloads the pinned official Godot **4.7.2-stable** web editor (version, archive size and sha512 are pinned in `packages/server/scripts/fetch-godot-editor.mjs`) into that gitignored directory. `packages/server/godot_runtime/` is also gitignored: `pnpm fetch:runtime` installs the pinned 4.7.2 native runtime for the current OS/arch there and writes `runtime.json`; `GODOT_RUNTIME_PATH` still overrides it. `packages/server/godot_project/_wired/` (shared base Godot project) is still a committed asset.
+- `packages/server/godot_editor/` is **not committed**: `pnpm fetch:editor` downloads the pinned official Godot **4.8-beta2** web editor (version, archive size and sha512 are pinned in `packages/server/scripts/fetch-godot-editor.mjs`) into that gitignored directory. `packages/server/godot_runtime/` is also gitignored: `pnpm fetch:runtime` installs the pinned 4.8-beta2 native runtime for the current OS/arch there and writes `runtime.json`; `GODOT_RUNTIME_PATH` still overrides it. `packages/server/godot_project/_wired/` (shared base Godot project) is still a committed asset.
 - `docs/superpowers/{specs,plans}/` — checked-in design docs, including dropping Phaser and Godot-only multiplayer/packages.
 - No CI, no migrations, no root README. Tests: 32 server Jest specs + 7 frontend Vitest files.
 
@@ -18,8 +18,8 @@ Wired is a browser-based Godot game platform: Next.js frontend + NestJS API/asse
 - API calls are browser-only: `frontend/src/api/services/*` → `client-api.ts` axios with `NEXT_PUBLIC_BACKEND_URL` and `Authorization: Bearer` copied from the `access_token` cookie (`AUTH_COOKIE_NAME`). `server-api.ts` and `remote-api.ts` are unused. Don't add server-side fetches expecting the auth cookie to propagate.
 - Server paths are resolved from **cwd** at config load (`src/config/config.ts`): editor assets, `godot_project`, `storage`, `game_export`. Run the server through pnpm from `packages/server` (root scripts do); launching `node packages/server/dist/...` from the repo root 404s assets and writes storage to the wrong place.
 - COOP/COEP headers (`frontend/next.config.ts` and the editor/export controllers) are required by the WASM editor (SharedArrayBuffer). They are set on `/:path*`, not just `/room/*`, because client-side navigation does not reload the document. The `/api/*` rewrite proxies to `NEXT_PUBLIC_BACKEND_URL`; Godot asset URLs depend on it.
-- Package file operations go through the editor bridge, **not** `rtenv.FS`: `godot-packages-fs.ts` → `EditorBridgeClient` (`window.__wiredEditorBridge.request`) → `addons/wired_bridge/plugin.gd` → `package_fs.gd`. The official 4.7.2 build does not export Emscripten `FS` and has no `rtenv`, so never reintroduce direct engine-FS access. Bridge timeouts/absence set `fsReady = false` and the panel keeps probing; writes use `Engine.copyToFS`, reads return base64 from `collect`.
-- `GODOT_RUNTIME_PATH` used by `pnpm export:game` must be a **4.7.2** editor executable, matching `config/features` in `_wired/project.godot` (`"4.7"`). If it is unset, both the server and `export:game` use the runtime installed by `pnpm fetch:runtime`. Web export also requires the matching 4.7.2 export templates: `pnpm fetch:templates` installs `web_debug.zip`/`web_release.zip` into Godot's per-user template directory.
+- Package file operations go through the editor bridge, **not** `rtenv.FS`: `godot-packages-fs.ts` → `EditorBridgeClient` (`window.__wiredEditorBridge.request`) → `addons/wired_bridge/plugin.gd` → `package_fs.gd`. The official 4.8-beta2 build does not export Emscripten `FS` and has no `rtenv`, so never reintroduce direct engine-FS access. Bridge timeouts/absence set `fsReady = false` and the panel keeps probing; writes use `Engine.copyToFS`, reads return base64 from `collect`.
+- `GODOT_RUNTIME_PATH` used by `pnpm export:game` must be a **4.8-beta2** editor executable, matching `config/features` in `_wired/project.godot` (`"4.8"`). If it is unset, both the server and `export:game` use the runtime installed by `pnpm fetch:runtime`. Web export also requires the matching 4.8-beta2 export templates: `pnpm fetch:templates` installs `web_debug.zip`/`web_release.zip` into Godot's per-user template directory.
 - UI auth is Google OAuth only. Backend also has email/password endpoints. The Google callback sets the cookie on `COMMON_DOMAIN`, then redirects to `SITE_HOST`.
 - The room "Game" tab runs the client-side Godot Web export in a same-origin iframe. `POST /rooms/:id/game/connection` starts/reuses that room's native Godot runtime and mints a single-use ticket (request a fresh one per attempt); `GET /rooms/:id/game/status` reads state without starting anything; `GET /rooms/:id/game/packages` reports how far the runtime/clients have applied published revisions. All are browser-only and called through `/api/*`.
 - Runtime package delivery signs short-lived read URLs with `WIRED_PACKAGE_READ_SECRET` (fallback `WIRED_GAME_TICKET_SECRET`) and `WIRED_PACKAGE_READ_TTL_SEC` (default 900s). Artifacts are built under `<PACKAGES_FILES_DIR>/<packageId>/runtime/v1/<roomId>/<revision>/<artifactKey>/`; only the newest three per `<package>/<room>/<revision>` are retained. Every dependency publish creates a new artifact key for each dependent, so storage grows with publishes, bounded by that retention window; stale directories are pruned after a successful build.
@@ -29,9 +29,9 @@ Wired is a browser-based Godot game platform: Next.js frontend + NestJS API/asse
 
 ```bash
 pnpm install
-pnpm fetch:editor                        # download the pinned 4.7.2 web editor (gitignored)
-pnpm fetch:runtime                       # download the pinned 4.7.2 native runtime for this OS (gitignored)
-pnpm fetch:templates                     # download the pinned 4.7.2 Web export templates into Godot's user directory
+pnpm fetch:editor                        # download the pinned 4.8-beta2 web editor (gitignored)
+pnpm fetch:runtime                       # download the pinned 4.8-beta2 native runtime for this OS (gitignored)
+pnpm fetch:templates                     # download the pinned 4.8-beta2 Web export templates into Godot's user directory
 pnpm dev:server                          # Nest watch; needs the Postgres in packages/server/.env
 pnpm --filter frontend dev -- -p 3001    # backend owns :3000; SITE_HOST expects :3001
 pnpm check-types:frontend
@@ -39,7 +39,7 @@ pnpm --filter server build               # also the server typecheck (no separat
 pnpm --filter frontend build             # next build --webpack
 pnpm --filter frontend lint              # eslint, no auto-fix
 pnpm --filter server lint                # eslint --fix
-pnpm export:game                         # rebuild the Godot Web export; needs a 4.7.2 editor and templates
+pnpm export:game                         # rebuild the Godot Web export; needs a 4.8-beta2 editor and templates
 pnpm build                               # recursive: server + frontend (not shared declarations)
 ```
 

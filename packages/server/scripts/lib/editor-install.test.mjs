@@ -18,7 +18,7 @@ import {
   isEditorInstalled,
 } from './editor-install.mjs';
 
-const VERSION = '4.7.2-stable';
+const VERSION = '4.8-beta2';
 
 function withTempRoot(run) {
   const root = mkdtempSync(join(tmpdir(), 'wired-editor-install-'));

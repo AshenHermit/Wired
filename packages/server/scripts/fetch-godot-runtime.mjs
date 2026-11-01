@@ -6,7 +6,7 @@
  * Run from the repository root:
  *   pnpm fetch:runtime
  *
- * The version, archive name, byte size and sha256 are pinned in
+ * The version, archive name, byte size and sha512 are pinned in
  * `lib/runtime-install.mjs`; any mismatch aborts before the install directory
  * is touched. Existing `GODOT_RUNTIME_PATH` still wins at runtime, so a local
  * `.env` override is not changed by this script.
@@ -56,7 +56,7 @@ async function main() {
   log(`Платформа: ${asset.platform}`);
   const buffer = await downloadRuntimeArchive(asset);
   log(`Скачано: ${buffer.length} байт (${mib(buffer.length)})`);
-  log(`sha256: ${asset.sha256}`);
+  log(`sha512: ${asset.sha512}`);
 
   const tempDir = mkdtempSync(path.join(tmpdir(), 'wired-godot-runtime-'));
   let manifest;

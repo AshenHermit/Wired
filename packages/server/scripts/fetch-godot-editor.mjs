@@ -31,12 +31,12 @@ import {
 } from './lib/editor-install.mjs';
 import { extractZip } from './lib/unzip.mjs';
 
-const VERSION = '4.7.2-stable';
+const VERSION = '4.8-beta2';
 const ZIP_NAME = `Godot_v${VERSION}_web_editor.zip`;
-const ZIP_URL = `https://github.com/godotengine/godot/releases/download/${VERSION}/${ZIP_NAME}`;
-const ZIP_SIZE = 54031095;
+const ZIP_URL = `https://github.com/godotengine/godot-builds/releases/download/${VERSION}/${ZIP_NAME}`;
+const ZIP_SIZE = 32_990_172;
 const ZIP_SHA512 =
-  '03ad6b4b4d96f0f7d85bf4fdcf29535891b79d52ee94a11e96895463a2745347b8f601b455e7a58135bf641df43fc25296bc257bbfce593d477dfa64a2272268';
+  'cb3da25c5ecd63e855be4641cc3225193984dac0e8448eba648f8db9d4b491d87376ee8e6c5eff13a62fdfa5cc9b55a2f468c86ecf44bb34c52bb91651cb082e';
 
 const SERVER_ROOT = path.resolve(import.meta.dirname, '..');
 const destDir = path.resolve(

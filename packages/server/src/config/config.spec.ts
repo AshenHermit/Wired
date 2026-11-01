@@ -69,14 +69,14 @@ describe('config paths', () => {
     const originalRuntime = process.env.GODOT_RUNTIME_PATH;
     const originalCwd = process.cwd();
     const root = mkdtempSync(join(tmpdir(), 'wired-config-'));
-    const directory = '4.7.2-stable-win32-x64';
+    const directory = '4.8-beta2-win32-x64';
     try {
       mkdirSync(join(root, 'godot_runtime', directory), { recursive: true });
       writeFileSync(join(root, 'godot_runtime', directory, 'Godot.exe'), '');
       writeFileSync(
         join(root, 'godot_runtime', 'runtime.json'),
         JSON.stringify({
-          version: '4.7.2-stable',
+          version: '4.8-beta2',
           platform: 'win32-x64',
           directory,
           executable: `${directory}/Godot.exe`,

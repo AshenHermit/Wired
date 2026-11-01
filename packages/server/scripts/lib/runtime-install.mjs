@@ -2,62 +2,69 @@ import { createHash } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-export const RUNTIME_VERSION = '4.7.2-stable';
+export const RUNTIME_VERSION = '4.8-beta2';
 
 const ASSETS = {
   'win32-x64': {
-    name: 'Godot_v4.7.2-stable_win64.exe.zip',
-    size: 86_013_866,
-    sha256: '731980f9608d61333e5baf54a2ef17210acc7a538446c0cb9969f002aca1e953',
-    sourceExecutable: 'Godot_v4.7.2-stable_win64.exe',
+    name: 'Godot_v4.8-beta2_win64.exe.zip',
+    size: 64_448_151,
+    sha512: '23d6dc2561f95cf296ca88c18d843867dffe978ac23608e3e4eb3fd67c0745cf48a259d51c83650f47e9e42f23154e0f907a6a162ea6b0e47dddbb3d88aa4579',
+    sourceExecutable: 'Godot_v4.8-beta2_win64.exe',
     executable: 'Godot.exe',
   },
   'win32-ia32': {
-    name: 'Godot_v4.7.2-stable_win32.exe.zip',
-    size: 87_837_088,
-    sha256: '187ff56a73e6fc4b82ed22a87d72915a63c74abc9defe8b2e29a0098b5f8eea2',
-    sourceExecutable: 'Godot_v4.7.2-stable_win32.exe',
+    name: 'Godot_v4.8-beta2_win32.exe.zip',
+    size: 66_988_384,
+    sha512: '595eff0b87386ba4815c4a7d7af92143e65a9a9290a4c62523af6c5d1fefcb1d6e03fbceca5812a2648a72106870ce024e9f8d90faab1ec96efeabd9f21f797e',
+    sourceExecutable: 'Godot_v4.8-beta2_win32.exe',
     executable: 'Godot.exe',
   },
   'win32-arm64': {
-    name: 'Godot_v4.7.2-stable_windows_arm64.exe.zip',
-    size: 84_263_370,
-    sha256: '2d206e0b1d2366eb3508971c670c52333dcd7218b818102d77ca7ceaa86892ba',
-    sourceExecutable: 'Godot_v4.7.2-stable_windows_arm64.exe',
+    name: 'Godot_v4.8-beta2_windows_arm64.exe.zip',
+    size: 64_850_220,
+    sha512: 'e7a005cc01ca153ed9ff3d1f6753c4a19837b8c71fd56f4ab57ba718f91ec016a214952a0a4439d0a5fd38d1b68b967acc43f3e6525fb9e31122fcb5000e3bcf',
+    sourceExecutable: 'Godot_v4.8-beta2_windows_arm64.exe',
     executable: 'Godot.exe',
   },
   'linux-x64': {
-    name: 'Godot_v4.7.2-stable_linux.x86_64.zip',
-    size: 77_860_424,
-    sha256: 'cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4',
-    sourceExecutable: 'Godot_v4.7.2-stable_linux.x86_64',
+    name: 'Godot_v4.8-beta2_linux.x86_64.zip',
+    size: 62_274_839,
+    sha512: '77470f53a9039cd22837935380230220167e098324e82ec448ee4b1f943f00afc424885f7d6631f385123d7a630a9399b3cc1b0e1dad1a4ac45c6356b3a0aa45',
+    sourceExecutable: 'Godot_v4.8-beta2_linux.x86_64',
     executable: 'godot',
   },
   'linux-arm64': {
-    name: 'Godot_v4.7.2-stable_linux.arm64.zip',
-    size: 77_008_699,
-    sha256: '5dd0d86405cf7e8adf79fb6377b38ba682a2846cb378ffe5364f38c01ad29b9d',
-    sourceExecutable: 'Godot_v4.7.2-stable_linux.arm64',
+    name: 'Godot_v4.8-beta2_linux.arm64.zip',
+    size: 58_878_748,
+    sha512: '3021a84b4d2e37bb704af5ed53a4b80ffa1e1f292f5ebcfc23d3ab1ef27d278e255777373254636415d2a2262065a4532555f0e5fadb224fe862f0ee167446ed',
+    sourceExecutable: 'Godot_v4.8-beta2_linux.arm64',
     executable: 'godot',
   },
   'linux-x86_32': {
-    name: 'Godot_v4.7.2-stable_linux.x86_32.zip',
-    size: 78_111_204,
-    sha256: '05d7b8ef72c1d1f15eee82a585867ec0e18ad31501a4b7ce0974c111720c36b9',
-    sourceExecutable: 'Godot_v4.7.2-stable_linux.x86_32',
+    name: 'Godot_v4.8-beta2_linux.x86_32.zip',
+    size: 58_241_294,
+    sha512: '7f0c16f0930c1d95bcd3281859203812cdcbaf3372daff5c17d82e3fe7f06bad8b74d20b27f8113e467f5d5041557b03bfa3878bf4fa7e3c10ff259144d2a432',
+    sourceExecutable: 'Godot_v4.8-beta2_linux.x86_32',
     executable: 'godot',
   },
   'linux-arm32': {
-    name: 'Godot_v4.7.2-stable_linux.arm32.zip',
-    size: 74_780_990,
-    sha256: '974393f85c108f62d7754369b9d1ed4c82645aefdd2ea72c3d125c7bec18b030',
-    sourceExecutable: 'Godot_v4.7.2-stable_linux.arm32',
+    name: 'Godot_v4.8-beta2_linux.arm32.zip',
+    size: 55_085_572,
+    sha512: 'eff529cb217903d14c522e2951861790a79232695055497c9294d0901021151a563fb74217c0d630e29dfe56837fb124bf2ae7a62bb78a78c59f7737cf73ab9e',
+    sourceExecutable: 'Godot_v4.8-beta2_linux.arm32',
     executable: 'godot',
   },
-  'darwin-universal': {
-    name: 'Godot_v4.7.2-stable_macos.universal.zip',
-    size: 170_622_178,
-    sha256: 'c58a24e31d720be9d62f60cb5627c4e695fb72f21b0cfe1bc9ccaa9a3b3ba63e',
+  'darwin-x64': {
+    name: 'Godot_v4.8-beta2_macos.x86_64.zip',
+    size: 67_913_304,
+    sha512: 'c9280801da5d4ccfb34bd30089d2383e4c0d65c1d7f769291027aa6cff2f2fe8d41beb578fdc7e6de75e67d99caeae5b5f9c2568ff594dbc9fc10e4680413107',
+    sourceExecutable: 'Godot.app/Contents/MacOS/Godot',
+    executable: 'Godot.app/Contents/MacOS/Godot',
+  },
+  'darwin-arm64': {
+    name: 'Godot_v4.8-beta2_macos.arm64.zip',
+    size: 61_048_120,
+    sha512: '91e14126ad880dc31983b11fe03817771acfb20286a7543f8cde0db1c8c63c1845bcf38cb2252318165b65ddd166b362aadf874892555f4eb5e37dbc486b171e',
     sourceExecutable: 'Godot.app/Contents/MacOS/Godot',
     executable: 'Godot.app/Contents/MacOS/Godot',
   },
@@ -71,7 +78,7 @@ const PLATFORM_KEYS = {
     ia32: 'linux-x86_32',
     arm: 'linux-arm32',
   },
-  darwin: { x64: 'darwin-universal', arm64: 'darwin-universal' },
+  darwin: { x64: 'darwin-x64', arm64: 'darwin-arm64' },
 };
 
 export function selectRuntimeAsset(platform = process.platform, arch = process.arch) {
@@ -90,9 +97,9 @@ export function verifyRuntimeArchive(buffer, asset) {
       `неверный размер архива: ожидалось ${asset.size} байт, получено ${buffer.length}`,
     );
   }
-  const digest = createHash('sha256').update(buffer).digest('hex');
-  if (digest !== asset.sha256) {
-    throw new Error(`неверная sha256 архива: ${digest}`);
+  const digest = createHash('sha512').update(buffer).digest('hex');
+  if (digest !== asset.sha512) {
+    throw new Error(`неверная sha512 архива: ${digest}`);
   }
 }
 

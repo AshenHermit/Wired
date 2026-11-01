@@ -30,8 +30,8 @@ function withTempDir(run) {
   }
 }
 
-function sha256(buffer) {
-  return createHash('sha256').update(buffer).digest('hex');
+function sha512(buffer) {
+  return createHash('sha512').update(buffer).digest('hex');
 }
 
 test('resolves the Windows template directory from APPDATA', () => {
@@ -125,10 +125,10 @@ test('detects both required web templates', () =>
     assert.equal(hasWebTemplates(dir), false);
   }));
 
-test('verifies archive size and sha256', () => {
+test('verifies archive size and sha512', () => {
   const buffer = Buffer.from('templates');
-  const digest = sha256(buffer);
-  const asset = { name: 'templates.tpz', size: buffer.length, sha256: digest };
+  const digest = sha512(buffer);
+  const asset = { name: 'templates.tpz', size: buffer.length, sha512: digest };
 
   assert.doesNotThrow(() => verifyTemplatesArchive(buffer, asset));
   assert.throws(
@@ -136,8 +136,8 @@ test('verifies archive size and sha256', () => {
     /размер/i,
   );
   assert.throws(
-    () => verifyTemplatesArchive(buffer, { ...asset, sha256: '0'.repeat(64) }),
-    /sha256/i,
+    () => verifyTemplatesArchive(buffer, { ...asset, sha512: '0'.repeat(128) }),
+    /sha512/i,
   );
 });
 
@@ -177,12 +177,12 @@ test('leaves existing templates intact when a source file is missing', () =>
     assert.equal(existsSync(join(templates, 'web_release.zip')), false);
   }));
 
-test('pins the official 4.7.2 archive metadata', () => {
-  assert.equal(TEMPLATES_ASSET.name, 'Godot_v4.7.2-stable_export_templates.tpz');
-  assert.equal(TEMPLATES_ASSET.size, 1_281_349_702);
+test('pins the official 4.8-beta2 archive metadata', () => {
+  assert.equal(TEMPLATES_ASSET.name, 'Godot_v4.8-beta2_export_templates.tpz');
+  assert.equal(TEMPLATES_ASSET.size, 1_349_622_957);
   assert.equal(
-    TEMPLATES_ASSET.sha256,
-    'f298490b8d44d934be425a5a65a51bf15f422428b229a06a6e11d9ffea248011',
+    TEMPLATES_ASSET.sha512,
+    '260de4173d9bb366110dab4f35e42e39f2eace62f29e082d6630bc5c6ea790ef92f51a9145ffbca2c0ffe97a60da46019c6780d7f88569932cd3237284085c0e',
   );
-  assert.equal(TEMPLATES_DIRECTORY, '4.7.2.stable');
+  assert.equal(TEMPLATES_DIRECTORY, '4.8.beta2');
 });
