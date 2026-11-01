@@ -513,6 +513,28 @@ describe('PackageSyncService', () => {
     expect((await service.getStatuses('7'))[0].state).toBe('applied');
   });
 
+  it('does not wait for peers of a previous runtime after it restarts', async () => {
+    await service.revisionPublished(42, 3);
+    service.onPackagesApplied('7', 42, 3, 1);
+    // Peer 5 belongs to the first process; it never sends `player_left` when
+    // the process dies, so the backend learns about the restart only from the
+    // next `ready` line.
+    service.onPeerAuthenticated('7', 5);
+    expect((await service.getStatuses('7'))[0].state).toBe('applied');
+
+    service.onRuntimeReady('7');
+    await flushAsync();
+    service.onPackagesApplied('7', 42, 3, 1);
+
+    // A new player joins the restarted runtime and is fully ready.
+    service.onPeerAuthenticated('7', 6);
+    service.onClientPackagesReady('7', 6, 42, 3);
+
+    const [status] = await service.getStatuses('7');
+    expect(status.state).toBe('ready');
+    expect(status.clients.map((client) => client.peer)).toEqual([6]);
+  });
+
   it('loads the latest published revisions of every room package in one query', async () => {
     packages.find.mockResolvedValue([
       { id: 42, name: 'Demo package' },

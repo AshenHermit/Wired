@@ -221,6 +221,11 @@ export class PackageSyncService
   // --- RuntimeObserver ----------------------------------------------------
 
   onRuntimeReady(roomId: string): void {
+    // A ready line also means a *new* process: the previous session's peers
+    // died with it and never sent `player_left`. Keeping them would make
+    // `aggregateState` wait for clients that no longer exist, so the package
+    // status would stick at `applied` forever.
+    this.peers.delete(roomId);
     void this.reconcileRoom(roomId, true).catch((error: unknown) => {
       this.logger.error(
         `Failed to reconcile packages for room ${roomId}: ${this.errorMessage(error)}`,
