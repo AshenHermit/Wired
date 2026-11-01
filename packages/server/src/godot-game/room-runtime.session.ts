@@ -2,7 +2,7 @@ import { Logger } from '@nestjs/common';
 import { RoomRuntimeConfiguration } from './room-runtime.configuration';
 import { RoomRuntimeError } from './room-runtime.errors';
 import { RoomRuntimeLog } from './room-runtime.log';
-import { RoomRuntimeRegistry } from './room-runtime.registry';
+import type { RoomRuntimeRegistry } from './room-runtime.registry';
 import { RuntimeRecord } from './room-runtime.record';
 import {
   GodotRuntimeConfig,
