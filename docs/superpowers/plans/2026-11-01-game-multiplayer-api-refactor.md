@@ -469,3 +469,44 @@
 - **6 неиспользуемых экспортов** (`listScriptingPackages`, `getScriptingPackage`, `updateScriptingPackage`, `deleteScriptingPackage`, `listPackageRevisions`, `getRevisionManifest`) находятся в **`frontend/src/api/services/scripting-packages.ts`**, а не в серверном сервисе. Ветка 3 их не трогала (фронтенд вне её скоупа). Удалить отдельной мелкой правкой на этапе интеграции.
 - **`DISTINCT ON` и `pg_try_advisory_lock`** проверены только юнит-тестами с моками. На интеграции прогнать против живого Postgres (опубликовать пакет, удалить пакет, параллельная публикация двух инстансов), иначе риск, что SQL-синтаксис/поведение БД разойдётся с моками.
 - `pnpm --filter server lint` в worktree даёт ~1.4k ложных `Delete ␍` из-за `core.autocrlf=true`; как гейт не использовать, проверять `prettier --check` на своих файлах.
+
+---
+
+## Результат интеграции (2026-11-01)
+
+Все шесть веток слиты в `working-on-game-multiplayer-api` (merge-коммиты, конфликтов не было):
+
+| № | Ветка | Итог |
+|---|---|---|
+| 1 | `fix/scripting-packages-access-control` | слито |
+| 2 | `fix/godot-process-lifecycle` | слито |
+| 3 | `refactor/package-delivery` | слито |
+| 4 | `fix/package-sync-room-status` | слито |
+| 5 | `fix/gdscript-runtime-correctness` | слито |
+| 6 | `fix/frontend-editor-bridge` | слито |
+
+### Закрытые интеграционные пункты
+
+- **Integration 1** — выбран room-scoped service token:
+  - `godot-game/runtime-service-token.ts` — HMAC-SHA256 от `runtime-api:v1:<roomId>` на `WIRED_GAME_TICKET_SECRET`;
+  - `room-runtime.configuration.ts` кладёт токен в env процесса как `WIRED_RUNTIME_API_TOKEN`;
+  - `guards/runtime-auth.guard.ts` принимает либо обычный JWT, либо токен, привязанный к `?room=`;
+  - `RoomMembershipGuard` пропускает runtime-принципал без членства, но сохраняет проверку `package.room === room`;
+  - `packages_manager.gd` отправляет `Authorization: Bearer` (server — из env, web — токен пользователя из host bridge);
+  - `shell.html` принимает `apiToken`, `GameTab.tsx`/`game-bridge.ts` передают его из cookie `access_token`.
+- **Integration 2** — удалён неиспользуемый `RoomRuntimeService.refreshConnection`.
+- **Integration 3** — `room_starting` убран из `RoomRuntimeErrorCode` и из `Record`-карт `game-room.service.ts`.
+- **Integration 4** — удалены 6 неиспользуемых экспортов в `frontend/src/api/services/scripting-packages.ts`.
+
+### Проверки после слияния
+
+- `pnpm build` — успешно (server + frontend);
+- сервер: 40 suites, 428 passed, 1 skipped;
+- фронтенд: 8 files, 100 passed, `check-types` чистый;
+- `pnpm export:game` — Web-сборка собрана (Godot 4.8-beta2).
+
+### Осталось до продакшена
+
+- Ручной двухклиентский прогон: late-join репарация через `MultiplayerSpawner` и hot-reload при живом игроке (п. 5.1/5.2);
+- Проверка `DISTINCT ON` и `pg_try_advisory_lock` на живом Postgres;
+- Проверить, что branch-5 smoke-тесты GDScript не регрессировали под новым заголовком `Authorization` (smoke использует `request_override`, сеть не задействована).
