@@ -7,7 +7,7 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import {
   CreatePackageRevisionPayload,
   PackageFileEntry,
@@ -31,7 +31,6 @@ import {
   PACKAGE_REVISION_DISPATCHER,
   PackageRevisionDispatcher,
 } from 'src/godot-game/package-sync.types';
-import { InjectDataSource } from '@nestjs/typeorm';
 
 /**
  * Draft and published revisions of a scripting package.
