@@ -246,7 +246,25 @@ func _on_world_snapshot_received(snapshot: Dictionary) -> void:
 ## applies the snapshot only when both peers ended on the same applied closure
 ## (revision and artifact key). Otherwise the snapshot stays pending and a fresh
 ## one is requested. Called from a signal, so it can await but cannot be awaited.
+##
+## The reconcile downloads and unloads packages, so it must own the package-op
+## mutex: a snapshot arriving while a queued apply is suspended is stored and
+## replayed by `_pump_package_ops` instead of interleaving with it.
 func _apply_world_snapshot(snapshot: Dictionary) -> void:
+	if _package_ops_busy:
+		_pending_world_snapshot = snapshot
+		return
+	_package_ops_busy = true
+	await _apply_world_snapshot_owned(snapshot)
+	_package_ops_busy = false
+	# The snapshot may have queued a retry or left work behind: the pump decides
+	# whether a queued operation or the pending snapshot runs next.
+	call_deferred("_pump_package_ops")
+
+
+## Body of `_apply_world_snapshot`, called only while it holds the package-op
+## mutex. Every early return is safe: the caller always clears the flag.
+func _apply_world_snapshot_owned(snapshot: Dictionary) -> void:
 	var remote_packages: Variant = snapshot.get(WiredProtocol.KEY_PACKAGES, {})
 	if typeof(remote_packages) != TYPE_DICTIONARY:
 		remote_packages = {}
@@ -341,13 +359,22 @@ func _schedule_package_retry(package_id: int, error: String) -> void:
 	)
 	await get_tree().create_timer(delay).timeout
 	_package_retry_in_flight = false
+	print(
+		"WIRED_PACKAGE_SYNC_RETRY package=%d attempt=%d delay=%.1f"
+		% [package_id, _package_retry_attempts, delay]
+	)
 	_request_world_snapshot()
 
 
 func _retry_pending_world_snapshot() -> void:
 	if _pending_world_snapshot.is_empty():
 		return
-	_apply_world_snapshot(_pending_world_snapshot)
+	# Take the snapshot out before applying it: a re-entrant replay (the apply
+	# path itself may store a pending snapshot again) must not apply a snapshot
+	# that is already being applied.
+	var snapshot := _pending_world_snapshot
+	_pending_world_snapshot = {}
+	_apply_world_snapshot(snapshot)
 
 
 func _api_url() -> String:
@@ -488,8 +515,10 @@ func _control_loop() -> void:
 					print("WIRED_CONTROL_ERROR unknown_command=%s" % command)
 
 
-## Appends one package operation and starts the pump. Two operations never run
-## concurrently, so an unload that arrives during an apply is queued behind it.
+## Appends one package operation and starts the pump. Every package mutation
+## goes through here - server apply, client apply (`client_apply`, whose download
+## awaits) and unload - so an unload that arrives while an apply is downloading
+## is queued behind it instead of removing the package the apply is re-adding.
 func _enqueue_package_op(op: Dictionary) -> void:
 	_package_ops_queue.append(op)
 	_pump_package_ops()
@@ -501,12 +530,20 @@ func _pump_package_ops() -> void:
 	_package_ops_busy = true
 	var op: Dictionary = _package_ops_queue.pop_front()
 	var package_id := int(op.get("id", 0))
-	if str(op.get("kind", "")) == "apply":
-		await _apply_package_revision(package_id, int(op.get("revision", 0)))
-	elif str(op.get("kind", "")) == "unload":
-		_apply_package_removal(package_id, bool(op.get("purge", false)))
+	match str(op.get("kind", "")):
+		"apply":
+			await _apply_package_revision(package_id, int(op.get("revision", 0)))
+		"client_apply":
+			await _apply_client_package(package_id, int(op.get("revision", 0)))
+		"unload":
+			_apply_package_removal(package_id, bool(op.get("purge", false)))
 	_package_ops_busy = false
-	if not _package_ops_queue.is_empty():
+	# A snapshot deferred while this operation held the mutex is replayed first:
+	# it may unload a package this operation just applied, or vice versa, and the
+	# two must never interleave. Its own apply schedules the pump again.
+	if not _pending_world_snapshot.is_empty():
+		call_deferred("_retry_pending_world_snapshot")
+	elif not _package_ops_queue.is_empty():
 		call_deferred("_pump_package_ops")
 
 
@@ -853,9 +890,12 @@ func _on_server_event(event: Dictionary) -> void:
 	if event_type == WiredNetwork.EVENT_WORLD_STATE:
 		_bridge_status("ready", WiredNetwork.EVENT_WORLD_STATE)
 	elif event_type == WiredNetwork.EVENT_PACKAGE_REVISION:
-		_apply_client_package(
-			int(event.get(WiredProtocol.KEY_PACKAGE_ID, 0)),
-			int(event.get(WiredProtocol.KEY_REVISION, 0))
+		_enqueue_package_op(
+			{
+				"kind": "client_apply",
+				"id": int(event.get(WiredProtocol.KEY_PACKAGE_ID, 0)),
+				"revision": int(event.get(WiredProtocol.KEY_REVISION, 0)),
+			}
 		)
 	elif event_type == WiredProtocol.EVENT_PACKAGE_REMOVED:
 		_enqueue_package_op(
@@ -873,7 +913,8 @@ func _on_server_event(event: Dictionary) -> void:
 
 
 ## Client side: download and verify the announced revision over HTTP, then tell
-## the server whether this client applied it.
+## the server whether this client applied it. Runs as a queued package operation,
+## so its download cannot interleave with an unload of the same package.
 func _apply_client_package(package_id: int, revision: int) -> void:
 	if package_id <= 0 or revision <= 0:
 		return

@@ -47,6 +47,38 @@ class FakeDynamicEntity extends Node:
 		}
 
 
+## Source of the package-op probe. It must be compiled at runtime: this suite is
+## the `--script` entry point, so a parse-time `extends` of `main_scene.gd` is
+## resolved before the `Global` autoload exists and fails with
+## "Identifier not found: Global". The probe never enters the tree and never
+## calls `_ready`; it only overrides the two operations and the reconcile.
+const PACKAGE_OP_PROBE_SOURCE := """
+extends "res://_wired/scripts/main_scene.gd"
+
+var order: Array[String] = []
+## Emitted by the test to let the suspended operation finish.
+signal gate
+
+func _apply_package_revision(package_id: int, revision: int) -> void:
+	order.append("apply:start:%d:%d" % [package_id, revision])
+	await gate
+	order.append("apply:end:%d:%d" % [package_id, revision])
+
+func _apply_client_package(package_id: int, revision: int) -> void:
+	order.append("client_apply:start:%d:%d" % [package_id, revision])
+	await gate
+	order.append("client_apply:end:%d:%d" % [package_id, revision])
+
+func _apply_package_removal(
+	package_id: int, purge: bool, _request_snapshot := true
+) -> void:
+	order.append("unload:%d:%s" % [package_id, purge])
+
+func _reconcile_client_packages(_remote: Dictionary) -> bool:
+	return true
+"""
+
+
 func _initialize() -> void:
 	_run.call_deferred()
 
@@ -55,6 +87,8 @@ func _run() -> void:
 	_test_main_scene_uses_the_authored_dynamic_spawner()
 	_test_save_and_load_round_trip()
 	_test_parked_dynamic_records_are_saved_and_reseeded()
+	await _test_package_ops_are_serialized()
+	await _test_world_snapshot_waits_for_a_running_package_op()
 	_free_owned()
 	_finish()
 
@@ -206,7 +240,110 @@ func _test_parked_dynamic_records_are_saved_and_reseeded() -> void:
 	)
 
 
+## The queue is the only entry point that mutates packages, so a suspended apply
+## must block a client apply and an unload behind it.
+func _test_package_ops_are_serialized() -> void:
+	var probe: Variant = _make_package_op_probe()
+	if probe == null:
+		return
+	probe._enqueue_package_op({"kind": "apply", "id": 42, "revision": 1})
+	probe._enqueue_package_op({"kind": "client_apply", "id": 42, "revision": 2})
+	probe._enqueue_package_op({"kind": "unload", "id": 43, "purge": false})
+	_check(
+		probe.order == ["apply:start:42:1"],
+		"only the first package op may start while it is suspended, got %s"
+		% [probe.order],
+	)
+	_check(
+		probe._package_ops_busy,
+		"the queue must report itself busy while an op is suspended",
+	)
+	_check(
+		probe._package_ops_queue.size() == 2,
+		"the queued ops must wait behind the suspended one, got %d"
+		% probe._package_ops_queue.size(),
+	)
+
+	probe.gate.emit()
+	await process_frame
+	await process_frame
+	_check(
+		probe.order
+		== ["apply:start:42:1", "apply:end:42:1", "client_apply:start:42:2"],
+		"a client apply must start only after the apply finished, got %s"
+		% [probe.order],
+	)
+
+	probe.gate.emit()
+	await process_frame
+	await process_frame
+	_check(
+		probe.order
+		== [
+			"apply:start:42:1",
+			"apply:end:42:1",
+			"client_apply:start:42:2",
+			"client_apply:end:42:2",
+			"unload:43:false",
+		],
+		"the queue must run apply, client_apply and unload in order, got %s"
+		% [probe.order],
+	)
+	_check(not probe._package_ops_busy, "the queue must clear its busy flag")
+	probe.free()
+
+
+## A snapshot arriving during a suspended op must be stored, not applied: its
+## reconcile could otherwise unload a package the running op is still applying.
+func _test_world_snapshot_waits_for_a_running_package_op() -> void:
+	var probe: Variant = _make_package_op_probe()
+	if probe == null:
+		return
+	# The replay reaches `applied_packages()`; an empty manager matches the empty
+	# remote map without any network access.
+	probe._packages = PackagesManager.new()
+	probe._enqueue_package_op({"kind": "apply", "id": 42, "revision": 1})
+	var snapshot := {WiredProtocol.KEY_PACKAGES: {}}
+	probe._apply_world_snapshot(snapshot)
+	_check(
+		probe._pending_world_snapshot == snapshot,
+		"a snapshot must be deferred while a package op is suspended, got %s"
+		% [probe._pending_world_snapshot],
+	)
+	_check(
+		probe._package_ops_busy,
+		"a deferred snapshot must not clear the busy flag",
+	)
+
+	probe.gate.emit()
+	await process_frame
+	await process_frame
+	await process_frame
+	_check(
+		probe._pending_world_snapshot.is_empty(),
+		"the deferred snapshot must be replayed after the op finishes, got %s"
+		% [probe._pending_world_snapshot],
+	)
+	_check(not probe._package_ops_busy, "the replay must release the mutex")
+	probe._packages.free()
+	probe.free()
+
+
 # --- helpers --------------------------------------------------------------
+
+
+## Compiles the package-op probe at runtime. See `PACKAGE_OP_PROBE_SOURCE` for
+## why a parse-time inner class cannot be used in this `--script` suite.
+func _make_package_op_probe() -> Node:
+	var script := GDScript.new()
+	script.source_code = PACKAGE_OP_PROBE_SOURCE
+	var err := script.reload()
+	_check(err == OK, "the package-op probe must compile, err=%d" % err)
+	if err != OK:
+		return null
+	var probe := script.new() as Node
+	_check(probe != null, "the package-op probe must instantiate")
+	return probe
 
 
 func _instantiate_main() -> Node:
