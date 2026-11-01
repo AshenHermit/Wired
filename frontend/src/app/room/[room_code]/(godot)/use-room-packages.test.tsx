@@ -29,6 +29,8 @@ vi.mock("@/api/services/scripting-packages", () => ({
   publishPackageRevision: vi.fn(),
   getPackageManifest: vi.fn(),
   getRevisionFile: vi.fn(),
+  updateScriptingPackage: vi.fn(),
+  deleteScriptingPackage: vi.fn(),
 }));
 
 import * as gameApi from "@/api/services/godot-game";
@@ -222,16 +224,18 @@ async function manifestOf(
 }
 
 function roomStatus(
-  packages: { id: number; revision: number }[] = [{ id: 5, revision: 2 }],
+  packages: { id: number; revision: number; enabled?: boolean }[] = [
+    { id: 5, revision: 2 },
+  ],
 ): RoomPackagesStatus {
   return {
     roomId: 1,
-    packages: packages.map(({ id, revision }) => ({
+    packages: packages.map(({ id, revision, enabled = true }) => ({
       packageId: id,
       name: id === 5 ? "Demo" : "Other",
-      enabled: true,
+      enabled,
       revision,
-      publishedAt: "2026-10-30T10:00:00.000Z",
+      publishedAt: revision > 0 ? "2026-10-30T10:00:00.000Z" : null,
       state: "published",
       runtime: { state: "pending", revision, error: null, updatedAt: null },
       clients: [],
@@ -284,6 +288,10 @@ describe("useRoomPackages", () => {
     vi.mocked(packagesApi.publishPackageRevision).mockResolvedValue(
       revision(5, 3),
     );
+    vi.mocked(packagesApi.updateScriptingPackage).mockResolvedValue(
+      roomPackage(5, "Demo"),
+    );
+    vi.mocked(packagesApi.deleteScriptingPackage).mockResolvedValue(undefined);
     mockPublishedFile();
   });
 
@@ -1080,6 +1088,12 @@ describe("useRoomPackages", () => {
 
     // The stale load must not have leaked into the package list either: a
     // later refresh still does not resurrect package 7.
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValueOnce(
+      roomStatus([
+        { id: 5, revision: 2 },
+        { id: 6, revision: 4 },
+      ]),
+    );
     await act(async () => {
       await result.current.refresh();
     });
@@ -1155,5 +1169,99 @@ describe("useRoomPackages", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("patches enabled and refreshes", async () => {
+    const { result } = await startHook();
+    const before = vi.mocked(gameApi.getRoomPackages).mock.calls.length;
+    await act(async () => {
+      await result.current.setPackageEnabled(5, false);
+    });
+    expect(packagesApi.updateScriptingPackage).toHaveBeenCalledWith(5, {
+      enabled: false,
+    });
+    expect(vi.mocked(gameApi.getRoomPackages).mock.calls.length).toBe(
+      before + 1,
+    );
+  });
+
+  it("deletes the package, its editor directory and the entry", async () => {
+    const { result } = await startHook();
+    fs.put(5, HERO, "extends Node");
+
+    await act(async () => {
+      await result.current.deletePackage(5);
+    });
+
+    expect(packagesApi.deleteScriptingPackage).toHaveBeenCalledWith(5);
+    expect(fs.deletePackage).toHaveBeenCalledWith(5);
+    expect(await fs.files.exists(5)).toBe(false);
+    // The refresh after the delete still sees the old status response; the
+    // tombstone must keep the deleted package out of the panel.
+    expect(
+      result.current.entries.find((entry) => entry.packageId === 5),
+    ).toBeUndefined();
+  });
+
+  it("does not resurrect a deleted package from the room prop", async () => {
+    bridgeWith();
+    const { result, rerender } = renderHook(
+      ({ packages }: { packages: ScriptingPackage[] }) =>
+        useRoomPackages(1, packages),
+      { initialProps: { packages: ONE_PACKAGE } },
+    );
+    await act(async () => {
+      result.current.afterEditorStart(makeEditor());
+    });
+    await waitFor(() => expect(result.current.fsReady).toBe(true));
+    await act(async () => {
+      await result.current.deletePackage(5);
+    });
+
+    // A stale room snapshot (a new array with the deleted package) arrives.
+    rerender({ packages: [roomPackage(5, "Demo")] });
+
+    expect(
+      result.current.entries.find((entry) => entry.packageId === 5),
+    ).toBeUndefined();
+  });
+
+  it("drops entries missing from the polling response", async () => {
+    const { result } = await startHook({ packages: TWO_PACKAGES });
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValueOnce(
+      roomStatus([
+        { id: 5, revision: 2 },
+        { id: 6, revision: 2 },
+      ]),
+    );
+    await act(async () => {
+      await result.current.refresh();
+    });
+    await waitFor(() => expect(result.current.entries).toHaveLength(2));
+
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValue(
+      roomStatus([{ id: 6, revision: 2 }]),
+    );
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.entries.map((entry) => entry.packageId)).toEqual([6]);
+  });
+
+  it("exposes disabled entries with a disabled status", async () => {
+    const { result } = await startHook();
+
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValue(
+      roomStatus([{ id: 5, revision: 0, enabled: false }]),
+    );
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.entries[0]).toMatchObject({
+      enabled: false,
+      status: "disabled",
+    });
   });
 });

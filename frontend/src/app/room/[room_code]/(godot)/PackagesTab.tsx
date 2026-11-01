@@ -29,6 +29,7 @@ const STATUS_LABEL: Record<RoomPackageStatus, string> = {
   loaded: "загружен",
   "new-revision": "есть новая ревизия",
   "local-changes": "локальные изменения",
+  disabled: "отключён",
 };
 
 const STATUS_CLASS: Record<RoomPackageStatus, string> = {
@@ -36,6 +37,7 @@ const STATUS_CLASS: Record<RoomPackageStatus, string> = {
   loaded: "border-emerald-400/30 bg-emerald-400/10 text-emerald-200",
   "new-revision": "border-sky-400/30 bg-sky-400/10 text-sky-200",
   "local-changes": "border-amber-400/30 bg-amber-400/10 text-amber-200",
+  disabled: "border-white/15 bg-white/5 text-white/40",
 };
 
 const BACKEND_LABEL: Record<string, string> = {

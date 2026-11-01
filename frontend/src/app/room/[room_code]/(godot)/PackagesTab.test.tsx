@@ -13,6 +13,7 @@ function entry(overrides: Partial<RoomPackageEntry> = {}): RoomPackageEntry {
     name: "Demo",
     version: "0.1.0",
     status: "loaded",
+    enabled: true,
     loaded: true,
     inEditor: true,
     publishedRevision: 2,
@@ -48,6 +49,8 @@ function controller(
     createPackage: vi.fn().mockResolvedValue({ id: 7, name: "New" }),
     downloadPackage: vi.fn().mockResolvedValue(undefined),
     removePackage: vi.fn().mockResolvedValue(undefined),
+    setPackageEnabled: vi.fn().mockResolvedValue(undefined),
+    deletePackage: vi.fn().mockResolvedValue(undefined),
     adoptPackage: vi.fn().mockResolvedValue(undefined),
     emitPackage: vi.fn().mockResolvedValue(undefined),
   };

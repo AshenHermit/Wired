@@ -5,6 +5,7 @@ import {
   PackageManifest,
   PackageRevision,
   ScriptingPackage,
+  UpdateScriptingPackagePayload,
 } from "@wired-io/shared";
 import { apiClient } from "../api-client/client-api";
 import { uint8ArrayToFile } from "@/utils/file-utils";
@@ -16,6 +17,20 @@ export async function createScriptingPackage(
     "scripting-packages",
     data
   );
+}
+
+export async function updateScriptingPackage(
+  id: number,
+  data: UpdateScriptingPackagePayload
+) {
+  return apiClient.patch<ScriptingPackage, UpdateScriptingPackagePayload>(
+    `scripting-packages/${id}`,
+    data
+  );
+}
+
+export async function deleteScriptingPackage(id: number) {
+  await apiClient.delete<void, void>(`scripting-packages/${id}`);
 }
 
 // --- Package revisions ------------------------------------------------------

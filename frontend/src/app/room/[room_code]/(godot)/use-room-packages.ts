@@ -7,7 +7,11 @@ import type {
   ScriptingPackage,
 } from "@wired-io/shared";
 import { getRoomPackages } from "@/api/services/godot-game";
-import { createScriptingPackage } from "@/api/services/scripting-packages";
+import {
+  createScriptingPackage,
+  deleteScriptingPackage,
+  updateScriptingPackage,
+} from "@/api/services/scripting-packages";
 import type { GodotEditorInstance } from "./GodotEditorInstance";
 import {
   EditorBridgeError,
@@ -34,13 +38,16 @@ export type RoomPackageStatus =
   | "not-loaded"
   | "loaded"
   | "new-revision"
-  | "local-changes";
+  | "local-changes"
+  | "disabled";
 
 export type RoomPackageEntry = {
   packageId: number;
   name: string;
   version: string;
   status: RoomPackageStatus;
+  /** The package is active in the room runtime. */
+  enabled: boolean;
   /** Loaded by an explicit action in this editor session. */
   loaded: boolean;
   /** The package directory is present in the editor FS. */
@@ -96,6 +103,10 @@ export type RoomPackagesController = {
     packageId: number,
     options?: { force?: boolean },
   ) => Promise<void>;
+  /** Activates or deactivates the package in the room without deleting it. */
+  setPackageEnabled: (packageId: number, enabled: boolean) => Promise<void>;
+  /** Deletes the package from the room and the backend, permanently. */
+  deletePackage: (packageId: number) => Promise<void>;
   adoptPackage: (packageId: number) => Promise<void>;
   emitPackage: (
     packageId: number,
@@ -145,18 +156,59 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * The backend refuses to delete a package that enabled packages still depend
+ * on. Its 409 payload names them, which is far more useful than the generic
+ * "Request failed with status code 409".
+ */
+function deleteConflictMessage(error: unknown): string | null {
+  const data = (
+    error as
+      | {
+          response?: {
+            data?: {
+              code?: string;
+              dependents?: { packageId?: number; name?: string }[];
+            };
+          };
+        }
+      | undefined
+  )?.response?.data;
+  if (data?.code !== "package_has_dependents" || !data.dependents?.length) {
+    return null;
+  }
+  return `Сначала отключите или удалите зависимые пакеты: ${data.dependents
+    .map((dependent) => dependent.name ?? `#${dependent.packageId}`)
+    .join(", ")}`;
+}
+
 function mergePackages(
   current: ScriptingPackage[],
   incoming: ScriptingPackage[],
+  removedIds: ReadonlySet<number> = new Set(),
 ): ScriptingPackage[] {
   let changed = false;
   const result = current.slice();
   for (const pkg of incoming) {
+    if (removedIds.has(pkg.id)) continue;
     if (result.some((existing) => existing.id === pkg.id)) continue;
     result.push(pkg);
     changed = true;
   }
   return changed ? result : current;
+}
+
+/**
+ * A package can never come back after an explicit delete in this session, even
+ * when the room prop or a slow poll still carries it.
+ */
+function withoutRemoved(
+  packages: ScriptingPackage[],
+  removedIds: ReadonlySet<number>,
+): ScriptingPackage[] {
+  if (removedIds.size === 0) return packages;
+  const kept = packages.filter((pkg) => !removedIds.has(pkg.id));
+  return kept.length === packages.length ? packages : kept;
 }
 
 /**
@@ -171,7 +223,7 @@ function packageFromStatus(status: PackageSyncStatus): ScriptingPackage {
     name: status.name,
     version: "",
     description: "",
-    enabled: true,
+    enabled: status.enabled,
     dependencies: [],
     scripts: [],
     createdAt: timestamp,
@@ -209,8 +261,14 @@ function buildEntries(
       ? changedPackageFiles(loadedState.files, snapshot)
       : Object.keys(snapshot);
 
+    const enabled = remoteState?.enabled ?? pkg.enabled !== false;
+
     let status: RoomPackageStatus = "not-loaded";
-    if (loadedState) {
+    if (!enabled) {
+      // A disabled package keeps its local files and changes visible, but it
+      // is not part of the room runtime, so download/emit are not offered.
+      status = "disabled";
+    } else if (loadedState) {
       if (localChanges.length > 0) {
         status = "local-changes";
       } else if (
@@ -233,6 +291,7 @@ function buildEntries(
       name: pkg.name,
       version: pkg.version,
       status,
+      enabled,
       loaded: loadedState !== null,
       inEditor,
       publishedRevision,
@@ -274,12 +333,17 @@ type RoomPackagesState = {
   packages: ScriptingPackage[];
   entries: RoomPackageEntry[];
   actions: Record<number, PackageActionState>;
+  /** Packages deleted in this session; stale props/polls must not bring them back. */
+  removedIds: Set<number>;
+  /** Package ids the status endpoint listed on the previous load. */
+  remoteIds: Set<number>;
 };
 
 type RoomPackagesAction =
   | { type: "reset"; packages: ScriptingPackage[] }
   | { type: "merged"; packages: ScriptingPackage[] }
   | { type: "created"; package: ScriptingPackage }
+  | { type: "removed"; ids: number[] }
   | {
       type: "loaded";
       incoming: ScriptingPackage[];
@@ -304,17 +368,49 @@ function roomPackagesReducer(
         packages: action.packages,
         entries: [],
         actions: {},
+        removedIds: new Set(),
+        remoteIds: new Set(),
       };
     case "merged": {
-      const packages = mergePackages(state.packages, action.packages);
+      const packages = withoutRemoved(
+        mergePackages(state.packages, action.packages, state.removedIds),
+        state.removedIds,
+      );
       return packages === state.packages ? state : { ...state, packages };
     }
     case "created": {
-      const packages = mergePackages(state.packages, [action.package]);
+      const packages = withoutRemoved(
+        mergePackages(state.packages, [action.package], state.removedIds),
+        state.removedIds,
+      );
       return packages === state.packages ? state : { ...state, packages };
     }
+    case "removed": {
+      const removed = new Set([...state.removedIds, ...action.ids]);
+      return {
+        ...state,
+        packages: state.packages.filter((pkg) => !removed.has(pkg.id)),
+        entries: state.entries.filter((entry) => !removed.has(entry.packageId)),
+        removedIds: removed,
+      };
+    }
     case "loaded": {
-      const packages = mergePackages(state.packages, action.incoming);
+      // The status endpoint lists every room package (including disabled and
+      // unpublished ones), so a package the server listed before and no
+      // longer lists was deleted elsewhere. A package that never appeared in
+      // a status response (created locally, a stale prop) is kept.
+      const incomingIds = new Set(action.incoming.map((pkg) => pkg.id));
+      const dropped = state.packages
+        .filter((pkg) => state.remoteIds.has(pkg.id) && !incomingIds.has(pkg.id))
+        .map((pkg) => pkg.id);
+      const removedIds =
+        dropped.length > 0
+          ? new Set([...state.removedIds, ...dropped])
+          : state.removedIds;
+      const packages = withoutRemoved(
+        mergePackages(state.packages, action.incoming, removedIds),
+        removedIds,
+      );
       return {
         ...state,
         packages,
@@ -325,6 +421,8 @@ function roomPackagesReducer(
           action.snapshots,
           action.present,
         ),
+        removedIds,
+        remoteIds: incomingIds,
       };
     }
     case "action":
@@ -363,6 +461,8 @@ export function useRoomPackages(
     packages: roomPackages,
     entries: [],
     actions: {},
+    removedIds: new Set<number>(),
+    remoteIds: new Set<number>(),
   });
   const [statusLoaded, setStatusLoaded] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -742,6 +842,67 @@ export function useRoomPackages(
     [beginAction, endAction, filesRef, guarded, refresh, setAction],
   );
 
+  const setPackageEnabled = React.useCallback(
+    (packageId: number, enabled: boolean): Promise<void> =>
+      guarded(async () => {
+        beginAction(packageId);
+        try {
+          await updateScriptingPackage(packageId, { enabled });
+          setAction(packageId, {
+            notice: enabled ? "Пакет включён" : "Пакет отключён",
+          });
+          await refresh();
+        } catch (cause) {
+          const message = `Не удалось ${
+            enabled ? "включить" : "отключить"
+          } пакет: ${errorMessage(cause)}`;
+          setAction(packageId, { error: message });
+          throw new Error(message);
+        } finally {
+          endAction(packageId);
+        }
+      }),
+    [beginAction, endAction, guarded, refresh, setAction],
+  );
+
+  const deletePackage = React.useCallback(
+    (packageId: number): Promise<void> =>
+      guarded(async () => {
+        beginAction(packageId);
+        try {
+          try {
+            await deleteScriptingPackage(packageId);
+          } catch (cause) {
+            const message =
+              deleteConflictMessage(cause) ??
+              `Не удалось удалить пакет: ${errorMessage(cause)}`;
+            setAction(packageId, { error: message });
+            throw new Error(message);
+          }
+
+          // The editor directory is local state, not the package itself: a
+          // failed cleanup must not make the deleted package look present.
+          try {
+            const files = filesRef.current;
+            if (files) {
+              await files.deletePackage(packageId);
+              requestEditorRescan();
+            }
+          } catch {
+            // The editor may be gone; the package is already deleted.
+          }
+          snapshotsRef.current.delete(packageId);
+          loadedRef.current.delete(packageId);
+          dispatch({ type: "removed", ids: [packageId] });
+          setAction(packageId, { notice: "Пакет удалён из комнаты" });
+          await refresh();
+        } finally {
+          endAction(packageId);
+        }
+      }),
+    [beginAction, endAction, filesRef, guarded, refresh, setAction],
+  );
+
   const adoptPackage = React.useCallback(
     (packageId: number): Promise<void> =>
       guarded(async () => {
@@ -839,6 +1000,8 @@ export function useRoomPackages(
     createPackage,
     downloadPackage,
     removePackage,
+    setPackageEnabled,
+    deletePackage,
     adoptPackage,
     emitPackage,
   };
