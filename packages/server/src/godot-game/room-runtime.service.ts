@@ -115,7 +115,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
     );
   }
 
-  stopRoom(roomId: string, reason = 'requested'): Promise<void> {
+  async stopRoom(roomId: string, reason = 'requested'): Promise<void> {
     const session = this.sessions.get(roomId);
     if (!session) {
       return Promise.reject(
@@ -126,13 +126,20 @@ export class RoomRuntimeService implements OnModuleDestroy {
         ),
       );
     }
-    return session.stop(reason);
+    await session.stop(reason);
+    if (!session.canBeStopped()) {
+      // The process really exited: drop the record so the room does not keep
+      // a stale session (and its log buffer) after an explicit stop.
+      this.forgetSession(roomId);
+    }
   }
 
   /** Stops every room; used by Nest shutdown hooks so no process is orphaned. */
   async shutdownAll(): Promise<void> {
+    // `canBeStopped` and not `isActive`: a runtime that survived a force kill
+    // is already `failed`, but it still holds its port until it really exits.
     const sessions = [...this.sessions.values()].filter((session) =>
-      session.isActive(),
+      session.canBeStopped(),
     );
     await Promise.all(
       sessions.map((session) =>
@@ -143,16 +150,29 @@ export class RoomRuntimeService implements OnModuleDestroy {
         }),
       ),
     );
+    for (const session of sessions) {
+      if (!session.canBeStopped()) {
+        this.forgetSession(session.roomId);
+      }
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
     await this.shutdownAll();
   }
 
+  /**
+   * Drops a stopped session so the room no longer keeps a record (and its log
+   * buffer) after it is gone. The port was already released by the exit.
+   */
+  private forgetSession(roomId: string): void {
+    this.sessions.delete(roomId);
+    this.registry.remove(roomId);
+  }
+
   // --- startup ------------------------------------------------------------
 
-  private ensureSession(roomId: string): RoomRuntimeSession {
-    this.runtimeConfiguration.validateRoomId(roomId);
+  private ensureSession(roomId: string): RoomRuntimeSession {    this.runtimeConfiguration.validateRoomId(roomId);
     const config = this.configService.godotRuntime;
     this.runtimeConfiguration.validate(config);
     const paths = this.runtimeConfiguration.resolvePaths(config);

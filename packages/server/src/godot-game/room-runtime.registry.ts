@@ -21,6 +21,11 @@ export class RoomRuntimeRegistry {
     this.reservedPorts.set(record.port, record);
   }
 
+  /** Forgets a room that is already gone; ports are released by the exit. */
+  remove(roomId: string): void {
+    this.activeByRoom.delete(roomId);
+  }
+
   allocatePort(config: GodotRuntimeConfig): number | null {
     const now = Date.now();
     for (let port = config.portStart; port <= config.portEnd; port += 1) {

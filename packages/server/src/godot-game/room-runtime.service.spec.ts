@@ -267,26 +267,30 @@ describe('RoomRuntimeService', () => {
     process.exit(0);
     await stopping;
 
-    expect(service.getRuntime('room-1')?.state).toBe('stopped');
+    expect(service.getRuntime('room-1')).toBeNull();
     expect(process.killed).toBe(false);
   });
 
   it('force kills only after the grace period and logs it', async () => {
     jest.useFakeTimers();
     const { process } = await startRoom('room-1');
+    // Keep the record alive after the force kill, so its log is still readable.
+    process.killExits = false;
 
     const stopping = service.stopRoom('room-1');
     await flushAsync();
     expect(process.stdinText).toContain('shutdown');
+    expect(process.killed).toBe(false);
 
     jest.advanceTimersByTime(config.shutdownGraceMs);
     await flushAsync();
+    expect(process.killed).toBe(true);
+    expect(service.getLogs('room-1').join('\n')).toMatch(/forc/i);
+
     process.exit(0);
     await stopping;
 
-    expect(process.killed).toBe(true);
-    expect(service.getLogs('room-1').join('\n')).toMatch(/forc/i);
-    expect(service.getRuntime('room-1')?.state).toBe('stopped');
+    expect(service.getRuntime('room-1')).toBeNull();
   });
 
   it('keeps the port reserved when a force-killed process refuses to exit', async () => {
@@ -312,6 +316,63 @@ describe('RoomRuntimeService', () => {
       'WIRED_SERVER_READY room=room-2 port=19101 bind=127.0.0.1',
     );
     await second;
+  });
+
+  it('retries the force kill when the runtime survived a stop', async () => {
+    jest.useFakeTimers();
+    const { process } = await startRoom('room-1');
+    process.killExits = false;
+
+    const stopping = service.stopRoom('room-1');
+    await flushAsync();
+    jest.advanceTimersByTime(config.shutdownGraceMs);
+    await flushAsync();
+    jest.advanceTimersByTime(2_000);
+    await flushAsync();
+    await stopping;
+    expect(service.getRuntime('room-1')?.state).toBe('failed');
+
+    process.killExits = true;
+    await service.stopRoom('room-1');
+
+    expect(process.killed).toBe(true);
+    expect(service.getRuntime('room-1')).toBeNull();
+  });
+
+  it('frees the port of a stopped room for the next runtime', async () => {
+    const { process } = await startRoom('room-1');
+    const stopping = service.stopRoom('room-1');
+    await flushAsync();
+    process.exit(0);
+    await stopping;
+
+    expect(service.getRuntime('room-1')).toBeNull();
+
+    const next = service.getConnection('room-2');
+    await flushAsync();
+    expect(service.getRuntime('room-2')?.port).toBe(19100);
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-2 port=19100 bind=127.0.0.1',
+    );
+    await next;
+  });
+
+  it('clears a failed session when the room is stopped explicitly', async () => {
+    const { process } = await startRoom('room-1');
+    process.exit(1);
+    expect(service.getRuntime('room-1')?.state).toBe('failed');
+
+    await service.stopRoom('room-1');
+
+    expect(service.getRuntime('room-1')).toBeNull();
+
+    const next = service.getConnection('room-2');
+    await flushAsync();
+    expect(service.getRuntime('room-2')?.port).toBe(19100);
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-2 port=19100 bind=127.0.0.1',
+    );
+    await next;
   });
 
   it('starts the idle timer when the last player leaves and cancels it on rejoin', async () => {
@@ -409,7 +470,7 @@ describe('RoomRuntimeService', () => {
 
     factory.last.exit(0);
     await stopping;
-    expect(service.getRuntime('room-1')?.state).toBe('stopped');
+    expect(service.getRuntime('room-1')).toBeNull();
   });
 
   it('writes runtime logs to the per-room file', async () => {
