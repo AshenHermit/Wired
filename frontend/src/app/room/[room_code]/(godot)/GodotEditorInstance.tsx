@@ -50,7 +50,6 @@ export class GodotEditorInstance {
   events: EventEmitter<EditorEvents> = new EventEmitter<EditorEvents>();
   rootPath = "/home/web_user";
   persistentPaths = [this.rootPath];
-  lastScale = 0;
   editor!: GodotEngine;
   OnEditorExit: ((code: number) => void) | null = null;
   projectInfo: ProjectInfo | null = null;
@@ -135,22 +134,17 @@ export class GodotEditorInstance {
     await this.editor.start({ args: args, persistentDrops: true });
     this.events.emit("onLoadStatusChange", "ready");
   }
+  /**
+   * The canvas belongs to React: it is mounted once and its ref must keep
+   * pointing at the node that is actually in the document. Only the drawing
+   * buffer is reset here, the element itself is never replaced.
+   */
   setCanvas(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.canvas.width = this.canvas.parentElement?.clientWidth ?? 0;
     this.canvas.height = this.canvas.parentElement?.clientHeight ?? 0;
   }
-  focus() {
-    this.canvas?.focus();
-  }
-  replaceCanvas(from: HTMLCanvasElement) {
-    const out = document.createElement("canvas");
-    out.id = from.id;
-    out.tabIndex = from.tabIndex;
-    from.parentNode?.replaceChild(out, from);
-    this.lastScale = 0;
-    return out;
-  }
+
   createEditorConfig() {
     const concurrency = clamp(navigator.hardwareConcurrency ?? 1, 12, 24);
     return {
@@ -172,12 +166,13 @@ export class GodotEditorInstance {
       canvas: this.canvas,
       canvasResizePolicy: 0,
       onExit: () => {
-        this.canvas = this.replaceCanvas(this.canvas!);
-        this.setCanvas(this.canvas);
-        console.log("exited", this.OnEditorExit);
-        if (this.OnEditorExit) {
-          this.OnEditorExit(0);
+        // Reuse the React-owned canvas instead of swapping it in the DOM:
+        // replacing the node detached the component's ref and the next React
+        // render recreated an empty canvas for the restarted engine.
+        if (this.canvas) {
+          this.setCanvas(this.canvas);
         }
+        this.OnEditorExit?.(0);
       },
       onExecute: this.Execute.bind(this),
       persistentPaths: this.persistentPaths,
