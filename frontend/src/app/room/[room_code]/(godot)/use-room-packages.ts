@@ -11,6 +11,7 @@ import { createScriptingPackage } from "@/api/services/scripting-packages";
 import type { GodotEditorInstance } from "./GodotEditorInstance";
 import {
   EditorBridgeError,
+  EditorBridgeWaitCancelledError,
   createEditorBridgeClient,
   requestEditorRescan,
   waitForEditorBridge,
@@ -292,6 +293,7 @@ export function useRoomPackages(
   const filesRef = React.useRef<PackageFileSystem | null>(null);
   const engineRef = React.useRef<GodotEditorInstance | null>(null);
   const reconnectRef = React.useRef<number | null>(null);
+  const bridgeWaitRef = React.useRef<AbortController | null>(null);
   const connectingRef = React.useRef(false);
   const mountedRef = React.useRef(false);
   const requestRef = React.useRef(0);
@@ -460,12 +462,23 @@ export function useRoomPackages(
     [load],
   );
 
+  /**
+   * Cancels the background wait for the editor plugin. A wait left running
+   * after unmount (or after the room changed) would keep a 120 s timer chain
+   * alive and only then write into a dead component.
+   */
+  const cancelBridgeWait = React.useCallback((): void => {
+    bridgeWaitRef.current?.abort();
+    bridgeWaitRef.current = null;
+  }, []);
+
   const roomIdRef = React.useRef(roomId);
   React.useEffect(() => {
     if (roomIdRef.current === roomId) return;
     roomIdRef.current = roomId;
     // An in-flight load belongs to the old room: invalidate it before clearing
     // so it can neither publish stale state nor keep a dead reconnect loop.
+    cancelBridgeWait();
     stopReconnectLoop();
     engineRef.current = null;
     requestRef.current += 1;
@@ -481,7 +494,7 @@ export function useRoomPackages(
     setFsReady(false);
     setStatusLoaded(false);
     setError(null);
-  }, [roomId, roomPackages, stopReconnectLoop]);
+  }, [cancelBridgeWait, roomId, roomPackages, stopReconnectLoop]);
 
   React.useEffect(() => {
     void refresh();
@@ -588,7 +601,13 @@ export function useRoomPackages(
     connectRef.current = connect;
   }, [connect]);
 
-  React.useEffect(() => () => stopReconnectLoop(), [stopReconnectLoop]);
+  React.useEffect(
+    () => () => {
+      cancelBridgeWait();
+      stopReconnectLoop();
+    },
+    [cancelBridgeWait, stopReconnectLoop],
+  );
 
   /**
    * Runs after the editor reported ready and waits for the plugin bridge in the
@@ -598,19 +617,27 @@ export function useRoomPackages(
   const afterEditorStart = React.useCallback(
     (editor: GodotEditorInstance): void => {
       engineRef.current = editor;
+      cancelBridgeWait();
+      const controller = new AbortController();
+      bridgeWaitRef.current = controller;
       void (async () => {
         try {
-          await waitForEditorBridge(BRIDGE_WAIT_MS);
+          await waitForEditorBridge(BRIDGE_WAIT_MS, {
+            signal: controller.signal,
+          });
           if (!mountedRef.current) return;
           await connect();
-        } catch {
+        } catch (cause) {
+          // An aborted wait means the panel is gone or was reset: it is not a
+          // missing bridge and must not surface as an error.
+          if (cause instanceof EditorBridgeWaitCancelledError) return;
           if (!mountedRef.current) return;
           setError("Мост редактора не появился: пакеты недоступны");
           startReconnectLoop();
         }
       })();
     },
-    [connect, startReconnectLoop],
+    [cancelBridgeWait, connect, startReconnectLoop],
   );
 
   /**

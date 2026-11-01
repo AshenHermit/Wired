@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import type { Room, RoomPackagesStatus } from "@wired-io/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -53,6 +53,43 @@ const connection = {
   ticketExpiresAt: 1_800_000_000,
   activePlayers: 0,
 };
+
+/**
+ * Drives the host through the whole handshake with fake timers. Mirrors what
+ * the exported build sends, so the heartbeat can be observed from `ready`.
+ */
+async function reachReady(view: ReturnType<typeof render>) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  const iframe = view.container.querySelector("iframe") as HTMLIFrameElement;
+  if (!iframe) {
+    throw new Error("iframe is not mounted");
+  }
+  send(iframe, { source: "wired-game", type: "wired:game-ready", payload: {} });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  send(iframe, {
+    source: "wired-game",
+    type: "wired:game-configured",
+    payload: { room: 8 },
+  });
+  send(iframe, {
+    source: "wired-game",
+    type: "wired:game-status",
+    payload: { stage: "authenticated", detail: "" },
+  });
+  send(iframe, {
+    source: "wired-game",
+    type: "wired:game-status",
+    payload: { stage: "ready", detail: "" },
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  return iframe;
+}
 
 describe("GameTab bridge", () => {
   beforeEach(() => {
@@ -173,5 +210,61 @@ describe("GameTab bridge", () => {
       window.location.origin,
     );
     expect(screen.getByText("Игра недоступна")).toBeTruthy();
+  });
+
+  it("reloads a ready frame whose engine stopped answering", async () => {
+    vi.useFakeTimers();
+    try {
+      const view = render(<GameTab room={room} />);
+      const iframe = await reachReady(view);
+      expect(view.container.textContent).toContain("Игроков: 1");
+
+      // No message from the frame for the whole heartbeat window: the backend
+      // poll keeps succeeding, but the host must stop trusting the engine.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      expect(view.container.textContent).not.toContain("Игроков: 1");
+      expect(view.container.textContent).toContain("Соединение потеряно");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(view.container.querySelector("iframe")).not.toBe(iframe);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pings a live ready frame and keeps it mounted", async () => {
+    vi.useFakeTimers();
+    try {
+      const view = render(<GameTab room={room} />);
+      const iframe = await reachReady(view);
+      const postMessage = vi.spyOn(iframe.contentWindow!, "postMessage");
+
+      // The frame answers every heartbeat by reporting its still-ready stage.
+      for (let beat = 0; beat < 4; beat += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(10_000);
+        });
+        send(iframe, {
+          source: "wired-game",
+          type: "wired:game-status",
+          payload: { stage: "ready", detail: "" },
+        });
+      }
+
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "wired-host", type: "wired:ping" }),
+        window.location.origin,
+      );
+      expect(view.container.querySelector("iframe")).toBe(iframe);
+      expect(view.container.textContent).toContain("Игроков: 1");
+      expect(view.container.textContent).not.toContain("Соединение потеряно");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

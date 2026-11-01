@@ -356,6 +356,35 @@ describe("useRoomPackages", () => {
     }
   });
 
+  it("cancels the bridge wait on unmount", async () => {
+    vi.useFakeTimers();
+    try {
+      // No bridge yet: the hook is inside the 120 s plugin wait.
+      const { result, unmount } = renderHook(() =>
+        useRoomPackages(1, ONE_PACKAGE),
+      );
+      await act(async () => {
+        result.current.afterEditorStart(makeEditor());
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      unmount();
+      // The polling chain is cancelled with the component instead of keeping
+      // one timer alive for the rest of the timeout window.
+      expect(vi.getTimerCount()).toBe(0);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      expect(gameApi.getRoomPackages).toHaveBeenCalledTimes(1);
+      expect(createPackageFileSystem).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reports an error when the bridge never appears", async () => {
     vi.useFakeTimers();
     try {

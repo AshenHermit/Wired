@@ -3,6 +3,7 @@ import {
   createEditorBridgeClient,
   EditorBridgeError,
   EditorBridgeOperationError,
+  EditorBridgeWaitCancelledError,
   requestEditorRescan,
   waitForEditorBridge,
 } from "./editor-bridge";
@@ -240,5 +241,48 @@ describe("waitForEditorBridge", () => {
 
     await vi.advanceTimersByTimeAsync(1000);
     await assertion;
+  });
+
+  it("cancels the timeout chain when its owner aborts", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const promise = waitForEditorBridge(120_000, {
+      signal: controller.signal,
+    });
+    const assertion = expect(promise).rejects.toBeInstanceOf(
+      EditorBridgeWaitCancelledError,
+    );
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(vi.getTimerCount()).toBe(1);
+
+    controller.abort();
+
+    await assertion;
+    // The pending 250 ms tick is cleared instead of polling a dead editor for
+    // the remaining two minutes.
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(120_000);
+  });
+
+  it("rejects immediately when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      waitForEditorBridge(120_000, { signal: controller.signal }),
+    ).rejects.toBeInstanceOf(EditorBridgeWaitCancelledError);
+  });
+
+  it("does not report a cancellation as a missing bridge", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const promise = waitForEditorBridge(120_000, {
+      signal: controller.signal,
+    }).catch((error: unknown) => error);
+
+    controller.abort();
+
+    await expect(promise).resolves.not.toBeInstanceOf(EditorBridgeError);
   });
 });

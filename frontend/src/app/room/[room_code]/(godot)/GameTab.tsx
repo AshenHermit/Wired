@@ -34,6 +34,11 @@ const MAX_AUTO_RETRIES = 3;
 const LOAD_TIMEOUT_MS = 120_000;
 const HANDSHAKE_TIMEOUT_MS = 15_000;
 const STATUS_POLL_MS = 5_000;
+// A ready frame that stops answering for this long is treated as a crashed
+// WASM engine. The backend status poll can stay healthy while the engine is
+// dead, so liveness has to be observed on the frame itself.
+const HEARTBEAT_MS = 10_000;
+const HEARTBEAT_TIMEOUT_MS = 30_000;
 
 /**
  * The Godot Web build runs in a same-origin iframe. The host waits for the
@@ -57,6 +62,7 @@ export function GameTab({ room }: { room: Room }) {
   const retryTimerRef = React.useRef<number | null>(null);
   const handshakeTimerRef = React.useRef<number | null>(null);
   const disposedRef = React.useRef(false);
+  const lastFrameMessageAtRef = React.useRef(0);
 
   const update = React.useCallback((next: GamePhase, text?: string) => {
     phaseRef.current = next;
@@ -250,6 +256,9 @@ export function GameTab({ room }: { room: Room }) {
         return;
       }
 
+      // Any valid message proves the engine loop is still alive.
+      lastFrameMessageAtRef.current = Date.now();
+
       switch (data.type) {
         case "wired:game-booted":
           if (phaseRef.current !== "error") {
@@ -354,6 +363,28 @@ export function GameTab({ room }: { room: Room }) {
       window.clearInterval(timer);
     };
   }, [phase, room.id]);
+
+  // The status poll only proves the backend is healthy. A frame whose WASM
+  // engine crashed silently keeps the tab in `ready` forever unless the host
+  // asks the frame itself and notices the missing answers.
+  React.useEffect(() => {
+    if (phase !== "ready") {
+      return;
+    }
+    lastFrameMessageAtRef.current = Date.now();
+    const timer = window.setInterval(() => {
+      const frame = iframeRef.current;
+      if (!frame) {
+        return;
+      }
+      if (Date.now() - lastFrameMessageAtRef.current >= HEARTBEAT_TIMEOUT_MS) {
+        startReconnect();
+        return;
+      }
+      postGamePing(frame);
+    }, HEARTBEAT_MS);
+    return () => window.clearInterval(timer);
+  }, [phase, startReconnect]);
 
   React.useEffect(() => {
     // Strict Mode runs setup → cleanup → setup on the same instance in
