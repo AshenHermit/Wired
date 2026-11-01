@@ -105,16 +105,38 @@ func _sorted_descriptors(kind: String) -> Array[Dictionary]:
 
 
 ## Explicit comparator rather than relying on sort stability, so package order
-## is identical on every peer.
+## is identical on every peer. Package ids are numeric on the wire (`"12"`), so
+## they compare as numbers: a string compare put `"10"` before `"9"`. A
+## non-numeric id (a test fixture) still sorts deterministically, after the
+## numeric ones, so the order never depends on registration timing.
 func _compare_descriptors(left: Dictionary, right: Dictionary) -> bool:
-	var left_package := str(left.get("package_id", ""))
-	var right_package := str(right.get("package_id", ""))
-	if left_package != right_package:
-		return left_package < right_package
-	var left_order := int(left.get("order", 0))
-	var right_order := int(right.get("order", 0))
+	var package_order := _compare_package_ids(
+		str(left.get(WiredProtocol.KEY_PACKAGE_ID, "")),
+		str(right.get(WiredProtocol.KEY_PACKAGE_ID, "")),
+	)
+	if package_order != 0:
+		return package_order < 0
+	var left_order := int(left.get(WiredProtocol.KEY_ORDER, 0))
+	var right_order := int(right.get(WiredProtocol.KEY_ORDER, 0))
 	if left_order != right_order:
 		return left_order < right_order
 	return int(left.get("registration_index", 0)) < int(
 		right.get("registration_index", 0)
 	)
+
+
+## Negative when `left` sorts first, positive when `right` does, 0 when equal.
+static func _compare_package_ids(left: String, right: String) -> int:
+	if left == right:
+		return 0
+	var left_numeric := left.is_valid_int()
+	var right_numeric := right.is_valid_int()
+	if left_numeric and right_numeric:
+		var left_value := left.to_int()
+		var right_value := right.to_int()
+		return -1 if left_value < right_value else 1
+	if left_numeric != right_numeric:
+		# Numeric package ids first, so the order of real packages never depends
+		# on which non-numeric ids a fixture happens to register.
+		return -1 if left_numeric else 1
+	return -1 if left < right else 1

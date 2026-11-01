@@ -46,6 +46,19 @@ const SERVER_PEER_ID := 1
 ## keeps normal tab switches lossless and gives the focus resync time to run.
 const NETWORK_BUFFER_SIZE := 4 * 1024 * 1024
 
+## Protocol vocabulary. The values live in `WiredProtocol`; the aliases keep the
+## transport's own API readable at its call sites.
+const KEY_PLAYER_ID := WiredProtocol.KEY_PLAYER_ID
+const KEY_STATE := WiredProtocol.KEY_STATE
+const KEY_TYPE := WiredProtocol.KEY_TYPE
+const EVENT_WORLD_STATE := WiredProtocol.EVENT_WORLD_STATE
+const EVENT_PLAYER_JOINED := WiredProtocol.EVENT_PLAYER_JOINED
+const EVENT_PLAYER_READY := WiredProtocol.EVENT_PLAYER_READY
+const EVENT_PLAYER_LEFT := WiredProtocol.EVENT_PLAYER_LEFT
+const EVENT_PACKAGE_REVISION := WiredProtocol.EVENT_PACKAGE_REVISION
+const EVENT_WORLD_SNAPSHOT := WiredProtocol.EVENT_WORLD_SNAPSHOT
+const EVENT_ERROR := WiredProtocol.EVENT_ERROR
+
 var mode := ""
 var room_code := ""
 var player_id := 0
@@ -60,6 +73,8 @@ var _next_player_id := 1
 var _server_seq := 0
 var _players: Dictionary = {}
 var _pending: Dictionary = {}
+## Burned ticket nonce -> unix expiry of that ticket. A nonce is only kept while
+## its ticket could still pass verification, so the set cannot grow forever.
 var _used_nonces: Dictionary = {}
 # server: latest applied revision per package id
 var _package_revisions: Dictionary = {}
@@ -185,10 +200,10 @@ func _on_peer_disconnected(peer_id: int) -> void:
 	if not _players.has(peer_id):
 		print("WIRED_PEER_DISCONNECTED peer=%d (unauthenticated)" % peer_id)
 		return
-	var pid: int = _players[peer_id]["player_id"]
+	var pid: int = _players[peer_id][KEY_PLAYER_ID]
 	_players.erase(peer_id)
 	print("WIRED_PLAYER_LEFT peer=%d player=%d" % [peer_id, pid])
-	_broadcast_event({"type": "player_left", "player_id": pid})
+	_broadcast_event({KEY_TYPE: EVENT_PLAYER_LEFT, KEY_PLAYER_ID: pid})
 	# Emitted after the peer is gone from `_players`, so the player manager can
 	# free the node and drop the auth record exactly once.
 	peer_left.emit(peer_id)
@@ -216,15 +231,19 @@ func cli_hello(payload_json: String) -> void:
 		_reject(peer_id, str(result.reason))
 		return
 	var nonce := str(result.nonce)
+	_prune_used_nonces(Time.get_unix_time_from_system())
 	if _used_nonces.has(nonce):
 		_reject(peer_id, "ticket_reused")
 		return
-	_used_nonces[nonce] = true
+	# The nonce is kept only until its ticket expires: `WiredTicket.verify`
+	# rejects an expired ticket anyway, so burning it after that point is
+	# pointless and would grow the set for the life of the process.
+	_used_nonces[nonce] = int(result.get("exp", 0))
 	_pending.erase(peer_id)
 	var pid := _next_player_id
 	_next_player_id += 1
 	_players[peer_id] = {
-		"player_id": pid,
+		KEY_PLAYER_ID: pid,
 		"ready": false,
 		"packages_ready": false,
 		"name": str(payload.get("name", "player")),
@@ -233,14 +252,14 @@ func cli_hello(payload_json: String) -> void:
 	var auth := {
 		"protocol": PROTOCOL_VERSION,
 		"room": room_code,
-		"player_id": pid,
+		KEY_PLAYER_ID: pid,
 		"peer_id": peer_id,
 		"server_time": Time.get_unix_time_from_system(),
 	}
 	rpc_id(peer_id, "srv_auth_ok", JSON.stringify(auth))
 	print("WIRED_AUTH_OK peer=%d player=%d room=%s" % [peer_id, pid, room_code])
 	var state := {
-		"type": "world_state",
+		KEY_TYPE: EVENT_WORLD_STATE,
 		"seq": _next_seq(),
 		"room": room_code,
 		"server_time": Time.get_unix_time_from_system(),
@@ -251,7 +270,7 @@ func cli_hello(payload_json: String) -> void:
 	# the current revisions immediately; it then downloads and reports itself.
 	_send_package_revisions(peer_id)
 	peer_authenticated.emit(peer_id, pid, str(_players[peer_id]["name"]))
-	_broadcast_event({"type": "player_joined", "player_id": pid})
+	_broadcast_event({KEY_TYPE: EVENT_PLAYER_JOINED, KEY_PLAYER_ID: pid})
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -265,9 +284,11 @@ func cli_ready() -> void:
 	_players[peer_id]["ready"] = true
 	print(
 		"WIRED_PLAYER_READY peer=%d player=%d"
-		% [peer_id, int(_players[peer_id]["player_id"])]
+		% [peer_id, int(_players[peer_id][KEY_PLAYER_ID])]
 	)
-	_broadcast_event({"type": "player_ready", "player_id": _players[peer_id]["player_id"]})
+	_broadcast_event(
+		{KEY_TYPE: EVENT_PLAYER_READY, KEY_PLAYER_ID: _players[peer_id][KEY_PLAYER_ID]}
+	)
 	# A room without packages has nothing to download: spawning is gated only
 	# by `cli_ready`, as specified. With packages, `cli_package_ready` emits.
 	if _package_revisions.is_empty():
@@ -284,7 +305,7 @@ func cli_ack_event(seq: int) -> void:
 		return
 	print(
 		"WIRED_EVENT_ACK peer=%d player=%d seq=%d"
-		% [peer_id, int(_players[peer_id]["player_id"]), seq]
+		% [peer_id, int(_players[peer_id][KEY_PLAYER_ID]), seq]
 	)
 
 
@@ -302,7 +323,7 @@ func cli_game_action(action_json: String) -> void:
 		return
 	print(
 		"WIRED_ACTION_ACCEPTED peer=%d player=%d action=%s"
-		% [peer_id, int(_players[peer_id]["player_id"]), action_json]
+		% [peer_id, int(_players[peer_id][KEY_PLAYER_ID]), action_json]
 	)
 
 
@@ -363,11 +384,11 @@ func send_world_snapshot(peer_id: int, snapshot: Dictionary) -> void:
 	if not is_peer_packages_ready(peer_id):
 		return
 	var payload := snapshot.duplicate(true)
-	payload["type"] = "world_snapshot"
+	payload[KEY_TYPE] = EVENT_WORLD_SNAPSHOT
 	payload["seq"] = _next_seq()
 	rpc_id(peer_id, "srv_world_snapshot", payload)
-	var players: Variant = payload.get("players", [])
-	var dynamic_records: Variant = payload.get("dynamic_world", [])
+	var players: Variant = payload.get(WiredProtocol.KEY_PLAYERS, [])
+	var dynamic_records: Variant = payload.get(WiredProtocol.KEY_DYNAMIC_WORLD, [])
 	print(
 		"WIRED_WORLD_SNAPSHOT_SENT peer=%d players=%d dynamic=%d"
 		% [
@@ -402,14 +423,14 @@ func set_package_revision(package_id: int, revision: int) -> void:
 		% [package_id, revision, _players.size()]
 	)
 	_broadcast_event(
-		{"type": "package_revision", "package_id": package_id, "revision": revision}
+		{KEY_TYPE: EVENT_PACKAGE_REVISION, "package_id": package_id, "revision": revision}
 	)
 
 
 func _send_package_revisions(peer_id: int) -> void:
 	for package_id in _package_revisions:
 		var event := {
-			"type": "package_revision",
+			KEY_TYPE: EVENT_PACKAGE_REVISION,
 			"package_id": int(package_id),
 			"revision": int(_package_revisions[package_id]),
 			"seq": _next_seq(),
@@ -485,9 +506,18 @@ func _mark_packages_ready(peer_id: int) -> void:
 	player["packages_ready"] = true
 	print(
 		"WIRED_PEER_PACKAGES_READY peer=%d player=%d"
-		% [peer_id, int(player["player_id"])]
+		% [peer_id, int(player[KEY_PLAYER_ID])]
 	)
 	peer_packages_ready.emit(peer_id)
+
+
+## Drops burned nonces whose ticket can no longer pass verification. Called
+## before every hello, so the set stays bounded by the connection rate inside
+## one ticket lifetime instead of growing for the life of the process.
+func _prune_used_nonces(now_unix: float) -> void:
+	for nonce: Variant in _used_nonces.keys():
+		if int(_used_nonces[nonce]) <= int(now_unix):
+			_used_nonces.erase(nonce)
 
 
 func _single_line(text: String) -> String:
@@ -527,7 +557,9 @@ func _deny(peer_id: int, method: String) -> void:
 	rpc_id(
 		peer_id,
 		"srv_event",
-		JSON.stringify({"type": "error", "reason": "not_authenticated", "method": method})
+		JSON.stringify(
+			{KEY_TYPE: EVENT_ERROR, "reason": "not_authenticated", "method": method}
+		)
 	)
 
 
@@ -548,7 +580,7 @@ func _player_list() -> Array:
 	for peer_id in _players:
 		list.append(
 			{
-				"player_id": _players[peer_id]["player_id"],
+				KEY_PLAYER_ID: _players[peer_id][KEY_PLAYER_ID],
 				"ready": _players[peer_id]["ready"],
 			}
 		)
@@ -709,7 +741,7 @@ func srv_auth_ok(payload_json: String) -> void:
 	if typeof(payload) != TYPE_DICTIONARY:
 		status_changed.emit("Malformed auth response")
 		return
-	player_id = int(payload.get("player_id", 0))
+	player_id = int(payload.get(KEY_PLAYER_ID, 0))
 	_authenticated = true
 	print(
 		"WIRED_CLIENT_AUTH_OK player=%d room=%s"
@@ -739,9 +771,9 @@ func srv_event(payload_json: String) -> void:
 		return
 	print("WIRED_CLIENT_EVENT " + payload_json)
 	server_event.emit(payload)
-	var event_type := str(payload.get("type", "event"))
+	var event_type := str(payload.get(KEY_TYPE, "event"))
 	log_line.emit("%s %s" % [event_type, payload_json])
-	if event_type != "error" and payload.has("seq"):
+	if event_type != EVENT_ERROR and payload.has("seq"):
 		var seq := int(payload["seq"])
 		rpc_id(SERVER_PEER_ID, "cli_ack_event", seq)
 		print("WIRED_CLIENT_ACK_SENT seq=%d" % seq)
@@ -753,8 +785,8 @@ func srv_event(payload_json: String) -> void:
 func srv_world_snapshot(snapshot: Dictionary) -> void:
 	if mode != "client":
 		return
-	var players: Variant = snapshot.get("players", [])
-	var dynamic_records: Variant = snapshot.get("dynamic_world", [])
+	var players: Variant = snapshot.get(WiredProtocol.KEY_PLAYERS, [])
+	var dynamic_records: Variant = snapshot.get(WiredProtocol.KEY_DYNAMIC_WORLD, [])
 	print(
 		"WIRED_CLIENT_WORLD_SNAPSHOT players=%d dynamic=%d"
 		% [

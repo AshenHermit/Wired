@@ -53,10 +53,11 @@ func _entry(kind: String, relative_path: String, options: Dictionary) -> Diction
 		authority = DEFAULT_AUTHORITY
 	return {
 		"kind": kind,
-		"path": relative_path,
-		"order": int(options.get("order", 0)),
-		"authority": authority,
-		"local_only": bool(options.get("local_only", false)),
-		"options": options.duplicate(true),
+		WiredProtocol.KEY_PATH: relative_path,
+		WiredProtocol.KEY_ORDER: int(options.get(WiredProtocol.KEY_ORDER, 0)),
+		WiredProtocol.KEY_AUTHORITY: authority,
+		WiredProtocol.KEY_LOCAL_ONLY:
+		bool(options.get(WiredProtocol.KEY_LOCAL_ONLY, false)),
+		WiredProtocol.KEY_OPTIONS: options.duplicate(true),
 		"registration_index": _entries.size(),
 	}

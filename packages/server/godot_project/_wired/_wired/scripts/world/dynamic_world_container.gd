@@ -20,16 +20,17 @@ class_name DynamicWorldContainer
 ## after every `package_applied` without knowing the package arrival order.
 
 const SPAWNER_NAME := "Spawner"
-const META_ENTITY_ID := "_wired_entity_id"
-const META_SOURCE_ENTITY_ID := "_wired_source_entity_id"
+## Set on an entity this peer recreated from a late-join snapshot instead of
+## receiving it from the spawner. Nothing else owns its lifetime here.
+const META_SNAPSHOT_REPAIR := "_wired_snapshot_repair"
 const STATE_KEYS: Array[String] = ["position", "rotation", "linear_velocity"]
 const RECORD_KEYS: Array[String] = [
-	"entity_id",
-	"type_id",
-	"owner_player_id",
-	"restore",
-	"state",
-	"spawn_data",
+	WiredProtocol.KEY_ENTITY_ID,
+	WiredProtocol.KEY_TYPE_ID,
+	WiredProtocol.KEY_OWNER_PLAYER_ID,
+	WiredProtocol.KEY_RESTORE,
+	WiredProtocol.KEY_STATE,
+	WiredProtocol.KEY_SPAWN_DATA,
 ]
 
 var _registry: WiredPackageRegistry = null
@@ -99,7 +100,7 @@ func spawn_entity(qualified_type: String, data: Dictionary = {}) -> Node:
 			% [qualified_type, package_id]
 		)
 		return null
-	var entity_id := int(data.get("entity_id", 0))
+	var entity_id := int(data.get(WiredProtocol.KEY_ENTITY_ID, 0))
 	if entity_id > 0 and _entities.has(entity_id):
 		# Never overwrite the index entry: the old node would stay in the tree
 		# untracked and the next save would drop it.
@@ -123,15 +124,17 @@ func spawn_entity(qualified_type: String, data: Dictionary = {}) -> Node:
 	return entity
 
 
-## Server only. Freeing the node tells the spawner to despawn the matching
-## instance on every peer.
+## Any peer. The index entry always goes: a client that frees nothing here must
+## still stop tracking a node the server despawned, otherwise the next snapshot
+## or save reads a dead instance. Only the server frees the node itself; freeing
+## it tells the spawner to despawn the matching instance on every peer.
 func despawn_entity(entity_id: int) -> void:
-	if not _is_server():
-		return
 	var entity: Variant = _entities.get(entity_id)
 	_entities.erase(entity_id)
 	# `_restored_ids` is intentionally kept: a restored record must not be
 	# resurrected by the next `package_applied` after an explicit despawn.
+	if not _is_server():
+		return
 	if not is_instance_valid(entity):
 		return
 	var node := entity as Node
@@ -159,23 +162,32 @@ func _state_records(only_persistent: bool) -> Array[Dictionary]:
 	ids.sort()
 	for entity_id: Variant in ids:
 		var entity: Variant = _entities[entity_id]
-		if not is_instance_valid(entity):
+		if not _is_live_entity(entity):
+			# The engine may free a replicated entity on its own (a despawn
+			# packet matched by net id), so the index is pruned here rather than
+			# keeping a dead reference for the life of the process.
+			_entities.erase(entity_id)
 			continue
 		var node := entity as Node
-		if node.is_queued_for_deletion():
-			continue
 		var persistent: Variant = node.get("persistent")
 		if only_persistent and persistent != null and not bool(persistent):
 			continue
 		records.append(
 			{
-				"entity_id": int(node.get("entity_id")),
-				"type_id": str(node.get("type_id")),
-				"owner_player_id": int(node.get("owner_player_id")),
-				"state": node.call("_wired_save_state"),
+				WiredProtocol.KEY_ENTITY_ID: int(node.get("entity_id")),
+				WiredProtocol.KEY_TYPE_ID: str(node.get("type_id")),
+				WiredProtocol.KEY_OWNER_PLAYER_ID: int(node.get("owner_player_id")),
+				WiredProtocol.KEY_STATE: node.call("_wired_save_state"),
 			}
 		)
 	return records
+
+
+func _is_live_entity(entity: Variant) -> bool:
+	if not is_instance_valid(entity):
+		return false
+	var node := entity as Node
+	return node != null and not node.is_queued_for_deletion()
 
 
 ## Server only. Full restore of a saved world: every record is re-evaluated
@@ -214,6 +226,11 @@ func spawn_function(data: Dictionary) -> Node:
 ## late client's registry was still empty when it replayed the spawns. The
 ## record is applied through the normal restore path, and an entity that is
 ## already tracked is skipped: applying a snapshot twice is idempotent.
+##
+## A recreated entity keeps the spawn record's exact name under the spawner's
+## `spawn_path` (see the replication note in `PlayersManager`). The *root* was
+## never announced by the spawner, so a later authoritative despawn cannot be
+## matched by net id; `_entities` is pruned whenever the engine frees the node.
 func apply_snapshot(records: Array) -> void:
 	if _registry == null:
 		push_warning("WIRED_DYNAMIC_SNAPSHOT_SKIPPED reason=no_registry")
@@ -224,8 +241,8 @@ func apply_snapshot(records: Array) -> void:
 		if typeof(record) != TYPE_DICTIONARY:
 			continue
 		var source: Dictionary = record
-		var entity_id := int(source.get("entity_id", 0))
-		var type_id := str(source.get("type_id", ""))
+		var entity_id := int(source.get(WiredProtocol.KEY_ENTITY_ID, 0))
+		var type_id := str(source.get(WiredProtocol.KEY_TYPE_ID, ""))
 		if entity_id <= 0 or type_id.is_empty():
 			continue
 		if _entities.has(entity_id):
@@ -234,29 +251,54 @@ func apply_snapshot(records: Array) -> void:
 			# exists must adopt the fresh authoritative state.
 			var existing := _entities[entity_id] as WiredDynamicEntity
 			if existing != null and is_instance_valid(existing):
-				var state: Variant = source.get("state", {})
+				var state: Variant = source.get(WiredProtocol.KEY_STATE, {})
 				if typeof(state) == TYPE_DICTIONARY:
 					existing._wired_load_state(state)
 					refreshed += 1
-			continue
+				continue
+			# A dead tracked instance must not block the repair below.
+			_entities.erase(entity_id)
 		var payload := {
-			"entity_id": entity_id,
-			"owner_player_id": int(source.get("owner_player_id", 0)),
-			"restore": true,
-			"state": source.get("state", {}),
+			WiredProtocol.KEY_ENTITY_ID: entity_id,
+			WiredProtocol.KEY_OWNER_PLAYER_ID:
+			int(source.get(WiredProtocol.KEY_OWNER_PLAYER_ID, 0)),
+			WiredProtocol.KEY_RESTORE: true,
+			WiredProtocol.KEY_STATE: source.get(WiredProtocol.KEY_STATE, {}),
 		}
 		var entity := _instantiate_entity(payload, type_id)
 		if entity == null:
 			continue
-		# Snapshot entities are not spawned through the scene's spawner, so the
-		# container owns parenting and the entity's `_ready()` applies the state.
-		add_child(entity)
+		_adopt_repaired_entity(entity)
+		print(
+			"WIRED_DYNAMIC_REPAIRED_LOCAL type=%s entity_id=%d reason=spawner_spawn_missed"
+			% [type_id, entity_id]
+		)
 		_entities[entity_id] = entity
 		applied += 1
 	print(
 		"WIRED_DYNAMIC_SNAPSHOT_APPLIED entities=%d refreshed=%d"
 		% [applied, refreshed]
 	)
+
+
+## Parents a replicated entity that the spawner did not deliver to this peer,
+## under the same parent and with the same name the spawner would use.
+func _adopt_repaired_entity(entity: WiredDynamicEntity) -> void:
+	entity.set_multiplayer_authority(1)
+	entity.set_meta(META_SNAPSHOT_REPAIR, true)
+	_spawn_parent().add_child(entity)
+
+
+## The node that owns spawned entities: the spawner's `spawn_path`, or this
+## container when no spawner is configured (tests, headless tools).
+func _spawn_parent() -> Node:
+	if _spawner != null:
+		var path := _spawner.spawn_path
+		if not path.is_empty():
+			var parent := _spawner.get_node_or_null(path)
+			if parent != null:
+				return parent
+	return self
 
 
 ## Builds one entity from a spawn record without parenting it. `type_override`
@@ -266,21 +308,25 @@ func _instantiate_entity(data: Dictionary, type_override := "") -> WiredDynamicE
 	if _registry == null:
 		push_warning("WIRED_DYNAMIC_SPAWN_FAILED reason=no_registry")
 		return null
-	var type_id := type_override if not type_override.is_empty() else str(data.get("type_id", ""))
+	var type_id := (
+		type_override
+		if not type_override.is_empty()
+		else str(data.get(WiredProtocol.KEY_TYPE_ID, ""))
+	)
 	var descriptor := _registry.find_dynamic_entity(type_id)
 	if descriptor.is_empty():
 		push_warning(
 			"WIRED_DYNAMIC_SPAWN_FAILED type=%s reason=unknown_type" % type_id
 		)
 		return null
-	var entity_id := int(data.get("entity_id", 0))
+	var entity_id := int(data.get(WiredProtocol.KEY_ENTITY_ID, 0))
 	if entity_id > 0 and _entities.has(entity_id):
 		push_warning(
 			"WIRED_DYNAMIC_SPAWN_DUPLICATE type=%s entity_id=%d"
 			% [type_id, entity_id]
 		)
 		return null
-	var package_id := str(descriptor.get("package_id", ""))
+	var package_id := str(descriptor.get(WiredProtocol.KEY_PACKAGE_ID, ""))
 	var context := _registry.get_context(package_id)
 	if context == null:
 		push_warning(
@@ -288,7 +334,7 @@ func _instantiate_entity(data: Dictionary, type_override := "") -> WiredDynamicE
 			% [type_id, package_id]
 		)
 		return null
-	var instance := context.instantiate(str(descriptor.get("path", "")))
+	var instance := context.instantiate(str(descriptor.get(WiredProtocol.KEY_PATH, "")))
 	if instance == null:
 		# WiredPackageContext already reported why it failed.
 		return null
@@ -303,22 +349,29 @@ func _instantiate_entity(data: Dictionary, type_override := "") -> WiredDynamicE
 	entity.setup(
 		entity_id,
 		type_id,
-		int(data.get("owner_player_id", 0))
+		int(data.get(WiredProtocol.KEY_OWNER_PLAYER_ID, 0))
 	)
 	entity.persistent = _descriptor_persists(descriptor)
 	entity.spawn_data = data.duplicate(true)
-	entity.spawn_data["type_id"] = type_id
-	entity.name = "Dynamic%d" % entity.entity_id
-	entity.set_meta(META_ENTITY_ID, entity.entity_id)
-	# Registry-created dynamic roots are owned by the container, not by
-	# `PackageReloader`: a revision must never replace a live entity and drop
-	# its id, spawn record or spawner tracking.
-	entity.set_meta("_wired_registered", true)
+	entity.spawn_data[WiredProtocol.KEY_TYPE_ID] = type_id
+	entity.name = entity_name(entity.entity_id)
+	entity.set_meta(WiredProtocol.META_ENTITY_ID, entity.entity_id)
+	# Registry-created dynamic roots are owned by the container: a revision must
+	# never replace a live entity and drop its id, spawn record or spawner
+	# tracking.
+	entity.set_meta(WiredProtocol.META_REGISTERED, true)
 	return entity
 
 
+## Deterministic name of a dynamic entity node. The server's spawn packet and a
+## repaired local root must agree, because path-based synchronization resolves
+## the synchronizer by node path.
+func entity_name(entity_id: int) -> String:
+	return "Dynamic%d" % entity_id
+
+
 func _descriptor_persists(descriptor: Dictionary) -> bool:
-	var options: Variant = descriptor.get("options", {})
+	var options: Variant = descriptor.get(WiredProtocol.KEY_OPTIONS, {})
 	if typeof(options) != TYPE_DICTIONARY:
 		return true
 	return bool((options as Dictionary).get("persist", true))
@@ -333,8 +386,8 @@ func _restore_records(records: Array) -> void:
 		if typeof(record) != TYPE_DICTIONARY:
 			continue
 		var source: Dictionary = record
-		var source_id := int(source.get("entity_id", 0))
-		var type_id := str(source.get("type_id", ""))
+		var source_id := int(source.get(WiredProtocol.KEY_ENTITY_ID, 0))
+		var type_id := str(source.get(WiredProtocol.KEY_TYPE_ID, ""))
 		if source_id <= 0 or type_id.is_empty():
 			continue
 		if _restored_ids.has(source_id):
@@ -347,7 +400,7 @@ func _restore_records(records: Array) -> void:
 		# registry cannot instantiate its scene before the entry is registered.
 		if _registry.find_dynamic_entity(type_id).is_empty():
 			continue
-		var state: Variant = source.get("state", {})
+		var state: Variant = source.get(WiredProtocol.KEY_STATE, {})
 		if typeof(state) != TYPE_DICTIONARY:
 			state = {}
 		var entity_id := source_id
@@ -361,18 +414,19 @@ func _restore_records(records: Array) -> void:
 			)
 			entity_id = 0
 		var payload := {
-			"owner_player_id": int(source.get("owner_player_id", 0)),
-			"restore": true,
-			"state": state,
+			WiredProtocol.KEY_OWNER_PLAYER_ID:
+			int(source.get(WiredProtocol.KEY_OWNER_PLAYER_ID, 0)),
+			WiredProtocol.KEY_RESTORE: true,
+			WiredProtocol.KEY_STATE: state,
 		}
 		if entity_id > 0:
-			payload["entity_id"] = entity_id
+			payload[WiredProtocol.KEY_ENTITY_ID] = entity_id
 		var entity := spawn_entity(type_id, payload)
 		if entity == null:
 			continue
 		# Keep the persisted id on the entity so a later full load recognizes
 		# this node even when a collision forced a fresh live id.
-		entity.set_meta(META_SOURCE_ENTITY_ID, source_id)
+		entity.set_meta(WiredProtocol.META_SOURCE_ENTITY_ID, source_id)
 		_restored_ids[source_id] = true
 
 
@@ -383,7 +437,7 @@ func _reserve_ids(records: Array) -> void:
 		if typeof(record) != TYPE_DICTIONARY:
 			continue
 		var source: Dictionary = record
-		var entity_id := int(source.get("entity_id", 0))
+		var entity_id := int(source.get(WiredProtocol.KEY_ENTITY_ID, 0))
 		if entity_id <= 0:
 			continue
 		_next_entity_id = maxi(_next_entity_id, entity_id + 1)
@@ -396,47 +450,98 @@ func _restored_entity_id(source_id: int) -> int:
 		var node := _entities[entity_id] as Node
 		if node == null:
 			continue
-		if int(node.get_meta(META_SOURCE_ENTITY_ID, -1)) == source_id:
+		if int(node.get_meta(WiredProtocol.META_SOURCE_ENTITY_ID, -1)) == source_id:
 			return int(entity_id)
 	return 0
 
 
-## Normalizes the two accepted payload shapes into the replicated spawn record.
-## Package components send flat data (`position`, `direction`, `owner_player_id`)
-## while tests and restore send the explicit `state`/`spawn_data` form.
+## Normalizes a caller payload into the replicated spawn record. The two shapes
+## are separate constructors: package components send flat data (`position`,
+## `direction`, `owner_player_id`), while tests and restore send the explicit
+## `state`/`spawn_data` form. Merging both in one method made every key look
+## optional; here each form has exactly one meaning.
 func _spawn_record(
 	entity_id: int, qualified_type: String, data: Dictionary
 ) -> Dictionary:
-	var record := {
-		"entity_id": entity_id,
-		"type_id": qualified_type,
-		"owner_player_id": int(data.get("owner_player_id", 0)),
-		"restore": bool(data.get("restore", false)),
-		"state": {},
-		"spawn_data": {},
-	}
-	var explicit_state: Variant = data.get("state", null)
+	if data.has(WiredProtocol.KEY_STATE) or data.has(WiredProtocol.KEY_SPAWN_DATA):
+		return _explicit_spawn_record(entity_id, qualified_type, data)
+	return _flat_spawn_record(entity_id, qualified_type, data)
+
+
+## Record with `state`/`spawn_data` supplied by the caller. Extra non-record keys
+## are still accepted into `spawn_data`, so a caller may mix a record shape with
+## a flat one-shot input.
+func _explicit_spawn_record(
+	entity_id: int, qualified_type: String, data: Dictionary
+) -> Dictionary:
+	var record := _empty_spawn_record(entity_id, qualified_type, data)
+	var explicit_state: Variant = data.get(WiredProtocol.KEY_STATE, null)
 	if typeof(explicit_state) == TYPE_DICTIONARY:
-		record["state"] = (explicit_state as Dictionary).duplicate(true)
-	var explicit_spawn: Variant = data.get("spawn_data", null)
+		record[WiredProtocol.KEY_STATE] = (explicit_state as Dictionary).duplicate(true)
+	var explicit_spawn: Variant = data.get(WiredProtocol.KEY_SPAWN_DATA, null)
 	if typeof(explicit_spawn) == TYPE_DICTIONARY:
-		record["spawn_data"] = (explicit_spawn as Dictionary).duplicate(true)
-	# Flat `position`/`rotation`/`linear_velocity` are initial state; every other
-	# flat key (direction, impulse, ...) is one-shot spawn data.
-	if not data.has("state"):
-		for key: String in STATE_KEYS:
-			if data.has(key):
-				record["state"][key] = data[key]
-	for key: String in RECORD_KEYS:
-		record["spawn_data"].erase(key)
-	for key: String in STATE_KEYS:
-		record["spawn_data"].erase(key)
+		record[WiredProtocol.KEY_SPAWN_DATA] = (
+			(explicit_spawn as Dictionary).duplicate(true)
+		)
+	# A record that only names `spawn_data` still gets its flat state keys.
+	if not data.has(WiredProtocol.KEY_STATE):
+		_copy_flat_state(record, data)
+	var spawn_data: Dictionary = record[WiredProtocol.KEY_SPAWN_DATA]
+	_strip_reserved_keys(spawn_data)
 	for key: Variant in data:
-		if RECORD_KEYS.has(str(key)) or STATE_KEYS.has(str(key)):
+		if _is_reserved_key(key) or spawn_data.has(key):
 			continue
-		if not record["spawn_data"].has(key):
-			record["spawn_data"][key] = data[key]
+		spawn_data[key] = data[key]
 	return record
+
+
+## Record for the flat form: `position`/`rotation`/`linear_velocity` are initial
+## state, every other key (direction, impulse, ...) is one-shot spawn data.
+func _flat_spawn_record(
+	entity_id: int, qualified_type: String, data: Dictionary
+) -> Dictionary:
+	var record := _empty_spawn_record(entity_id, qualified_type, data)
+	_copy_flat_state(record, data)
+	var spawn_data: Dictionary = record[WiredProtocol.KEY_SPAWN_DATA]
+	for key: Variant in data:
+		if _is_reserved_key(key):
+			continue
+		spawn_data[key] = data[key]
+	return record
+
+
+func _empty_spawn_record(
+	entity_id: int, qualified_type: String, data: Dictionary
+) -> Dictionary:
+	return {
+		WiredProtocol.KEY_ENTITY_ID: entity_id,
+		WiredProtocol.KEY_TYPE_ID: qualified_type,
+		WiredProtocol.KEY_OWNER_PLAYER_ID:
+		int(data.get(WiredProtocol.KEY_OWNER_PLAYER_ID, 0)),
+		WiredProtocol.KEY_RESTORE: bool(data.get(WiredProtocol.KEY_RESTORE, false)),
+		WiredProtocol.KEY_STATE: {},
+		WiredProtocol.KEY_SPAWN_DATA: {},
+	}
+
+
+func _copy_flat_state(record: Dictionary, data: Dictionary) -> void:
+	for key: String in STATE_KEYS:
+		if data.has(key):
+			record[WiredProtocol.KEY_STATE][key] = data[key]
+
+
+## Record keys belong to the record itself and state keys are initial state, so
+## neither may leak into the one-shot spawn data.
+func _strip_reserved_keys(spawn_data: Dictionary) -> void:
+	for key: String in RECORD_KEYS:
+		spawn_data.erase(key)
+	for key: String in STATE_KEYS:
+		spawn_data.erase(key)
+
+
+func _is_reserved_key(key: Variant) -> bool:
+	var name := str(key)
+	return RECORD_KEYS.has(name) or STATE_KEYS.has(name)
 
 
 func _is_server() -> bool:

@@ -130,24 +130,15 @@ func _is_server() -> bool:
 	return api.is_server()
 
 
-## Parses a serialized 2D vector. JSON state stores vectors as `[x, y]`.
+## Parses a serialized 2D vector. Kept as an instance hook because package
+## entity scenes call it; the parsing itself lives in `WiredProtocol`.
 func _as_vector2(value: Variant, fallback: Vector2 = Vector2.ZERO) -> Vector2:
-	if value is Vector2:
-		var vector: Vector2 = value
-		return vector
-	if value is Array and value.size() >= 2:
-		return Vector2(float(value[0]), float(value[1]))
-	return fallback
+	return WiredProtocol.as_vector2(value, fallback)
 
 
-## Parses a serialized 3D vector. JSON state stores vectors as `[x, y, z]`.
+## Parses a serialized 3D vector. Kept as an instance hook for package scenes.
 func _as_vector3(value: Variant, fallback: Vector3 = Vector3.ZERO) -> Vector3:
-	if value is Vector3:
-		var vector: Vector3 = value
-		return vector
-	if value is Array and value.size() >= 3:
-		return Vector3(float(value[0]), float(value[1]), float(value[2]))
-	return fallback
+	return WiredProtocol.as_vector3(value, fallback)
 
 
 # --- package hooks --------------------------------------------------------

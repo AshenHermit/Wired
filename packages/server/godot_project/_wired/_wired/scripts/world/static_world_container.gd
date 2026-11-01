@@ -6,9 +6,9 @@ class_name StaticWorldContainer
 ## Static content is built from `WiredPackageRegistry` descriptors and never
 ## replicated: every peer instantiates the same scenes from the same registry.
 ## Each package root is tagged with `_wired_package_id` (its owning package) and
-## `_wired_registered = true`, so `PackageReloader` can tell registry-owned
-## roots from nodes authored in `main.tscn`, and `clear()` can replace exactly
-## the children this container created.
+## `_wired_registered = true`: the tags tell registry-owned roots from nodes
+## authored in `main.tscn`, so `clear()` replaces exactly the children this
+## container created and nothing generic replaces a live root behind its back.
 ##
 ## Spawn markers are `Marker2D`/`Marker3D` nodes in the `wired_player_spawn`
 ## group or with `wired_player_spawn = true` metadata. They are collected
@@ -17,8 +17,10 @@ class_name StaticWorldContainer
 ## and a `Marker2D` lifts to `Vector3(x, y, 0)`. An out-of-range index or a
 ## world without markers returns the zero vector.
 
-const META_PACKAGE_ID := "_wired_package_id"
-const META_REGISTERED := "_wired_registered"
+## Kept as local names for readability; the values live in `WiredProtocol`, so a
+## producer and a consumer of the metadata cannot drift apart.
+const META_PACKAGE_ID := WiredProtocol.META_PACKAGE_ID
+const META_REGISTERED := WiredProtocol.META_REGISTERED
 const META_SPAWN := "wired_player_spawn"
 const SPAWN_GROUP := &"wired_player_spawn"
 
