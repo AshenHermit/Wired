@@ -27,7 +27,11 @@ type RevisionFixture = {
 describe('PackageClosureResolver', () => {
   let root: string;
   let storage: PackageStorageService;
-  let revisionsRepository: { findOne: jest.Mock; find: jest.Mock };
+  let revisionsRepository: {
+    findOne: jest.Mock;
+    find: jest.Mock;
+    createQueryBuilder: jest.Mock;
+  };
   let resolver: PackageClosureResolver;
 
   let packages: PackageFixture[];
@@ -50,6 +54,7 @@ describe('PackageClosureResolver', () => {
           .sort((a, b) => b.revision - a.revision)
           .map((row) => toRevisionRow(row, packageById(row.packageId)));
       }),
+      createQueryBuilder: jest.fn(() => latestRevisionsQueryBuilder()),
       findOne: jest.fn(
         (opts: {
           where: {
@@ -96,6 +101,38 @@ describe('PackageClosureResolver', () => {
       throw new Error(`package ${id} not defined in fixture`);
     }
     return pkg;
+  }
+
+  /**
+   * Minimal stand-in for the TypeORM query builder that loads the newest
+   * published revision of every package (DISTINCT ON `package.id`).
+   */
+  function latestRevisionsQueryBuilder() {
+    const builder = {
+      distinctOn: jest.fn(() => builder),
+      innerJoinAndSelect: jest.fn(() => builder),
+      leftJoinAndSelect: jest.fn(() => builder),
+      where: jest.fn(() => builder),
+      andWhere: jest.fn(() => builder),
+      orderBy: jest.fn(() => builder),
+      addOrderBy: jest.fn(() => builder),
+      getMany: jest.fn(async () => {
+        const rows = revisions
+          .filter((row) => row.status === 'published' && row.publishedAt)
+          .sort((a, b) => b.revision - a.revision);
+        const seen = new Set<number>();
+        const out: ScriptingPackageRevision[] = [];
+        for (const row of rows) {
+          if (seen.has(row.packageId)) {
+            continue;
+          }
+          seen.add(row.packageId);
+          out.push(toRevisionRow(row, packageById(row.packageId)));
+        }
+        return out;
+      }),
+    };
+    return builder;
   }
 
   function toRevisionRow(
@@ -172,17 +209,28 @@ describe('PackageClosureResolver', () => {
       ]);
     });
 
-    it('queries published revisions with the expected repository options', async () => {
+    it('loads only the newest published revision of every package', async () => {
       definePackage(5, 'Library', null);
+      definePackage(10, 'A', 7);
+      await writePublished(10, 1, {
+        'a.gd': 'preload("res://packages/5/x.gd")',
+      });
+      await writePublished(10, 2, { 'a.gd': 'extends Node' });
       await writePublished(5, 2, { 'x.gd': 'extends Node' });
 
       await resolver.findDependentRoomPackages(5);
 
-      expect(revisionsRepository.find).toHaveBeenCalledWith({
-        where: { status: 'published' },
-        relations: ['package', 'package.room'],
-        order: { revision: 'DESC' },
-      });
+      expect(revisionsRepository.find).not.toHaveBeenCalled();
+      const builder =
+        revisionsRepository.createQueryBuilder.mock.results[0].value;
+      expect(builder.distinctOn).toHaveBeenCalledWith(['package.id']);
+      expect(builder.where).toHaveBeenCalledWith(
+        'revision.status = :status',
+        { status: 'published' },
+      );
+      expect(builder.andWhere).toHaveBeenCalledWith(
+        'revision.publishedAt IS NOT NULL',
+      );
     });
 
     it('only considers the latest published revision of a dependent', async () => {
@@ -409,6 +457,27 @@ describe('PackageClosureResolver', () => {
         'res://packages/6/lib.gd',
       );
       expect(resolved.artifactKeys.size).toBe(2);
+    });
+
+    it('does not read binary dependency files while resolving', async () => {
+      definePackage(5, 'Heroes', 7);
+      definePackage(6, 'Library', null);
+      await writePublished(6, 9, {
+        'tex.png': Buffer.from([1, 2, 3]),
+        'lib.gd': 'extends Node',
+      });
+      await writePublished(5, 3, {
+        'main.gd': 'preload("res://packages/6/lib.gd")',
+      });
+      const readSpy = jest.spyOn(storage, 'readPublishedFile');
+
+      const resolved = await resolver.resolve(5, 3, 7);
+
+      expect(readSpy.mock.calls).toEqual([
+        [5, 3, 'main.gd'],
+        [6, 9, 'lib.gd'],
+      ]);
+      expect([...resolved.bytes.keys()]).toEqual(['main.gd']);
     });
 
     it('rejects an unpublished dependency', async () => {

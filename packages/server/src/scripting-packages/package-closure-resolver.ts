@@ -153,29 +153,33 @@ export class PackageClosureResolver {
   }
 
   /**
-   * Loads the latest published revision of every package. The DESC order makes
-   * the first occurrence of each package its newest revision; a package whose
-   * newest published row has no `publishedAt` is dropped entirely (the same
-   * invariant `loadRevision` enforces), never falling back to an older row.
+   * Loads the latest published revision of every package.
+   *
+   * `DISTINCT ON (package.id)` keeps only the newest published row per
+   * package in the database, so a publication does not deserialize the `files`
+   * JSONB of every historical revision just to throw all but one away. A
+   * package whose newest published row has no `publishedAt` is dropped
+   * entirely (the same invariant `loadRevision` enforces), never falling back
+   * to an older row.
    */
   async loadLatestPublishedRevisions(): Promise<
     Map<number, LatestPublishedRevision>
   > {
-    const revisions = await this.revisionsRepository.find({
-      where: { status: 'published' },
-      relations: ['package', 'package.room'],
-      order: { revision: 'DESC' },
-    });
+    const revisions = await this.revisionsRepository
+      .createQueryBuilder('revision')
+      .innerJoinAndSelect('revision.package', 'package')
+      .leftJoinAndSelect('package.room', 'room')
+      .where('revision.status = :status', { status: 'published' })
+      .andWhere('revision.publishedAt IS NOT NULL')
+      .distinctOn(['package.id'])
+      .orderBy('package.id', 'ASC')
+      .addOrderBy('revision.revision', 'DESC')
+      .getMany();
 
     const latestByPackage = new Map<number, LatestPublishedRevision>();
-    const seen = new Set<number>();
     for (const row of revisions) {
       const id = row.package.id;
-      if (seen.has(id)) {
-        continue;
-      }
-      seen.add(id);
-      if (!row.publishedAt) {
+      if (latestByPackage.has(id) || !row.publishedAt) {
         continue;
       }
       latestByPackage.set(id, {
@@ -240,7 +244,6 @@ export class PackageClosureResolver {
   ): Promise<ResolvedClosure> {
     const revisionByPackage = new Map<number, number>();
     const textFilesByPackage = new Map<number, PackageTextFile[]>();
-    const bytesByPackage = new Map<number, Map<string, Buffer>>();
     const filesByPackage = new Map<number, PackageFileEntry[]>();
     const nameByPackage = new Map<number, string>();
     const publishedAtByPackage = new Map<number, string>();
@@ -249,6 +252,8 @@ export class PackageClosureResolver {
     const directDependencyIds: number[] = [];
     const seenDirectDeps = new Set<number>();
     const visiting: number[] = [];
+    /** Only the root's bytes are written, so only they are kept in memory. */
+    let rootBytes = new Map<string, Buffer>();
 
     const resolvePackage = async (
       id: number,
@@ -275,15 +280,24 @@ export class PackageClosureResolver {
       const fileSet = new Set(loaded.files.map((file) => file.filepath));
       const bytes = new Map<string, Buffer>();
       const textFiles: PackageTextFile[] = [];
+      const isRoot = id === packageId;
 
       for (const entry of loaded.files) {
+        const wantsText = isTextPackageFile(entry.filepath);
+        if (!isRoot && !wantsText) {
+          // A dependency's binary file is served from that package's own
+          // artifact and is never rewritten here: keep it out of memory.
+          continue;
+        }
         const data = await this.readFileBytes(
           id,
           loaded.revision,
           entry.filepath,
         );
-        bytes.set(entry.filepath, data);
-        if (isTextPackageFile(entry.filepath)) {
+        if (isRoot) {
+          bytes.set(entry.filepath, data);
+        }
+        if (wantsText) {
           let text: string;
           try {
             text = decodePackageText(entry.filepath, data);
@@ -293,7 +307,9 @@ export class PackageClosureResolver {
           textFiles.push({ filepath: entry.filepath, text });
         }
       }
-      bytesByPackage.set(id, bytes);
+      if (isRoot) {
+        rootBytes = bytes;
+      }
       textFilesByPackage.set(id, textFiles);
 
       for (const file of textFiles) {
@@ -367,7 +383,7 @@ export class PackageClosureResolver {
       nameByPackage,
       artifactKeys,
       rootFiles: filesByPackage.get(packageId)!,
-      bytes: bytesByPackage.get(packageId)!,
+      bytes: rootBytes,
       rootTextFiles: textFilesByPackage.get(packageId)!,
       dependencyTextFiles: this.dependencyTextFiles(
         textFilesByPackage,
