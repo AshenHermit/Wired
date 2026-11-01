@@ -182,9 +182,7 @@ func _test_dynamic_entities() -> void:
 	var registration := WiredPackageRegistration.new()
 	registration.package_id = "pkg.a"
 	registration.add_dynamic_entity(
-		"crate",
-		"dynamic/crate.tscn",
-		{"authority": "server", "persist": true, "limit_per_player": 8},
+		"crate", "dynamic/crate.tscn", {"authority": "server", "persist": true}
 	)
 	registry.add_registration(registration)
 

@@ -141,9 +141,11 @@ func test_example_contract_registers_all_kinds() -> void:
 			"the crate must persist",
 		)
 		_check(
-			int(crate["options"].get("limit_per_player", 0)) == 8,
-			"the crate limit must be 8 per player, got %s"
-			% crate["options"].get("limit_per_player", 0),
+			not crate["options"].has("limit_per_player")
+			and not crate["options"].has("cooldown_ms")
+			and not crate["options"].has("lifetime_ms"),
+			"per-player policy must stay out of the registration contract, got %s"
+			% [crate["options"]],
 		)
 
 	_check(

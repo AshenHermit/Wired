@@ -13,7 +13,5 @@ func register(_registry: WiredPackageRegistry) -> void:
 	)
 	add_player_component("player/spawner.tscn", {"order": 30, "authority": "server"})
 	add_dynamic_entity(
-		"crate",
-		"dynamic/crate.tscn",
-		{"authority": "server", "persist": true, "limit_per_player": 8}
+		"crate", "dynamic/crate.tscn", {"authority": "server", "persist": true}
 	)
