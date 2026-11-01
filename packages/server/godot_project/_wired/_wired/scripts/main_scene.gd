@@ -135,15 +135,12 @@ func _setup_packages(room: String) -> void:
 	_packages.configure(_api_url(), room)
 	if not _packages.package_applied.is_connected(_on_package_applied):
 		_packages.package_applied.connect(_on_package_applied)
-	# Lives under Main: a package scene must never become the whole game scene.
-	var reloader := PackageReloader.new()
-	add_child(reloader)
-	reloader.setup(_packages)
 
 
-## An applied revision replaces that package's registry entries and its static
-## content. `PackageReloader` also receives the signal, but skips the roots
-## rebuilt here because `StaticWorldContainer` owns them.
+## An applied revision replaces that package's registry entries, its static
+## content and the components of every live player. A stable-content root (a
+## generic package scene outside the containers) is not replaced: the containers
+## own every registry-created root, and nothing else may swap a live one.
 func _on_package_applied(
 	package_id: int, revision: int, _changed_files: PackedStringArray
 ) -> void:
@@ -170,6 +167,11 @@ func _apply_registered_package(package_id: int, revision: int) -> void:
 	PackageEntryLoader.load_entry(context.package_id, revision, context, _registry)
 	if _static_world != null:
 		_static_world.rebuild()
+	# Players already in the world keep running the previous revision's scripts
+	# unless their components are rebuilt. The root stays (and keeps the
+	# spawner's net id); only the components are replaced, with their state.
+	if _players != null:
+		_players.rebuild_live_components()
 	# Package order is not guaranteed: every applied revision retries the saved
 	# records, and the ones whose type is still unregistered stay pending.
 	if _dynamic_world != null and _net.mode == "server":
@@ -198,11 +200,11 @@ func _send_world_snapshot(peer_id: int) -> void:
 	if _net.mode != "server" or _packages == null:
 		return
 	var snapshot := {
-		"packages": _packages.applied_packages(),
-		"players": _players.snapshot_players() if _players != null else [],
-		"dynamic_world": (
-			_dynamic_world.snapshot_state() if _dynamic_world != null else []
-		),
+		WiredProtocol.KEY_PACKAGES: _packages.applied_packages(),
+		WiredProtocol.KEY_PLAYERS:
+		_players.snapshot_players() if _players != null else [],
+		WiredProtocol.KEY_DYNAMIC_WORLD:
+		_dynamic_world.snapshot_state() if _dynamic_world != null else [],
 	}
 	_net.send_world_snapshot(peer_id, snapshot)
 
@@ -217,7 +219,7 @@ func _on_world_snapshot_received(snapshot: Dictionary) -> void:
 ## the same applied package closure (revision and artifact key). Otherwise the
 ## snapshot stays pending and a fresh one is requested.
 func _apply_world_snapshot(snapshot: Dictionary) -> void:
-	var remote_packages: Variant = snapshot.get("packages", {})
+	var remote_packages: Variant = snapshot.get(WiredProtocol.KEY_PACKAGES, {})
 	if typeof(remote_packages) != TYPE_DICTIONARY:
 		remote_packages = {}
 	var local_packages := _packages.applied_packages()
@@ -234,10 +236,10 @@ func _apply_world_snapshot(snapshot: Dictionary) -> void:
 		return
 	_pending_world_snapshot = {}
 	_snapshot_request_signature = ""
-	var players: Variant = snapshot.get("players", [])
+	var players: Variant = snapshot.get(WiredProtocol.KEY_PLAYERS, [])
 	if players is Array and _players != null:
 		_players.apply_snapshot(players)
-	var dynamic_records: Variant = snapshot.get("dynamic_world", [])
+	var dynamic_records: Variant = snapshot.get(WiredProtocol.KEY_DYNAMIC_WORLD, [])
 	if dynamic_records is Array and _dynamic_world != null:
 		_dynamic_world.apply_snapshot(dynamic_records)
 	print(
@@ -384,7 +386,7 @@ func _save_state(reason: String) -> void:
 	# persistence shape so a package only sees its `_wired_*_state` dictionary.
 	var players: Array = []
 	if _players != null:
-		players = _players.save_state().get("players", [])
+		players = _players.save_state().get(WiredProtocol.KEY_PLAYERS, [])
 	var state := {
 		"room": _net.room_code,
 		"port": _server_port,
@@ -392,10 +394,9 @@ func _save_state(reason: String) -> void:
 		"active_players": _net.get_active_player_count(),
 		"server_seq": _net.get_server_seq(),
 		"saved_at": Time.get_datetime_string_from_system(true),
-		"players": players,
-		"dynamic_world": (
-			_dynamic_world.save_state() if _dynamic_world != null else []
-		),
+		WiredProtocol.KEY_PLAYERS: players,
+		WiredProtocol.KEY_DYNAMIC_WORLD:
+		_dynamic_world.save_state() if _dynamic_world != null else [],
 	}
 	var dir := _state_dir
 	if not dir.is_empty():
@@ -440,13 +441,13 @@ func _load_state() -> void:
 		print("WIRED_STATE_LOAD_FAILED path=%s reason=invalid_json" % path)
 		return
 	var state: Dictionary = parsed
-	var dynamic_records: Variant = state.get("dynamic_world", [])
+	var dynamic_records: Variant = state.get(WiredProtocol.KEY_DYNAMIC_WORLD, [])
 	if dynamic_records is Array:
 		_saved_dynamic_records = dynamic_records
-	var player_records: Variant = state.get("players", [])
+	var player_records: Variant = state.get(WiredProtocol.KEY_PLAYERS, [])
 	if player_records is Array and _players != null:
 		# Applied immediately to live players, or on that player's next spawn.
-		_players.load_state({"players": player_records})
+		_players.load_state({WiredProtocol.KEY_PLAYERS: player_records})
 	print(
 		"WIRED_STATE_LOADED path=%s dynamic=%d players=%d"
 		% [
@@ -633,13 +634,19 @@ func _on_server_disconnected() -> void:
 
 func _on_server_event(event: Dictionary) -> void:
 	_bridge_call("notifyEvent", [JSON.stringify(event)])
-	var event_type := str(event.get("type", ""))
-	if event_type == "world_state":
-		_bridge_status("ready", "world_state")
-	elif event_type == "package_revision":
+	var event_type := str(event.get(WiredProtocol.KEY_TYPE, ""))
+	if event_type == WiredNetwork.EVENT_WORLD_STATE:
+		_bridge_status("ready", WiredNetwork.EVENT_WORLD_STATE)
+	elif event_type == WiredNetwork.EVENT_PACKAGE_REVISION:
 		_apply_client_package(
-			int(event.get("package_id", 0)), int(event.get("revision", 0))
+			int(event.get(WiredProtocol.KEY_PACKAGE_ID, 0)),
+			int(event.get(WiredProtocol.KEY_REVISION, 0))
 		)
+	elif event_type == WiredNetwork.EVENT_PLAYER_LEFT:
+		# The despawn packet is matched by spawn net id, which a root built from
+		# the late-join snapshot does not have: release it by player id.
+		if _players != null:
+			_players.forget_player(int(event.get(WiredProtocol.KEY_PLAYER_ID, 0)))
 
 
 ## Client side: download and verify the announced revision over HTTP, then tell

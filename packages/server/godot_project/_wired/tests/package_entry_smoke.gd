@@ -1,14 +1,10 @@
 extends SceneTree
 
-## Headless smoke test for PackageEntryLoader and the reloader ownership rule.
+## Headless smoke test for PackageEntryLoader.
 ##
 ## A package entry is the root `wired_package.gd` of an applied revision. The
 ## loader turns its registration into registry descriptors; a package without an
 ## entry is valid and must simply return false.
-##
-## The same suite proves that `PackageReloader` never collects roots owned by
-## `StaticWorldContainer` (`_wired_registered = true`), including nested package
-## roots inside them.
 ##
 ## Run from the repository root:
 ##   godot --headless --path packages/server/godot_project/_wired \
@@ -23,14 +19,12 @@ var _checks := 0
 
 
 func _initialize() -> void:
-	# Deferred so tree traversal in the reloader check sees the live tree.
 	_run.call_deferred()
 
 
 func _run() -> void:
 	_test_entry_registers_static_scene()
 	_test_missing_entry_returns_false()
-	_test_reloader_skips_registered_roots()
 	_finish()
 
 
@@ -90,45 +84,6 @@ func _test_missing_entry_returns_false() -> void:
 		"a package without an entry script must not store a context",
 	)
 	registry.free()
-
-
-func _test_reloader_skips_registered_roots() -> void:
-	var scene_root := Node.new()
-	scene_root.name = "ReloadCoordTestRoot"
-	root.add_child(scene_root)
-	var reloader := PackageReloader.new()
-	scene_root.add_child(reloader)
-
-	var plain := Node.new()
-	plain.name = "PlainPackageRoot"
-	plain.set_meta("_wired_package_id", 5)
-	scene_root.add_child(plain)
-
-	var registered := Node.new()
-	registered.name = "RegisteredStaticRoot"
-	registered.set_meta("_wired_package_id", 5)
-	registered.set_meta("_wired_registered", true)
-	scene_root.add_child(registered)
-
-	var nested := Node.new()
-	nested.name = "NestedPackageRoot"
-	nested.set_meta("_wired_package_id", 6)
-	registered.add_child(nested)
-
-	var roots: Array[Node] = reloader._collect_roots()
-	_check(
-		roots.has(plain),
-		"a package root not owned by the registry must stay reloadable",
-	)
-	_check(
-		not roots.has(registered),
-		"the reloader must skip roots tagged _wired_registered",
-	)
-	_check(
-		not roots.has(nested),
-		"the reloader must not descend into registry-owned static content",
-	)
-	scene_root.free()
 
 
 # --- assertions -----------------------------------------------------------

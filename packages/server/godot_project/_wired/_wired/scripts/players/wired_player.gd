@@ -192,11 +192,11 @@ func save_state() -> Dictionary:
 		# Inserting or reordering components therefore cannot move state.
 		component_states[component.state_key()] = component._wired_save_state()
 	return {
-		"player_id": player_id,
-		"peer_id": peer_id,
-		"display_name": display_name,
-		"anchor_position_2d": [_anchor_position_2d.x, _anchor_position_2d.y],
-		"anchor_position_3d": [
+		WiredProtocol.KEY_PLAYER_ID: player_id,
+		WiredProtocol.KEY_PEER_ID: peer_id,
+		WiredProtocol.KEY_DISPLAY_NAME: display_name,
+		WiredProtocol.KEY_ANCHOR_POSITION_2D: [_anchor_position_2d.x, _anchor_position_2d.y],
+		WiredProtocol.KEY_ANCHOR_POSITION_3D: [
 			_anchor_position_3d.x, _anchor_position_3d.y, _anchor_position_3d.z
 		],
 		"components": component_states,
@@ -207,10 +207,14 @@ func save_state() -> Dictionary:
 ## spawned subtree is ready, so a body component whose saved record has no
 ## component state still starts at the persisted anchor.
 func apply_saved_anchor(state: Dictionary) -> void:
-	if state.has("anchor_position_2d"):
-		_anchor_position_2d = _as_vector2(state["anchor_position_2d"])
-	if state.has("anchor_position_3d"):
-		_anchor_position_3d = _as_vector3(state["anchor_position_3d"])
+	if state.has(WiredProtocol.KEY_ANCHOR_POSITION_2D):
+		_anchor_position_2d = WiredProtocol.as_vector2(
+			state[WiredProtocol.KEY_ANCHOR_POSITION_2D]
+		)
+	if state.has(WiredProtocol.KEY_ANCHOR_POSITION_3D):
+		_anchor_position_3d = WiredProtocol.as_vector3(
+			state[WiredProtocol.KEY_ANCHOR_POSITION_3D]
+		)
 
 
 ## Restores anchors and per-component state. Identity (player id, peer id and
@@ -372,21 +376,3 @@ func _consume_action_budget() -> bool:
 		return false
 	_action_window_count += 1
 	return true
-
-
-func _as_vector2(value: Variant) -> Vector2:
-	if value is Vector2:
-		var vector: Vector2 = value
-		return vector
-	if value is Array and value.size() >= 2:
-		return Vector2(float(value[0]), float(value[1]))
-	return Vector2.ZERO
-
-
-func _as_vector3(value: Variant) -> Vector3:
-	if value is Vector3:
-		var vector: Vector3 = value
-		return vector
-	if value is Array and value.size() >= 3:
-		return Vector3(float(value[0]), float(value[1]), float(value[2]))
-	return Vector3.ZERO

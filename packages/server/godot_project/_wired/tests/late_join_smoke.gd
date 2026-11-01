@@ -218,25 +218,13 @@ func _test_late_client_is_repaired_once() -> void:
 			"the recreated crate must carry _wired_registered",
 		)
 
-	# A live registry-created player component and crate must never be collected
-	# by PackageReloader: a revision may rebuild static roots, not live entities.
-	var reloader := PackageReloader.new()
-	root.add_child(reloader)
-	_owned.append(reloader)
-	var reload_roots := reloader._collect_roots()
-	_check(
-		not reload_roots.has(repaired),
-		"a live player root must not be a PackageReloader candidate",
-	)
-	_check(
-		not reload_roots.has(restored_crate),
-		"a live dynamic entity must not be a PackageReloader candidate",
-	)
+	# A live registry-created player component and crate are owned by their
+	# containers: no generic code may replace a live root and drop its id.
 	if repaired != null:
 		for component: WiredPlayerComponent in repaired.components:
 			_check(
-				not reload_roots.has(component),
-				"a live player component must not be a PackageReloader candidate",
+				component.get_parent() == repaired,
+				"a repaired component must stay parented by its player",
 			)
 
 	# Applying the same snapshot again must not duplicate anything.
