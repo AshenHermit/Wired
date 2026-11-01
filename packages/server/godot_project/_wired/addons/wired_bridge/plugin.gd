@@ -130,6 +130,12 @@ func _on_delete_selected_pressed() -> void:
 	if filesystem != null:
 		filesystem.scan()
 
+	# Deletions happen in the Web editor's in-memory filesystem; without a flush
+	# to IndexedDB a reload would bring the deleted files back. Only the local
+	# menu needs this: the `deleteFiles` op is synced by its shell caller.
+	if OS.has_feature("web"):
+		JavaScriptBridge.force_fs_sync()
+
 	if not errors.is_empty():
 		_notify(
 			"Wired: не удалось удалить: %s" % ", ".join(PackedStringArray(errors)),
