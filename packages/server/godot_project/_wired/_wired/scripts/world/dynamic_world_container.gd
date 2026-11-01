@@ -192,6 +192,8 @@ func snapshot_state() -> Array[Dictionary]:
 ## parked records. Nothing spawns here: `restore_pending` retries them after
 ## every applied package.
 func seed_pending(records: Array) -> void:
+	if not _server_only("seed_pending"):
+		return
 	_parked.clear()
 	for record: Variant in records:
 		if typeof(record) != TYPE_DICTIONARY:
@@ -212,6 +214,8 @@ func pending_records() -> Array:
 ## its record, so the previous revision's nodes stop running while their world
 ## state survives the reload.
 func park_package(package_id: int) -> int:
+	if not _server_only("park_package"):
+		return 0
 	var parked := 0
 	for id: Variant in _entities.keys():
 		var entity: Variant = _entities[id]
@@ -291,6 +295,8 @@ func restore_pending() -> int:
 ## Server only. Drops every parked record of one package, whose revision will
 ## never come back. Returns the number of records dropped.
 func purge_package(package_id: int) -> int:
+	if not _server_only("purge_package"):
+		return 0
 	var purged := _drop_parked({package_id: true})
 	print("WIRED_DYNAMIC_PURGED package=%d records=%d" % [package_id, purged])
 	return purged
@@ -299,6 +305,8 @@ func purge_package(package_id: int) -> int:
 ## Server only. Keeps the parked records whose package is still published;
 ## everything else belongs to a package that no longer exists.
 func purge_missing_packages(package_ids: PackedStringArray) -> int:
+	if not _server_only("purge_missing_packages"):
+		return 0
 	var allowed: Dictionary = {}
 	for package_id: String in package_ids:
 		if package_id.is_valid_int():
@@ -437,6 +445,14 @@ func apply_snapshot(records: Array, packages: Dictionary = {}) -> void:
 	if _registry == null:
 		push_warning("WIRED_DYNAMIC_SNAPSHOT_SKIPPED reason=no_registry")
 		return
+	if packages.is_empty() and not records.is_empty():
+		# A caller that forgot the package map makes every entity look stale:
+		# the snapshot would silently rebuild and prune the whole client world.
+		# This is a loud signal, not a fallback: pass the server's map.
+		push_warning(
+			"WIRED_DYNAMIC_SNAPSHOT_UNSTAMPED records=%d reason=no_package_map"
+			% records.size()
+		)
 	var applied := 0
 	var refreshed := 0
 	var replaced := 0
@@ -864,3 +880,14 @@ func _is_server() -> bool:
 	if api == null:
 		return true
 	return api.is_server()
+
+
+## Guard of the server-only mutators. A client that calls one of them is a
+## programming error, not a no-op: both the runtime log and the warning stream
+## name the operation, and the caller returns without touching the world.
+func _server_only(op: String) -> bool:
+	if _is_server():
+		return true
+	print("WIRED_DYNAMIC_SERVER_ONLY_OP op=%s" % op)
+	push_warning("WIRED_DYNAMIC_SERVER_ONLY_OP op=%s" % op)
+	return false

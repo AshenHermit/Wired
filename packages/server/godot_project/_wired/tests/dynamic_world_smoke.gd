@@ -31,6 +31,14 @@ var _owned: Array[Node] = []
 var _registries: Array[Node] = []
 
 
+## Container that reports itself as a client. The server-only guards only read
+## `_is_server()`, so overriding it drives them without a real peer.
+class ClientWorld extends DynamicWorldContainer:
+
+	func _is_server() -> bool:
+		return false
+
+
 func _initialize() -> void:
 	_run.call_deferred()
 
@@ -56,6 +64,8 @@ func _run() -> void:
 	_test_snapshot_removes_entities_of_an_unloaded_package()
 	_test_snapshot_keeps_entities_created_after_the_snapshot()
 	_test_snapshot_replaces_a_stale_entity_by_id()
+	_test_snapshot_without_a_stamp_map_rebuilds()
+	_test_server_only_ops_refuse_to_run_on_a_client()
 	_free_owned()
 	_finish()
 
@@ -849,8 +859,87 @@ func _test_snapshot_replaces_a_stale_entity_by_id() -> void:
 	)
 
 
-# --- helpers --------------------------------------------------------------
+## The one-argument form still parses for a call site not migrated yet, but it
+## is a bug: with no package map every entity looks stale. The warning
+## `WIRED_DYNAMIC_SNAPSHOT_UNSTAMPED` is the visible signal; this pins the
+## fallback so it can never silently become a no-op.
+func _test_snapshot_without_a_stamp_map_rebuilds() -> void:
+	var world := _make_world()
+	world.setup(_make_stamp_registry(), null)
+	var entity := world.spawn_entity(
+		STAMP_CRATE_TYPE, {"state": {"position": [2.0, 3.0]}}
+	)
+	_check(entity != null, "the unstamped snapshot test needs an entity")
+	if entity == null:
+		return
+	var id: int = entity.entity_id
+	var instance_id := entity.get_instance_id()
 
+	world.apply_snapshot(
+		[
+			{
+				"entity_id": id,
+				"type_id": STAMP_CRATE_TYPE,
+				"owner_player_id": 0,
+				"state": {"position": [2.0, 3.0]},
+			},
+		]
+	)
+
+	var rebuilt: Variant = world._entities.get(id)
+	_check(
+		rebuilt != null and rebuilt.get_instance_id() != instance_id,
+		"an unstamped snapshot must be treated as fully stale, not ignored",
+	)
+
+
+## The server-only mutators refuse to run on a client copy: the guard logs
+## `WIRED_DYNAMIC_SERVER_ONLY_OP` and leaves the local bookkeeping alone.
+func _test_server_only_ops_refuse_to_run_on_a_client() -> void:
+	var world := ClientWorld.new()
+	root.add_child(world)
+	_owned.append(world)
+	world.setup(_make_stamp_registry(), null)
+	world._parked.append(
+		world._parked_record(
+			{
+				"entity_id": 7,
+				"type_id": STAMP_CRATE_TYPE,
+				"owner_player_id": 0,
+				"state": {},
+			}
+		)
+	)
+
+	_check(
+		world.park_package(STAMP_PACKAGE_NUMBER) == 0,
+		"park_package must be a no-op on a client",
+	)
+	_check(
+		world.purge_package(STAMP_PACKAGE_NUMBER) == 0,
+		"purge_package must be a no-op on a client",
+	)
+	_check(
+		world.purge_missing_packages(PackedStringArray(["43"])) == 0,
+		"purge_missing_packages must be a no-op on a client",
+	)
+	_check(
+		world._parked.size() == 1,
+		"a client-side purge must not drop a parked record, got %d"
+		% world._parked.size(),
+	)
+	world.seed_pending(
+		[{"entity_id": 8, "type_id": STAMP_CRATE_TYPE, "state": {}}]
+	)
+	_check(
+		world.pending_records().size() == 1
+		and world.pending_records()[0].get("entity_id") == 7,
+		"seed_pending must not replace the records on a client, got %s"
+		% [world.pending_records()],
+	)
+
+
+# --- helpers --------------------------------------------------------------
 
 func _make_registry(options: Dictionary = {}) -> WiredPackageRegistry:
 	var registry := WiredPackageRegistry.new()

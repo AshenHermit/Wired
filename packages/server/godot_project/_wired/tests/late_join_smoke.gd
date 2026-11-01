@@ -23,12 +23,22 @@ extends SceneTree
 ##     --script res://tests/late_join_smoke.gd --quit-after 2
 
 const PLAYER_PACKAGE := "pkg.player"
-const DYNAMIC_PACKAGE := "pkg.dynamic"
+## Numeric, like a backend package id: `DynamicWorldContainer` derives an
+## entity's package stamp from the `<package_id>/<local_type>` prefix, so a
+## non-numeric fixture id could never match the snapshot's package map and every
+## repeated snapshot would rebuild instead of refreshing.
+const DYNAMIC_PACKAGE := "7"
 const PLAYER_ROOT := "res://tests/fixtures/player_root"
 const DYNAMIC_ROOT := "res://tests/fixtures/dynamic_root"
 const PLAYER_SCENE := "player_component.tscn"
 const CRATE_SCENE := "crate.tscn"
-const CRATE_TYPE := "pkg.dynamic/crate"
+const CRATE_TYPE := "7/crate"
+## Revision and artifact keys both registries and the snapshot agree on. A real
+## package application fills them from the manifest; the fixture must too, or
+## every snapshot entity looks stale.
+const PACKAGE_REVISION := 1
+const PLAYER_ARTIFACT := "player-a"
+const DYNAMIC_ARTIFACT := "dynamic-a"
 const SnapshotRules := preload("res://_wired/scripts/network/world_snapshot.gd")
 
 var _failures: PackedStringArray = []
@@ -156,8 +166,14 @@ func _test_late_client_is_repaired_once() -> void:
 	_add_full_packages(client_registry)
 	var snapshot := {
 		"packages": {
-			PLAYER_PACKAGE: {"revision": 1, "artifact_key": "player-a"},
-			DYNAMIC_PACKAGE: {"revision": 1, "artifact_key": "dynamic-a"},
+			PLAYER_PACKAGE: {
+				"revision": PACKAGE_REVISION,
+				"artifact_key": PLAYER_ARTIFACT,
+			},
+			DYNAMIC_PACKAGE: {
+				"revision": PACKAGE_REVISION,
+				"artifact_key": DYNAMIC_ARTIFACT,
+			},
 		},
 		"players": player_record,
 		"dynamic_world": dynamic_records,
@@ -243,6 +259,13 @@ func _test_late_client_is_repaired_once() -> void:
 		"a repeated snapshot must not duplicate dynamic entities, got %d"
 		% _live_entities(client_world).size(),
 	)
+	if restored_crate != null:
+		# The snapshot carries the package map, so a crate of the same revision
+		# and artifact key must be refreshed in place, not rebuilt.
+		_check(
+			client_world._entities.get(crate.entity_id) == restored_crate,
+			"a repeated snapshot must refresh the crate, not rebuild it",
+		)
 
 
 func _test_snapshot_package_map_guard() -> void:
@@ -293,7 +316,9 @@ func _apply_snapshot(
 		"the snapshot package map must be self-consistent",
 	)
 	players.apply_snapshot(snapshot.get("players", []))
-	world.apply_snapshot(snapshot.get("dynamic_world", []))
+	world.apply_snapshot(
+		snapshot.get("dynamic_world", []), snapshot.get("packages", {})
+	)
 
 
 func _make_full_registry() -> WiredPackageRegistry:
@@ -314,6 +339,8 @@ func _add_full_packages(registry: WiredPackageRegistry) -> void:
 	var player_context := WiredPackageContext.new()
 	player_context.package_id = PLAYER_PACKAGE
 	player_context.root_path = PLAYER_ROOT
+	player_context.revision = PACKAGE_REVISION
+	player_context.artifact_key = PLAYER_ARTIFACT
 	registry.register_context(PLAYER_PACKAGE, player_context)
 	var player_entry := WiredPackageRegistration.new()
 	player_entry.package_id = PLAYER_PACKAGE
@@ -323,6 +350,8 @@ func _add_full_packages(registry: WiredPackageRegistry) -> void:
 	var dynamic_context := WiredPackageContext.new()
 	dynamic_context.package_id = DYNAMIC_PACKAGE
 	dynamic_context.root_path = DYNAMIC_ROOT
+	dynamic_context.revision = PACKAGE_REVISION
+	dynamic_context.artifact_key = DYNAMIC_ARTIFACT
 	registry.register_context(DYNAMIC_PACKAGE, dynamic_context)
 	var dynamic_entry := WiredPackageRegistration.new()
 	dynamic_entry.package_id = DYNAMIC_PACKAGE
