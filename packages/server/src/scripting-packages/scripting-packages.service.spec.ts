@@ -324,4 +324,59 @@ describe('ScriptingPackagesService', () => {
       );
     });
   });
+
+  describe('delete dependency guard', () => {
+    function makeService(options: {
+      dependents?: Array<{ packageId: number; roomId: number; revision: number }>;
+      rows?: Array<{ id: number; name: string; enabled: boolean }>;
+    }) {
+      const packagesRepository = {
+        findOne: jest.fn(async () => ({ id: 42, room: { id: 7 } })),
+        find: jest.fn(async () => options.rows ?? []),
+        delete: jest.fn(async () => ({ affected: 1 })),
+      };
+      const delivery = {
+        findDependentRoomPackages: jest.fn(
+          async () => options.dependents ?? [],
+        ),
+      };
+      return {
+        packagesRepository,
+        delivery,
+        service: new ScriptingPackagesService(
+          packagesRepository as never,
+          {} as never,
+          undefined,
+          undefined,
+          delivery as never,
+        ),
+      };
+    }
+
+    it('refuses to delete a package with enabled room dependents', async () => {
+      const { service, packagesRepository } = makeService({
+        dependents: [{ packageId: 9, roomId: 7, revision: 2 }],
+        rows: [{ id: 9, name: 'Dep', enabled: true }],
+      });
+
+      await expect(service.remove(42)).rejects.toMatchObject({
+        response: {
+          code: 'package_has_dependents',
+          dependents: [{ packageId: 9, name: 'Dep' }],
+        },
+      });
+      expect(packagesRepository.delete).not.toHaveBeenCalled();
+    });
+
+    it('deletes when every dependent is disabled', async () => {
+      const { service, packagesRepository } = makeService({
+        dependents: [{ packageId: 9, roomId: 7, revision: 2 }],
+        rows: [{ id: 9, name: 'Dep', enabled: false }],
+      });
+
+      await service.remove(42);
+
+      expect(packagesRepository.delete).toHaveBeenCalledWith(42);
+    });
+  });
 });

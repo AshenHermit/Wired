@@ -347,6 +347,28 @@ export class PackageStorageService {
     }
   }
 
+  /**
+   * Reads a file of an unfinished draft. Publishing checks a package's own
+   * draft sources for references to other packages before the bytes move to
+   * the immutable published directory, so the draft is the only place these
+   * files exist at that moment.
+   */
+  async readDraftFile(
+    packageId: number,
+    revision: number,
+    filepath: string,
+  ): Promise<string> {
+    const fullPath = resolvePackagePath(
+      this.draftRevisionDir(packageId, revision),
+      filepath,
+    );
+    try {
+      return await readFile(fullPath, 'utf8');
+    } catch {
+      throw new NotFoundException(`File ${filepath} is not in the draft`);
+    }
+  }
+
   async discardDraft(packageId: number, revision: number): Promise<void> {
     await this.removeDirectory(this.draftRevisionDir(packageId, revision));
   }

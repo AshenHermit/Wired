@@ -73,6 +73,25 @@ describe('PackageStorageService', () => {
         storage.saveDraftFile(7, 1, '/etc/passwd', Buffer.from('x')),
       ).rejects.toThrow(PackagePathError);
     });
+
+    it('reads a stored draft file as text', async () => {
+      await storage.saveDraftFile(
+        7,
+        1,
+        'scripts/hero.gd',
+        Buffer.from('extends Node\n'),
+      );
+
+      await expect(storage.readDraftFile(7, 1, 'scripts/hero.gd')).resolves.toBe(
+        'extends Node\n',
+      );
+    });
+
+    it('rejects reading a draft file that was never uploaded', async () => {
+      await expect(
+        storage.readDraftFile(7, 1, 'scripts/missing.gd'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
   });
 
   describe('publishRevision', () => {

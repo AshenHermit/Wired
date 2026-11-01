@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -7,7 +8,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { User } from 'src/database/entities/user.entity';
 import { Room } from 'src/database/entities/room.entity';
@@ -15,6 +16,7 @@ import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
 import { canEditRoom } from 'src/rooms/room-access';
 import { PackageStorageService } from './package-storage.service';
+import { PackageDeliveryService } from './package-delivery.service';
 import {
   PACKAGE_REVISION_DISPATCHER,
   PackageRevisionDispatcher,
@@ -34,6 +36,8 @@ export class ScriptingPackagesService {
     @Optional()
     @Inject(PACKAGE_REVISION_DISPATCHER)
     private readonly dispatcher?: PackageRevisionDispatcher,
+    @Optional()
+    private readonly delivery?: PackageDeliveryService,
   ) {}
 
   assertPackageCreation(user: User, dto: CreateScriptingPackageDto): void {
@@ -192,6 +196,39 @@ export class ScriptingPackagesService {
   }
 
   /**
+   * A room package may reference files of another package by absolute path
+   * (`res://packages/<id>/...`), and the runtime keeps those references
+   * pointing into the referenced package's own directory. Deleting a package
+   * whose files are still referenced would therefore break every enabled
+   * dependent on its next reload, so the delete is refused while one exists.
+   */
+  private async assertNoEnabledDependents(packageId: number): Promise<void> {
+    if (!this.delivery) {
+      return;
+    }
+    const dependents = await this.delivery.findDependentRoomPackages(packageId);
+    if (dependents.length === 0) {
+      return;
+    }
+    const rows = await this.packagesRepository.find({
+      where: { id: In(dependents.map((dependent) => dependent.packageId)) },
+    });
+    const blocking = rows
+      .filter((row) => row.enabled !== false)
+      .map((row) => ({ packageId: row.id, name: row.name }))
+      .sort((a, b) => a.packageId - b.packageId);
+    if (blocking.length === 0) {
+      return;
+    }
+    throw new ConflictException({
+      statusCode: 409,
+      code: 'package_has_dependents',
+      message: 'Enabled packages depend on this package',
+      dependents: blocking,
+    });
+  }
+
+  /**
    * Deletes the package row and then every stored file of the package. The
    * revision rows cascade with the package, but nothing on disk does: without
    * the cleanup `revisions/<n>` and `runtime/v1/<room>/...` stay orphaned.
@@ -200,6 +237,7 @@ export class ScriptingPackagesService {
    * completed deletion into an error.
    */
   async remove(id: number): Promise<void> {
+    await this.assertNoEnabledDependents(id);
     const pkg = await this.findOne(id);
     const roomId = pkg.room?.id ?? null;
     const result = await this.packagesRepository.delete(id);

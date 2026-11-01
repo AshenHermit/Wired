@@ -14,8 +14,9 @@ import {
   PackageManifest,
   PackageRevision,
 } from '@wired-io/shared';
-import { DataSource, QueryRunner, Repository } from 'typeorm';
+import { DataSource, In, QueryRunner, Repository } from 'typeorm';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
+import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import {
   SavedDraftFile,
   PackageStorageService,
@@ -61,6 +62,9 @@ export class PackageRevisionsService {
     @Optional()
     @InjectDataSource()
     private readonly dataSource?: DataSource,
+    @Optional()
+    @InjectRepository(ScriptingPackage)
+    private readonly packagesRepository?: Repository<ScriptingPackage>,
   ) {}
 
   /**
@@ -155,6 +159,8 @@ export class PackageRevisionsService {
       );
     }
 
+    await this.assertNoDisabledRoomDependency(packageId, revision, row.files);
+
     // Reject uploads for this package while its bytes are verified and moved.
     const lock = await this.acquirePublishLock(packageId);
     this.publishing.add(packageId);
@@ -177,6 +183,98 @@ export class PackageRevisionsService {
     await this.recordPinnedDependencies(packageId, revision, row.files);
     await this.dispatchPublished(packageId, revision);
     return toRevision(row, packageId);
+  }
+
+  /**
+   * Publishing pins every package the sources reference, directly or through
+   * another package's own pins, and the artifact builder rewrites those
+   * references into the dependency's runtime directory. Publishing against a
+   * dependency disabled in the same room would therefore produce an artifact
+   * that can never load, so the publication is refused instead.
+   */
+  private async assertNoDisabledRoomDependency(
+    packageId: number,
+    revision: number,
+    files: PackageFileEntry[],
+  ): Promise<void> {
+    if (!this.packagesRepository) {
+      return;
+    }
+    const pkg = await this.packagesService.findOne(packageId);
+    const roomId = pkg.room?.id;
+    if (roomId === undefined) {
+      return;
+    }
+
+    const visited = new Set<number>();
+    const queue: number[] = [];
+    const visit = (id: number): void => {
+      if (id === packageId || visited.has(id)) {
+        return;
+      }
+      visited.add(id);
+      queue.push(id);
+    };
+
+    for (const entry of files) {
+      if (!isTextPackageFile(entry.filepath)) {
+        continue;
+      }
+      let text: string;
+      try {
+        text = await this.storage.readDraftFile(
+          packageId,
+          revision,
+          entry.filepath,
+        );
+      } catch {
+        // A missing upload is reported by publishRevision's own check.
+        continue;
+      }
+      for (const reference of collectPackageReferences(text)) {
+        visit(reference.packageId);
+      }
+    }
+
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      const latest = await this.revisionsRepository.findOne({
+        where: { package: { id }, status: 'published' },
+        order: { revision: 'DESC' },
+      });
+      if (!latest) {
+        continue;
+      }
+      const pins = await this.storage.readPinnedDependencies(
+        id,
+        latest.revision,
+      );
+      for (const pinned of pins?.keys() ?? []) {
+        visit(pinned);
+      }
+    }
+
+    if (visited.size === 0) {
+      return;
+    }
+    const dependencies = await this.packagesRepository.find({
+      where: { id: In([...visited]) },
+      relations: { room: true },
+    });
+    const blocked = dependencies.find(
+      (dependency) =>
+        dependency.enabled === false && dependency.room?.id === roomId,
+    );
+    if (!blocked) {
+      return;
+    }
+    throw new ConflictException({
+      statusCode: 409,
+      code: 'dependency_disabled',
+      message: `Dependency ${blocked.id} is disabled in this room`,
+      dependencyId: blocked.id,
+      name: blocked.name,
+    });
   }
 
   /** Advisory lock key; `hashtext` maps it to the lock's bigint id. */

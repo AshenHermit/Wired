@@ -47,13 +47,16 @@ describe('PackageRevisionsService', () => {
     delete: jest.Mock;
   };
   let packagesService: { findOne: jest.Mock };
+  let packagesRepository: { find: jest.Mock };
   let storage: {
     saveDraftFile: jest.Mock;
     publishRevision: jest.Mock;
     discardDraft: jest.Mock;
     readPublishedFile: jest.Mock;
+    readDraftFile: jest.Mock;
     resolvePublishedFile: jest.Mock;
     writePinnedDependencies: jest.Mock;
+    readPinnedDependencies: jest.Mock;
   };
   let service: PackageRevisionsService;
   let dispatcher: { revisionPublished: jest.Mock };
@@ -72,6 +75,7 @@ describe('PackageRevisionsService', () => {
       delete: jest.fn(async () => ({ affected: 1 })),
     };
     packagesService = { findOne: jest.fn(async () => pkg) };
+    packagesRepository = { find: jest.fn(async () => []) };
     dispatcher = { revisionPublished: jest.fn(async () => undefined) };
     storage = {
       saveDraftFile: jest.fn(async (_id, _rev, _path, data: Buffer) => ({
@@ -81,17 +85,21 @@ describe('PackageRevisionsService', () => {
       publishRevision: jest.fn(async (_id, _rev, _files, commit) => commit()),
       discardDraft: jest.fn(async () => undefined),
       readPublishedFile: jest.fn(async () => Buffer.from('x')),
+      readDraftFile: jest.fn(async () => ''),
       resolvePublishedFile: jest.fn(async () => ({
         path: '/tmp/a.txt',
         size: 1,
       })),
       writePinnedDependencies: jest.fn(async () => undefined),
+      readPinnedDependencies: jest.fn(async () => null),
     };
     service = new PackageRevisionsService(
       repository as never,
       packagesService as unknown as ScriptingPackagesService,
       storage as unknown as PackageStorageService,
       dispatcher as unknown as PackageRevisionDispatcher,
+      undefined,
+      packagesRepository as never,
     );
   });
 
@@ -279,6 +287,32 @@ describe('PackageRevisionsService', () => {
         3,
         new Map([[6, 9]]),
       );
+    });
+
+    it('rejects publishing when a same-room dependency is disabled', async () => {
+      const row = draftRow(3, [
+        file('main.gd', 'preload("res://packages/9/a.tscn")'),
+      ]);
+      repository.findOne.mockImplementation(
+        async (opts: { where: { status?: string } }) =>
+          opts.where.status === 'published' ? null : row,
+      );
+      storage.readDraftFile.mockResolvedValue(
+        'preload("res://packages/9/a.tscn")',
+      );
+      packagesService.findOne.mockResolvedValue({ id: 42, room: { id: 7 } });
+      packagesRepository.find.mockResolvedValue([
+        { id: 9, enabled: false, room: { id: 7 }, name: 'Off' },
+      ]);
+
+      await expect(service.publish(42, 3)).rejects.toMatchObject({
+        response: {
+          code: 'dependency_disabled',
+          dependencyId: 9,
+          name: 'Off',
+        },
+      });
+      expect(storage.publishRevision).not.toHaveBeenCalled();
     });
 
     it('keeps the publication even when the pins cannot be recorded', async () => {
