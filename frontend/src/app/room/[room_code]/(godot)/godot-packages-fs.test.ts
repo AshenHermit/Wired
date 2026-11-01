@@ -35,7 +35,10 @@ function makeEngine(tree: Map<string, Uint8Array>, order: string[]): PackageEngi
  * GDScript plugin sends; every bridge call and every engine write is recorded
  * in `order` so a test can assert the sequence of a replacement.
  */
-function makeWorkspace(overrides: Record<string, Handler> = {}) {
+function makeWorkspace(
+  overrides: Record<string, Handler> = {},
+  options: { getEngine?: () => PackageEngine } = {},
+) {
   const tree = new Map<string, Uint8Array>();
   const order: string[] = [];
   const syncHandler = vi.fn();
@@ -67,7 +70,7 @@ function makeWorkspace(overrides: Record<string, Handler> = {}) {
 
   const files: PackageFileSystem = createPackageFileSystem({
     bridge,
-    getEngine: () => engine,
+    getEngine: options.getEngine ?? (() => engine),
     projectRoot,
   });
 
@@ -199,6 +202,49 @@ describe("PackageFileSystem", () => {
     expect(engine.copyToFS).not.toHaveBeenCalled();
     expect(order).not.toContain("replace");
     expect(order).not.toContain("sync");
+  });
+
+  it("reports a reset editor as GodotFsError before creating staging", async () => {
+    // The engine getter used by the panel throws GodotFsError when the editor
+    // instance was reset between `prepareReplace` and `copyToFS`.
+    const { files, bridge, order, tree } = makeWorkspace(
+      {},
+      {
+        getEngine: () => {
+          throw new GodotFsError(
+            "Файловая система Godot-редактора ещё не готова: дождитесь загрузки проекта",
+          );
+        },
+      },
+    );
+
+    const replacement = files.replaceContents(
+      7,
+      new Map([["main.gd", data("main")]]),
+    );
+
+    await expect(replacement).rejects.toBeInstanceOf(GodotFsError);
+    await expect(replacement).rejects.toThrow(/ещё не готова/);
+    // Nothing was staged: the plugin was never asked to prepare a directory.
+    expect(bridge.call).not.toHaveBeenCalled();
+    expect(order).toEqual([]);
+    expect(tree.size).toBe(0);
+  });
+
+  it("does not create staging when the engine primitive is missing", async () => {
+    const { files, bridge, order, tree } = makeWorkspace(
+      {},
+      {
+        getEngine: () => undefined as unknown as PackageEngine,
+      },
+    );
+
+    await expect(
+      files.replaceContents(7, new Map([["main.gd", data("main")]])),
+    ).rejects.toBeInstanceOf(GodotFsError);
+    expect(bridge.call).not.toHaveBeenCalled();
+    expect(order).toEqual([]);
+    expect(tree.size).toBe(0);
   });
 
   it("keeps editor metadata out of collect", async () => {

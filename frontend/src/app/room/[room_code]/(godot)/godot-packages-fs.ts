@@ -136,7 +136,8 @@ function decodeBase64(contentsBase64: string): Uint8Array {
  *
  * `getEngine` is read on every replacement instead of being captured once: the
  * editor instance is recreated when the page restarts the engine, and writes
- * must reach the live one.
+ * must reach the live one. An engine that is gone must be reported as a
+ * `GodotFsError` by the getter itself, never as a raw `TypeError`.
  */
 export function createPackageFileSystem({
   bridge,
@@ -231,18 +232,22 @@ export function createPackageFileSystem({
         data,
       }));
 
-      const { staging_path: stagingPath } =
-        await bridge.call<PrepareReplacePayload>("prepareReplace", {
-          packageId,
-        });
-      assertStagingPath(stagingPath, packageId);
-
+      // Read the write primitive before the plugin creates a staging directory:
+      // an editor that was reset between the revision download and this write
+      // must fail here, not after files were copied into an orphan staging dir.
       const engine = getEngine();
       if (!engine) {
         throw new GodotFsError(
           "Файловая система Godot-редактора ещё не готова: дождитесь загрузки проекта",
         );
       }
+
+      const { staging_path: stagingPath } =
+        await bridge.call<PrepareReplacePayload>("prepareReplace", {
+          packageId,
+        });
+      assertStagingPath(stagingPath, packageId);
+
       for (const { filepath, data } of staged) {
         try {
           engine.copyToFS(`${stagingPath}/${filepath}`, data);

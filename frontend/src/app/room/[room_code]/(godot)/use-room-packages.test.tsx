@@ -35,6 +35,7 @@ import * as gameApi from "@/api/services/godot-game";
 import * as packagesApi from "@/api/services/scripting-packages";
 import {
   createPackageFileSystem,
+  GodotFsError,
   type CollectedPackageFile,
   type PackageFileSystem,
 } from "./godot-packages-fs";
@@ -715,6 +716,20 @@ describe("useRoomPackages", () => {
     editor.editor = restarted;
 
     expect(options.getEngine()).toBe(restarted);
+    unmount();
+  });
+
+  it("reports a reset editor as GodotFsError instead of TypeError", async () => {
+    const editor = makeEditor();
+    const { unmount } = await startHook({ editor });
+    const options = vi.mocked(createPackageFileSystem).mock.calls[0][0];
+
+    // The page restarted the engine and the hook lost the instance between
+    // `prepareReplace` and the actual write.
+    delete (editor as { editor?: unknown }).editor;
+
+    expect(() => options.getEngine()).toThrow(GodotFsError);
+    expect(() => options.getEngine()).not.toThrow(TypeError);
     unmount();
   });
 

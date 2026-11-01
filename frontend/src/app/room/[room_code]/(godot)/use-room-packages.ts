@@ -16,6 +16,7 @@ import {
   waitForEditorBridge,
 } from "./editor-bridge";
 import {
+  GodotFsError,
   createPackageFileSystem,
   type PackageFileSystem,
 } from "./godot-packages-fs";
@@ -537,8 +538,18 @@ export function useRoomPackages(
       files = createPackageFileSystem({
         bridge: createEditorBridgeClient(),
         // Read at write time: the editor instance is recreated when the page
-        // restarts the engine, and package writes must reach the live one.
-        getEngine: () => engineRef.current!.editor,
+        // restarts the engine, and package writes must reach the live one. The
+        // editor can also be reset between a revision download and the write,
+        // so a missing engine is a `GodotFsError`, never a raw `TypeError`.
+        getEngine: () => {
+          const current = engineRef.current;
+          if (!current?.editor) {
+            throw new GodotFsError(
+              "Файловая система Godot-редактора ещё не готова: дождитесь загрузки проекта",
+            );
+          }
+          return current.editor;
+        },
         projectRoot,
       });
     } catch (cause) {
