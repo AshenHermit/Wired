@@ -618,6 +618,42 @@ describe('RoomRuntimeService', () => {
     expect(process.stdinText).toBe('package 42 3\n');
   });
 
+  it('logs an EPIPE from the runtime stdin instead of crashing the backend', async () => {
+    const { process } = await startRoom('room-1');
+    expect(service.sendPackage('room-1', 42, 3)).toBe(true);
+
+    const epipe = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+
+    // An 'error' event without a listener is an uncaughtException.
+    expect(() => process.stdin.emit('error', epipe)).not.toThrow();
+    expect(service.getLogs('room-1').join('\n')).toContain('EPIPE');
+    expect(service.getRuntime('room-1')?.state).toBe('running');
+  });
+
+  it('refuses a control write after the runtime stdin ended', async () => {
+    const { process } = await startRoom('room-1');
+
+    process.stdin.end();
+    await new Promise((resolve) => process.stdin.once('finish', resolve));
+
+    expect(service.sendPackage('room-1', 42, 3)).toBe(false);
+    expect(process.stdinText).toBe('');
+  });
+
+  it('logs stdout and stderr read errors instead of crashing the backend', async () => {
+    const { process } = await startRoom('room-1');
+
+    expect(() => process.stdout.emit('error', new Error('read ECONNRESET'))) //
+      .not.toThrow();
+    expect(() => process.stderr.emit('error', new Error('read EPIPE'))) //
+      .not.toThrow();
+
+    const logs = service.getLogs('room-1').join('\n');
+    expect(logs).toContain('stdout stream error');
+    expect(logs).toContain('read ECONNRESET');
+    expect(logs).toContain('stderr stream error');
+  });
+
   it('notifies the observer about lifecycle and package protocol events', async () => {
     const events: unknown[] = [];
     service.setObserver({

@@ -43,6 +43,8 @@ export interface RoomRuntimeSessionOptions {
  */
 export class RoomRuntimeSession {
   readonly record: RuntimeRecord;
+  /** Pipes that already carry the guard against an unhandled 'error' event. */
+  private readonly guardedPipes = new WeakSet<NodeJS.EventEmitter>();
 
   constructor(private readonly options: RoomRuntimeSessionOptions) {
     this.record = this.createRecord();
@@ -306,6 +308,25 @@ export class RoomRuntimeSession {
         this.handleLine(line, source);
       }
     });
+    // A runtime that exits mid-write makes the pipe emit 'error'
+    // asynchronously. Without a listener that is an uncaughtException and it
+    // would take the whole backend down, so a broken pipe is only logged.
+    this.guardPipe(stream, `${source} stream`);
+  }
+
+  /**
+   * Subscribes once to asynchronous pipe errors (EPIPE, "write after end",
+   * ECONNRESET). They arrive outside the write's try/catch, and an unhandled
+   * 'error' event on a stream is an uncaughtException.
+   */
+  private guardPipe(pipe: NodeJS.EventEmitter, label: string): void {
+    if (this.guardedPipes.has(pipe)) {
+      return;
+    }
+    this.guardedPipes.add(pipe);
+    pipe.on('error', (error: Error) => {
+      this.appendLog(`[wired] ${label} error: ${this.errorMessage(error)}`);
+    });
   }
 
   private handleLine(line: string, source: 'stdout' | 'stderr'): void {
@@ -403,11 +424,22 @@ export class RoomRuntimeSession {
    */
   sendCommand(command: string): boolean {
     const record = this.record;
-    if (record.state !== 'running' || !record.process?.stdin) {
+    if (record.state !== 'running') {
+      return false;
+    }
+    const stdin = record.process?.stdin;
+    if (!stdin) {
+      return false;
+    }
+    this.guardPipe(stdin, 'control stdio');
+    // Re-check right before the write: the process may have exited (or the
+    // pipe closed) between the state check and this line.
+    if (record.state !== 'running' || !stdin.writable) {
+      this.appendLog('[wired] control write skipped: stdin is closed');
       return false;
     }
     try {
-      record.process.stdin.write(`${command}\n`);
+      stdin.write(`${command}\n`);
       this.appendLog(`[wired] control -> ${command}`);
       return true;
     } catch (error) {
@@ -621,8 +653,14 @@ export class RoomRuntimeSession {
       return;
     }
 
+    const stdin = record.process.stdin;
+    if (stdin) {
+      this.guardPipe(stdin, 'control stdio');
+    }
     try {
-      record.process.stdin?.write('shutdown\n');
+      if (stdin?.writable) {
+        stdin.write('shutdown\n');
+      }
     } catch (error) {
       this.appendLog(
         `[wired] failed to send shutdown command: ${this.errorMessage(error)}`,
