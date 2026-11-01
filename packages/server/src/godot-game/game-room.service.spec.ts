@@ -87,6 +87,7 @@ describe('GameRoomService', () => {
   let runtime: {
     getConnection: jest.Mock;
     refreshConnection: jest.Mock;
+    stopRoom: jest.Mock;
     getRuntime: jest.Mock;
   };
   let packageSync: { getStatuses: jest.Mock };
@@ -97,6 +98,7 @@ describe('GameRoomService', () => {
     runtime = {
       getConnection: jest.fn(),
       refreshConnection: jest.fn(),
+      stopRoom: jest.fn(),
       getRuntime: jest.fn(),
     };
     packageSync = { getStatuses: jest.fn(async () => []) };
@@ -231,24 +233,23 @@ describe('GameRoomService', () => {
     expect(packageSync.getStatuses).toHaveBeenCalledTimes(2);
   });
 
-  it('refreshes the ticket after a readiness wait consumed its TTL', async () => {
+  it('mints exactly one ticket per connection while the readiness wait runs', async () => {
     packageSync.getStatuses
       .mockResolvedValueOnce([status({ runtime: { state: 'pending' } })])
       .mockResolvedValueOnce([status({ runtime: { state: 'applied' } })]);
-    runtime.refreshConnection.mockReturnValue({
-      ...connection(),
-      ticket: 'fresh-ticket',
-      ticketExpiresAt: 1_800_000_600,
-    });
 
     const result = await service.connect(user(1), 42);
 
-    expect(runtime.refreshConnection).toHaveBeenCalledWith('42');
-    expect(result.ticket).toBe('fresh-ticket');
-    expect(result.ticketExpiresAt).toBe(1_800_000_600);
+    expect(runtime.getConnection).toHaveBeenCalledTimes(1);
+    // A second mint would discard the first ticket and can stop the runtime
+    // through the handshake window, so the wait must not re-mint.
+    expect(runtime.refreshConnection).not.toHaveBeenCalled();
+    expect(runtime.stopRoom).not.toHaveBeenCalled();
+    expect(result.ticket).toBe('ticket-value');
+    expect(result.ticketExpiresAt).toBe(1_800_000_000);
   });
 
-  it('does not refresh a ticket when the readiness wait times out', async () => {
+  it('does not mint another ticket when the readiness wait times out', async () => {
     jest.useFakeTimers();
     packageSync.getStatuses.mockResolvedValue([
       status({ runtime: { state: 'pending' } }),
@@ -259,6 +260,7 @@ describe('GameRoomService', () => {
     await jest.advanceTimersByTimeAsync(10_100);
     await rejection;
 
+    expect(runtime.getConnection).toHaveBeenCalledTimes(1);
     expect(runtime.refreshConnection).not.toHaveBeenCalled();
   });
 
