@@ -65,6 +65,7 @@ func _run() -> void:
 	_test_component_state_key_survives_reorder()
 	_test_non_finite_input_is_rejected()
 	_test_build_player_tags_components_as_registered()
+	_test_hot_reload_rebuilds_live_components()
 	_test_spawn_waits_for_both_gates_and_routes_actions()
 	_test_disconnect_despawns_the_player()
 	_test_spawner_parents_the_spawned_player()
@@ -506,8 +507,8 @@ func _test_non_finite_input_is_rejected() -> void:
 
 
 ## Registry-created player components are owned by PlayersManager. Tagging them
-## `_wired_registered` is what keeps PackageReloader from replacing a live
-## component after a package revision.
+## `_wired_registered` keeps a live component out of generic root replacement:
+## only `rebuild_live_components` may replace it, after a package revision.
 func _test_build_player_tags_components_as_registered() -> void:
 	var player := _build_player(_make_registry(), 7, 1, Vector2.ZERO)
 	root.add_child(player)
@@ -520,6 +521,69 @@ func _test_build_player_tags_components_as_registered() -> void:
 			bool(component.get_meta("_wired_registered", false)),
 			"every registry-created component must carry _wired_registered",
 		)
+
+
+## Hot reload: an applied package revision rebuilds the components of players
+## that are already in the world. The root (and therefore the spawner's tracking)
+## stays, the new components come from the current registry and the component
+## state is carried over instead of snapping bodies back to their anchor.
+func _test_hot_reload_rebuilds_live_components() -> void:
+	var registry := _make_registry()
+	var manager := PlayersManager.new()
+	root.add_child(manager)
+	_owned.append(manager)
+	manager.setup(registry, null, null)
+	manager._authenticated[1] = {
+		WiredProtocol.KEY_PLAYER_ID: 7,
+		WiredProtocol.KEY_NAME: "bob",
+	}
+	manager.spawn_player(1)
+	var player := manager.get_player_by_peer(1)
+	_check(player != null, "the hot-reload test needs a live player")
+	if player == null or player.components.is_empty():
+		_check(false, "the hot-reload test needs a live component")
+		return
+	var previous: Variant = player.components[0]
+	previous.body.position = Vector2(11, 12)
+	var player_id := player.get_instance_id()
+
+	# A new revision adds a component. The registry instance is the same object
+	# the player was built from, exactly like `PackageEntryLoader` applying an
+	# entry into a live registry.
+	var revision := WiredPackageRegistration.new()
+	revision.package_id = PACKAGE_ID
+	revision.add_player_component(EXTRA_COMPONENT_SCENE, {"order": 20})
+	registry.add_registration(revision)
+
+	var rebuilt := manager.rebuild_live_components()
+	_check(rebuilt == 1, "one live player must be rebuilt, got %d" % rebuilt)
+	_check(
+		manager.get_player_by_peer(1) != null
+		and manager.get_player_by_peer(1).get_instance_id() == player_id,
+		"a rebuild must keep the player root (and its spawner tracking)",
+	)
+	_check(
+		player.components.size() == 2,
+		"the rebuilt player must follow the new registry, got %d components"
+		% player.components.size(),
+	)
+	_check(
+		previous.is_queued_for_deletion(),
+		"the previous component must be released, not left running",
+	)
+	var positions := {}
+	for component: WiredPlayerComponent in player.components:
+		var instance: Variant = component
+		_check(
+			bool(component.get_meta("_wired_registered", false)),
+			"a rebuilt component must carry _wired_registered",
+		)
+		positions[component.relative_path] = instance.body.position
+	_check(
+		positions.get(COMPONENT_SCENE, Vector2.ZERO) == Vector2(11, 12),
+		"a rebuild must carry the component state over, got %s"
+		% positions.get(COMPONENT_SCENE, Vector2.ZERO),
+	)
 
 
 func _test_spawn_waits_for_both_gates_and_routes_actions() -> void:
