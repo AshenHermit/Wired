@@ -290,13 +290,17 @@ function normalizeReferencePath(raw: string): string | null {
 }
 
 /**
- * Rejects a raw captured reference path that contains a `.` or `..` segment.
- * Such a path would address files outside the referenced package directory
- * (or normalize ambiguously), so it must fail before normalization collapses
- * the offending segment and the rewrite preserves it verbatim.
+ * Rejects a raw captured reference path that would address something other
+ * than the intended package file: a `.`/`..` segment escapes the package
+ * directory (or normalizes ambiguously), and a backslash is a Windows
+ * separator that Godot never uses in `res://paths` and that would survive the
+ * rewrite into an artifact path.
  */
 function assertSafeRawPath(raw: string): void {
-  if (raw.split('/').some((segment) => segment === '.' || segment === '..')) {
+  if (
+    raw.includes('\\') ||
+    raw.split('/').some((segment) => segment === '.' || segment === '..')
+  ) {
     throw new Error(`package_reference_invalid_path:${raw}`);
   }
 }

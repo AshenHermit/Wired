@@ -105,10 +105,6 @@ export class PackageStorageService {
     );
   }
 
-  publishedRevisionExists(packageId: number, revision: number): boolean {
-    return existsSync(this.publishedRevisionDir(packageId, revision));
-  }
-
   /**
    * Records the revisions every direct dependency was pinned to when this
    * revision was published.

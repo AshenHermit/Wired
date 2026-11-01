@@ -346,6 +346,7 @@ describe('PackageDeliveryService', () => {
     ['res://packages/5/./hero.gd', 'package_reference_invalid_path:./hero.gd'],
     ['res://packages/5/a/../b.gd', 'package_reference_invalid_path:a/../b.gd'],
     ['res://packages/5/../6/x', 'package_reference_invalid_path:../6/x'],
+    ['res://packages/5/a\\b.gd', 'package_reference_invalid_path:a\\b.gd'],
   ])('rejects the unsafe reference path %s', async (reference, expected) => {
     definePackage(5, 'Heroes', 7);
     await writePublished(5, 3, {
