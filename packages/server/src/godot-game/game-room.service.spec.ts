@@ -67,6 +67,7 @@ const status = (overrides: StatusOverrides = {}): PackageSyncStatus => {
   return {
     packageId: 3,
     name: 'Demo',
+    enabled: true,
     revision: 2,
     publishedAt: '2026-10-30T09:00:00.000Z',
     state: 'applied',
@@ -265,6 +266,37 @@ describe('GameRoomService', () => {
     await expect(service.connect(user(1), 42)).resolves.toMatchObject({
       ticket: 'ticket-value',
     });
+  });
+
+  it('does not wait for disabled or unpublished room packages', async () => {
+    jest.useFakeTimers();
+    packageSync.getStatuses.mockResolvedValue([
+      status({
+        packageId: 1,
+        enabled: false,
+        revision: 0,
+        publishedAt: null,
+        runtime: { state: 'pending', revision: 0 },
+      }),
+      status({
+        packageId: 2,
+        enabled: true,
+        revision: 0,
+        publishedAt: null,
+        runtime: { state: 'pending', revision: 0 },
+      }),
+      status({
+        packageId: 3,
+        enabled: true,
+        revision: 4,
+        runtime: { state: 'applied', revision: 4 },
+      }),
+    ]);
+
+    const promise = service.connect(user(1), 42);
+    await jest.advanceTimersByTimeAsync(10_100);
+
+    await expect(promise).resolves.toMatchObject({ ticket: 'ticket-value' });
   });
 
   it('rejects with packages_pending after the timeout', async () => {

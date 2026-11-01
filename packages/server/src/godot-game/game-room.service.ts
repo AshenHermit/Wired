@@ -76,6 +76,7 @@ export class GameRoomService {
         {
           statusCode: HttpStatus.TOO_MANY_REQUESTS,
           code: 'rate_limited',
+          retryAfterSeconds: limit.retryAfterSeconds,
           message: `Too many connection attempts; retry in ${limit.retryAfterSeconds}s`,
         },
         HttpStatus.TOO_MANY_REQUESTS,
@@ -142,7 +143,9 @@ export class GameRoomService {
   private async waitForInitialPackages(roomId: string): Promise<void> {
     const deadline = Date.now() + PACKAGE_READY_TIMEOUT_MS;
     for (;;) {
-      const statuses = await this.packageSync.getStatuses(roomId);
+      const statuses = (
+        await this.packageSync.getStatuses(roomId)
+      ).filter((status) => status.enabled && status.revision > 0);
       if (statuses.some((s) => s.runtime.state === 'failed')) {
         throw new HttpException(
           {
