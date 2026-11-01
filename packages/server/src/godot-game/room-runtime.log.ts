@@ -8,6 +8,7 @@ import {
   WriteStream,
 } from 'node:fs';
 import { join } from 'node:path';
+import { safeRoomName } from './room-runtime.names';
 
 const DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
 
@@ -33,7 +34,7 @@ export class RoomRuntimeLog {
       mkdirSync(stateDir, { recursive: true });
       const path = join(
         stateDir,
-        `${this.safeName(this.roomId)}-${this.port}.log`,
+        `${safeRoomName(this.roomId)}-${this.port}.log`,
       );
       this.rotateIfNeeded(path);
       this.stream = createWriteStream(path, { flags: 'a' });
@@ -67,10 +68,6 @@ export class RoomRuntimeLog {
     }
     this.stream = null;
     stream.end();
-  }
-
-  private safeName(roomId: string): string {
-    return roomId.replace(/[^a-zA-Z0-9._-]/g, '_');
   }
 
   /**

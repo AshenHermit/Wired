@@ -159,6 +159,6 @@ describeIntegration('RoomRuntimeService with real Godot', () => {
     expect(restarted.pid).not.toBeNull();
 
     await service.stopRoom(roomId, 'test_done');
-    expect(service.getRuntime(roomId)?.state).toBe('stopped');
+    expect(service.getRuntime(roomId)).toBeNull();
   }, 120_000);
 });

@@ -31,7 +31,6 @@ export class RoomRuntimeService implements OnModuleDestroy {
   private readonly logger = new Logger(RoomRuntimeService.name);
   private readonly registry = new RoomRuntimeRegistry();
   private readonly runtimeConfiguration: RoomRuntimeConfiguration;
-  private readonly sessions = new Map<string, RoomRuntimeSession>();
   private observer?: RuntimeObserver;
 
   constructor(
@@ -67,7 +66,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
    * playable fails with the same explicit lifecycle error as `getConnection`.
    */
   refreshConnection(roomId: string): RoomConnection {
-    const session = this.sessions.get(roomId);
+    const session = this.registry.get(roomId);
     if (!session || !session.isActive()) {
       throw new RoomRuntimeError(
         'room_not_running',
@@ -86,15 +85,15 @@ export class RoomRuntimeService implements OnModuleDestroy {
 
   /** Current runtime status; never starts a process. */
   getRuntime(roomId: string): RoomRuntimeInfo | null {
-    return this.sessions.get(roomId)?.info() ?? null;
+    return this.registry.get(roomId)?.info() ?? null;
   }
 
   listRuntimes(): RoomRuntimeInfo[] {
-    return [...this.sessions.values()].map((session) => session.info());
+    return this.registry.list().map((session) => session.info());
   }
 
   getLogs(roomId: string): string[] {
-    return this.sessions.get(roomId)?.logLines() ?? [];
+    return this.registry.get(roomId)?.logLines() ?? [];
   }
 
   /**
@@ -110,13 +109,11 @@ export class RoomRuntimeService implements OnModuleDestroy {
    * runtime is absent or not running, so the caller can retry after readiness.
    */
   sendPackage(roomId: string, packageId: number, revision: number): boolean {
-    return (
-      this.sessions.get(roomId)?.sendPackage(packageId, revision) ?? false
-    );
+    return this.registry.get(roomId)?.sendPackage(packageId, revision) ?? false;
   }
 
-  stopRoom(roomId: string, reason = 'requested'): Promise<void> {
-    const session = this.sessions.get(roomId);
+  async stopRoom(roomId: string, reason = 'requested'): Promise<void> {
+    const session = this.registry.get(roomId);
     if (!session) {
       return Promise.reject(
         new RoomRuntimeError(
@@ -126,14 +123,21 @@ export class RoomRuntimeService implements OnModuleDestroy {
         ),
       );
     }
-    return session.stop(reason);
+    await session.stop(reason);
+    if (!session.canBeStopped()) {
+      // The process really exited: drop the record so the room does not keep
+      // a stale session (and its log buffer) after an explicit stop.
+      this.forgetSession(roomId);
+    }
   }
 
   /** Stops every room; used by Nest shutdown hooks so no process is orphaned. */
   async shutdownAll(): Promise<void> {
-    const sessions = [...this.sessions.values()].filter((session) =>
-      session.isActive(),
-    );
+    // `canBeStopped` and not `isActive`: a runtime that survived a force kill
+    // is already `failed`, but it still holds its port until it really exits.
+    const sessions = this.registry
+      .list()
+      .filter((session) => session.canBeStopped());
     await Promise.all(
       sessions.map((session) =>
         session.stop('backend_shutdown').catch((error) => {
@@ -143,10 +147,23 @@ export class RoomRuntimeService implements OnModuleDestroy {
         }),
       ),
     );
+    for (const session of sessions) {
+      if (!session.canBeStopped()) {
+        this.forgetSession(session.roomId);
+      }
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
     await this.shutdownAll();
+  }
+
+  /**
+   * Drops a stopped session so the room no longer keeps a record (and its log
+   * buffer) after it is gone. The port was already released by the exit.
+   */
+  private forgetSession(roomId: string): void {
+    this.registry.remove(roomId);
   }
 
   // --- startup ------------------------------------------------------------
@@ -157,7 +174,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
     this.runtimeConfiguration.validate(config);
     const paths = this.runtimeConfiguration.resolvePaths(config);
 
-    const existing = this.sessions.get(roomId);
+    const existing = this.registry.get(roomId);
     if (existing) {
       if (existing.state === 'starting' || existing.state === 'running') {
         return existing;
@@ -190,11 +207,9 @@ export class RoomRuntimeService implements OnModuleDestroy {
       processFactory: this.processFactory,
       registry: this.registry,
       logger: this.logger,
-      onEvent: (event) =>
-        this.handleSessionEvent(roomId, event),
+      onEvent: (event) => this.handleSessionEvent(roomId, event),
     });
-    this.sessions.set(roomId, session);
-    this.registry.add(session.record);
+    this.registry.add(session);
     session.start();
     return session;
   }
