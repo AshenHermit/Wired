@@ -1,4 +1,8 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ScriptingPackagesService } from './scripting-packages.service';
 
 describe('ScriptingPackagesService', () => {
@@ -378,5 +382,83 @@ describe('ScriptingPackagesService', () => {
 
       expect(packagesRepository.delete).toHaveBeenCalledWith(42);
     });
+  });
+});
+
+describe('ScriptingPackagesService enable guard', () => {
+  function makeService(options: {
+    pkg?: {
+      id: number;
+      name?: string;
+      enabled: boolean;
+      room: { id: number } | null;
+    };
+    dependencies?: Record<number, unknown>;
+    pins?: Map<number, Map<number, number>>;
+  }) {
+    const pkg =
+      options.pkg ?? { id: 42, name: 'B', enabled: false, room: { id: 7 } };
+    const packagesRepository = {
+      findOne: jest.fn(async (opts: { where: { id: number } }) => {
+        if (opts.where.id === pkg.id) return pkg;
+        return options.dependencies?.[opts.where.id] ?? null;
+      }),
+      save: jest.fn(async (value: unknown) => value),
+    };
+    const revisionsRepository = {
+      findOne: jest.fn(async (opts: { where: { package: { id: number } } }) => ({
+        package: { id: opts.where.package.id },
+        revision: 1,
+        status: 'published',
+      })),
+    };
+    const storage = {
+      readPinnedDependencies: jest.fn(
+        async (packageId: number) =>
+          options.pins?.get(packageId) ?? new Map<number, number>(),
+      ),
+    };
+    const service = new ScriptingPackagesService(
+      packagesRepository as never,
+      {} as never,
+      storage as never,
+      undefined,
+      undefined,
+      revisionsRepository as never,
+    );
+    return { service, packagesRepository };
+  }
+
+  it('refuses to enable a package whose dependency was deleted', async () => {
+    const { service, packagesRepository } = makeService({
+      pins: new Map([[42, new Map([[99, 1]])]]),
+      dependencies: {},
+    });
+
+    const error = await service
+      .update(42, { enabled: true } as never)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toMatchObject({
+      code: 'dependency_missing',
+      dependencyId: 99,
+    });
+    expect(packagesRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('enables when every pinned dependency still exists', async () => {
+    const { service, packagesRepository } = makeService({
+      pins: new Map([[42, new Map([[10, 1]])]]),
+      dependencies: {
+        10: { id: 10, name: 'A', enabled: true, room: { id: 7 } },
+      },
+    });
+
+    await service.update(42, { enabled: true } as never);
+
+    expect(packagesRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: true }),
+    );
   });
 });

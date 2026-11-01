@@ -28,7 +28,10 @@ describe('PackageSyncService', () => {
     getRuntime: jest.Mock;
     setObserver: jest.Mock;
   };
-  let delivery: { findDependentRoomPackages: jest.Mock };
+  let delivery: {
+    findDependentRoomPackages: jest.Mock;
+    collectRuntimePackageIds: jest.Mock;
+  };
   let service: PackageSyncService;
 
   const roomPackage = {
@@ -74,6 +77,11 @@ describe('PackageSyncService', () => {
     };
     delivery = {
       findDependentRoomPackages: jest.fn().mockResolvedValue([]),
+      collectRuntimePackageIds: jest
+        .fn()
+        .mockImplementation(() =>
+          Promise.resolve([42, 43]).then((ids) => ids as number[]),
+        ),
     };
     service = new PackageSyncService(
       packages as unknown as Repository<ScriptingPackage>,
@@ -656,7 +664,9 @@ describe('PackageSyncService', () => {
     expect(runtime.sendPackage).not.toHaveBeenCalled();
   });
 
-  it('announces all room package ids including disabled ones on runtime ready', async () => {
+  it('announces the runtime package closure, not just room rows, on runtime ready', async () => {
+    delivery.collectRuntimePackageIds.mockResolvedValue([10, 42, 43]);
+
     packages.find.mockResolvedValue([
       { ...roomPackage, enabled: true },
       { id: 43, name: 'Off', room: { id: 7 }, enabled: false },
@@ -665,6 +675,7 @@ describe('PackageSyncService', () => {
     service.onRuntimeReady('7');
     await flushAsync();
 
-    expect(runtime.sendRoomPackages).toHaveBeenCalledWith('7', [42, 43]);
+    expect(delivery.collectRuntimePackageIds).toHaveBeenCalledWith(7);
+    expect(runtime.sendRoomPackages).toHaveBeenCalledWith('7', [10, 42, 43]);
   });
 });

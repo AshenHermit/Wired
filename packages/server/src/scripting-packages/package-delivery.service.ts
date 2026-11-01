@@ -103,6 +103,45 @@ export class PackageDeliveryService {
     this.resolver = new PackageClosureResolver(revisionsRepository, storage);
   }
 
+  /**
+   * Every package id the runtime may hold state for in a room: the room's own
+   * packages (including disabled and unpublished ones) plus the transitive
+   * published dependency closure. Dependencies keep their own entities and
+   * player components, so a runtime restart must not purge their save records.
+   * A dependency whose package row was deleted is intentionally not included.
+   */
+  async collectRuntimePackageIds(roomId: number): Promise<number[]> {
+    const roomPackages = await this.packagesRepository.find({
+      where: { room: { id: roomId } },
+    });
+    const ids = new Set<number>(roomPackages.map((pkg) => pkg.id));
+    const queue = [...ids];
+    while (queue.length > 0) {
+      const packageId = queue.pop() as number;
+      const latest = await this.revisionsRepository.findOne({
+        where: { package: { id: packageId }, status: 'published' },
+        relations: { package: true },
+        order: { revision: 'DESC' },
+      });
+      if (!latest) continue;
+      const pins = await this.storage.readPinnedDependencies(
+        packageId,
+        latest.revision,
+      );
+      if (!pins) continue;
+      for (const dependencyId of pins.keys()) {
+        if (ids.has(dependencyId)) continue;
+        const exists = await this.packagesRepository.findOne({
+          where: { id: dependencyId },
+        });
+        if (!exists) continue;
+        ids.add(dependencyId);
+        queue.push(dependencyId);
+      }
+    }
+    return [...ids].sort((left, right) => left - right);
+  }
+
   async getRuntimeManifest(
     packageId: number,
     revision: number,

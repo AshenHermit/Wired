@@ -29,7 +29,7 @@ type RevisionFixture = {
 describe('PackageDeliveryService', () => {
   let root: string;
   let storage: PackageStorageService;
-  let packagesRepository: { findOne: jest.Mock };
+  let packagesRepository: { findOne: jest.Mock; find: jest.Mock };
   let revisionsRepository: { findOne: jest.Mock; find: jest.Mock };
   let roomsRepository: { exist: jest.Mock };
   let readUrls: { createToken: jest.Mock };
@@ -53,6 +53,13 @@ describe('PackageDeliveryService', () => {
       findOne: jest.fn((opts: { where: { id: number } }) => {
         return packages.find((pkg) => pkg.id === opts.where.id) ?? null;
       }),
+      find: jest.fn((opts: { where: { room?: { id: number } } }) =>
+        packages.filter(
+          (pkg) =>
+            opts.where.room === undefined ||
+            pkg.room?.id === opts.where.room.id,
+        ),
+      ),
     };
     roomsRepository = {
       exist: jest.fn((opts: { where: { id: number } }) =>
@@ -601,6 +608,29 @@ describe('PackageDeliveryService', () => {
       expect(dirs).not.toContain(
         path.join(root, '5', 'runtime', 'v1', '7', '3', keys[0]),
       );
+    });
+  });
+
+  describe('collectRuntimePackageIds', () => {
+    it('includes the transitive published dependency closure', async () => {
+      definePackage(42, 'Root', 7);
+      definePackage(10, 'Library', null);
+      await writePublished(42, 2, { 'root.gd': 'extends Node' });
+      await writePublished(10, 3, { 'lib.gd': 'extends Node' });
+      await storage.writePinnedDependencies(42, 2, new Map([[10, 3]]));
+      await storage.writePinnedDependencies(10, 3, new Map());
+
+      await expect(service.collectRuntimePackageIds(7)).resolves.toEqual([
+        10, 42,
+      ]);
+    });
+
+    it('does not keep a dependency whose package was deleted', async () => {
+      definePackage(42, 'Root', 7);
+      await writePublished(42, 2, { 'root.gd': 'extends Node' });
+      await storage.writePinnedDependencies(42, 2, new Map([[99, 1]]));
+
+      await expect(service.collectRuntimePackageIds(7)).resolves.toEqual([42]);
     });
   });
 });

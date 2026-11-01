@@ -358,11 +358,8 @@ export class PackageSyncService
    * so it can drop save records of packages deleted while it was stopped.
    */
   private async announceRoomPackages(roomId: string): Promise<void> {
-    const packages = await this.roomPackages(roomId, false);
-    this.runtime.sendRoomPackages(
-      roomId,
-      packages.map((pkg) => pkg.id),
-    );
+    const ids = await this.delivery.collectRuntimePackageIds(Number(roomId));
+    this.runtime.sendRoomPackages(roomId, ids);
   }
 
   /**

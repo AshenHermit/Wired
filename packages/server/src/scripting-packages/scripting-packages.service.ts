@@ -10,6 +10,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
+import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { User } from 'src/database/entities/user.entity';
 import { Room } from 'src/database/entities/room.entity';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
@@ -38,6 +39,9 @@ export class ScriptingPackagesService {
     private readonly dispatcher?: PackageRevisionDispatcher,
     @Optional()
     private readonly delivery?: PackageDeliveryService,
+    @Optional()
+    @InjectRepository(ScriptingPackageRevision)
+    private readonly revisionsRepository?: Repository<ScriptingPackageRevision>,
   ) {}
 
   assertPackageCreation(user: User, dto: CreateScriptingPackageDto): void {
@@ -178,6 +182,9 @@ export class ScriptingPackagesService {
     if (dto.physicalFiles !== undefined) pkg.physicalFiles = dto.physicalFiles;
 
     const previousEnabled = pkg.enabled !== false;
+    if (dto.enabled === true && previousEnabled === false) {
+      await this.assertEnableable(id);
+    }
     if (dto.enabled !== undefined) pkg.enabled = dto.enabled;
 
     const saved = await this.packagesRepository.save(pkg);
@@ -202,6 +209,64 @@ export class ScriptingPackagesService {
    * whose files are still referenced would therefore break every enabled
    * dependent on its next reload, so the delete is refused while one exists.
    */
+  /**
+   * Enabling is the fourth invariant point: a package may have been disabled
+   * while one of its dependencies was deleted, and dispatching it then would
+   * fail every later game connection for the room.
+   */
+  private async assertEnableable(packageId: number): Promise<void> {
+    const pkg = await this.packagesRepository.findOne({
+      where: { id: packageId },
+      relations: { room: true },
+    });
+    if (!pkg?.room) return;
+    if (!this.revisionsRepository || !this.storage) return;
+    const roomId = pkg.room.id;
+    const visited = new Set<number>();
+    const queue: number[] = [packageId];
+    while (queue.length > 0) {
+      const currentId = queue.pop() as number;
+      if (visited.has(currentId)) continue;
+      visited.add(currentId);
+      const latest = await this.revisionsRepository.findOne({
+        where: { package: { id: currentId }, status: 'published' },
+        relations: { package: true },
+        order: { revision: 'DESC' },
+      });
+      if (!latest) continue;
+      const pins = await this.storage.readPinnedDependencies(
+        currentId,
+        latest.revision,
+      );
+      if (!pins) continue;
+      for (const dependencyId of pins.keys()) {
+        if (visited.has(dependencyId)) continue;
+        const dependency = await this.packagesRepository.findOne({
+          where: { id: dependencyId },
+          relations: { room: true },
+        });
+        if (!dependency) {
+          throw new ConflictException({
+            statusCode: 409,
+            code: 'dependency_missing',
+            message: `Dependency ${dependencyId} was deleted`,
+            dependencyId,
+          });
+        }
+        if (dependency.enabled === false && dependency.room?.id === roomId) {
+          throw new ConflictException({
+            statusCode: 409,
+            code: 'dependency_disabled',
+            message: `Dependency ${dependencyId} is disabled in this room`,
+            dependencyId,
+            name: dependency.name,
+          });
+        }
+        queue.push(dependencyId);
+      }
+    }
+  }
+
   private async assertNoEnabledDependents(packageId: number): Promise<void> {
     if (!this.delivery) {
       return;
