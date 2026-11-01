@@ -188,23 +188,21 @@ extends WiredPackageRegistration
 func register(registry: WiredPackageRegistry) -> void:
 	registry.add_static_scene("static/platform.tscn", {"order": 0})
 	registry.add_player_component("player/body.tscn", {
-		"authority": WiredPackageRegistration.AUTHORITY_SERVER,
+		"authority": "server",
 		"order": 10,
 	})
 	registry.add_player_component("player/camera.tscn", {
-		"authority": WiredPackageRegistration.AUTHORITY_LOCAL,
+		"authority": "local",
 		"order": 20,
 		"local_only": true,
 	})
 	registry.add_player_component("player/spawner.tscn", {
-		"authority": WiredPackageRegistration.AUTHORITY_SERVER,
+		"authority": "server",
 		"order": 30,
 	})
 	registry.add_dynamic_entity("crate", "dynamic/crate.tscn", {
-		"authority": WiredPackageRegistration.AUTHORITY_SERVER,
+		"authority": "server",
 		"persist": true,
-		"limit_per_player": 8,
-		"cooldown_ms": 250,
 	})
 ```
 
@@ -223,7 +221,9 @@ func register(registry: WiredPackageRegistry) -> void:
 ```gdscript
 class_name WiredPackageRegistration extends RefCounted
 
-enum Authority { SERVER, CLIENT, LOCAL }
+# Реализованный контракт использует строки `"server"` и `"local"`; enum
+# `Authority` из ранней редакции не вводился, чтобы пакетные скрипты не
+# зависели от констант глобального класса.
 
 var context: WiredPackageContext
 
@@ -264,12 +264,17 @@ add_dynamic_entity(local_type: String, path: String, options: Dictionary = {}) -
 | Опция | Где | По умолчанию | Смысл |
 |---|---|---|---|
 | `order` | static/player | 0 | порядок создания |
-| `authority` | player/dynamic | SERVER | кто симулирует |
+| `authority` | player/dynamic | `"server"` | кто симулирует; у dynamic ядро принимает только `"server"` |
 | `local_only` | player | false | создавать только у локального владельца |
-| `persist` | dynamic | true | попадает в `state.json` |
-| `limit_per_player` | dynamic | 0 | 0 = без лимита |
-| `cooldown_ms` | dynamic | 0 | 0 = без кулдауна |
-| `lifetime_ms` | dynamic | 0 | 0 = бессрочно |
+| `persist` | dynamic | true | попадает ли сущность в `state.json` |
+
+Ядро честно исполняет только эти опции. Политика на игрока — лимит живых
+сущностей, кулдаун, время жизни — принадлежит компонентам пакета (например,
+`player/spawner.gd` в примере) и не дублируется в регистрации. Опции
+`limit_per_player`, `cooldown_ms`, `lifetime_ms` из ранней редакции удалены:
+они не читались ядром и создавали ложное впечатление контракта. Динамическая
+сущность с `authority != "server"` отклоняется при спавне с диагностикой
+`WIRED_DYNAMIC_SPAWN_FAILED reason=authority_not_server`.
 
 Внутренние ключи: `package_id`, `revision`, `qualified_name`.
 
@@ -367,8 +372,13 @@ load_state(data: Dictionary) -> void
 
 ```gdscript
 var player: WiredPlayer
-var registration: Dictionary
-var authority: WiredPackageRegistration.Authority
+var package_id: String
+var relative_path: String          # путь сцены относительно корня пакета
+var authority_mode: String         # "server" | "local"
+var local_only: bool
+
+func state_key() -> String:
+	return "<package_id>:<relative_path>"
 ```
 
 Хуки:
@@ -379,7 +389,7 @@ _wired_process(delta: float) -> void
 _wired_physics_process(delta: float) -> void
 _wired_visual_process(delta: float) -> void          # на всех peer-ах, только визуал/якорь
 _wired_unhandled_input(event: InputEvent) -> void    # только локальный владелец
-_wired_replicated_properties() -> Array[String]      # например ["Body:position", "Body:velocity"]
+_wired_replicated_properties() -> PackedStringArray      # например ["Body:position", "Body:velocity"]
 _wired_save_state() -> Dictionary
 _wired_load_state(data: Dictionary) -> void
 ```
@@ -419,11 +429,18 @@ class_name PlayersManager extends Node
 signal player_spawned(player: WiredPlayer)
 signal player_despawned(player: WiredPlayer)
 
-func setup(network: WiredNetwork, registry: WiredPackageRegistry) -> void
+func setup(
+	registry: WiredPackageRegistry,
+	network: WiredNetwork,
+	spawner: MultiplayerSpawner
+) -> void
 func get_player_by_peer(peer_id: int) -> WiredPlayer
 func get_player_by_id(player_id: int) -> WiredPlayer
-func save_state() -> Array
-func load_state(records: Array) -> void
+func build_player(data: Dictionary, registry: WiredPackageRegistry) -> WiredPlayer
+func snapshot_players() -> Array[Dictionary]
+func apply_snapshot(records: Array) -> void
+func save_state() -> Dictionary          # {"players": [...]}
+func load_state(state: Dictionary) -> void
 ```
 
 Спавн:
@@ -522,21 +539,26 @@ func load_state(records: Array) -> void
 API:
 
 ```gdscript
-setup(registry: WiredPackageRegistry) -> void
-spawn_entity(qualified_type: StringName, data: Dictionary) -> Node
-despawn_entity(entity: WiredDynamicEntity) -> void
-save_state() -> Array
+setup(registry: WiredPackageRegistry, spawner: MultiplayerSpawner) -> void
+spawn_entity(qualified_type: String, data: Dictionary) -> Node
+despawn_entity(entity_id: int) -> void
+snapshot_state() -> Array[Dictionary]   # late-join snapshot, includes persist:false
+apply_snapshot(records: Array) -> void  # client, idempotent by entity_id
+save_state() -> Array[Dictionary]       # only persist:true live entities
 load_state(records: Array) -> void
 ```
 
 `spawn_entity`:
 
 - только сервер;
-- проверяет, что тип зарегистрирован и authority = SERVER;
-- проверяет `limit_per_player` и `cooldown_ms`;
+- проверяет, что тип зарегистрирован и `authority == "server"`; другие
+  authority отклоняются;
+- пробрасывает `persist` в сущность: `false` оставляет её в живом мире и в
+  late-join snapshot, но исключает из `state.json`;
 - добавляет в data `type`, `owner_player_id`, `spawn_time`;
 - вызывает `Spawner.spawn(data)`;
 - возвращает узел или `null`; причина отказа пишется в лог и, при необходимости, в ответ игроку.
+- лимиты и кулдауны на игрока ядро не проверяет: это политика компонента пакета.
 
 `_spawn_entity(data)`:
 
@@ -553,18 +575,18 @@ load_state(records: Array) -> void
 Поля:
 
 ```gdscript
-var entity_type: StringName
+var entity_id: int
+var type_id: String              # "<package_id>/<local_type>"
 var owner_player_id: int
+var persistent: bool             # registry option `persist`
 var spawn_data: Dictionary
-var body_2d: RigidBody2D
-var body_3d: RigidBody3D
 ```
 
 Хуки:
 
 ```gdscript
 _wired_apply_spawn(data: Dictionary) -> void
-_wired_replicated_properties() -> Array[String]
+_wired_replicated_properties() -> PackedStringArray
 _wired_save_state() -> Dictionary
 _wired_load_state(data: Dictionary) -> void
 ```
@@ -573,9 +595,9 @@ _wired_load_state(data: Dictionary) -> void
 
 - на сервере `RigidBody2D.freeze = false`, `RigidBody3D.freeze = false`;
 - на клиентах тело замораживается (`freeze = true`, kinematic-режим), позиция/поворот/скорость приходят через `MultiplayerSynchronizer`;
-- если у сцены есть `RigidBody2D`/`RigidBody3D`, база находит его автоматически; пакет может переопределить `body_2d`/`body_3d`;
-- `apply_impulse(direction, force)` — только сервер; вызывает `apply_central_impulse`;
-- `despawn()` — сервер удаляет узел; spawner реплицирует удаление.
+- `_wired_freeze_on_client()` обходит все `RigidBody2D`/`RigidBody3D` под корнем, включая сам корень, если пакет сделал тело корневой нодой;
+- пакет сам хранит ссылку на тело (`@onready var body`) и применяет импульс в `_wired_apply_spawn`; base-класс не навязывает поля `body_2d`/`body_3d`;
+- удаление выполняет `DynamicWorldContainer.despawn_entity(entity_id)`; освобождение узла реплицируется spawner-ом.
 
 Пример crate:
 
@@ -589,7 +611,7 @@ func _wired_apply_spawn(data: Dictionary) -> void:
 	if data.has("impulse"):
 		body.apply_central_impulse(data.impulse)
 
-func _wired_replicated_properties() -> Array[String]:
+func _wired_replicated_properties() -> PackedStringArray:
 	return ["RigidBody2D:position", "RigidBody2D:rotation", "RigidBody2D:linear_velocity"]
 
 func _wired_save_state() -> Dictionary:
@@ -616,7 +638,7 @@ func _wired_save_state() -> Dictionary:
 }
 ```
 
-Сохраняется только финальное состояние, без транзиентных параметров спавна (`impulse`, `direction`). Это важно: восстановление не должно повторно запускать все crate-ы с импульсом.
+Сохраняется только финальное состояние, без транзиентных параметров спавна (`impulse`, `direction`). Это важно: восстановление не должно повторно запускать все crate-ы с импульсом. Сущности, зарегистрированные с `persist: false`, в этот массив не попадают; при этом они входят в late-join snapshot, потому что опоздавший клиент должен увидеть текущий мир.
 
 `main_scene._save_state(reason)` добавляет в `state.json`:
 
@@ -656,7 +678,9 @@ func _wired_save_state() -> Dictionary:
 signal peer_authenticated(peer_id: int, player_id: int, display_name: String)
 signal peer_packages_ready(peer_id: int)
 signal player_input_received(peer_id: int, input: Dictionary)
-signal player_action_received(peer_id: int, action_id: StringName, payload: Variant)
+signal player_action_received(peer_id: int, action: String, payload: Dictionary)
+signal world_snapshot_requested(peer_id: int)      # server
+signal world_snapshot_received(snapshot: Dictionary)  # client
 ```
 
 Методы:
@@ -665,6 +689,8 @@ signal player_action_received(peer_id: int, action_id: StringName, payload: Vari
 func is_peer_packages_ready(peer_id: int) -> bool
 func send_player_input(input: Dictionary) -> void          # client -> server, unreliable_ordered
 func send_player_action(action_id: StringName, payload: Variant) -> void  # client -> server, reliable
+func send_world_snapshot(peer_id: int, snapshot: Dictionary) -> void  # server, reliable
+func request_world_snapshot() -> void                      # client -> server, reliable
 ```
 
 Изменения в существующих RPC:
@@ -691,6 +717,67 @@ func send_player_action(action_id: StringName, payload: Variant) -> void  # clie
 Если клиент опоздал (late join), он получает актуальные ревизии в `_send_package_revisions`, применяет и отчитывается; спавн происходит после этого.
 
 Если пакет меняется во время игры, сервер объявляет новую ревизию; клиенты применяют и снова отчитываются. Игроки при этом не пересоздаются автоматически в v1; новый контент применяется к статике и новым спавнам. Для компонентов игрока нужен respawn/reconnect.
+
+#### 11.2.2. Late join snapshot
+
+`MultiplayerSpawner` реплеит отслеженные спавны сразу при подключении
+транспортного peer-а — до `cli_hello`, ревизий пакетов и `peer_packages_ready`.
+Поэтому одного readiness-гейта для собственного игрока недостаточно: у
+опоздавшего клиента реестр ещё пуст, и существующий игрок собирается без
+компонентов, а динамическая сущность с неизвестным типом отбрасывается.
+
+После `peer_packages_ready` сервер отправляет этому peer-у авторитетный
+снимок мира (`srv_world_snapshot`, reliable, Dictionary):
+
+```json
+{
+  "packages": {"7": {"revision": 3, "artifact_key": "..."}},
+  "players": [{"player_id": 1, "peer_id": 2, "name": "...",
+               "spawn_position_2d": [x, y], "spawn_position_3d": [x, y, z],
+               "state": {"player_id": 1, "display_name": "...",
+                         "components": {"7:player/body.tscn": {...}}}}],
+  "dynamic_world": [{"entity_id": 12, "type_id": "7/crate",
+                     "owner_player_id": 1, "state": {...}}]
+}
+```
+
+Клиент применяет снимок только если его локальная карта применённых пакетов
+совпадает с серверной по `revision` и `artifact_key` (одна ревизия может
+давать разный набор компонентов после публикации зависимости). При
+несовпадении снимок откладывается, клиент запрашивает новый
+(`cli_world_snapshot`) и повторяет проверку после следующего
+`package_applied`. Игроки чинятся на месте: недостающие компоненты
+создаются, уже созданные не дублируются; динамические сущности создаются по
+`entity_id`, уже отслеженные пропускаются. Повторное применение снимка
+идемпотентно. Снимок не заменяет обычную репликацию: дальнейшие изменения
+идут через `MultiplayerSpawner`/`MultiplayerSynchronizer`.
+
+#### 11.2.3. Ограничение: аутентификация не гейтит транспортную репликацию
+
+Ticket-аутентификация защищает все игровые RPC: `cli_player_input`,
+`cli_player_action`, `cli_package_ready`, `cli_world_snapshot` и остальные
+проверяют `_players.has(peer_id)` и отклоняют неизвестного отправителя.
+Однако `MultiplayerSpawner` и `MultiplayerSynchronizer` работают на уровне
+транспорта: Godot 4.7 реплеит spawn-пакеты и синхронизирует свойства peer-у,
+который ещё не отправил `cli_hello`. Публичного per-peer фильтра у
+`MultiplayerSpawner` в 4.7 нет; `MultiplayerSynchronizer` умеет visibility
+filters, но это не отменяет сам spawn-пакет.
+
+Это осознанно принятое ограничение v1, а не молчаливое игнорирование:
+
+- окно ограничено `AUTH_TIMEOUT_SEC = 5`; сервер разрывает соединение, если
+  `cli_hello` не пришёл вовремя;
+- до аутентификации peer не может создать игрока, отправить ввод/действие,
+  запросить снимок или получить `srv_world_snapshot`;
+- реплицируемое состояние — игровое (позиции игроков и сущностей), не токены
+  и не пользовательские данные; пакеты комнаты считаются доверенным
+  контентом;
+- настоящее per-peer гейтирование потребует заменить spawner/synchronizer на
+  авторитетные RPC-спавн и снапшоты — отдельная задача, не входящая в v1.
+
+Тест `network_readiness_smoke` фиксирует отказ игровых RPC неизвестному
+отправителю; ограничение транспортной репликации остаётся документированным
+residual-риском.
 
 #### 11.2.1. Проблема начального bootstrap
 
@@ -735,7 +822,9 @@ packages/server/godot_project/examples/wired-platformer/
 - player `player/body.tscn` (server authority);
 - player `player/camera.tscn` (local authority, local_only);
 - player `player/spawner.tscn` (server authority);
-- dynamic `crate` → `dynamic/crate.tscn` (server, persist, limit 8, cooldown 250 ms).
+- dynamic `crate` → `dynamic/crate.tscn` (server, persist). Лимит 8 и кулдаун
+  250 мс — экспортируемые параметры компонента `player/spawner.gd`, а не
+  опции регистрации.
 
 `static/platform.tscn`:
 
@@ -789,12 +878,16 @@ request_action("spawn_crate", {"direction": [direction.x, direction.y]})
 
 - на сервере `_on_spawn_crate(payload)`:
   - проверяет, что `direction` — конечный вектор, длина > 0, после нормализации не NaN, дальность в допустимых пределах;
-  - проверяет кулдаун (ядро/динамический мир);
+  - проверяет собственный кулдаун и лимит живых сущностей (политика компонента);
   - считает `spawn_position = player.get_anchor_position_2d() + direction * SPAWN_OFFSET`;
   - вызывает `spawn_dynamic("crate", {position: spawn_position, impulse: direction * IMPULSE_FORCE, owner_player_id: player.player_id})`;
   - при отказе логирует причину.
 
-Клиент никогда не присылает позицию спавна — только направление. Сервер сам выбирает точку рядом с авторитетным телом. Это не даёт спавнить предметы за стеной и не доверяет клиентской позиции.
+Клиент никогда не присылает позицию спавна — только направление. Сервер сам
+выбирает точку рядом с авторитетным телом и не доверяет клиентской позиции.
+Проверки «точка не внутри стены» в v1 нет: при спавне вплотную к препятствию
+ящик может пересечь коллайдер. Это ограничение примера, а не разрешение
+клиенту выбирать позицию; raycast/`intersect_shape` — отдельное улучшение.
 
 `dynamic/crate.tscn`:
 
@@ -840,8 +933,12 @@ Seed-скрипт — инструмент разработки, а не обя�
 Добавить в `packages/server/godot_project/_wired/tests/`:
 
 - `package_registry_smoke.gd` — регистрация фейкового пакета, сортировка, квалификация имён, повторная загрузка, отсутствующий `wired_package.gd`;
-- `players_manager_smoke.gd` — сборка игрока из фейковых компонентов, authority, local_only, input/action routing, save/load;
-- `dynamic_world_smoke.gd` — регистрация типа, spawn/despawn, freeze на клиенте (эмуляция), save/load, лимит/кулдаун.
+- `players_manager_smoke.gd` — сборка игрока из фейковых компонентов, authority, local_only, input/action routing, save/load, ключ состояния при перестановке компонентов, non-finite input, `_wired_registered`;
+- `dynamic_world_smoke.gd` — регистрация типа, spawn/despawn, freeze на клиенте (эмуляция), save/load, `persist: false`, authority validation, идемпотентный snapshot;
+- `late_join_smoke.gd` — модель двух peer-ов без сокета: реплей спавнов при пустом реестре, применение пакетов, снапшот игрока и ящика, отсутствие дублей, package-map guard;
+- `body_state_smoke.gd` — сохранение/загрузка позиции и скорости тела, fallback на сохранённый anchor;
+- `network_readiness_smoke.gd` — readiness и отказ игровых RPC неизвестному отправителю;
+- `spawner_smoke.gd` и `state_persistence_smoke.gd` — пример спавнера и сохранение `state.json`.
 
 Запуск — как существующие smoke-тесты:
 
@@ -893,8 +990,9 @@ godot --headless --path packages/server/godot_project/_wired \
 | Горячая перезагрузка ломает игроков | v1: статика пересобирается, игроки — при следующем спавне; для class_name/autoload — restart |
 | Нет стабильной идентичности игрока | Явно ограничить restore; отдельная задача на ticket/user id |
 | Пакет спавнит сущности за стеной | Сервер считает позицию от своего тела + direction; клиент не присылает позицию |
-| Спам действиями | Rate limit в ядре + limit_per_player/cooldown в динамическом мире |
-| Клиент подключается до первого reconcile пакетов и спавнится без компонентов | Readiness-гейт backend (§11.2.1, вариант A) или control-команда `packages_synced` (вариант B) |
+| Спам действиями | Rate limit действий в ядре; лимит/кулдаун сущностей — политика компонента пакета |
+| Клиент подключается до первого reconcile пакетов и спавнится без компонентов | Readiness-гейт backend (§11.2.1, вариант A) плюс late-join snapshot после `peer_packages_ready` (§11.2.2) |
+| Транспортная репликация доходит до неаутентифицированного peer-а | Документированное ограничение v1 (§11.2.3): RPC закрыты, окно ограничено auth timeout, per-peer spawn gating — отдельная задача |
 
 ## 15. Решения и открытые пункты
 
@@ -905,6 +1003,11 @@ godot --headless --path packages/server/godot_project/_wired \
 - Восстановление динамического мира не повторяет импульс: отдельный `restore = true` и `_wired_load_state`.
 - Точка спавна игрока — маркеры `wired_player_spawn` в статике; `PlayersManager` передаёт её в spawn data.
 - Ключ состояния компонента — `"<package_id>:<relative_scene_path>"`, не индекс.
+- Late join чинится серверным авторитетным снимком после
+  `peer_packages_ready`; снимок применяется только при совпадении
+  `revision` и `artifact_key` и идемпотентен (§11.2.2).
+- Динамические регистрации честно поддерживают только `authority` и
+  `persist`; лимиты/кулдауны остаются в компонентах пакета (§7.3).
 
 Открытые пункты, которые не меняют архитектуру и решаются на этапе плана:
 

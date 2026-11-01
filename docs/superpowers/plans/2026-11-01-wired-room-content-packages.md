@@ -764,7 +764,7 @@ Expected: FAIL — `DynamicWorldContainer` не найден.
 
 - [ ] **Step 3: Implement dynamic world and example crate**
 
-`DynamicWorldContainer` создаёт `MultiplayerSpawner` в `setup`, `spawn_path = NodePath("..")`, `spawn_function = spawn_function`; `spawn_entity` server-only, получает descriptor из registry, генерирует `entity_id` (монотонный int), вызывает `spawner.spawn(data)`, сохраняет `_entities[entity_id]`.
+`DynamicWorldContainer` создаёт `MultiplayerSpawner` в `setup`, `spawn_path = NodePath("..")`, `spawn_function = spawn_function`; `spawn_entity` server-only, получает descriptor из registry, проверяет `authority == "server"`, генерирует `entity_id` (монотонный int), вызывает `spawner.spawn(data)`, сохраняет `_entities[entity_id]`. `persist` из опций регистрации попадает в сущность и исключает её из `state.json`, но не из late-join snapshot. Лимит/кулдаун ядро не проверяет — это политика компонента.
 
 `WiredDynamicEntity._wired_freeze_on_client` вызывать в `_ready` после `_wired_apply_spawn`, если `not multiplayer.is_server()`. Для `RigidBody2D`: `freeze = true`, `freeze_mode = RigidBody2D.FREEZE_MODE_STATIC`.
 
@@ -815,7 +815,7 @@ git commit -m "feat(wired): add dynamic world and cursor impulse crate"
     - `add_player_component("player/body.tscn", {"order": 10, "authority": "server"})`
     - `add_player_component("player/camera.tscn", {"order": 20, "authority": "local", "local_only": true})`
     - `add_player_component("player/spawner.tscn", {"order": 30, "authority": "server"})`
-    - `add_dynamic_entity("crate", "dynamic/crate.tscn", {"authority": "server", "persist": true, "limit_per_player": 8})`
+    - `add_dynamic_entity("crate", "dynamic/crate.tscn", {"authority": "server", "persist": true})`
 - `static/platform.tscn`: root `StaticBody2D`, child `Polygon2D` (платформа 640x32, цвет placeholder), child `CollisionShape2D` (`RectangleShape2D` 640x32); child `Marker2D` `Spawn` в группе `wired_player_spawn` с позицией над платформой.
 - README: как создать пакет в комнате, скопировать файлы в `packages/<id>`, нажать Emit, открыть Game tab двумя клиентами; что должно работать.
 
@@ -942,11 +942,16 @@ git commit -m "docs: record room content package verification"
 
 - **Step 1 — автоматические проверки: PASS.**
   - `pnpm --filter server exec jest game-room.service.spec` — 1 suite / 19 tests, exit 0.
-  - `pnpm --filter server test` — 31 suites passed, 1 skipped (`room-runtime.integration`), 320 tests passed,
-    1 skipped, exit 0.
-  - 11 headless-скриптов (`package_registry`, `scene_layout`, `static_world`, `package_entry`,
-    `network_readiness`, `players_manager`, `player_push`, `camera_follow`, `wired_aim`, `dynamic_world`,
-    `example_package_contract`) — каждый печатает `ALL TESTS PASSED` и выходит с кодом 0; всего 380 проверок.
+  - `pnpm --filter server test` — 31 suite passed, 1 skipped (`room-runtime.integration`), 322 tests passed,
+    1 skipped, exit 0 (после fix-wave добавлены 2 теста ticket refresh).
+  - 19 headless-скриптов, все exit 0: `body_state` (6), `camera_follow` (13), `dynamic_world` (81),
+    `example_package_contract` (26), `late_join` (29), `network_readiness` (30), `package_assets`,
+    `package_entry` (12), `package_fs` (14), `package_registry` (43), `package_reloader`,
+    `packages_manager` (`--quit-after 2000`), `player_push` (50), `players_manager` (92),
+    `scene_layout` (38), `spawner` (40), `state_persistence` (16), `static_world` (15), `wired_aim` (14).
+    Скрипты без числового счётчика печатают собственный `*_SMOKE_OK`/`OK`; суммарно не менее 519
+    именованных проверок. `package_reloader_smoke` запускается с `--quit-after 600`, `packages_manager_smoke`
+    — с `--quit-after 2000`; остальные — с `--quit-after 2`.
 - **Step 2 — Web export: PASS.**
   - `pnpm fetch:runtime` — 4.7.2-stable (win32-x64) уже установлен.
   - `pnpm fetch:templates` — Web-шаблоны 4.7.2-stable найдены в
@@ -982,8 +987,12 @@ git commit -m "docs: record room content package verification"
   - Ожидаемые наблюдения совпадают с `Expected` шага 3. Автоматически косвенно покрыты: сохранение/восстановление
     без повторного импульса и порядок `restore_pending` (`dynamic_world_smoke`), толкание (`player_push_smoke`),
     камера (`camera_follow_smoke`), прицел и импульс (`wired_aim_smoke`), контракт примера
-    (`example_package_contract_smoke`). Late join через `MultiplayerSpawner` остаётся непроверенным вживую.
-- **Отклонения от спеки:** функциональных отклонений не обнаружено; статус спеки не менялся.
+    (`example_package_contract_smoke`). Порядок late join (spawn-replay при пустом реестре → пакеты →
+    серверный snapshot → отсутствие дублей) покрыт headless-моделью `late_join_smoke`; реальный
+    WebSocket-транспорт с двумя независимыми клиентами по-прежнему не проверен вживую.
+- **Отклонения от спеки:** API регистрации динамических сущностей сокращён до `authority` и `persist`;
+  `limit_per_player`/`cooldown_ms`/`lifetime_ms` удалены как неисполняемые ядром. Добавлен late-join
+  snapshot и документировано ограничение транспортной репликации (§11.2.2–11.2.3).
 - **Известная проблема репозитория (не upstream Godot):** `packages/server/scripts/lib/runtime-install.mjs:132-134`
   переименовывает распакованный `Godot_v4.7.2-stable_win64.exe` в `Godot.exe`, но оставляет консольный launcher
   `Godot_v4.7.2-stable_win64_console.exe` искать старое companion-имя `Godot_v4.7.2-stable_win64.exe`, поэтому
@@ -991,7 +1000,7 @@ git commit -m "docs: record room content package verification"
   `runtime.json`, сервер и все прогоны выше используют `Godot.exe` 4.7.2 и работают; при этом
   `GODOT_RUNTIME_PATH=<...>\Godot_v4.7.2-stable_win64_console.exe` на Windows сейчас сломан. Исправление
   установщика — отдельный follow-up; в Task 10 код не менялся.
-- **`AGENTS.md` устарел:** там указано 31 suite / 314 tests, текущий прогон — 320 tests (1 skipped).
+- **`AGENTS.md` устарел:** там указано 31 suite / 314 tests, текущий прогон — 322 tests (1 skipped).
   `AGENTS.md` вне области Task 10 и не правился.
 
 ## Self-Review Notes
