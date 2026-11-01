@@ -61,6 +61,9 @@ func _run() -> void:
 	_test_component_qualifies_action_names()
 	_test_handle_action_calls_registered_handler()
 	_test_save_and_load_state()
+	_test_component_state_key_survives_reorder()
+	_test_non_finite_input_is_rejected()
+	_test_build_player_tags_components_as_registered()
 	_test_spawn_waits_for_both_gates_and_routes_actions()
 	_test_disconnect_despawns_the_player()
 	_test_spawner_parents_the_spawned_player()
@@ -374,8 +377,17 @@ func _test_save_and_load_state() -> void:
 		"save_state must serialize the 2D anchor, got %s"
 		% [saved["anchor_position_2d"]],
 	)
-	var records: Array = saved["components"]
+	var records: Dictionary = saved["components"]
 	_check(records.size() == 1, "save_state must save every component")
+	_check(
+		records.has("pkg.test:player_component.tscn"),
+		"component state must be keyed by package id and relative scene path, got %s"
+		% [records.keys()],
+	)
+	_check(
+		saved.get("display_name", "") == "bob",
+		"save_state must use the spec's display_name key",
+	)
 	player.set_anchor_position_2d(Vector2.ZERO)
 	player.set_anchor_position_3d(Vector3.ZERO)
 	component.body.position = Vector2.ZERO
@@ -392,6 +404,106 @@ func _test_save_and_load_state() -> void:
 		component.body.position == Vector2(3, 4),
 		"load_state must restore component state, got %s" % component.body.position,
 	)
+
+
+## Inserting or reordering two components must not move saved state between
+## them: the key is `<package_id>:<relative_path>`, not the array index.
+func _test_component_state_key_survives_reorder() -> void:
+	var original := _make_two_package_registry(["pkg.a", "pkg.b"])
+	var player := _build_player(original, 7, 1, Vector2.ZERO)
+	root.add_child(player)
+	if player.components.size() != 2:
+		_check(false, "the reorder test needs two components")
+		return
+	var first: Variant = player.components[0]
+	var second: Variant = player.components[1]
+	first.body.position = Vector2(1, 1)
+	second.body.position = Vector2(2, 2)
+	var saved := player.save_state()
+
+	var reordered := _make_two_package_registry(["pkg.b", "pkg.a"])
+	var restored := _build_player(reordered, 7, 1, Vector2.ZERO)
+	root.add_child(restored)
+	if restored.components.size() != 2:
+		_check(false, "the reordered player must keep two components")
+		return
+	restored.load_state(saved)
+	var positions := {}
+	for component: WiredPlayerComponent in restored.components:
+		var instance: Variant = component
+		positions[component.package_id] = instance.body.position
+	_check(
+		positions.get("pkg.a", Vector2.ZERO) == Vector2(1, 1),
+		"pkg.a state must follow pkg.a after reorder, got %s"
+		% positions.get("pkg.a", Vector2.ZERO),
+	)
+	_check(
+		positions.get("pkg.b", Vector2.ZERO) == Vector2(2, 2),
+		"pkg.b state must follow pkg.b after reorder, got %s"
+		% positions.get("pkg.b", Vector2.ZERO),
+	)
+
+
+## INF/NaN movement and absurd sequences are malformed, not values to clamp:
+## `limit_length()` would turn INF into NaN and poison the body velocity.
+func _test_non_finite_input_is_rejected() -> void:
+	var player := WiredPlayer.new()
+	_owned.append(player)
+	player.setup(7, 5, "bob", null)
+	player._on_player_input_received(
+		5, {"move": Vector2(INF, 0), "jump": true, "seq": 1}
+	)
+	_check(
+		player.input.get("move") == Vector2.ZERO,
+		"an INF 2D move must become zero, got %s" % player.input.get("move"),
+	)
+	_check(player.input.get("seq") == 1, "the finite sequence must be stored")
+	player._on_player_input_received(
+		5, {"move": Vector3(NAN, 1, 0), "jump": false, "seq": 2}
+	)
+	_check(
+		player.input.get("move") == Vector3.ZERO,
+		"a NaN 3D move must become zero, got %s" % player.input.get("move"),
+	)
+	player._on_player_input_received(
+		5, {"move": Vector2.UP, "jump": false, "seq": WiredPlayer.MAX_INPUT_SEQ + 1}
+	)
+	_check(
+		player.input.get("move") == Vector3.ZERO,
+		"an absurd sequence must be dropped without changing input",
+	)
+	player._on_player_input_received(
+		5, {"move": Vector2.UP, "jump": false, "seq": NAN}
+	)
+	_check(
+		player.input.get("move") == Vector3.ZERO,
+		"a NaN sequence must be dropped without changing input",
+	)
+	player._on_player_input_received(
+		5, {"move": Vector2(3, 0), "jump": true, "seq": 4.0}
+	)
+	_check(
+		player.input.get("move") == Vector2.RIGHT,
+		"a finite integral float sequence must still be accepted, got %s"
+		% player.input.get("move"),
+	)
+
+
+## Registry-created player components are owned by PlayersManager. Tagging them
+## `_wired_registered` is what keeps PackageReloader from replacing a live
+## component after a package revision.
+func _test_build_player_tags_components_as_registered() -> void:
+	var player := _build_player(_make_registry(), 7, 1, Vector2.ZERO)
+	root.add_child(player)
+	_check(
+		not player.components.is_empty(),
+		"the metadata test needs a component",
+	)
+	for component: WiredPlayerComponent in player.components:
+		_check(
+			bool(component.get_meta("_wired_registered", false)),
+			"every registry-created component must carry _wired_registered",
+		)
 
 
 func _test_spawn_waits_for_both_gates_and_routes_actions() -> void:
@@ -605,6 +717,23 @@ func _make_registry(include_local := false) -> WiredPackageRegistry:
 			COMPONENT_SCENE, {"order": 30, "authority": "local"}
 		)
 	registry.add_registration(registration)
+	return registry
+
+
+func _make_two_package_registry(
+	package_ids: Array
+) -> WiredPackageRegistry:
+	var registry := WiredPackageRegistry.new()
+	_registries.append(registry)
+	for package_id: String in package_ids:
+		var context := WiredPackageContext.new()
+		context.package_id = package_id
+		context.root_path = FIXTURE_ROOT
+		registry.register_context(package_id, context)
+		var registration := WiredPackageRegistration.new()
+		registration.package_id = package_id
+		registration.add_player_component(COMPONENT_SCENE)
+		registry.add_registration(registration)
 	return registry
 
 

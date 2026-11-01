@@ -40,6 +40,10 @@ func _run() -> void:
 	_test_restore_pending_waits_for_the_registered_package()
 	_test_saved_ids_are_reserved_before_the_package_arrives()
 	_test_restore_reassigns_a_colliding_id()
+	_test_persist_false_is_live_but_not_saved()
+	_test_non_server_authority_is_rejected()
+	_test_snapshot_apply_is_idempotent()
+	_test_registry_roots_are_tagged_as_registered()
 	_free_owned()
 	_finish()
 
@@ -496,16 +500,98 @@ func _test_restore_reassigns_a_colliding_id() -> void:
 	)
 
 
+## `persist: false` must be honest: the entity lives in the world and in the
+## late-join snapshot, but never appears in `state.json`.
+func _test_persist_false_is_live_but_not_saved() -> void:
+	var world := _make_world()
+	world.setup(_make_registry({"persist": false}), null)
+	var entity := world.spawn_entity(
+		CRATE_TYPE, {"state": {"position": [5.0, 6.0]}}
+	)
+	_check(entity != null, "a non-persistent type must still spawn")
+	_check(
+		world.save_state().is_empty(),
+		"persist: false must keep the entity out of state.json",
+	)
+	_check(
+		world.snapshot_state().size() == 1,
+		"persist: false must still reach a late-join snapshot",
+	)
+
+
+## The core only supports server-authoritative dynamic entities. A registration
+## asking for client authority is rejected instead of silently ignoring the
+## option and simulating on the server anyway.
+func _test_non_server_authority_is_rejected() -> void:
+	var world := _make_world()
+	world.setup(_make_registry({"authority": "local"}), null)
+	_check(
+		world.spawn_entity(CRATE_TYPE, {}) == null,
+		"a non-server dynamic authority must not spawn",
+	)
+	_check(
+		_live_entities(world).is_empty(),
+		"a rejected authority must not leave an entity behind",
+	)
+
+
+## The server-authored late-join snapshot repairs entities the spawner dropped
+## before the client applied its packages, and is idempotent on retry.
+func _test_snapshot_apply_is_idempotent() -> void:
+	var registry := _make_registry()
+	var server := _make_world()
+	server.setup(registry, null)
+	var source := server.spawn_entity(
+		CRATE_TYPE, {"state": {"position": [21.0, 22.0]}}
+	)
+	_check(source != null, "the snapshot test needs a server entity")
+	if source == null:
+		return
+	var snapshot := server.snapshot_state()
+	var client := _make_world()
+	client.setup(registry, null)
+	client.apply_snapshot(snapshot)
+	client.apply_snapshot(snapshot)
+	_check(
+		_live_entities(client).size() == 1,
+		"applying a snapshot twice must not duplicate entities, got %d"
+		% _live_entities(client).size(),
+	)
+	var restored := client._entities.get(source.entity_id) as WiredDynamicEntity
+	_check(restored != null, "the snapshot must recreate the entity by id")
+	if restored != null:
+		var body := restored.get_node_or_null("RigidBody2D") as RigidBody2D
+		_check(
+			body != null and body.position == Vector2(21, 22),
+			"the snapshot entity must load its final state, got %s"
+			% (body.position if body != null else Vector2.ZERO),
+		)
+
+
+func _test_registry_roots_are_tagged_as_registered() -> void:
+	var world := _make_world()
+	world.setup(_make_registry(), null)
+	var entity := world.spawn_entity(CRATE_TYPE, {})
+	_check(entity != null, "the metadata test needs an entity")
+	if entity != null:
+		_check(
+			bool(entity.get_meta("_wired_registered", false)),
+			"a registry-created dynamic root must carry _wired_registered",
+		)
+
+
 # --- helpers --------------------------------------------------------------
 
 
-func _make_registry() -> WiredPackageRegistry:
+func _make_registry(options: Dictionary = {}) -> WiredPackageRegistry:
 	var registry := WiredPackageRegistry.new()
 	_registries.append(registry)
 	registry.register_context(PACKAGE_ID, _make_context(PACKAGE_ID))
 	var registration := WiredPackageRegistration.new()
 	registration.package_id = PACKAGE_ID
-	registration.add_dynamic_entity(CRATE_SCENE.get_basename(), CRATE_SCENE)
+	registration.add_dynamic_entity(
+		CRATE_SCENE.get_basename(), CRATE_SCENE, options
+	)
 	registry.add_registration(registration)
 	return registry
 

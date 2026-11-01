@@ -38,8 +38,11 @@ func _wired_ready() -> void:
 	if player != null:
 		# The authoritative spawn marker lives on the player, not in the package
 		# scene. Apply it on every peer so the server simulates from the marker
-		# and clients start there before the first synchronization.
-		body.position = player.spawn_position_2d
+		# and clients start there before the first synchronization. A restored
+		# player anchor (preloaded by `PlayersManager` before `_ready`) wins over
+		# the marker, so an old save without body component state still starts at
+		# the persisted position.
+		body.position = player.get_anchor_position_2d()
 		player.set_anchor_position_2d(body.position)
 
 
@@ -80,6 +83,37 @@ func _wired_visual_process(_delta: float) -> void:
 
 func _wired_replicated_properties() -> PackedStringArray:
 	return PackedStringArray(["Body:position", "Body:velocity"])
+
+
+## Persists both the body transform and its velocity: a restart must resume the
+## body in the same place and with the same motion, not at the spawn marker.
+func _wired_save_state() -> Dictionary:
+	if body == null:
+		return {}
+	return {
+		"position": [body.position.x, body.position.y],
+		"linear_velocity": [body.velocity.x, body.velocity.y],
+	}
+
+
+func _wired_load_state(state: Dictionary) -> void:
+	if body == null:
+		return
+	if state.has("position"):
+		body.position = _as_vector2(state["position"], body.position)
+	if state.has("linear_velocity"):
+		body.velocity = _as_vector2(state["linear_velocity"], body.velocity)
+	if player != null:
+		player.set_anchor_position_2d(body.position)
+
+
+func _as_vector2(value: Variant, fallback: Vector2) -> Vector2:
+	if value is Vector2:
+		var vector: Vector2 = value
+		return vector
+	if value is Array and value.size() >= 2:
+		return Vector2(float(value[0]), float(value[1]))
+	return fallback
 
 
 func _move_x(move: Variant) -> float:

@@ -84,6 +84,14 @@ func spawn_entity(qualified_type: String, data: Dictionary = {}) -> Node:
 			% qualified_type
 		)
 		return null
+	# Only server-authoritative dynamic types can be spawned: a client-owned
+	# dynamic entity has no trusted simulation or persistence path in v1.
+	if str(descriptor.get("authority", "server")) != "server":
+		push_warning(
+			"WIRED_DYNAMIC_SPAWN_FAILED type=%s reason=authority_not_server"
+			% qualified_type
+		)
+		return null
 	var package_id := str(descriptor.get("package_id", ""))
 	if _registry.get_context(package_id) == null:
 		push_warning(
@@ -133,8 +141,19 @@ func despawn_entity(entity_id: int) -> void:
 
 
 ## Live entities in id order, one persisted record each. The transient spawn
-## data and the restore flag are deliberately dropped.
+## data and the restore flag are deliberately dropped. Entities registered with
+## `persist: false` are part of the world but not of the save file.
 func save_state() -> Array[Dictionary]:
+	return _state_records(true)
+
+
+## Live entities for the late-join snapshot, including non-persistent ones:
+## a late client must see the current world even when an entity is not saved.
+func snapshot_state() -> Array[Dictionary]:
+	return _state_records(false)
+
+
+func _state_records(only_persistent: bool) -> Array[Dictionary]:
 	var records: Array[Dictionary] = []
 	var ids := _entities.keys()
 	ids.sort()
@@ -144,6 +163,9 @@ func save_state() -> Array[Dictionary]:
 			continue
 		var node := entity as Node
 		if node.is_queued_for_deletion():
+			continue
+		var persistent: Variant = node.get("persistent")
+		if only_persistent and persistent != null and not bool(persistent):
 			continue
 		records.append(
 			{
@@ -178,14 +200,71 @@ func restore_pending(records: Array) -> void:
 ## spawn record, then returns the node without adding it: the spawner owns
 ## parenting, and the entity's `_ready()` applies the spawn exactly once.
 func spawn_function(data: Dictionary) -> Node:
+	var entity := _instantiate_entity(data)
+	if entity == null:
+		return null
+	# Track client-side entities too, so a following snapshot can tell which
+	# entities the spawner already delivered. On the server `spawn_entity`
+	# records the same node after `spawn()` returns.
+	_entities[entity.entity_id] = entity
+	return entity
+
+
+## Client side. Recreates the entities that the spawner dropped because the
+## late client's registry was still empty when it replayed the spawns. The
+## record is applied through the normal restore path, and an entity that is
+## already tracked is skipped: applying a snapshot twice is idempotent.
+func apply_snapshot(records: Array) -> void:
+	if _registry == null:
+		push_warning("WIRED_DYNAMIC_SNAPSHOT_SKIPPED reason=no_registry")
+		return
+	var applied := 0
+	for record: Variant in records:
+		if typeof(record) != TYPE_DICTIONARY:
+			continue
+		var source: Dictionary = record
+		var entity_id := int(source.get("entity_id", 0))
+		var type_id := str(source.get("type_id", ""))
+		if entity_id <= 0 or type_id.is_empty():
+			continue
+		if _entities.has(entity_id):
+			continue
+		var payload := {
+			"entity_id": entity_id,
+			"owner_player_id": int(source.get("owner_player_id", 0)),
+			"restore": true,
+			"state": source.get("state", {}),
+		}
+		var entity := _instantiate_entity(payload, type_id)
+		if entity == null:
+			continue
+		# Snapshot entities are not spawned through the scene's spawner, so the
+		# container owns parenting and the entity's `_ready()` applies the state.
+		add_child(entity)
+		_entities[entity_id] = entity
+		applied += 1
+	print("WIRED_DYNAMIC_SNAPSHOT_APPLIED entities=%d" % applied)
+
+
+## Builds one entity from a spawn record without parenting it. `type_override`
+## mirrors the record shape used by the late-join snapshot, where `type_id` is
+## a sibling of the restore payload.
+func _instantiate_entity(data: Dictionary, type_override := "") -> WiredDynamicEntity:
 	if _registry == null:
 		push_warning("WIRED_DYNAMIC_SPAWN_FAILED reason=no_registry")
 		return null
-	var type_id := str(data.get("type_id", ""))
+	var type_id := type_override if not type_override.is_empty() else str(data.get("type_id", ""))
 	var descriptor := _registry.find_dynamic_entity(type_id)
 	if descriptor.is_empty():
 		push_warning(
 			"WIRED_DYNAMIC_SPAWN_FAILED type=%s reason=unknown_type" % type_id
+		)
+		return null
+	var entity_id := int(data.get("entity_id", 0))
+	if entity_id > 0 and _entities.has(entity_id):
+		push_warning(
+			"WIRED_DYNAMIC_SPAWN_DUPLICATE type=%s entity_id=%d"
+			% [type_id, entity_id]
 		)
 		return null
 	var package_id := str(descriptor.get("package_id", ""))
@@ -209,14 +288,27 @@ func spawn_function(data: Dictionary) -> Node:
 		instance.free()
 		return null
 	entity.setup(
-		int(data.get("entity_id", 0)),
+		entity_id,
 		type_id,
 		int(data.get("owner_player_id", 0))
 	)
+	entity.persistent = _descriptor_persists(descriptor)
 	entity.spawn_data = data.duplicate(true)
+	entity.spawn_data["type_id"] = type_id
 	entity.name = "Dynamic%d" % entity.entity_id
 	entity.set_meta(META_ENTITY_ID, entity.entity_id)
+	# Registry-created dynamic roots are owned by the container, not by
+	# `PackageReloader`: a revision must never replace a live entity and drop
+	# its id, spawn record or spawner tracking.
+	entity.set_meta("_wired_registered", true)
 	return entity
+
+
+func _descriptor_persists(descriptor: Dictionary) -> bool:
+	var options: Variant = descriptor.get("options", {})
+	if typeof(options) != TYPE_DICTIONARY:
+		return true
+	return bool((options as Dictionary).get("persist", true))
 
 
 func _restore_records(records: Array) -> void:

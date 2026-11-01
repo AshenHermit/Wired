@@ -29,11 +29,16 @@ signal peer_packages_ready(peer_id: int)
 # Server side: gameplay input/action arrived from an authenticated peer.
 signal player_input_received(peer_id: int, input: Dictionary)
 signal player_action_received(peer_id: int, action: String, payload: Dictionary)
+# Server side: an authenticated, package-ready peer asked for a fresh world
+# snapshot (for example after a revision mismatch).
+signal world_snapshot_requested(peer_id: int)
+# Client side: an authenticated server-authored snapshot arrived.
+signal world_snapshot_received(snapshot: Dictionary)
 # Server side: an authenticated peer disconnected and left the game.
 signal peer_left(peer_id: int)
 
 const PROTOCOL_VERSION := 1
-const AUTH_TIMEOUT_SEC := 10.0
+const AUTH_TIMEOUT_SEC := 5.0
 const SERVER_PEER_ID := 1
 
 var mode := ""
@@ -127,7 +132,7 @@ func _on_peer_disconnected(peer_id: int) -> void:
 func cli_hello(payload_json: String) -> void:
 	if mode != "server":
 		return
-	var peer_id := multiplayer.get_remote_sender_id()
+	var peer_id := _remote_sender_id()
 	if _players.has(peer_id):
 		return
 	var payload: Variant = JSON.parse_string(payload_json)
@@ -187,7 +192,7 @@ func cli_hello(payload_json: String) -> void:
 func cli_ready() -> void:
 	if mode != "server":
 		return
-	var peer_id := multiplayer.get_remote_sender_id()
+	var peer_id := _remote_sender_id()
 	if not _players.has(peer_id):
 		_deny(peer_id, "cli_ready")
 		return
@@ -207,7 +212,7 @@ func cli_ready() -> void:
 func cli_ack_event(seq: int) -> void:
 	if mode != "server":
 		return
-	var peer_id := multiplayer.get_remote_sender_id()
+	var peer_id := _remote_sender_id()
 	if not _players.has(peer_id):
 		_deny(peer_id, "cli_ack_event")
 		return
@@ -221,7 +226,7 @@ func cli_ack_event(seq: int) -> void:
 func cli_game_action(action_json: String) -> void:
 	if mode != "server":
 		return
-	var peer_id := multiplayer.get_remote_sender_id()
+	var peer_id := _remote_sender_id()
 	if not _players.has(peer_id):
 		print(
 			"WIRED_ACTION_REJECTED peer=%d reason=not_authenticated action=%s"
@@ -241,7 +246,7 @@ func cli_game_action(action_json: String) -> void:
 func cli_player_input(input: Dictionary) -> void:
 	if mode != "server":
 		return
-	var peer_id := multiplayer.get_remote_sender_id()
+	var peer_id := _remote_sender_id()
 	if not _players.has(peer_id):
 		print("WIRED_PLAYER_INPUT_REJECTED peer=%d reason=not_authenticated" % peer_id)
 		_deny(peer_id, "cli_player_input")
@@ -254,7 +259,7 @@ func cli_player_input(input: Dictionary) -> void:
 func cli_player_action(action: String, payload: Dictionary) -> void:
 	if mode != "server":
 		return
-	var peer_id := multiplayer.get_remote_sender_id()
+	var peer_id := _remote_sender_id()
 	if not _players.has(peer_id):
 		print("WIRED_PLAYER_ACTION_REJECTED peer=%d reason=not_authenticated" % peer_id)
 		_deny(peer_id, "cli_player_action")
@@ -263,6 +268,56 @@ func cli_player_action(action: String, payload: Dictionary) -> void:
 		print("WIRED_PLAYER_ACTION_REJECTED peer=%d reason=empty_action" % peer_id)
 		return
 	player_action_received.emit(peer_id, action, payload)
+
+
+## A late joiner may have missed a package revision between the initial snapshot
+## and its own readiness. It asks again; the answer is still server-authored and
+## is only sent to a peer that completed auth and the initial package gate.
+@rpc("any_peer", "call_remote", "reliable")
+func cli_world_snapshot() -> void:
+	if mode != "server":
+		return
+	var peer_id := _remote_sender_id()
+	if not _players.has(peer_id):
+		print("WIRED_SNAPSHOT_REJECTED peer=%d reason=not_authenticated" % peer_id)
+		_deny(peer_id, "cli_world_snapshot")
+		return
+	if not is_peer_packages_ready(peer_id):
+		print("WIRED_SNAPSHOT_REJECTED peer=%d reason=packages_not_ready" % peer_id)
+		return
+	world_snapshot_requested.emit(peer_id)
+
+
+## Server side: sends the current players and dynamic entities to one peer.
+## This is the fallback for spawns that `MultiplayerSpawner` replayed before the
+## late client had applied its packages; it is idempotent on the receiver.
+func send_world_snapshot(peer_id: int, snapshot: Dictionary) -> void:
+	if mode != "server" or not _players.has(peer_id):
+		return
+	if not is_peer_packages_ready(peer_id):
+		return
+	var payload := snapshot.duplicate(true)
+	payload["type"] = "world_snapshot"
+	payload["seq"] = _next_seq()
+	rpc_id(peer_id, "srv_world_snapshot", payload)
+	var players: Variant = payload.get("players", [])
+	var dynamic_records: Variant = payload.get("dynamic_world", [])
+	print(
+		"WIRED_WORLD_SNAPSHOT_SENT peer=%d players=%d dynamic=%d"
+		% [
+			peer_id,
+			(players as Array).size() if players is Array else 0,
+			(dynamic_records as Array).size() if dynamic_records is Array else 0,
+		]
+	)
+
+
+## Client side: asks for a fresh snapshot after a package revision mismatch.
+func request_world_snapshot() -> void:
+	if mode != "client" or not _authenticated:
+		return
+	rpc_id(SERVER_PEER_ID, "cli_world_snapshot")
+	print("WIRED_CLIENT_SNAPSHOT_REQUESTED")
 
 
 ## Announces an applied package revision to every authenticated client. Only
@@ -303,7 +358,7 @@ func _send_package_revisions(peer_id: int) -> void:
 func cli_package_ready(payload_json: String) -> void:
 	if mode != "server":
 		return
-	var peer_id := multiplayer.get_remote_sender_id()
+	var peer_id := _remote_sender_id()
 	if not _players.has(peer_id):
 		print(
 			"WIRED_PACKAGES_REPORT_REJECTED peer=%d reason=not_authenticated" % peer_id
@@ -376,22 +431,33 @@ func _single_line(text: String) -> String:
 func _reject(peer_id: int, reason: String) -> void:
 	print("WIRED_AUTH_REJECTED peer=%d reason=%s" % [peer_id, reason])
 	_pending.erase(peer_id)
-	if multiplayer.multiplayer_peer != null:
+	if multiplayer != null and multiplayer.multiplayer_peer != null:
 		rpc_id(peer_id, "srv_auth_error", reason)
 	var timer := get_tree().create_timer(0.25)
 	timer.timeout.connect(func() -> void: _disconnect_peer(peer_id))
 
 
 func _disconnect_peer(peer_id: int) -> void:
-	if multiplayer.multiplayer_peer == null:
+	if multiplayer == null or multiplayer.multiplayer_peer == null:
 		return
 	if multiplayer.get_peers().has(peer_id):
 		multiplayer.multiplayer_peer.disconnect_peer(peer_id)
 		print("WIRED_PEER_DROPPED peer=%d" % peer_id)
 
 
+## The sender of the RPC being handled, or 0 when called outside a transport
+## (headless tests and direct handler probes). Never indexes a null API.
+func _remote_sender_id() -> int:
+	var api := multiplayer
+	if api == null:
+		return 0
+	return api.get_remote_sender_id()
+
+
 func _deny(peer_id: int, method: String) -> void:
 	print("WIRED_RPC_DENIED peer=%d method=%s reason=not_authenticated" % [peer_id, method])
+	if multiplayer == null:
+		return
 	rpc_id(
 		peer_id,
 		"srv_event",
@@ -434,6 +500,18 @@ func is_peer_packages_ready(peer_id: int) -> bool:
 		return false
 	var player: Dictionary = _players[peer_id]
 	return bool(player.get("packages_ready", false))
+
+
+## Server side: whether the peer completed ticket authentication. Used by the
+## snapshot/audit paths; spawner/synchronizer traffic itself is transport-level
+## and cannot be filtered per peer in Godot 4.7 (documented limitation).
+func is_peer_authenticated(peer_id: int) -> bool:
+	return _players.has(peer_id)
+
+
+## Server side: copy of the announced revisions, for diagnostics and snapshots.
+func get_package_revisions() -> Dictionary:
+	return _package_revisions.duplicate(true)
 
 
 func get_server_seq() -> int:
@@ -588,3 +666,21 @@ func srv_event(payload_json: String) -> void:
 		var seq := int(payload["seq"])
 		rpc_id(SERVER_PEER_ID, "cli_ack_event", seq)
 		print("WIRED_CLIENT_ACK_SENT seq=%d" % seq)
+
+
+## The binary Variant channel carries Vector2/Vector3 state without the lossy
+## string conversion JSON would apply.
+@rpc("authority", "call_remote", "reliable")
+func srv_world_snapshot(snapshot: Dictionary) -> void:
+	if mode != "client":
+		return
+	var players: Variant = snapshot.get("players", [])
+	var dynamic_records: Variant = snapshot.get("dynamic_world", [])
+	print(
+		"WIRED_CLIENT_WORLD_SNAPSHOT players=%d dynamic=%d"
+		% [
+			(players as Array).size() if players is Array else 0,
+			(dynamic_records as Array).size() if dynamic_records is Array else 0,
+		]
+	)
+	world_snapshot_received.emit(snapshot)

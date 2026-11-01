@@ -26,6 +26,9 @@ var entity_id: int = 0
 var type_id: String = ""
 ## Player that caused the spawn, or 0 for world-owned entities.
 var owner_player_id: int = 0
+## Registry option `persist` (default true). When false the entity is part of
+## the live world and the late-join snapshot, but never enters `state.json`.
+var persistent: bool = true
 ## Full spawn record: `{entity_id, type_id, owner_player_id, restore, state,
 ## spawn_data}`. Set before the node enters the tree.
 var spawn_data: Dictionary = {}
@@ -84,20 +87,32 @@ func _create_synchronizer() -> void:
 ## Freezing every body under the entity keeps a late physics tick from fighting
 ## the replicated values.
 func _wired_freeze_on_client() -> void:
+	# `find_children` never returns the node itself, but a package may make the
+	# RigidBody the entity root. Freeze it explicitly as well. The explicit
+	# `Node` hop keeps the downcast valid in the script compiler.
+	var self_node: Node = self
+	_freeze_2d(self_node as RigidBody2D)
+	_freeze_3d(self_node as RigidBody3D)
 	for node: Node in find_children("*", "RigidBody2D", true, false):
-		var body := node as RigidBody2D
-		if body == null:
-			continue
-		body.freeze = true
-		body.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC
-		body.sleeping = true
+		_freeze_2d(node as RigidBody2D)
 	for node: Node in find_children("*", "RigidBody3D", true, false):
-		var body := node as RigidBody3D
-		if body == null:
-			continue
-		body.freeze = true
-		body.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
-		body.sleeping = true
+		_freeze_3d(node as RigidBody3D)
+
+
+func _freeze_2d(body: RigidBody2D) -> void:
+	if body == null:
+		return
+	body.freeze = true
+	body.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC
+	body.sleeping = true
+
+
+func _freeze_3d(body: RigidBody3D) -> void:
+	if body == null:
+		return
+	body.freeze = true
+	body.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
+	body.sleeping = true
 
 
 ## Whether this peer owns the simulation. Outside the tree (tests, tooling) the

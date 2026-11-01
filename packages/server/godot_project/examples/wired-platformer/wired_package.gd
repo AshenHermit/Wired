@@ -18,8 +18,9 @@ func register(_registry: WiredPackageRegistry) -> void:
 		"player/camera.tscn", {"order": 20, "authority": "local", "local_only": true}
 	)
 	add_player_component("player/spawner.tscn", {"order": 30, "authority": "server"})
+	# Dynamic registration is deliberately limited to the core contract
+	# (`authority`, `persist`). Per-player cooldown and limit are package policy
+	# and live in `player/spawner.gd`; the core does not pretend to enforce them.
 	add_dynamic_entity(
-		"crate",
-		"dynamic/crate.tscn",
-		{"authority": "server", "persist": true, "limit_per_player": 8}
+		"crate", "dynamic/crate.tscn", {"authority": "server", "persist": true}
 	)

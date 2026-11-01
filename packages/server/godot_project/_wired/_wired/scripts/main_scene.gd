@@ -14,6 +14,10 @@ extends Node
 const DEFAULT_ROOM := "local-room"
 const DEFAULT_PORT := 19001
 const DEFAULT_BIND := "127.0.0.1"
+## Preloaded by path: a newly added `class_name` is not in the global class
+## cache until the editor imports it, and headless `--script` runs must not
+## depend on that import step.
+const SnapshotRules := preload("res://_wired/scripts/network/world_snapshot.gd")
 
 var _server_port := 0
 var _state_dir := ""
@@ -29,6 +33,9 @@ var _players: PlayersManager
 ## `dynamic_world` records from `state.json`. Restored after every package is
 ## applied; a record whose package is not registered yet stays here.
 var _saved_dynamic_records: Array = []
+## Client side: a snapshot whose package map did not match the local registry.
+## It is retried after the next package application, never applied blindly.
+var _pending_world_snapshot: Dictionary = {}
 
 @onready var _net: WiredNetwork = $Net
 @onready var _status: Label = $UI/Margin/VBox/Status
@@ -52,6 +59,13 @@ func _ready() -> void:
 	_net.connection_failed.connect(_on_connection_failed)
 	_net.disconnected.connect(_on_server_disconnected)
 	_net.server_event.connect(_on_server_event)
+	# Late join: the server repairs spawns that the transport replayed before
+	# the client had applied its packages, and answers retries after a revision
+	# mismatch. PlayersManager was connected earlier, so its own player exists
+	# by the time the snapshot is built.
+	_net.peer_packages_ready.connect(_on_peer_packages_ready)
+	_net.world_snapshot_requested.connect(_on_world_snapshot_requested)
+	_net.world_snapshot_received.connect(_on_world_snapshot_received)
 	# The host waits for this before minting a ticket.
 	_bridge_call("notifyReady", [])
 	if str(cfg.get("mode", "")) == "server":
@@ -156,6 +170,81 @@ func _apply_registered_package(package_id: int, revision: int) -> void:
 	# records, and the ones whose type is still unregistered stay pending.
 	if _dynamic_world != null and _net.mode == "server":
 		_dynamic_world.restore_pending(_saved_dynamic_records)
+	# A snapshot deferred on a revision mismatch can now be checked again.
+	if _net.mode == "client":
+		_retry_pending_world_snapshot()
+
+
+## Server side: sends the late-join snapshot after the peer's initial package
+## gate opened. Deferred by one frame so the joining player's normal spawner
+## packet is queued first; the receiver is idempotent anyway.
+func _on_peer_packages_ready(peer_id: int) -> void:
+	if _net.mode != "server" or _shutdown_in_progress:
+		return
+	_send_world_snapshot.call_deferred(peer_id)
+
+
+func _on_world_snapshot_requested(peer_id: int) -> void:
+	if _net.mode != "server" or _shutdown_in_progress:
+		return
+	_send_world_snapshot(peer_id)
+
+
+func _send_world_snapshot(peer_id: int) -> void:
+	if _net.mode != "server" or _packages == null:
+		return
+	var snapshot := {
+		"packages": _packages.applied_packages(),
+		"players": _players.snapshot_players() if _players != null else [],
+		"dynamic_world": (
+			_dynamic_world.snapshot_state() if _dynamic_world != null else []
+		),
+	}
+	_net.send_world_snapshot(peer_id, snapshot)
+
+
+func _on_world_snapshot_received(snapshot: Dictionary) -> void:
+	if _net.mode != "client":
+		return
+	_apply_world_snapshot(snapshot)
+
+
+## Client side: applies the snapshot only when the server and the client used
+## the same applied package closure (revision and artifact key). Otherwise the
+## snapshot stays pending and a fresh one is requested.
+func _apply_world_snapshot(snapshot: Dictionary) -> void:
+	var remote_packages: Variant = snapshot.get("packages", {})
+	if typeof(remote_packages) != TYPE_DICTIONARY:
+		remote_packages = {}
+	var local_packages := _packages.applied_packages()
+	if not SnapshotRules.packages_match(remote_packages, local_packages):
+		_pending_world_snapshot = snapshot.duplicate(true)
+		print(
+			"WIRED_WORLD_SNAPSHOT_DEFERRED reason=package_mismatch remote=%s local=%s"
+			% [remote_packages, local_packages]
+		)
+		_net.request_world_snapshot()
+		return
+	_pending_world_snapshot = {}
+	var players: Variant = snapshot.get("players", [])
+	if players is Array and _players != null:
+		_players.apply_snapshot(players)
+	var dynamic_records: Variant = snapshot.get("dynamic_world", [])
+	if dynamic_records is Array and _dynamic_world != null:
+		_dynamic_world.apply_snapshot(dynamic_records)
+	print(
+		"WIRED_WORLD_SNAPSHOT_APPLIED players=%d dynamic=%d"
+		% [
+			(players as Array).size() if players is Array else 0,
+			(dynamic_records as Array).size() if dynamic_records is Array else 0,
+		]
+	)
+
+
+func _retry_pending_world_snapshot() -> void:
+	if _pending_world_snapshot.is_empty():
+		return
+	_apply_world_snapshot(_pending_world_snapshot)
 
 
 func _api_url() -> String:
@@ -533,6 +622,7 @@ func _apply_client_package(package_id: int, revision: int) -> void:
 		applied = revision
 	var error := "" if ok else str(result.get("error", ""))
 	_net.report_package_ready(package_id, applied, ok, error)
+	_retry_pending_world_snapshot()
 	_bridge_call(
 		"notifyEvent",
 		[

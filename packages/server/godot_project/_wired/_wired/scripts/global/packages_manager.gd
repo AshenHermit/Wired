@@ -177,6 +177,21 @@ func current_artifact_key(package_id: int) -> String:
 	return str(_current_artifact_keys.get(package_id, ""))
 
 
+## Every package applied by this process: `{id: {revision, artifact_key}}`.
+## The late-join snapshot compares this map with the peer's local map, because a
+## same-revision dependency publish changes the artifact key without changing
+## the revision number.
+func applied_packages() -> Dictionary:
+	var result := {}
+	for package_id: Variant in _current_revisions:
+		var id := int(package_id)
+		result[str(id)] = {
+			"revision": int(_current_revisions[package_id]),
+			"artifact_key": str(_current_artifact_keys.get(package_id, "")),
+		}
+	return result
+
+
 ## Dependencies of one scene of an applied artifact, as "<package id>:<filepath>"
 ## entries. Returns an empty array for an unknown package or scene.
 func scene_dependencies(package_id: int, scene_path: String) -> PackedStringArray:

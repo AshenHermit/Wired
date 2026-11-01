@@ -79,12 +79,12 @@ func get_player_by_id(player_id: int) -> WiredPlayer:
 ## scene tree. The spawner (or the caller, in tests) owns parenting.
 func build_player(data: Dictionary, registry: WiredPackageRegistry) -> WiredPlayer:
 	var player := WiredPlayer.new()
-	var spawn_2d: Vector2 = data.get("spawn_position_2d", Vector2.ZERO)
-	var spawn_3d: Vector3 = data.get("spawn_position_3d", Vector3.ZERO)
+	var spawn_2d := _as_vector2(data.get("spawn_position_2d", Vector2.ZERO))
+	var spawn_3d := _as_vector3(data.get("spawn_position_3d", Vector3.ZERO))
 	player.setup(
 		int(data.get("player_id", 0)),
 		int(data.get("peer_id", 0)),
-		str(data.get("name", "")),
+		str(data.get("name", data.get("display_name", ""))),
 		_network
 	)
 	player.spawn_position_2d = spawn_2d
@@ -97,6 +97,16 @@ func build_player(data: Dictionary, registry: WiredPackageRegistry) -> WiredPlay
 			% player.player_id
 		)
 		return player
+	_add_registered_components(player, registry)
+	return player
+
+
+## Adds every registered component in registry order. Each registry-created
+## component root is tagged `_wired_registered`, so `PackageReloader` never
+## replaces a live player component when a package revision is applied.
+func _add_registered_components(
+	player: WiredPlayer, registry: WiredPackageRegistry
+) -> void:
 	var own_peer := _current_peer_id()
 	for descriptor: Dictionary in registry.get_player_components():
 		var package_id := str(descriptor.get("package_id", ""))
@@ -126,10 +136,108 @@ func build_player(data: Dictionary, registry: WiredPackageRegistry) -> WiredPlay
 			instance.free()
 			continue
 		component.package_id = package_id
+		component.relative_path = path
+		component.set_meta("_wired_registered", true)
 		player.add_component(
 			component, str(descriptor.get("authority", DEFAULT_AUTHORITY)), local_only
 		)
-	return player
+
+
+## Server-authored late-join snapshot: every live player with its spawn record
+## and persisted component state. Vectors stay Variants because the snapshot
+## travels through a Dictionary RPC, not JSON.
+func snapshot_players() -> Array[Dictionary]:
+	var records: Array[Dictionary] = []
+	var peer_ids := _spawned.keys()
+	peer_ids.sort()
+	for peer_id: Variant in peer_ids:
+		var player: WiredPlayer = _spawned[peer_id]
+		if not is_instance_valid(player):
+			continue
+		records.append(
+			{
+				"player_id": player.player_id,
+				"peer_id": player.peer_id,
+				"name": player.display_name,
+				"spawn_position_2d": player.spawn_position_2d,
+				"spawn_position_3d": player.spawn_position_3d,
+				"state": player.save_state(),
+			}
+		)
+	return records
+
+
+## Client side. Repairs players that the spawner replayed before packages were
+## ready and creates any player missing from the replay. Idempotent: applying
+## the same snapshot again rebuilds nothing and never adds a duplicate.
+func apply_snapshot(records: Array) -> void:
+	if _registry == null:
+		push_warning("WIRED_PLAYER_SNAPSHOT_SKIPPED reason=no_registry")
+		return
+	var applied := 0
+	for record: Variant in records:
+		if typeof(record) != TYPE_DICTIONARY:
+			continue
+		var data: Dictionary = record
+		var player_id := int(data.get("player_id", 0))
+		if player_id <= 0:
+			continue
+		var player := get_player_by_id(player_id)
+		if player == null:
+			player = build_player(data, _registry)
+			player.name = "Player%d" % player.player_id
+			_spawned[player.peer_id] = player
+			# Snapshot players are not spawned through the scene's spawner, so
+			# the manager owns parenting here.
+			add_child(player)
+		elif not _components_match(player):
+			_rebuild_components(player)
+		var state: Variant = data.get("state", null)
+		if typeof(state) == TYPE_DICTIONARY:
+			player.load_state(state)
+		else:
+			player.apply_saved_anchor(
+				{
+					"anchor_position_2d": data.get("spawn_position_2d", Vector2.ZERO),
+					"anchor_position_3d": data.get("spawn_position_3d", Vector3.ZERO),
+				}
+			)
+		applied += 1
+	print("WIRED_PLAYER_SNAPSHOT_APPLIED players=%d" % applied)
+
+
+## Whether the live component list already matches the registry (including the
+## local-only rule for this peer). A replayed pre-package player has zero
+## components and is therefore rebuilt.
+func _components_match(player: WiredPlayer) -> bool:
+	var expected: Array[Dictionary] = []
+	var own_peer := _current_peer_id()
+	for descriptor: Dictionary in _registry.get_player_components():
+		if bool(descriptor.get("local_only", false)) and player.peer_id != own_peer:
+			continue
+		expected.append(descriptor)
+	if player.components.size() != expected.size():
+		return false
+	for index in expected.size():
+		var component := player.components[index]
+		if not is_instance_valid(component):
+			return false
+		if component.package_id != str(expected[index].get("package_id", "")):
+			return false
+		if component.relative_path != str(expected[index].get("path", "")):
+			return false
+	return true
+
+
+func _rebuild_components(player: WiredPlayer) -> void:
+	for component: WiredPlayerComponent in player.components:
+		if is_instance_valid(component):
+			# Detach first so the component stops processing this frame and a
+			# same-named replacement cannot collide with the pending free.
+			player.remove_child(component)
+			component.queue_free()
+	player.components.clear()
+	_add_registered_components(player, _registry)
 
 
 ## Server only. Spawns through the scene's `MultiplayerSpawner`, which calls
@@ -170,15 +278,27 @@ func despawn_player(peer_id: int) -> void:
 ## returned node, so this method must not add it to the tree when a spawner is
 ## configured. It still records the instance so routing works immediately.
 func _spawn_player(data: Dictionary) -> Node:
+	var existing := get_player_by_id(int(data.get("player_id", 0)))
+	if existing != null:
+		# A snapshot may have repaired this player while the spawner replay was
+		# still in flight. Never build a second node for the same player.
+		push_warning(
+			"WIRED_PLAYER_SPAWN_DUPLICATE player=%d reason=already_present"
+			% int(data.get("player_id", 0))
+		)
+		return null
 	var player := build_player(data, _registry)
 	if player == null:
 		return null
 	player.name = "Player%d" % player.player_id
 	_spawned[player.peer_id] = player
-	# Component hooks may use @onready refs, so restored state is applied only
-	# after the spawned subtree reports ready. The spawner parents the node
-	# after this call returns.
+	# The saved anchor is available before the subtree is ready, so a body
+	# component without its own saved state still starts at the right place.
 	if _saved_states.has(player.player_id):
+		player.apply_saved_anchor(_saved_states[player.player_id])
+		# Component hooks may use @onready refs, so the rest of the restored
+		# state is applied only after the spawned subtree reports ready. The
+		# spawner parents the node after this call returns.
 		player.ready.connect(_apply_saved_state.bind(player), CONNECT_ONE_SHOT)
 	if _spawner == null:
 		add_child(player)
@@ -322,6 +442,24 @@ func _apply_saved_state(player: WiredPlayer) -> void:
 		return
 	player.load_state(_saved_states[player.player_id])
 	_saved_states.erase(player.player_id)
+
+
+func _as_vector2(value: Variant) -> Vector2:
+	if value is Vector2:
+		var vector: Vector2 = value
+		return vector
+	if value is Array and value.size() >= 2:
+		return Vector2(float(value[0]), float(value[1]))
+	return Vector2.ZERO
+
+
+func _as_vector3(value: Variant) -> Vector3:
+	if value is Vector3:
+		var vector: Vector3 = value
+		return vector
+	if value is Array and value.size() >= 3:
+		return Vector3(float(value[0]), float(value[1]), float(value[2]))
+	return Vector3.ZERO
 
 
 func _current_peer_id() -> int:

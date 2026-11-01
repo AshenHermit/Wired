@@ -329,6 +329,9 @@ func _instantiate_example_body(spawn_position := Vector2.ZERO) -> Dictionary:
 	_owned.append(player)
 	player.setup(1, 1, "local", null)
 	player.spawn_position_2d = spawn_position
+	# `PlayersManager.build_player` publishes the spawn marker as the anchor
+	# before the component enters the tree; mirror that contract here.
+	player.set_anchor_position_2d(spawn_position)
 	player.add_component(component, "server", false)
 	root.add_child(player)
 	var body := component.get_node_or_null("Body") as CharacterBody2D

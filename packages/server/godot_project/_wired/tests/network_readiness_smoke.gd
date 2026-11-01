@@ -22,6 +22,7 @@ func _run() -> void:
 	_test_readiness_matrix()
 	_test_network_api_surface()
 	_test_packages_ready_emits_once()
+	_test_gameplay_rpcs_require_authentication()
 	_finish()
 
 
@@ -92,6 +93,21 @@ func _test_network_api_surface() -> void:
 		not net.is_peer_packages_ready(1),
 		"an unknown peer must never be packages-ready",
 	)
+	_check(
+		net.has_signal("world_snapshot_requested")
+		and net.has_signal("world_snapshot_received"),
+		"world snapshot signals must exist",
+	)
+	_check(
+		net.has_method("send_world_snapshot")
+		and net.has_method("request_world_snapshot"),
+		"world snapshot transport methods must exist",
+	)
+	_check(
+		net.has_method("get_package_revisions")
+		and net.has_method("is_peer_authenticated"),
+		"the snapshot server helpers must exist",
+	)
 	net.free()
 
 
@@ -118,6 +134,72 @@ func _test_packages_ready_emits_once() -> void:
 	_check(
 		not net.is_peer_packages_ready(99),
 		"a peer that never authenticated must not become ready",
+	)
+	net.free()
+
+
+## The gameplay RPC handlers re-check authentication themselves, not only the
+## ticket handshake. Offline `get_remote_sender_id()` is 0, so adding peer 0 to
+## `_players` simulates an authenticated sender without a socket.
+func _test_gameplay_rpcs_require_authentication() -> void:
+	var net := WiredNetwork.new()
+	net.mode = "server"
+	var inputs: Array = []
+	var actions: Array = []
+	var snapshot_requests: Array = []
+	net.player_input_received.connect(
+		func(peer_id: int, input: Dictionary) -> void:
+			inputs.append({"peer": peer_id, "input": input})
+	)
+	net.player_action_received.connect(
+		func(peer_id: int, action: String, payload: Dictionary) -> void:
+			actions.append({"peer": peer_id, "action": action, "payload": payload})
+	)
+	net.world_snapshot_requested.connect(
+		func(peer_id: int) -> void: snapshot_requests.append(peer_id)
+	)
+
+	net.cli_player_input({"move": Vector2.RIGHT, "seq": 1})
+	net.cli_player_action("pkg.test/ping", {"n": 1})
+	net.cli_world_snapshot()
+	_check(inputs.is_empty(), "input from an unauthenticated peer must be rejected")
+	_check(actions.is_empty(), "actions from an unauthenticated peer must be rejected")
+	_check(
+		snapshot_requests.is_empty(),
+		"snapshot requests from an unauthenticated peer must be rejected",
+	)
+
+	net._players[0] = {
+		"player_id": 9,
+		"ready": true,
+		"packages_ready": true,
+		"name": "eve",
+	}
+	net._package_reports[0] = {}
+	net.cli_player_input({"move": Vector2.RIGHT, "seq": 1})
+	_check(
+		inputs.size() == 1 and inputs[0]["peer"] == 0,
+		"input from an authenticated peer must be forwarded",
+	)
+	net.cli_player_action("", {})
+	_check(actions.is_empty(), "an empty action must still be rejected")
+	net.cli_player_action("pkg.test/ping", {"n": 2})
+	_check(
+		actions.size() == 1 and actions[0]["action"] == "pkg.test/ping",
+		"a valid action from an authenticated peer must be forwarded",
+	)
+	net.cli_world_snapshot()
+	_check(
+		snapshot_requests == [0],
+		"a package-ready authenticated peer may request a snapshot, got %s"
+		% [snapshot_requests],
+	)
+	# Malformed package reports must be dropped without touching readiness.
+	net.cli_package_ready("{not json")
+	net.cli_package_ready(JSON.stringify({"package_id": 42, "revision": 1, "ok": true}))
+	_check(
+		net._package_reports[0].is_empty(),
+		"malformed and unknown package reports must not be recorded",
 	)
 	net.free()
 

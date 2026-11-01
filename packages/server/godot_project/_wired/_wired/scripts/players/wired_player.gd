@@ -23,6 +23,9 @@ const INPUT_SEND_INTERVAL_MSEC := 33
 const MAX_INPUT_MOVE_LENGTH := 1.0
 const MAX_ACTIONS_PER_SECOND := 20
 const DEFAULT_PEER_ID := 1
+## A sequence outside this range is treated as malformed, not as a clock:
+## clients start at 1 and cannot legitimately jump to absurd values.
+const MAX_INPUT_SEQ := 1_000_000_000
 
 const MOVE_LEFT := "wired_move_left"
 const MOVE_RIGHT := "wired_move_right"
@@ -48,6 +51,9 @@ var _input_seq := 0
 var _last_input_sent_msec := -1
 var _action_window_start_msec := 0
 var _action_window_count := 0
+## Missing input actions are a package configuration error, not a per-frame
+## event: warn once per action and then treat the input as zero.
+var _warned_missing_actions: Dictionary = {}
 
 
 ## Wires identity and transport. Called before the player enters the tree, so
@@ -178,20 +184,17 @@ func request_action(qualified_action: String, payload: Dictionary = {}) -> void:
 
 
 func save_state() -> Dictionary:
-	var component_states: Array = []
+	var component_states: Dictionary = {}
 	for component: WiredPlayerComponent in components:
 		if not is_instance_valid(component):
 			continue
-		component_states.append(
-			{
-				"package_id": component.package_id,
-				"state": component._wired_save_state(),
-			}
-		)
+		# The key is the package id plus the scene path, never the array index.
+		# Inserting or reordering components therefore cannot move state.
+		component_states[component.state_key()] = component._wired_save_state()
 	return {
 		"player_id": player_id,
 		"peer_id": peer_id,
-		"name": display_name,
+		"display_name": display_name,
 		"anchor_position_2d": [_anchor_position_2d.x, _anchor_position_2d.y],
 		"anchor_position_3d": [
 			_anchor_position_3d.x, _anchor_position_3d.y, _anchor_position_3d.z
@@ -200,16 +203,36 @@ func save_state() -> Dictionary:
 	}
 
 
-## Restores anchors and per-component state. Identity (player id, peer id and
-## name) comes from the spawn record, never from the save file.
-func load_state(state: Dictionary) -> void:
+## Applies only the saved anchors. `PlayersManager` calls this before the
+## spawned subtree is ready, so a body component whose saved record has no
+## component state still starts at the persisted anchor.
+func apply_saved_anchor(state: Dictionary) -> void:
 	if state.has("anchor_position_2d"):
 		_anchor_position_2d = _as_vector2(state["anchor_position_2d"])
 	if state.has("anchor_position_3d"):
 		_anchor_position_3d = _as_vector3(state["anchor_position_3d"])
-	var records: Variant = state.get("components", [])
+
+
+## Restores anchors and per-component state. Identity (player id, peer id and
+## name) comes from the spawn record, never from the save file. New saves use a
+## dictionary keyed by `<package_id>:<relative_path>`; the legacy array form is
+## still accepted so old `state.json` files keep loading.
+func load_state(state: Dictionary) -> void:
+	apply_saved_anchor(state)
+	var records: Variant = state.get("components", {})
+	if typeof(records) == TYPE_DICTIONARY:
+		var keyed: Dictionary = records
+		for component: WiredPlayerComponent in components:
+			if not is_instance_valid(component):
+				continue
+			var component_state: Variant = keyed.get(component.state_key(), null)
+			if typeof(component_state) == TYPE_DICTIONARY:
+				component._wired_load_state(component_state)
+		return
 	if not (records is Array):
 		return
+	# Legacy format: `[{package_id, state}, ...]` applied by index. Accepted for
+	# migration only; the keyed format never relies on positions.
 	var record_list: Array = records
 	var count := mini(record_list.size(), components.size())
 	for index in count:
@@ -240,27 +263,60 @@ func _physics_process(_delta: float) -> void:
 	network.send_player_input(input)
 
 
-## Server side: accepts only the owning peer's input, drops stale sequences and
-## clamps the movement vector.
+## Server side: accepts only the owning peer's input, drops stale or malformed
+## sequences and clamps finite movement vectors. `limit_length()` turns INF into
+## NaN, so finiteness is checked before it, not after.
 func _on_player_input_received(from_peer: int, received: Dictionary) -> void:
 	if from_peer != peer_id or not is_server_authority():
 		return
-	var seq := int(received.get("seq", 0))
-	if seq > 0 and seq <= _last_input_seq:
+	var seq := _valid_input_seq(received.get("seq", 0))
+	if seq <= 0:
+		push_warning(
+			"WIRED_PLAYER_INPUT_REJECTED player=%d reason=invalid_seq" % player_id
+		)
 		return
-	if seq > _last_input_seq:
-		_last_input_seq = seq
+	if seq <= _last_input_seq:
+		return
+	_last_input_seq = seq
 	var accepted := received.duplicate(true)
+	accepted["seq"] = seq
 	var move: Variant = accepted.get("move", Vector2.ZERO)
 	if move is Vector2:
 		var move_2d: Vector2 = move
-		accepted["move"] = move_2d.limit_length(MAX_INPUT_MOVE_LENGTH)
+		accepted["move"] = (
+			move_2d.limit_length(MAX_INPUT_MOVE_LENGTH)
+			if move_2d.is_finite()
+			else Vector2.ZERO
+		)
 	elif move is Vector3:
 		var move_3d: Vector3 = move
-		accepted["move"] = move_3d.limit_length(MAX_INPUT_MOVE_LENGTH)
+		accepted["move"] = (
+			move_3d.limit_length(MAX_INPUT_MOVE_LENGTH)
+			if move_3d.is_finite()
+			else Vector3.ZERO
+		)
 	else:
 		accepted["move"] = Vector2.ZERO
+	accepted["jump"] = bool(accepted.get("jump", false))
 	input = accepted
+
+
+## Accepts an integer or an integral finite float in `1..MAX_INPUT_SEQ`.
+## Everything else (NaN, INF, negatives, booleans, strings) is rejected with 0.
+func _valid_input_seq(value: Variant) -> int:
+	var seq := 0
+	if typeof(value) == TYPE_INT:
+		seq = int(value)
+	elif typeof(value) == TYPE_FLOAT:
+		var number := float(value)
+		if not is_finite(number) or number != floorf(number):
+			return 0
+		seq = int(number)
+	else:
+		return 0
+	if seq <= 0 or seq > MAX_INPUT_SEQ:
+		return 0
+	return seq
 
 
 func _collect_input() -> Dictionary:
@@ -287,6 +343,12 @@ func _action_axis(negative: String, positive: String) -> float:
 
 func _action_pressed(action: String) -> bool:
 	if not InputMap.has_action(action):
+		if not _warned_missing_actions.has(action):
+			_warned_missing_actions[action] = true
+			push_warning(
+				"WIRED_PLAYER_INPUT_ACTION_MISSING action=%s treating_as_zero"
+				% action
+			)
 		return false
 	return Input.is_action_pressed(action)
 

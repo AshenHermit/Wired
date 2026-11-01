@@ -28,6 +28,10 @@ var player: WiredPlayer = null
 ## Package that registered this component. Required to qualify action and
 ## dynamic-type names.
 var package_id: String = ""
+## Path of the component scene relative to the package root, set by
+## `PlayersManager` from the registry descriptor. Together with `package_id` it
+## forms the stable persistence key, so component reordering never moves state.
+var relative_path: String = ""
 ## `"server"` or `"local"`; mirrors the registry descriptor.
 var authority_mode: String = AUTHORITY_SERVER
 ## Registry option: the component exists only on its owner's peer.
@@ -69,6 +73,13 @@ func is_local_player() -> bool:
 
 func is_server() -> bool:
 	return player != null and player.is_server_authority()
+
+
+## Stable persistence key required by the spec: `<package_id>:<relative_path>`.
+## `id` in the registration options may override the path in a future version;
+## the default is the scene path, never the array index.
+func state_key() -> String:
+	return "%s:%s" % [package_id, relative_path]
 
 
 ## Registers a package-local action name. The package namespace is added here,
