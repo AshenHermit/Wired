@@ -3,11 +3,12 @@ extends SceneTree
 ## Headless smoke test for the main-scene save/load integration.
 ##
 ## `main_scene._save_state` writes `players` and `dynamic_world` into
-## `state.json`; `_load_state` reads the dynamic records back into
-## `_saved_dynamic_records` (they are spawned later, after their package is
-## applied) and hands player records to `PlayersManager`. The suite also proves
-## that `main.tscn` reuses its authored dynamic spawner instead of adding a
-## second one, and that `Global.dynamic_world` is typed and registered.
+## `state.json`; `_load_state` seeds the dynamic records into the world's parked
+## list (they are spawned later, after their package is applied) and hands player
+## records to `PlayersManager`. The suite also proves that `main.tscn` reuses its
+## authored dynamic spawner instead of adding a second one, that
+## `Global.dynamic_world` is typed and registered, and that a parked record
+## survives a save/load cycle.
 ##
 ## Run from the repository root:
 ##   godot --headless --path packages/server/godot_project/_wired \
@@ -16,10 +17,18 @@ extends SceneTree
 const MAIN_SCENE := "res://_wired/scenes/main.tscn"
 const CRATE_TYPE := "pkg.state/crate"
 const STATE_DIR := "user://wired_state_persistence_smoke"
+## Save/load of a parked record needs a real dynamic type: the numeric package id
+## and the fixture are the same ones `dynamic_world_smoke` uses.
+const DYNAMIC_FIXTURE_ROOT := "res://tests/fixtures/dynamic_root"
+const CRATE_SCENE := "crate.tscn"
+const STAMP_PACKAGE_ID := "42"
+const STAMP_PACKAGE_NUMBER := 42
+const STAMP_CRATE_TYPE := "42/box"
 
 var _failures: PackedStringArray = []
 var _checks := 0
 var _owned: Array[Node] = []
+var _registries: Array[Node] = []
 
 
 ## Minimal dynamic record source: persistence plumbing does not need a physics
@@ -45,6 +54,7 @@ func _initialize() -> void:
 func _run() -> void:
 	_test_main_scene_uses_the_authored_dynamic_spawner()
 	_test_save_and_load_round_trip()
+	_test_parked_dynamic_records_are_saved_and_reseeded()
 	_free_owned()
 	_finish()
 
@@ -122,18 +132,17 @@ func _test_save_and_load_round_trip() -> void:
 			"the saved dynamic record must not contain transient spawn data",
 		)
 
-	# A fresh load only fills the pending records; the entity itself is
+	# A fresh load only seeds the parked records; the entity itself is
 	# restored after `package_applied`, not by `_load_state`.
-	main._saved_dynamic_records = []
 	var reloaded: Variant = _instantiate_main()
 	if reloaded == null:
 		return
 	reloaded._state_dir = STATE_DIR
 	reloaded._load_state()
 	_check(
-		reloaded._saved_dynamic_records.size() == 1,
-		"_load_state must read the dynamic records, got %d"
-		% reloaded._saved_dynamic_records.size(),
+		reloaded._dynamic_world.pending_records().size() == 1,
+		"_load_state must seed the dynamic records, got %d"
+		% reloaded._dynamic_world.pending_records().size(),
 	)
 	_check(
 		reloaded._dynamic_world._entities.is_empty(),
@@ -142,6 +151,59 @@ func _test_save_and_load_round_trip() -> void:
 	# Drop the record before teardown; nothing is replication-tracked here.
 	dynamic_world._entities.erase(entity.entity_id)
 	entity.free()
+
+
+## A parked record is not lost by a save/load cycle: `save_state` persists it
+## although it is not in the tree, and `seed_pending` brings it back to the
+## parked list of a fresh world, where `restore_pending` spawns it again.
+func _test_parked_dynamic_records_are_saved_and_reseeded() -> void:
+	var world := _new_world()
+	var entity := world.spawn_entity(
+		STAMP_CRATE_TYPE, {"state": {"position": [16.0, 32.0]}}
+	)
+	_check(entity != null, "the parked-record test needs a spawned entity")
+	if entity == null:
+		return
+	var entity_id: int = entity.entity_id
+	_check(
+		world.park_package(STAMP_PACKAGE_NUMBER) == 1,
+		"park must take the entity out of the tree",
+	)
+
+	var saved := world.save_state()
+	_check(
+		saved.size() == 1,
+		"a parked entity must still be saved, got %d records" % saved.size(),
+	)
+	if saved.size() != 1:
+		return
+	_check(
+		saved[0].get("entity_id") == entity_id,
+		"the saved parked record must keep the entity id, got %s"
+		% [saved[0].get("entity_id")],
+	)
+	_check(
+		not saved[0].has("persistent"),
+		"the save format must not leak the parked bookkeeping flag, got %s"
+		% [saved[0]],
+	)
+
+	var reloaded := _new_world()
+	reloaded.seed_pending(saved)
+	_check(
+		reloaded.pending_records().size() == 1,
+		"seed_pending must park the saved record, got %d"
+		% reloaded.pending_records().size(),
+	)
+	_check(
+		reloaded.restore_pending() == 1,
+		"parked entity returns after a save/load cycle",
+	)
+	_check(
+		reloaded._entities.has(entity_id),
+		"the restored entity must keep its saved id, got %s"
+		% [reloaded._entities.keys()],
+	)
 
 
 # --- helpers --------------------------------------------------------------
@@ -159,6 +221,28 @@ func _instantiate_main() -> Node:
 	_owned.append(main)
 	root.add_child(main)
 	return main
+
+
+## A headless world with one registered numeric package. The runtime package id
+## must be numeric because component and entity keys are addressed by it.
+func _new_world() -> DynamicWorldContainer:
+	var registry := WiredPackageRegistry.new()
+	_registries.append(registry)
+	var context := WiredPackageContext.new()
+	context.package_id = STAMP_PACKAGE_ID
+	context.root_path = DYNAMIC_FIXTURE_ROOT
+	context.revision = 1
+	context.artifact_key = "k1"
+	registry.register_context(STAMP_PACKAGE_ID, context)
+	var registration := WiredPackageRegistration.new()
+	registration.package_id = STAMP_PACKAGE_ID
+	registration.add_dynamic_entity("box", CRATE_SCENE)
+	registry.add_registration(registration)
+	var world := DynamicWorldContainer.new()
+	root.add_child(world)
+	_owned.append(world)
+	world.setup(registry, null)
+	return world
 
 
 func _count_spawners(node: Node) -> int:
@@ -196,6 +280,10 @@ func _free_owned() -> void:
 		if is_instance_valid(node):
 			node.free()
 	_owned.clear()
+	for registry: Node in _registries:
+		if is_instance_valid(registry):
+			registry.free()
+	_registries.clear()
 
 
 # --- assertions -----------------------------------------------------------

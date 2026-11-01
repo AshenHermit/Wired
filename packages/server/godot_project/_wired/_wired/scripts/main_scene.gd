@@ -14,6 +14,10 @@ extends Node
 const DEFAULT_ROOM := "local-room"
 const DEFAULT_PORT := 19001
 const DEFAULT_BIND := "127.0.0.1"
+## The host may spend a while starting the native runtime and applying the
+## room's package revisions before it can mint a ticket. Wait longer than that
+## startup, otherwise a cold reconnect fails with a misleading "no config".
+const BRIDGE_CONFIG_TIMEOUT_SEC := 120.0
 ## Preloaded by path: a newly added `class_name` is not in the global class
 ## cache until the editor imports it, and headless `--script` runs must not
 ## depend on that import step.
@@ -30,9 +34,15 @@ var _registry: WiredPackageRegistry
 var _static_world: StaticWorldContainer
 var _dynamic_world: DynamicWorldContainer
 var _players: PlayersManager
-## `dynamic_world` records from `state.json`. Restored after every package is
-## applied; a record whose package is not registered yet stays here.
-var _saved_dynamic_records: Array = []
+## Package apply/unload operations are serialized: two overlapping applies would
+## interleave registry clears with entry loads and restores, and a removal that
+## arrives during an apply would run against a half-applied registry.
+var _package_ops_busy := false
+var _package_ops_queue: Array[Dictionary] = []
+## Client side: one package retry chain at a time. Every failed download must
+## converge instead of stacking a timer per snapshot.
+var _package_retry_in_flight := false
+var _package_retry_attempts := 0
 ## Client side: a snapshot whose package map did not match the local registry.
 ## It is retried after the next package application, never applied blindly.
 var _pending_world_snapshot: Dictionary = {}
@@ -154,6 +164,14 @@ func _apply_registered_package(package_id: int, revision: int) -> void:
 			% [package_id, revision]
 		)
 		return
+	# Server: the running entities of the previous revision leave the tree and
+	# keep their state, so the new revision resumes them. Client: its copies are
+	# respawned by the server, so they are dropped without a record.
+	if _dynamic_world != null:
+		if _net.mode == "server":
+			_dynamic_world.park_package(package_id)
+		else:
+			_dynamic_world.drop_package(package_id)
 	var artifact_key := _packages.current_artifact_key(package_id)
 	var context := WiredPackageContext.new()
 	context.package_id = str(package_id)
@@ -172,13 +190,22 @@ func _apply_registered_package(package_id: int, revision: int) -> void:
 	# spawner's net id); only the components are replaced, with their state.
 	if _players != null:
 		_players.rebuild_live_components()
-	# Package order is not guaranteed: every applied revision retries the saved
+	# Package order is not guaranteed: every applied revision retries the parked
 	# records, and the ones whose type is still unregistered stay pending.
-	if _dynamic_world != null and _net.mode == "server":
-		_dynamic_world.restore_pending(_saved_dynamic_records)
-	# A snapshot deferred on a revision mismatch can now be checked again.
-	if _net.mode == "client":
+	if _net.mode == "server":
+		if _dynamic_world != null:
+			_dynamic_world.restore_pending()
+	else:
+		# A snapshot deferred on a revision mismatch can now be checked again.
 		_retry_pending_world_snapshot()
+
+
+## Client side: asks the server for a fresh snapshot. Guarded so a package
+## callback that also runs on a server (or before auth) never sends an RPC.
+func _request_world_snapshot() -> void:
+	if _net == null or _net.mode != "client":
+		return
+	_net.request_world_snapshot()
 
 
 ## Server side: sends the late-join snapshot after the peer's initial package
@@ -215,24 +242,34 @@ func _on_world_snapshot_received(snapshot: Dictionary) -> void:
 	_apply_world_snapshot(snapshot)
 
 
-## Client side: applies the snapshot only when the server and the client used
-## the same applied package closure (revision and artifact key). Otherwise the
-## snapshot stays pending and a fresh one is requested.
+## Client side: reconciles the applied package set with the server's map, then
+## applies the snapshot only when both peers ended on the same applied closure
+## (revision and artifact key). Otherwise the snapshot stays pending and a fresh
+## one is requested. Called from a signal, so it can await but cannot be awaited.
 func _apply_world_snapshot(snapshot: Dictionary) -> void:
 	var remote_packages: Variant = snapshot.get(WiredProtocol.KEY_PACKAGES, {})
 	if typeof(remote_packages) != TYPE_DICTIONARY:
 		remote_packages = {}
+	var packages: Dictionary = remote_packages
+	if not await _reconcile_client_packages(packages):
+		# The retry chain schedules another snapshot; applying this one would
+		# run against the packages that are still downloading.
+		_pending_world_snapshot = snapshot
+		return
+	# The reconcile completed without a failed download: the backoff starts from
+	# the first delay again on the next unrelated failure.
+	_package_retry_attempts = 0
 	var local_packages := _packages.applied_packages()
-	if not SnapshotRules.packages_match(remote_packages, local_packages):
+	if not SnapshotRules.packages_match(packages, local_packages):
 		_pending_world_snapshot = snapshot.duplicate(true)
 		print(
 			"WIRED_WORLD_SNAPSHOT_DEFERRED reason=package_mismatch remote=%s local=%s"
-			% [remote_packages, local_packages]
+			% [packages, local_packages]
 		)
 		var signature := str(local_packages)
 		if _snapshot_request_signature != signature:
 			_snapshot_request_signature = signature
-			_net.request_world_snapshot()
+			_request_world_snapshot()
 		return
 	_pending_world_snapshot = {}
 	_snapshot_request_signature = ""
@@ -241,7 +278,7 @@ func _apply_world_snapshot(snapshot: Dictionary) -> void:
 		_players.apply_snapshot(players)
 	var dynamic_records: Variant = snapshot.get(WiredProtocol.KEY_DYNAMIC_WORLD, [])
 	if dynamic_records is Array and _dynamic_world != null:
-		_dynamic_world.apply_snapshot(dynamic_records)
+		_dynamic_world.apply_snapshot(dynamic_records, packages)
 	print(
 		"WIRED_WORLD_SNAPSHOT_APPLIED players=%d dynamic=%d"
 		% [
@@ -249,6 +286,62 @@ func _apply_world_snapshot(snapshot: Dictionary) -> void:
 			(dynamic_records as Array).size() if dynamic_records is Array else 0,
 		]
 	)
+
+
+## Client side: makes the applied package set match the server's map before a
+## snapshot is applied. A package the server no longer lists is unloaded; a
+## package whose revision or artifact key differs is synced over HTTP. Returns
+## false when a download failed (the retry chain is already scheduled then).
+func _reconcile_client_packages(remote: Dictionary) -> bool:
+	if _net == null or _net.mode != "client":
+		return true
+	# Snapshot before mutating: `_apply_package_removal` erases entries from the
+	# applied map while it runs.
+	var applied := _packages.applied_packages()
+	for id: Variant in applied:
+		if not remote.has(str(id)):
+			_apply_package_removal(int(id), false, false)
+	for id: Variant in remote:
+		var want: Variant = remote[id]
+		if typeof(want) != TYPE_DICTIONARY:
+			continue
+		var desired: Dictionary = want
+		var have: Dictionary = _packages.applied_packages().get(str(id), {})
+		if (
+			int(have.get("revision", 0)) == int(desired.get("revision", 0))
+			and str(have.get("artifact_key", "")) == str(desired.get("artifact_key", ""))
+		):
+			continue
+		var result: Dictionary = await _packages.sync_package(
+			int(id), int(desired.get("revision", 0))
+		)
+		if not bool(result.get("ok", false)):
+			_schedule_package_retry(int(id), str(result.get("error", "")))
+			return false
+	return true
+
+
+## One retry chain per client, with a bounded fast backoff: 2 s, 5 s, 10 s, then
+## every 10 s. Each attempt re-requests a snapshot, which re-enters
+## `_reconcile_client_packages` and retries the missing download.
+func _schedule_package_retry(package_id: int, error: String) -> void:
+	if _net == null or _net.mode != "client":
+		return
+	if _package_retry_in_flight:
+		return
+	_package_retry_in_flight = true
+	var delays: Array[float] = [2.0, 5.0, 10.0]
+	var delay := 10.0
+	if _package_retry_attempts < delays.size():
+		delay = delays[_package_retry_attempts]
+	_package_retry_attempts += 1
+	print(
+		"WIRED_PACKAGE_SYNC_FAILED package=%d error=%s retry=%.1f"
+		% [package_id, error, delay]
+	)
+	await get_tree().create_timer(delay).timeout
+	_package_retry_in_flight = false
+	_request_world_snapshot()
 
 
 func _retry_pending_world_snapshot() -> void:
@@ -333,26 +426,135 @@ func _start_control_listener() -> void:
 
 func _control_loop() -> void:
 	while not _shutdown_in_progress:
-		var line := OS.read_string_from_stdin()
-		if line.is_empty():
+		var chunk := OS.read_string_from_stdin()
+		if chunk.is_empty():
 			call_deferred("_request_shutdown", "stdin_closed")
 			return
-		var command := line.strip_edges()
-		if command == "shutdown":
-			call_deferred("_request_shutdown", "shutdown_command")
-			return
-		if command.begins_with("package "):
+		# `read_string_from_stdin()` returns every buffered write joined by
+		# newlines. Treat each line as a command: reading the chunk as one
+		# command silently dropped all but the first package dispatch, which
+		# made every cold start wait for the retry tick.
+		for raw_line: String in chunk.split("\n"):
+			var command := raw_line.strip_edges()
+			if command.is_empty():
+				continue
 			var parts := command.split(" ", false)
-			if (
-				parts.size() == 3
-				and parts[1].is_valid_int()
-				and parts[2].is_valid_int()
-			):
-				call_deferred(
-					"_apply_package_revision", int(parts[1]), int(parts[2])
-				)
-			else:
-				print("WIRED_CONTROL_ERROR invalid_package_command=%s" % command)
+			match parts[0]:
+				"shutdown":
+					call_deferred("_request_shutdown", "shutdown_command")
+					return
+				"package":
+					# The queue lives on the main thread: the control thread only
+					# hands the operation over.
+					if (
+						parts.size() == 3
+						and parts[1].is_valid_int()
+						and parts[2].is_valid_int()
+					):
+						call_deferred(
+							"_enqueue_package_op",
+							{
+								"kind": "apply",
+								"id": parts[1].to_int(),
+								"revision": parts[2].to_int(),
+							}
+						)
+					else:
+						print(
+							"WIRED_CONTROL_ERROR invalid_package_command=%s"
+							% command
+						)
+				"unload":
+					if parts.size() in [2, 3] and parts[1].is_valid_int():
+						call_deferred(
+							"_enqueue_package_op",
+							{
+								"kind": "unload",
+								"id": parts[1].to_int(),
+								"purge": parts.size() == 3 and parts[2] == "purge",
+							}
+						)
+					else:
+						print(
+							"WIRED_CONTROL_ERROR invalid_unload_command=%s"
+							% command
+						)
+				"room-packages":
+					call_deferred(
+						"_apply_room_packages",
+						parts[1] if parts.size() > 1 else ""
+					)
+				_:
+					print("WIRED_CONTROL_ERROR unknown_command=%s" % command)
+
+
+## Appends one package operation and starts the pump. Two operations never run
+## concurrently, so an unload that arrives during an apply is queued behind it.
+func _enqueue_package_op(op: Dictionary) -> void:
+	_package_ops_queue.append(op)
+	_pump_package_ops()
+
+
+func _pump_package_ops() -> void:
+	if _package_ops_busy or _package_ops_queue.is_empty():
+		return
+	_package_ops_busy = true
+	var op: Dictionary = _package_ops_queue.pop_front()
+	var package_id := int(op.get("id", 0))
+	if str(op.get("kind", "")) == "apply":
+		await _apply_package_revision(package_id, int(op.get("revision", 0)))
+	elif str(op.get("kind", "")) == "unload":
+		_apply_package_removal(package_id, bool(op.get("purge", false)))
+	_package_ops_busy = false
+	if not _package_ops_queue.is_empty():
+		call_deferred("_pump_package_ops")
+
+
+## Removes one package from the running world. Server: the entities are parked so
+## a re-add can restore them, and the announced revision is dropped. Client: the
+## local copies are dropped and, unless the caller is already reconciling, a
+## fresh snapshot is requested.
+func _apply_package_removal(
+	package_id: int, purge: bool, request_snapshot := true
+) -> void:
+	if package_id <= 0:
+		return
+	if _dynamic_world != null:
+		if _net.mode == "server":
+			_dynamic_world.park_package(package_id)
+		else:
+			_dynamic_world.drop_package(package_id)
+	_registry.clear_package(str(package_id))
+	_packages.forget_package(package_id, purge)
+	if _static_world != null:
+		_static_world.rebuild()
+	if _players != null:
+		_players.rebuild_live_components()
+	if purge:
+		if _dynamic_world != null:
+			_dynamic_world.purge_package(package_id)
+		if _players != null:
+			_players.purge_package(package_id)
+	if _net.mode == "server":
+		_net.remove_package_revision(package_id)
+	elif request_snapshot:
+		_request_world_snapshot()
+
+
+## `room-packages <csv>`: the backend reports which packages the room still
+## publishes. Parked records and player component state of any other package
+## belong to a package that no longer exists and are dropped.
+func _apply_room_packages(csv: String) -> void:
+	var ids := PackedStringArray()
+	for raw_id: String in csv.split(",", false):
+		var value := raw_id.strip_edges()
+		if not value.is_valid_int() or value.to_int() <= 0:
+			continue
+		ids.append(str(value.to_int()))
+	if _dynamic_world != null:
+		_dynamic_world.purge_missing_packages(ids)
+	if _players != null:
+		_players.purge_missing_packages(ids)
 
 
 ## Server side: the backend asked for a published revision. The loader fetches
@@ -425,7 +627,8 @@ func _save_state(reason: String) -> void:
 
 ## Server side. Reads the previous `state.json` before the runtime starts.
 ## Dynamic records are not spawned here: their package entry may not be
-## registered yet, so `restore_pending` is retried after every package apply.
+## registered yet, so they are seeded into the world's parked list and
+## `restore_pending` is retried after every package apply.
 func _load_state() -> void:
 	var path := _state_path()
 	if not FileAccess.file_exists(path):
@@ -445,8 +648,8 @@ func _load_state() -> void:
 		return
 	var state: Dictionary = parsed
 	var dynamic_records: Variant = state.get(WiredProtocol.KEY_DYNAMIC_WORLD, [])
-	if dynamic_records is Array:
-		_saved_dynamic_records = dynamic_records
+	if dynamic_records is Array and _dynamic_world != null:
+		_dynamic_world.seed_pending(dynamic_records)
 	var player_records: Variant = state.get(WiredProtocol.KEY_PLAYERS, [])
 	if player_records is Array and _players != null:
 		# Applied immediately to live players, or on that player's next spawn.
@@ -455,7 +658,11 @@ func _load_state() -> void:
 		"WIRED_STATE_LOADED path=%s dynamic=%d players=%d"
 		% [
 			path,
-			_saved_dynamic_records.size(),
+			(
+				_dynamic_world.pending_records().size()
+				if _dynamic_world != null
+				else 0
+			),
 			player_records.size() if player_records is Array else 0,
 		]
 	)
@@ -476,7 +683,9 @@ func _notification(what: int) -> void:
 func _run_client(cfg: Dictionary) -> void:
 	if str(cfg.get("source", "")) == "bridge":
 		_bridge_status("waiting", "Waiting for the Wired host")
-		var bridge_config: Dictionary = await _wait_for_bridge_config(15.0)
+		var bridge_config: Dictionary = await _wait_for_bridge_config(
+			BRIDGE_CONFIG_TIMEOUT_SEC
+		)
 		if bridge_config.is_empty():
 			_fail("No game configuration received from the Wired host")
 			return
@@ -648,6 +857,14 @@ func _on_server_event(event: Dictionary) -> void:
 			int(event.get(WiredProtocol.KEY_PACKAGE_ID, 0)),
 			int(event.get(WiredProtocol.KEY_REVISION, 0))
 		)
+	elif event_type == WiredProtocol.EVENT_PACKAGE_REMOVED:
+		_enqueue_package_op(
+			{
+				"kind": "unload",
+				"id": int(event.get(WiredProtocol.KEY_PACKAGE_ID, 0)),
+				"purge": false,
+			}
+		)
 	elif event_type == WiredNetwork.EVENT_PLAYER_LEFT:
 		# The despawn packet is matched by spawn net id, which a root built from
 		# the late-join snapshot does not have: release it by player id.
@@ -671,6 +888,11 @@ func _apply_client_package(package_id: int, revision: int) -> void:
 		applied = revision
 	var error := "" if ok else str(result.get("error", ""))
 	_net.report_package_ready(package_id, applied, ok, error)
+	if not ok:
+		# The server keeps announcing the revision, but a transient download
+		# failure must not leave this client permanently behind: retry the
+		# package on a backoff and re-request the snapshot afterwards.
+		_schedule_package_retry(package_id, error)
 	_retry_pending_world_snapshot()
 	_bridge_call(
 		"notifyEvent",

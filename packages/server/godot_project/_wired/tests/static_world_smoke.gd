@@ -16,6 +16,9 @@ extends SceneTree
 const FIXTURE_ROOT := "res://tests/fixtures/static_root"
 const PACKAGE_ID := "pkg.test"
 const STATIC_SCENE := "static.tscn"
+## Runtime package ids are numeric on the wire; a package removal is addressed by
+## that id, so the rebuild-after-forget check uses one too.
+const FORGOTTEN_PACKAGE_ID := "42"
 
 var _failures: PackedStringArray = []
 var _checks := 0
@@ -32,6 +35,7 @@ func _run() -> void:
 	_test_rebuild_instantiates_registered_static_scenes()
 	_test_rebuild_does_not_duplicate_scenes()
 	_test_clear_removes_only_registered_children()
+	_test_rebuild_removes_scenes_of_a_forgotten_package()
 	_test_spawn_markers_are_collected_recursively()
 	_test_missing_context_is_skipped()
 	_free_worlds()
@@ -98,6 +102,39 @@ func _test_clear_removes_only_registered_children() -> void:
 	_check(
 		world.get_spawn_position_2d(0) == Vector2.ZERO,
 		"cleared static scenes must not expose spawn markers",
+	)
+
+
+func _test_rebuild_removes_scenes_of_a_forgotten_package() -> void:
+	var registry := WiredPackageRegistry.new()
+	_registries.append(registry)
+	var context := WiredPackageContext.new()
+	context.package_id = FORGOTTEN_PACKAGE_ID
+	context.root_path = FIXTURE_ROOT
+	registry.register_context(FORGOTTEN_PACKAGE_ID, context)
+	var registration := WiredPackageRegistration.new()
+	registration.package_id = FORGOTTEN_PACKAGE_ID
+	registration.add_static_scene(STATIC_SCENE)
+	registry.add_registration(registration)
+
+	var world := _make_world(registry)
+	world.rebuild()
+	_check(
+		world.get_child_count() == 1,
+		"the forget check needs one static scene, got %d"
+		% world.get_child_count(),
+	)
+	if world.get_child_count() != 1:
+		return
+
+	# A removed package is forgotten in the registry, then the world is rebuilt:
+	# its scenes must not survive the reload that no longer registers them.
+	registry.clear_package(FORGOTTEN_PACKAGE_ID)
+	world.rebuild()
+	_check(
+		world.get_child_count() == 0,
+		"forgotten package scenes disappear, got %d children"
+		% world.get_child_count(),
 	)
 
 
