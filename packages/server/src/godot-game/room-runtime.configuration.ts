@@ -1,6 +1,7 @@
 import { AppConfigService } from 'src/config/config.service';
 import { resolve, join } from 'node:path';
 import { RoomRuntimeError } from './room-runtime.errors';
+import { safeRoomName } from './room-runtime.names';
 import { GodotRuntimeConfig, RuntimeSpawnOptions } from './room-runtime.types';
 
 const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -129,7 +130,7 @@ export class RoomRuntimeConfiguration {
         config.bindAddress,
         // Godot changes its cwd to the project directory when --path is set.
         '--state-dir',
-        join(stateDir, this.safeName(roomId)),
+        join(stateDir, safeRoomName(roomId)),
         // Package manifests and files are served by the Wired API, not by the
         // game socket. The URL is configuration, not derived from the ambient
         // PORT, so a proxy or a different backend port cannot break lookups.
@@ -171,9 +172,5 @@ export class RoomRuntimeConfiguration {
     }
     env.WIRED_GAME_TICKET_SECRET = ticketSecret;
     return env;
-  }
-
-  private safeName(roomId: string): string {
-    return roomId.replace(/[^a-zA-Z0-9._-]/g, '_');
   }
 }

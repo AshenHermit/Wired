@@ -63,7 +63,7 @@ describe('NodeRuntimeProcessFactory', () => {
   beforeEach(() => {
     children = [];
     mockedExeca.mockReset();
-    mockedExeca.mockImplementation((_path: string, _args: string[]) => {
+    mockedExeca.mockImplementation(() => {
       const child = new FakeChildProcess(4_242);
       children.push(child);
       return child;

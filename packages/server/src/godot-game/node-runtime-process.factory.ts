@@ -180,7 +180,7 @@ export class NodeRuntimeProcessFactory extends RuntimeProcessFactory {
 
     const pid = typeof child.pid === 'number' ? child.pid : undefined;
     this.watchdog.track(pid);
-    child.once('exit', () => this.watchdog.untrack(pid));
+    void child.once('exit', () => this.watchdog.untrack(pid));
 
     return {
       pid: child.pid,
@@ -188,10 +188,10 @@ export class NodeRuntimeProcessFactory extends RuntimeProcessFactory {
       stdout: child.stdout,
       stderr: child.stderr,
       onExit: (callback) => {
-        child.once('exit', callback);
+        void child.once('exit', callback);
       },
       onError: (callback) => {
-        child.once('error', callback);
+        void child.once('error', callback);
       },
       kill: (signal) => {
         if (pid === undefined) {

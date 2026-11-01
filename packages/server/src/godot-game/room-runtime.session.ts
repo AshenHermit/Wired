@@ -13,7 +13,8 @@ import { parseRuntimeLine, RuntimeLineEvent } from './room-runtime.line-parser';
 
 const FORCE_KILL_WAIT_MS = 2_000;
 const HANDSHAKE_LEASE_SLACK_MS = 5_000;
-// Keep in sync with AUTH_TIMEOUT_SEC in the Godot network script.
+// Keep in sync with AUTH_TIMEOUT_SEC in the Godot network script. The client
+// gets this long to finish the handshake after the ticket is minted.
 const AUTH_TIMEOUT_SEC = 5;
 
 export interface RoomRuntimeSessionOptions {
@@ -222,8 +223,8 @@ export class RoomRuntimeSession {
   /**
    * A ticket minted near the end of the handshake lease would outlive the
    * runtime. Clamp it to the remaining window (the client has one second to
-   * send hello, then the 10s auth timeout), or fail explicitly when there is
-   * not enough time left for a handshake. Returns undefined for a runtime that
+   * connect, then the 5s auth timeout), or fail explicitly when there is not
+   * enough time left for a handshake. Returns undefined for a runtime that
    * already has players, in which case the idle timeout governs shutdown.
    */
   private ticketTtlSec(): number | undefined {
@@ -287,13 +288,11 @@ export class RoomRuntimeSession {
       startedAt: null,
       stoppedAt: null,
       exitCode: null,
-      exitSignal: null,
       error: null,
       activePlayers: 0,
       authenticatedPeers: new Set<number>(),
       handshakeLeaseUntil: 0,
       stopRequested: false,
-      forceKilled: false,
       readySettled: false,
       exitHandled: false,
       portReleased: false,
@@ -485,7 +484,6 @@ export class RoomRuntimeSession {
     }
     record.exitHandled = true;
     record.exitCode = code;
-    record.exitSignal = signal;
     record.stoppedAt = new Date().toISOString();
     this.clearTimers();
     this.releasePort();

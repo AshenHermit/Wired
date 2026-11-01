@@ -207,8 +207,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
       processFactory: this.processFactory,
       registry: this.registry,
       logger: this.logger,
-      onEvent: (event) =>
-        this.handleSessionEvent(roomId, event),
+      onEvent: (event) => this.handleSessionEvent(roomId, event),
     });
     this.registry.add(session);
     session.start();
