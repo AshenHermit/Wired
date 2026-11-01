@@ -156,18 +156,67 @@ export function createEditorBridgeClient(options: {
 }
 
 /**
+ * The wait was cancelled by its owner (a component unmounted, the editor was
+ * replaced). Not an editor failure: callers must not report it to the user or
+ * start a reconnect loop.
+ */
+export class EditorBridgeWaitCancelledError extends Error {
+  constructor() {
+    super("Ожидание моста редактора отменено");
+    this.name = "EditorBridgeWaitCancelledError";
+  }
+}
+
+/**
  * Waits until the editor plugin registers its `request` callback. The plugin
  * appears only after the editor finishes loading, which can lag behind the
  * shell by seconds.
+ *
+ * The wait owns at most one timer at a time and clears it on abort, so an
+ * unmount never leaves a 120 s polling chain running against a dead editor.
  */
-export function waitForEditorBridge(timeoutMs: number): Promise<void> {
+export function waitForEditorBridge(
+  timeoutMs: number,
+  options: { signal?: AbortSignal } = {},
+): Promise<void> {
+  const { signal } = options;
   return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new EditorBridgeWaitCancelledError());
+      return;
+    }
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
+
+    const cleanup = (): void => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+    };
+    const onAbort = (): void => {
+      settle();
+      reject(new EditorBridgeWaitCancelledError());
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+
     const poll = (elapsed: number) => {
+      if (settled) return;
       if (hasBridgeRequest()) {
+        settle();
         resolve();
         return;
       }
       if (elapsed >= timeoutMs) {
+        settle();
         reject(
           new EditorBridgeError(
             `Мост редактора не появился за ${timeoutMs} мс`,
@@ -176,7 +225,7 @@ export function waitForEditorBridge(timeoutMs: number): Promise<void> {
         return;
       }
       const delay = Math.min(BRIDGE_POLL_MS, timeoutMs - elapsed);
-      setTimeout(() => poll(elapsed + delay), delay);
+      timer = setTimeout(() => poll(elapsed + delay), delay);
     };
     poll(0);
   });

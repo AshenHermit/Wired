@@ -4,13 +4,16 @@ import {
   ProjectInfo,
   RoomPackagesStatus,
 } from "@wired-io/shared";
+import { withApiPrefix } from "@/utils/variables";
 import { apiClient } from "../api-client/client-api";
 
 export async function getGodotProjectInfo() {
   const info = await apiClient.get<ProjectInfo, void>(
     "godot-project-info/wired"
   );
-  info.baseUrl = "/api" + info.baseUrl;
+  // The backend answers with its own path; the browser fetches project files
+  // through the Next rewrite.
+  info.baseUrl = withApiPrefix(info.baseUrl);
   return info;
 }
 

@@ -35,6 +35,7 @@ import * as gameApi from "@/api/services/godot-game";
 import * as packagesApi from "@/api/services/scripting-packages";
 import {
   createPackageFileSystem,
+  GodotFsError,
   type CollectedPackageFile,
   type PackageFileSystem,
 } from "./godot-packages-fs";
@@ -350,6 +351,35 @@ describe("useRoomPackages", () => {
       // Once on mount and once after the bridge connected.
       expect(gameApi.getRoomPackages).toHaveBeenCalledTimes(2);
       unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the bridge wait on unmount", async () => {
+    vi.useFakeTimers();
+    try {
+      // No bridge yet: the hook is inside the 120 s plugin wait.
+      const { result, unmount } = renderHook(() =>
+        useRoomPackages(1, ONE_PACKAGE),
+      );
+      await act(async () => {
+        result.current.afterEditorStart(makeEditor());
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      unmount();
+      // The polling chain is cancelled with the component instead of keeping
+      // one timer alive for the rest of the timeout window.
+      expect(vi.getTimerCount()).toBe(0);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      expect(gameApi.getRoomPackages).toHaveBeenCalledTimes(1);
+      expect(createPackageFileSystem).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -718,6 +748,20 @@ describe("useRoomPackages", () => {
     unmount();
   });
 
+  it("reports a reset editor as GodotFsError instead of TypeError", async () => {
+    const editor = makeEditor();
+    const { unmount } = await startHook({ editor });
+    const options = vi.mocked(createPackageFileSystem).mock.calls[0][0];
+
+    // The page restarted the engine and the hook lost the instance between
+    // `prepareReplace` and the actual write.
+    delete (editor as { editor?: unknown }).editor;
+
+    expect(() => options.getEngine()).toThrow(GodotFsError);
+    expect(() => options.getEngine()).not.toThrow(TypeError);
+    unmount();
+  });
+
   it("creates a new package as an empty directory and loads only it", async () => {
     vi.mocked(gameApi.getRoomPackages).mockResolvedValue(roomStatus([]));
     const { result, unmount } = await startHook();
@@ -993,6 +1037,51 @@ describe("useRoomPackages", () => {
       resolveManifest(await manifestOf("extends Node"));
       await first;
     });
+    unmount();
+  });
+
+  it("does not commit a superseded load into the package list", async () => {
+    const { result, unmount } = await startHook();
+
+    let resolveStale: (status: RoomPackagesStatus) => void = () => {};
+    vi.mocked(gameApi.getRoomPackages).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveStale = resolve;
+      }),
+    );
+    const stale = result.current.refresh();
+
+    // The newer load wins and publishes package 6.
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValueOnce(
+      roomStatus([
+        { id: 5, revision: 2 },
+        { id: 6, revision: 4 },
+      ]),
+    );
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    // The stale response carries a package the newer one never saw.
+    await act(async () => {
+      resolveStale(
+        roomStatus([
+          { id: 5, revision: 2 },
+          { id: 7, revision: 1 },
+        ]),
+      );
+      await stale;
+    });
+
+    const ids = () => result.current.entries.map((item) => item.packageId);
+    expect(ids()).toEqual([5, 6]);
+
+    // The stale load must not have leaked into the package list either: a
+    // later refresh still does not resurrect package 7.
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(ids()).toEqual([5, 6]);
     unmount();
   });
 
