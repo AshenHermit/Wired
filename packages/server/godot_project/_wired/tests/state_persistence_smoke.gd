@@ -79,6 +79,123 @@ func _reconcile_client_packages(_remote: Dictionary) -> bool:
 """
 
 
+## Source of the entry-path probe. It exercises `_reconcile_client_packages`,
+## `_apply_package_removal` and `_schedule_package_retry` themselves, so it does
+## NOT override them: the collaborators are replaced by stub subclasses instead.
+##
+## The stub classes are subclasses of the real ones because `main_scene.gd` types
+## its fields (`_packages: PackagesManager`, `_net: WiredNetwork`, ...): GDScript
+## rejects assigning a plain duck-typed object there. The probe overrides
+## `_ready` (the startup path is not under test) and its `StubNetwork` overrides
+## `_enter_tree` so the probe's child does not reconfigure `/root`'s multiplayer
+## API. `_schedule_package_retry` needs a real `get_tree()` (a native method that
+## cannot be overridden), so this probe is attached to `root` with stub children
+## that satisfy the scene's `@onready` lookups.
+const ENTRY_PROBE_SOURCE := """
+extends "res://_wired/scripts/main_scene.gd"
+
+var removal_calls: Array = []
+
+class StubNetwork extends WiredNetwork:
+	var removed: Array[int] = []
+	var snapshot_requests := 0
+	func _enter_tree() -> void:
+		pass
+	func remove_package_revision(package_id: int) -> void:
+		removed.append(package_id)
+	func request_world_snapshot() -> void:
+		snapshot_requests += 1
+
+class StubPackages extends PackagesManager:
+	var applied: Dictionary = {}
+	var forgotten: Array = []
+	var sync_calls: Array = []
+	var sync_result: Dictionary = {"ok": true, "revision": 1}
+	func applied_packages() -> Dictionary:
+		return applied.duplicate(true)
+	func forget_package(package_id: int, purge := false) -> void:
+		forgotten.append([package_id, purge])
+		applied.erase(str(package_id))
+	func sync_package(package_id: int, revision_hint := 0) -> Dictionary:
+		sync_calls.append([package_id, revision_hint])
+		if bool(sync_result.get("ok", false)):
+			applied[str(package_id)] = {
+				"revision": revision_hint,
+				"artifact_key": "synced",
+			}
+		return sync_result
+
+class StubRegistry extends WiredPackageRegistry:
+	var cleared: Array[String] = []
+	func clear_package(package_id: String) -> void:
+		cleared.append(package_id)
+
+class StubStaticWorld extends StaticWorldContainer:
+	var rebuilds := 0
+	func rebuild() -> void:
+		rebuilds += 1
+
+class StubPlayers extends PlayersManager:
+	var rebuilds := 0
+	var purged: Array[int] = []
+	func rebuild_live_components() -> int:
+		rebuilds += 1
+		return 0
+	func purge_package(package_id: int) -> void:
+		purged.append(package_id)
+
+class StubDynamicWorld extends DynamicWorldContainer:
+	var parked: Array[int] = []
+	var dropped: Array[int] = []
+	var purged: Array[int] = []
+	func park_package(package_id: int) -> int:
+		parked.append(package_id)
+		return 0
+	func drop_package(package_id: int) -> int:
+		dropped.append(package_id)
+		return 0
+	func purge_package(package_id: int) -> int:
+		purged.append(package_id)
+		return 0
+
+func _ready() -> void:
+	pass
+
+## Records what `_reconcile_client_packages` asks for, then runs the real removal.
+func _apply_package_removal(
+	package_id: int, purge: bool, request_snapshot := true
+) -> void:
+	removal_calls.append([package_id, purge, request_snapshot])
+	super._apply_package_removal(package_id, purge, request_snapshot)
+
+## Builds the stubs and the children the scene's `@onready` fields resolve.
+func make_stubs() -> void:
+	var net := StubNetwork.new()
+	net.name = "Net"
+	add_child(net)
+	var ui := Node.new()
+	ui.name = "UI"
+	add_child(ui)
+	var margin := Node.new()
+	margin.name = "Margin"
+	ui.add_child(margin)
+	var vbox := Node.new()
+	vbox.name = "VBox"
+	margin.add_child(vbox)
+	var status := Label.new()
+	status.name = "Status"
+	vbox.add_child(status)
+	var log_view := RichTextLabel.new()
+	log_view.name = "Log"
+	vbox.add_child(log_view)
+	_registry = StubRegistry.new()
+	_packages = StubPackages.new()
+	_static_world = StubStaticWorld.new()
+	_players = StubPlayers.new()
+	_dynamic_world = StubDynamicWorld.new()
+"""
+
+
 func _initialize() -> void:
 	_run.call_deferred()
 
@@ -89,6 +206,11 @@ func _run() -> void:
 	_test_parked_dynamic_records_are_saved_and_reseeded()
 	await _test_package_ops_are_serialized()
 	await _test_world_snapshot_waits_for_a_running_package_op()
+	await _test_reconcile_unloads_a_package_missing_from_the_server()
+	await _test_reconcile_syncs_a_changed_revision()
+	await _test_reconcile_schedules_a_retry_when_a_download_fails()
+	await _test_package_retry_is_single_flight()
+	_test_package_removal_announces_on_server_and_requests_on_client()
 	_free_owned()
 	_finish()
 
@@ -329,6 +451,272 @@ func _test_world_snapshot_waits_for_a_running_package_op() -> void:
 	probe.free()
 
 
+## The server map is authoritative: a package this peer applied but the server no
+## longer lists must be removed before the snapshot is applied, and the removal
+## must not request a snapshot of its own.
+func _test_reconcile_unloads_a_package_missing_from_the_server() -> void:
+	var probe: Variant = _make_entry_probe()
+	if probe == null:
+		return
+	var net: Variant = probe._net
+	var packages: Variant = probe._packages
+	net.mode = "client"
+	packages.applied = {
+		"43": {"revision": 1, "artifact_key": "k43"},
+		"44": {"revision": 2, "artifact_key": "k44"},
+	}
+	var remote := {"44": {"revision": 2, "artifact_key": "k44"}}
+
+	var ok: bool = await probe._reconcile_client_packages(remote)
+
+	_check(ok, "a reconcile without downloads must succeed")
+	_check(
+		probe.removal_calls == [[43, false, false]],
+		"the missing package must be removed without purge and snapshot, got %s"
+		% [probe.removal_calls],
+	)
+	_check(
+		not packages.applied_packages().has("43"),
+		"the unloaded package must leave the applied map, got %s"
+		% [packages.applied_packages()],
+	)
+	_check(
+		probe._registry.cleared == ["43"],
+		"the registry must forget the removed package, got %s"
+		% [probe._registry.cleared],
+	)
+	_check(
+		probe._dynamic_world.dropped == [43],
+		"a client must drop the removed package's entities, got %s"
+		% [probe._dynamic_world.dropped],
+	)
+	_check(
+		probe._players.rebuilds == 1 and probe._static_world.rebuilds == 1,
+		"the removal must rebuild players and static content exactly once",
+	)
+	_check(
+		int(net.snapshot_requests) == 0,
+		"a reconcile removal must not request a snapshot, got %d"
+		% net.snapshot_requests,
+	)
+	_check(net.removed.is_empty(), "a client removal must not announce a revision")
+	_free_entry_probe(probe)
+
+
+## A package the server lists at another revision or artifact key must be synced
+## before the snapshot is applied; an identical entry is skipped.
+func _test_reconcile_syncs_a_changed_revision() -> void:
+	var probe: Variant = _make_entry_probe()
+	if probe == null:
+		return
+	var net: Variant = probe._net
+	var packages: Variant = probe._packages
+	net.mode = "client"
+	packages.applied = {
+		"41": {"revision": 1, "artifact_key": "same"},
+		"42": {"revision": 2, "artifact_key": "old"},
+	}
+	var remote := {
+		"41": {"revision": 1, "artifact_key": "same"},
+		"42": {"revision": 2, "artifact_key": "new"},
+	}
+
+	var ok: bool = await probe._reconcile_client_packages(remote)
+
+	_check(ok, "a successful sync must make the reconcile return true")
+	_check(
+		packages.sync_calls == [[42, 2]],
+		"only the package with a changed artifact key may be synced, got %s"
+		% [packages.sync_calls],
+	)
+	_check(
+		str(packages.applied_packages().get("42", {}).get("artifact_key", ""))
+		== "synced",
+		"the applied map must report the synced artifact, got %s"
+		% [packages.applied_packages()],
+	)
+	_check(probe.removal_calls.is_empty(), "a matching package must not be unloaded")
+	_free_entry_probe(probe)
+
+
+## A failed download must make the reconcile return false and start exactly one
+## retry chain; the backoff is time-scaled so the real timer path still runs.
+func _test_reconcile_schedules_a_retry_when_a_download_fails() -> void:
+	var probe: Variant = _make_entry_probe()
+	if probe == null:
+		return
+	var net: Variant = probe._net
+	var packages: Variant = probe._packages
+	net.mode = "client"
+	packages.applied = {}
+	packages.sync_result = {"ok": false, "error": "boom"}
+	var previous_scale := Engine.time_scale
+	Engine.time_scale = 10000.0
+
+	var ok: bool = await probe._reconcile_client_packages(
+		{"42": {"revision": 3, "artifact_key": "k3"}}
+	)
+
+	_check(not ok, "a failed download must make the reconcile return false")
+	_check(
+		packages.sync_calls == [[42, 3]],
+		"the failed package must be attempted once, got %s"
+		% [packages.sync_calls],
+	)
+	_check(
+		probe._package_retry_in_flight,
+		"a failed download must start the retry chain",
+	)
+	_check(
+		probe._package_retry_attempts == 1,
+		"the first failure must count one attempt, got %d"
+		% probe._package_retry_attempts,
+	)
+	await process_frame
+	await process_frame
+	await process_frame
+	Engine.time_scale = previous_scale
+	_check(
+		int(net.snapshot_requests) == 1,
+		"the fired retry must request exactly one snapshot, got %d"
+		% net.snapshot_requests,
+	)
+	_check(
+		not probe._package_retry_in_flight,
+		"the fired retry must clear its single-flight flag",
+	)
+	_free_entry_probe(probe)
+
+
+## Two failures in a row must not stack retry chains: the second call returns at
+## the in-flight guard, so only one attempt is counted and one request is sent.
+func _test_package_retry_is_single_flight() -> void:
+	var probe: Variant = _make_entry_probe()
+	if probe == null:
+		return
+	var net: Variant = probe._net
+	net.mode = "client"
+	var previous_scale := Engine.time_scale
+	Engine.time_scale = 10000.0
+
+	probe._schedule_package_retry(42, "boom")
+	_check(
+		probe._package_retry_in_flight,
+		"the first call must start the retry chain",
+	)
+	_check(
+		probe._package_retry_attempts == 1,
+		"the first call must count one attempt, got %d"
+		% probe._package_retry_attempts,
+	)
+	_check(
+		int(net.snapshot_requests) == 0,
+		"the request happens only after the backoff",
+	)
+
+	probe._schedule_package_retry(42, "boom")
+	_check(
+		probe._package_retry_attempts == 1,
+		"a call while the chain is in flight must not count an attempt, got %d"
+		% probe._package_retry_attempts,
+	)
+	_check(
+		int(net.snapshot_requests) == 0,
+		"a call while the chain is in flight must not send a request, got %d"
+		% net.snapshot_requests,
+	)
+
+	await process_frame
+	await process_frame
+	await process_frame
+	Engine.time_scale = previous_scale
+	_check(
+		int(net.snapshot_requests) == 1,
+		"the two calls must produce exactly one snapshot request, got %d"
+		% net.snapshot_requests,
+	)
+	_check(
+		not probe._package_retry_in_flight,
+		"the fired retry must clear its single-flight flag",
+	)
+	_free_entry_probe(probe)
+
+
+## Server: the removal parks the entities, purges them when asked and announces
+## the dropped revision. Client: it drops local copies and asks for a snapshot,
+## never announcing a revision.
+func _test_package_removal_announces_on_server_and_requests_on_client() -> void:
+	var probe: Variant = _make_entry_probe()
+	if probe == null:
+		return
+	var net: Variant = probe._net
+	var packages: Variant = probe._packages
+	var dynamic_world: Variant = probe._dynamic_world
+	var players: Variant = probe._players
+
+	net.mode = "server"
+	probe._apply_package_removal(42, true)
+	_check(
+		net.removed == [42],
+		"the server must announce the removed revision, got %s" % [net.removed],
+	)
+	_check(
+		dynamic_world.parked == [42],
+		"the server must park the package's entities, got %s"
+		% [dynamic_world.parked],
+	)
+	_check(
+		dynamic_world.purged == [42],
+		"a purging removal must drop the parked records, got %s"
+		% [dynamic_world.purged],
+	)
+	_check(
+		players.purged == [42],
+		"a purging removal must drop the player component state, got %s"
+		% [players.purged],
+	)
+	_check(
+		probe._registry.cleared == ["42"],
+		"the registry must forget the removed package, got %s"
+		% [probe._registry.cleared],
+	)
+	_check(
+		packages.forgotten == [[42, true]],
+		"the package must be forgotten with purge=true, got %s"
+		% [packages.forgotten],
+	)
+	_check(
+		probe._static_world.rebuilds == 1 and players.rebuilds == 1,
+		"the removal must rebuild static content and live players once",
+	)
+	_check(
+		int(net.snapshot_requests) == 0,
+		"a server removal must not request a snapshot, got %d"
+		% net.snapshot_requests,
+	)
+
+	net.mode = "client"
+	probe._apply_package_removal(43, false)
+	_check(
+		net.removed == [42],
+		"a client removal must not announce a revision, got %s" % [net.removed],
+	)
+	_check(
+		dynamic_world.dropped == [43],
+		"a client must drop the removed package's entities, got %s"
+		% [dynamic_world.dropped],
+	)
+	_check(
+		int(net.snapshot_requests) == 1,
+		"a client removal must request a snapshot, got %d" % net.snapshot_requests,
+	)
+	_check(
+		packages.forgotten == [[42, true], [43, false]],
+		"the client must forget without purge, got %s" % [packages.forgotten],
+	)
+	_free_entry_probe(probe)
+
+
 # --- helpers --------------------------------------------------------------
 
 
@@ -344,6 +732,41 @@ func _make_package_op_probe() -> Node:
 	var probe := script.new() as Node
 	_check(probe != null, "the package-op probe must instantiate")
 	return probe
+
+
+## Compiles the entry-path probe at runtime (see `ENTRY_PROBE_SOURCE`), builds
+## its stubs and attaches it to the tree: `_schedule_package_retry` awaits a real
+## `get_tree().create_timer(...)`, and `get_tree()` cannot be overridden.
+func _make_entry_probe() -> Variant:
+	var script := GDScript.new()
+	script.source_code = ENTRY_PROBE_SOURCE
+	var err := script.reload()
+	_check(err == OK, "the entry probe must compile, err=%d" % err)
+	if err != OK:
+		return null
+	var probe: Variant = script.new()
+	_check(probe != null, "the entry probe must instantiate")
+	if probe == null:
+		return null
+	probe.make_stubs()
+	root.add_child(probe)
+	return probe
+
+
+## Frees the entry probe's stubs before the probe itself: they are not children,
+## so freeing the probe alone would leak them (and Godot reports the leak).
+func _free_entry_probe(probe: Variant) -> void:
+	for field: String in [
+		"_packages",
+		"_registry",
+		"_static_world",
+		"_players",
+		"_dynamic_world",
+	]:
+		var stub: Variant = probe.get(field)
+		if stub != null and is_instance_valid(stub):
+			stub.free()
+	probe.free()
 
 
 func _instantiate_main() -> Node:
