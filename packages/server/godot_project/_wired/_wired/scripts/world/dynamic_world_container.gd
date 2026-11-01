@@ -14,10 +14,22 @@ class_name DynamicWorldContainer
 ##
 ## Persisted record: `{entity_id, type_id, owner_player_id, state}`.
 ##
-## Restore path: `load_state`/`restore_pending` are server-only and only spawn
-## records whose type is registered. A record whose package has not been
-## applied yet stays pending, which lets `main_scene` call `restore_pending`
-## after every `package_applied` without knowing the package arrival order.
+## Restore path: `load_state`/`seed_pending`/`restore_pending` are server-only
+## and only spawn records whose type is registered. A record whose package has
+## not been applied yet stays parked, which lets `main_scene` call
+## `restore_pending` after every `package_applied` without knowing the package
+## arrival order.
+##
+## Package reload: `park_package` moves every entity of a package out of the
+## tree and keeps its record, so the previous revision's nodes never keep
+## running. `restore_pending` brings the records back on the new revision, and
+## `purge_package`/`purge_missing_packages` drop the records of a package that is
+## gone. `drop_package` is the client path: it frees the local copies without
+## keeping a record.
+##
+## Stamped snapshot: `apply_snapshot` rebuilds an entity whose package revision
+## or artifact key is older than the snapshot's, and prunes an entity whose
+## package is missing from the snapshot's package map.
 
 const SPAWNER_NAME := "Spawner"
 ## Set on an entity this peer recreated from a late-join snapshot instead of
@@ -39,6 +51,10 @@ var _spawner: MultiplayerSpawner = null
 var _entities: Dictionary = {}
 # entity_id -> true, so repeated restore_pending calls never duplicate records
 var _restored_ids: Dictionary = {}
+# Records of entities parked for a package reload, in the persisted shape plus
+# their `persistent` flag. Every parked entity is kept, so restoring resumes a
+# non-persistent one too; `save_state` persists only the persistent ones.
+var _parked: Array[Dictionary] = []
 # Next free id. Saved ids are reserved as soon as records are known, before any
 # fresh spawn can take one.
 var _next_entity_id: int = 1
@@ -143,17 +159,209 @@ func despawn_entity(entity_id: int) -> void:
 	node.queue_free()
 
 
-## Live entities in id order, one persisted record each. The transient spawn
-## data and the restore flag are deliberately dropped. Entities registered with
-## `persist: false` are part of the world but not of the save file.
+## Live entities in id order, one persisted record each, plus the parked ones
+## that must survive a reload. The transient spawn data and the restore flag are
+## deliberately dropped. Entities registered with `persist: false` are part of
+## the world but not of the save file, parked or live.
 func save_state() -> Array[Dictionary]:
-	return _state_records(true)
+	var records := _state_records(true)
+	var seen: Dictionary = {}
+	for record: Dictionary in records:
+		seen[int(record.get(WiredProtocol.KEY_ENTITY_ID, 0))] = true
+	for record: Dictionary in _parked:
+		if not bool(record.get("persistent", true)):
+			continue
+		var entity_id := int(record.get(WiredProtocol.KEY_ENTITY_ID, 0))
+		if entity_id <= 0 or seen.has(entity_id):
+			# Live wins: the same record is already represented by its node.
+			continue
+		seen[entity_id] = true
+		records.append(_saved_record(record))
+	records.sort_custom(_record_id_before)
+	return records
 
 
 ## Live entities for the late-join snapshot, including non-persistent ones:
 ## a late client must see the current world even when an entity is not saved.
+## Parked entities are excluded: they are not in the world right now.
 func snapshot_state() -> Array[Dictionary]:
 	return _state_records(false)
+
+
+## Server only. Replaces the saved-record list handed over by `state.json` with
+## parked records. Nothing spawns here: `restore_pending` retries them after
+## every applied package.
+func seed_pending(records: Array) -> void:
+	_parked.clear()
+	for record: Variant in records:
+		if typeof(record) != TYPE_DICTIONARY:
+			continue
+		_parked.append(_parked_record(record))
+	# Reserve first: a fresh entity spawned before the saved package arrives
+	# must not take an id that a pending record still owns.
+	_reserve_ids(_parked)
+
+
+## Copy of the records still waiting for their package, so a caller can log or
+## persist them without aliasing the container state.
+func pending_records() -> Array:
+	return _parked.duplicate(true)
+
+
+## Server only. Moves every live entity of a package out of the tree and keeps
+## its record, so the previous revision's nodes stop running while their world
+## state survives the reload.
+func park_package(package_id: int) -> int:
+	var parked := 0
+	for id: Variant in _entities.keys():
+		var entity: Variant = _entities[id]
+		if not is_instance_valid(entity):
+			_entities.erase(id)
+			continue
+		if _package_of(str(entity.type_id)) != package_id:
+			continue
+		_parked.append(
+			_parked_record(
+				{
+					WiredProtocol.KEY_ENTITY_ID: int(id),
+					WiredProtocol.KEY_TYPE_ID: str(entity.type_id),
+					WiredProtocol.KEY_OWNER_PLAYER_ID:
+					int(entity.owner_player_id),
+					WiredProtocol.KEY_STATE: entity._wired_save_state(),
+					"persistent": bool(entity.persistent),
+				}
+			)
+		)
+		_entities.erase(id)
+		# The entity is parked, not despawned: its saved record must be able to
+		# restore it, so the "already restored" guard is released.
+		_restored_ids.erase(
+			int(entity.get_meta(WiredProtocol.META_SOURCE_ENTITY_ID, 0))
+		)
+		_detach_and_free(entity)
+		parked += 1
+	print("WIRED_DYNAMIC_PARKED package=%d entities=%d" % [package_id, parked])
+	return parked
+
+
+## Client path. Frees this peer's copies of a package's entities without
+## keeping a record, and forgets the parked records of that package too.
+## Returns the number of live entities dropped.
+func drop_package(package_id: int) -> int:
+	var dropped := 0
+	for id: Variant in _entities.keys():
+		var entity: Variant = _entities[id]
+		if not is_instance_valid(entity):
+			_entities.erase(id)
+			continue
+		if _package_of(str(entity.type_id)) != package_id:
+			continue
+		_entities.erase(id)
+		_restored_ids.erase(
+			int(entity.get_meta(WiredProtocol.META_SOURCE_ENTITY_ID, 0))
+		)
+		_detach_and_free(entity)
+		dropped += 1
+	_drop_parked({package_id: true})
+	print("WIRED_DYNAMIC_DROPPED package=%d entities=%d" % [package_id, dropped])
+	return dropped
+
+
+## Server only. Restores every parked record whose package is registered again,
+## and keeps the records that still wait. Returns how many entities it spawned.
+func restore_pending() -> int:
+	if not _is_server() or _registry == null:
+		return 0
+	var restored := 0
+	var remaining: Array[Dictionary] = []
+	for record: Dictionary in _parked:
+		var spawned := _restore_records([record])
+		if spawned <= 0:
+			remaining.append(record)
+			continue
+		restored += spawned
+	_parked = remaining
+	print(
+		"WIRED_DYNAMIC_RESTORED restored=%d pending=%d"
+		% [restored, _parked.size()]
+	)
+	return restored
+
+
+## Server only. Drops every parked record of one package, whose revision will
+## never come back. Returns the number of records dropped.
+func purge_package(package_id: int) -> int:
+	var purged := _drop_parked({package_id: true})
+	print("WIRED_DYNAMIC_PURGED package=%d records=%d" % [package_id, purged])
+	return purged
+
+
+## Server only. Keeps the parked records whose package is still published;
+## everything else belongs to a package that no longer exists.
+func purge_missing_packages(package_ids: PackedStringArray) -> int:
+	var allowed: Dictionary = {}
+	for package_id: String in package_ids:
+		if package_id.is_valid_int():
+			allowed[package_id.to_int()] = true
+	var stale: Dictionary = {}
+	for record: Dictionary in _parked:
+		var package_id := _package_of(
+			str(record.get(WiredProtocol.KEY_TYPE_ID, ""))
+		)
+		if not allowed.has(package_id):
+			stale[package_id] = true
+	var purged := _drop_parked(stale)
+	print(
+		"WIRED_DYNAMIC_PURGED_MISSING packages=%d records=%d"
+		% [package_ids.size(), purged]
+	)
+	return purged
+
+
+## Removes the parked records whose package id is a key of `package_ids` and
+## returns how many went.
+func _drop_parked(package_ids: Dictionary) -> int:
+	var kept: Array[Dictionary] = []
+	for record: Dictionary in _parked:
+		var package_id := _package_of(
+			str(record.get(WiredProtocol.KEY_TYPE_ID, ""))
+		)
+		if package_ids.has(package_id):
+			continue
+		kept.append(record)
+	var dropped := _parked.size() - kept.size()
+	_parked = kept
+	return dropped
+
+
+func _record_id_before(left: Dictionary, right: Dictionary) -> bool:
+	return int(left.get(WiredProtocol.KEY_ENTITY_ID, 0)) < int(
+		right.get(WiredProtocol.KEY_ENTITY_ID, 0)
+	)
+
+
+## Numeric package id of a qualified type (`"<package_id>/<local_type>"`), or
+## -1 when the prefix is not numeric. Package ids are numeric on the wire.
+func _package_of(type_id: String) -> int:
+	var separator := type_id.find("/")
+	if separator <= 0:
+		return -1
+	var prefix := type_id.substr(0, separator)
+	if not prefix.is_valid_int():
+		return -1
+	return prefix.to_int()
+
+
+## Removes the node from the tree before freeing it, so `MultiplayerSpawner`
+## despawns it on every peer and the deterministic node name is immediately
+## reusable by the entity that replaces it.
+func _detach_and_free(entity: Node) -> void:
+	if not is_instance_valid(entity):
+		return
+	var parent := entity.get_parent()
+	if parent != null:
+		parent.remove_child(entity)
+	entity.queue_free()
 
 
 func _state_records(only_persistent: bool) -> Array[Dictionary]:
@@ -192,19 +400,11 @@ func _is_live_entity(entity: Variant) -> bool:
 
 ## Server only. Full restore of a saved world: every record is re-evaluated
 ## (live ids are still skipped, so the call stays idempotent). Compare with
-## `restore_pending`, which never resurrects an already restored record.
+## `restore_pending`, which only retries the parked records and never
+## resurrects an entity that was explicitly despawned.
 func load_state(records: Array) -> void:
 	_reserve_ids(records)
 	_restored_ids.clear()
-	_restore_records(records)
-
-
-## Server only. Incremental restore used after every `package_applied`: records
-## of packages that are not registered yet simply stay pending.
-func restore_pending(records: Array) -> void:
-	# Reserve first: a fresh entity spawned before the saved package arrives
-	# must not take an id that a pending record still owns.
-	_reserve_ids(records)
 	_restore_records(records)
 
 
@@ -222,50 +422,57 @@ func spawn_function(data: Dictionary) -> Node:
 	return entity
 
 
-## Client side. Recreates the entities that the spawner dropped because the
-## late client's registry was still empty when it replayed the spawns. The
-## record is applied through the normal restore path, and an entity that is
-## already tracked is skipped: applying a snapshot twice is idempotent.
+## Client side. Applies a world snapshot stamped with the package map it was
+## authored against. Recreates the entities that the spawner dropped because the
+## late client's registry was still empty when it replayed the spawns, rebuilds
+## an entity whose revision or artifact key is older than the snapshot's, and
+## prunes an entity whose package is missing from the map. An entity that is
+## already tracked and still current only adopts the fresh authoritative state.
 ##
 ## A recreated entity keeps the spawn record's exact name under the spawner's
 ## `spawn_path` (see the replication note in `PlayersManager`). The *root* was
 ## never announced by the spawner, so a later authoritative despawn cannot be
 ## matched by net id; `_entities` is pruned whenever the engine frees the node.
-func apply_snapshot(records: Array) -> void:
+func apply_snapshot(records: Array, packages: Dictionary = {}) -> void:
 	if _registry == null:
 		push_warning("WIRED_DYNAMIC_SNAPSHOT_SKIPPED reason=no_registry")
 		return
 	var applied := 0
 	var refreshed := 0
+	var replaced := 0
+	var pruned := 0
+	var seen: Dictionary = {}
 	for record: Variant in records:
 		if typeof(record) != TYPE_DICTIONARY:
 			continue
-		var source: Dictionary = record
+		var source := _parked_record(record)
 		var entity_id := int(source.get(WiredProtocol.KEY_ENTITY_ID, 0))
 		var type_id := str(source.get(WiredProtocol.KEY_TYPE_ID, ""))
 		if entity_id <= 0 or type_id.is_empty():
 			continue
+		# Seen before anything can fail: a record that is rejected here still
+		# owns its id, so the prune pass must not treat it as vanished.
+		seen[entity_id] = true
 		if _entities.has(entity_id):
-			# The snapshot is also the repair path after dropped synchronizer
-			# packets (a throttled background tab): an entity that already
-			# exists must adopt the fresh authoritative state.
-			var existing := _entities[entity_id] as WiredDynamicEntity
-			if existing != null and is_instance_valid(existing):
-				var state: Variant = source.get(WiredProtocol.KEY_STATE, {})
-				if typeof(state) == TYPE_DICTIONARY:
-					existing._wired_load_state(state)
+			var current: Variant = _entities[entity_id]
+			if is_instance_valid(current) and not current.is_queued_for_deletion():
+				# The snapshot is also the repair path after dropped
+				# synchronizer packets (a throttled background tab).
+				if not _stamp_stale(current, type_id, packages):
+					current._wired_load_state(
+						source.get(WiredProtocol.KEY_STATE, {})
+					)
 					refreshed += 1
-				continue
+					continue
+				# The entity is still running the previous package revision:
+				# its script and its state layout are stale, so rebuild it.
+				_detach_and_free(current)
+				replaced += 1
 			# A dead tracked instance must not block the repair below.
 			_entities.erase(entity_id)
-		var payload := {
-			WiredProtocol.KEY_ENTITY_ID: entity_id,
-			WiredProtocol.KEY_OWNER_PLAYER_ID:
-			int(source.get(WiredProtocol.KEY_OWNER_PLAYER_ID, 0)),
-			WiredProtocol.KEY_RESTORE: true,
-			WiredProtocol.KEY_STATE: source.get(WiredProtocol.KEY_STATE, {}),
-		}
-		var entity := _instantiate_entity(payload, type_id)
+		var entity := _instantiate_entity(
+			_restore_payload(source), type_id
+		)
 		if entity == null:
 			continue
 		_adopt_repaired_entity(entity)
@@ -275,9 +482,59 @@ func apply_snapshot(records: Array) -> void:
 		)
 		_entities[entity_id] = entity
 		applied += 1
+	# Prune the local entities the snapshot no longer names, but only when their
+	# package is missing from or differs from the snapshot's package map.
+	for entity_id: Variant in _entities.keys():
+		if seen.has(int(entity_id)):
+			continue
+		var entity: Variant = _entities[entity_id]
+		if not is_instance_valid(entity) or entity.is_queued_for_deletion():
+			_entities.erase(entity_id)
+			continue
+		if _prune_allowed(entity, packages):
+			_detach_and_free(entity)
+			_entities.erase(entity_id)
+			pruned += 1
 	print(
-		"WIRED_DYNAMIC_SNAPSHOT_APPLIED entities=%d refreshed=%d"
-		% [applied, refreshed]
+		"WIRED_DYNAMIC_SNAPSHOT_APPLIED entities=%d refreshed=%d replaced=%d pruned=%d"
+		% [applied, refreshed, replaced, pruned]
+	)
+
+
+## Whether an existing entity must be rebuilt from a snapshot record: its
+## package is missing from the map, or the map reports another revision or
+## artifact key. `type_id` is the record's type, which may differ from the
+## entity's own type after a package moved the entity.
+func _stamp_stale(entity: Node, type_id: String, packages: Dictionary) -> bool:
+	var stamp: Variant = packages.get(str(_package_of(type_id)))
+	if stamp == null:
+		return true
+	return _stamp_differs(entity, stamp)
+
+
+## Whether a local entity the snapshot does not name may be pruned: its package
+## is missing from the map, or the map reports another revision or artifact key.
+func _prune_allowed(entity: Node, packages: Dictionary) -> bool:
+	var package_id := str(
+		entity.get_meta(WiredProtocol.META_PACKAGE_ID, "")
+	)
+	var stamp: Variant = packages.get(package_id)
+	if stamp == null:
+		return true
+	return _stamp_differs(entity, stamp)
+
+
+## Whether the entity was built from another revision or artifact key than the
+## snapshot's stamp for its package.
+func _stamp_differs(entity: Node, stamp: Variant) -> bool:
+	if typeof(stamp) != TYPE_DICTIONARY:
+		return true
+	var values: Dictionary = stamp
+	return (
+		int(entity.get_meta(WiredProtocol.META_PACKAGE_REVISION, -1))
+		!= int(values.get("revision", -1))
+		or str(entity.get_meta(WiredProtocol.META_PACKAGE_ARTIFACT_KEY, ""))
+		!= str(values.get("artifact_key", ""))
 	)
 
 
@@ -360,6 +617,17 @@ func _instantiate_entity(data: Dictionary, type_override := "") -> WiredDynamicE
 	# never replace a live entity and drop its id, spawn record or spawner
 	# tracking.
 	entity.set_meta(WiredProtocol.META_REGISTERED, true)
+	# Stamp of the package revision the entity was built from. A snapshot with
+	# another revision or artifact key rebuilds it instead of reusing it.
+	entity.set_meta(WiredProtocol.META_PACKAGE_ID, package_id)
+	entity.set_meta(
+		WiredProtocol.META_PACKAGE_REVISION,
+		context.revision if context != null else 0
+	)
+	entity.set_meta(
+		WiredProtocol.META_PACKAGE_ARTIFACT_KEY,
+		context.artifact_key if context != null else ""
+	)
 	return entity
 
 
@@ -377,15 +645,19 @@ func _descriptor_persists(descriptor: Dictionary) -> bool:
 	return bool((options as Dictionary).get("persist", true))
 
 
-func _restore_records(records: Array) -> void:
+## Server only. Spawns every record whose type is registered and returns how
+## many entities it actually created. Records that are already represented stay
+## untouched, so callers may hand the same list in again.
+func _restore_records(records: Array) -> int:
 	if not _is_server():
-		return
+		return 0
 	if _registry == null:
-		return
+		return 0
+	var restored := 0
 	for record: Variant in records:
 		if typeof(record) != TYPE_DICTIONARY:
 			continue
-		var source: Dictionary = record
+		var source := _parked_record(record)
 		var source_id := int(source.get(WiredProtocol.KEY_ENTITY_ID, 0))
 		var type_id := str(source.get(WiredProtocol.KEY_TYPE_ID, ""))
 		if source_id <= 0 or type_id.is_empty():
@@ -396,13 +668,10 @@ func _restore_records(records: Array) -> void:
 		# one) means the record is restored; never spawn a duplicate.
 		if _restored_entity_id(source_id) > 0:
 			continue
-		# A record whose package has not been applied yet stays pending: the
+		# A record whose package has not been applied yet stays parked: the
 		# registry cannot instantiate its scene before the entry is registered.
 		if _registry.find_dynamic_entity(type_id).is_empty():
 			continue
-		var state: Variant = source.get(WiredProtocol.KEY_STATE, {})
-		if typeof(state) != TYPE_DICTIONARY:
-			state = {}
 		var entity_id := source_id
 		if _entities.has(entity_id):
 			# The id is occupied by a different entity (a fresh spawn that
@@ -417,7 +686,7 @@ func _restore_records(records: Array) -> void:
 			WiredProtocol.KEY_OWNER_PLAYER_ID:
 			int(source.get(WiredProtocol.KEY_OWNER_PLAYER_ID, 0)),
 			WiredProtocol.KEY_RESTORE: true,
-			WiredProtocol.KEY_STATE: state,
+			WiredProtocol.KEY_STATE: source.get(WiredProtocol.KEY_STATE, {}),
 		}
 		if entity_id > 0:
 			payload[WiredProtocol.KEY_ENTITY_ID] = entity_id
@@ -428,6 +697,52 @@ func _restore_records(records: Array) -> void:
 		# this node even when a collision forced a fresh live id.
 		entity.set_meta(WiredProtocol.META_SOURCE_ENTITY_ID, source_id)
 		_restored_ids[source_id] = true
+		restored += 1
+	return restored
+
+
+## The one persisted record shape: `{entity_id, type_id, owner_player_id,
+## state}` plus the `persistent` flag a parked record carries. Every caller
+## (`state.json`, a parked record, a world snapshot) is normalized through here,
+## so a stray key never reaches the spawn path.
+func _parked_record(record: Dictionary) -> Dictionary:
+	var state: Variant = record.get(WiredProtocol.KEY_STATE, {})
+	return {
+		WiredProtocol.KEY_ENTITY_ID: int(
+			record.get(WiredProtocol.KEY_ENTITY_ID, 0)
+		),
+		WiredProtocol.KEY_TYPE_ID: str(record.get(WiredProtocol.KEY_TYPE_ID, "")),
+		WiredProtocol.KEY_OWNER_PLAYER_ID: int(
+			record.get(WiredProtocol.KEY_OWNER_PLAYER_ID, 0)
+		),
+		WiredProtocol.KEY_STATE: (
+			(state as Dictionary).duplicate(true)
+			if typeof(state) == TYPE_DICTIONARY
+			else {}
+		),
+		"persistent": bool(record.get("persistent", true)),
+	}
+
+
+## Persisted form of a parked record: the `persistent` bookkeeping flag never
+## reaches `state.json`.
+func _saved_record(record: Dictionary) -> Dictionary:
+	var saved := _parked_record(record)
+	saved.erase("persistent")
+	return saved
+
+
+## Spawn payload of a snapshot record. The restore flag keeps the entity off the
+## fresh-spawn path, so a one-shot input is never replayed.
+func _restore_payload(record: Dictionary) -> Dictionary:
+	return {
+		WiredProtocol.KEY_ENTITY_ID: int(record.get(WiredProtocol.KEY_ENTITY_ID, 0)),
+		WiredProtocol.KEY_OWNER_PLAYER_ID: int(
+			record.get(WiredProtocol.KEY_OWNER_PLAYER_ID, 0)
+		),
+		WiredProtocol.KEY_RESTORE: true,
+		WiredProtocol.KEY_STATE: record.get(WiredProtocol.KEY_STATE, {}),
+	}
 
 
 ## Advances the allocator past every saved id, including records still waiting

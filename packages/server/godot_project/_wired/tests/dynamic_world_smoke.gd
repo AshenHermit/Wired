@@ -18,6 +18,12 @@ const PACKAGE_ID := "pkg.test"
 const CRATE_SCENE := "crate.tscn"
 const CRATE_TYPE := "pkg.test/crate"
 const OTHER_PACKAGE_ID := "pkg.other"
+## Runtime package ids are numeric on the wire. A stamp is derived from the
+## `<package_id>/<local_type>` prefix, so the reload/prune tests need a numeric
+## package instead of the fixture-only `pkg.test`.
+const STAMP_PACKAGE_ID := "42"
+const STAMP_PACKAGE_NUMBER := 42
+const STAMP_CRATE_TYPE := "42/box"
 
 var _failures: PackedStringArray = []
 var _checks := 0
@@ -45,6 +51,11 @@ func _run() -> void:
 	_test_snapshot_apply_is_idempotent()
 	_test_snapshot_updates_existing_entity_state()
 	_test_registry_roots_are_tagged_as_registered()
+	_test_park_keeps_identity_and_state()
+	_test_purge_drops_parked_records()
+	_test_snapshot_removes_entities_of_an_unloaded_package()
+	_test_snapshot_keeps_entities_created_after_the_snapshot()
+	_test_snapshot_replaces_a_stale_entity_by_id()
 	_free_owned()
 	_finish()
 
@@ -337,7 +348,8 @@ func _test_restore_pending_waits_for_the_registered_package() -> void:
 		},
 	]
 
-	world.restore_pending(records)
+	world.seed_pending(records)
+	world.restore_pending()
 	_check(
 		world._entities.has(43),
 		"a registered record must restore immediately",
@@ -346,7 +358,7 @@ func _test_restore_pending_waits_for_the_registered_package() -> void:
 		not world._entities.has(42),
 		"a record whose package is missing must stay pending",
 	)
-	world.restore_pending(records)
+	world.restore_pending()
 	_check(
 		_live_entities(world).size() == 1,
 		"restore_pending must not duplicate an already restored record, got %d"
@@ -354,7 +366,7 @@ func _test_restore_pending_waits_for_the_registered_package() -> void:
 	)
 
 	_register_other_package(registry)
-	world.restore_pending(records)
+	world.restore_pending()
 	_check(
 		world._entities.has(42),
 		"a pending record must restore once its package is registered",
@@ -366,7 +378,7 @@ func _test_restore_pending_waits_for_the_registered_package() -> void:
 	# A record that was already restored is never resurrected by later package
 	# applications, even after an explicit despawn.
 	world.despawn_entity(43)
-	world.restore_pending(records)
+	world.restore_pending()
 	_check(
 		not world._entities.has(43),
 		"an already restored record must not respawn after a despawn",
@@ -396,7 +408,8 @@ func _test_saved_ids_are_reserved_before_the_package_arrives() -> void:
 		},
 	]
 
-	world.restore_pending(records)
+	world.seed_pending(records)
+	world.restore_pending()
 	_check(
 		world._entities.is_empty(),
 		"the pending record must not spawn before its package is registered",
@@ -419,7 +432,7 @@ func _test_saved_ids_are_reserved_before_the_package_arrives() -> void:
 	)
 
 	_register_other_package(registry)
-	world.restore_pending(records)
+	world.restore_pending()
 	_check(
 		world._entities.has(1),
 		"the saved entity must restore after its package is registered",
@@ -467,7 +480,7 @@ func _test_restore_reassigns_a_colliding_id() -> void:
 	)
 
 	_register_other_package(registry)
-	world.restore_pending(
+	world.seed_pending(
 		[
 			{
 				"entity_id": 9,
@@ -477,6 +490,7 @@ func _test_restore_reassigns_a_colliding_id() -> void:
 			},
 		]
 	)
+	world.restore_pending()
 	_check(
 		world._entities.get(9) == occupied,
 		"the live entity must keep its id after the colliding restore",
@@ -539,11 +553,11 @@ func _test_non_server_authority_is_rejected() -> void:
 ## The server-authored late-join snapshot repairs entities the spawner dropped
 ## before the client applied its packages, and is idempotent on retry.
 func _test_snapshot_apply_is_idempotent() -> void:
-	var registry := _make_registry()
+	var registry := _make_stamp_registry()
 	var server := _make_world()
 	server.setup(registry, null)
 	var source := server.spawn_entity(
-		CRATE_TYPE, {"state": {"position": [21.0, 22.0]}}
+		STAMP_CRATE_TYPE, {"state": {"position": [21.0, 22.0]}}
 	)
 	_check(source != null, "the snapshot test needs a server entity")
 	if source == null:
@@ -551,8 +565,8 @@ func _test_snapshot_apply_is_idempotent() -> void:
 	var snapshot := server.snapshot_state()
 	var client := _make_world()
 	client.setup(registry, null)
-	client.apply_snapshot(snapshot)
-	client.apply_snapshot(snapshot)
+	client.apply_snapshot(snapshot, _stamp_map())
+	client.apply_snapshot(snapshot, _stamp_map())
 	_check(
 		_live_entities(client).size() == 1,
 		"applying a snapshot twice must not duplicate entities, got %d"
@@ -573,11 +587,11 @@ func _test_snapshot_apply_is_idempotent() -> void:
 ## after dropped synchronizer packets, so an already-tracked entity must adopt
 ## the fresh authoritative state instead of being skipped.
 func _test_snapshot_updates_existing_entity_state() -> void:
-	var registry := _make_registry()
+	var registry := _make_stamp_registry()
 	var server := _make_world()
 	server.setup(registry, null)
 	var source := server.spawn_entity(
-		CRATE_TYPE, {"state": {"position": [10.0, 20.0]}}
+		STAMP_CRATE_TYPE, {"state": {"position": [10.0, 20.0]}}
 	)
 	_check(source != null, "the snapshot refresh test needs a server entity")
 	if source == null:
@@ -585,7 +599,7 @@ func _test_snapshot_updates_existing_entity_state() -> void:
 	var snapshot := server.snapshot_state()
 	var client := _make_world()
 	client.setup(registry, null)
-	client.apply_snapshot(snapshot)
+	client.apply_snapshot(snapshot, _stamp_map())
 	var entity := client._entities.get(source.entity_id) as WiredDynamicEntity
 	_check(entity != null, "the first snapshot must create the entity")
 	if entity == null:
@@ -593,7 +607,7 @@ func _test_snapshot_updates_existing_entity_state() -> void:
 	var instance_id := entity.get_instance_id()
 	# The server moved the crate while the client was not processing packets.
 	snapshot[0]["state"]["position"] = [30.0, 40.0]
-	client.apply_snapshot(snapshot)
+	client.apply_snapshot(snapshot, _stamp_map())
 	var refreshed := client._entities.get(source.entity_id) as WiredDynamicEntity
 	_check(
 		refreshed != null and refreshed.get_instance_id() == instance_id,
@@ -625,6 +639,216 @@ func _test_registry_roots_are_tagged_as_registered() -> void:
 		)
 
 
+# --- task 8: park, restore, purge and stamped snapshots -------------------
+
+
+## A reload parks the previous revision's entities instead of losing them: the
+## id and the persisted state survive, the node leaves the tree, and
+## `restore_pending` brings it back on the new revision.
+func _test_park_keeps_identity_and_state() -> void:
+	var world := _make_world()
+	world.setup(_make_stamp_registry(), null)
+	var entity := world.spawn_entity(
+		STAMP_CRATE_TYPE,
+		{"state": {"position": [12.0, 34.0]}, "spawn_data": {"impulse": 480.0}}
+	)
+	_check(entity != null, "the park test needs a spawned entity")
+	if entity == null:
+		return
+	var id: int = entity.entity_id
+	var state_before := _state_of(entity)
+
+	_check(
+		world.park_package(STAMP_PACKAGE_NUMBER) == 1,
+		"park must take the entity out of the tree",
+	)
+	_check(world._entities.is_empty(), "parked entity leaves the index")
+	_check(
+		_live_entities(world).is_empty(),
+		"a parked entity must leave the tree, got %d"
+		% _live_entities(world).size(),
+	)
+	_check(
+		world.pending_records().size() == 1,
+		"park must keep one pending record, got %d"
+		% world.pending_records().size(),
+	)
+	_check(
+		world.save_state().size() == 1,
+		"a parked persistent entity must stay in state.json",
+	)
+
+	_check(world.restore_pending() == 1, "restore must bring the entity back")
+	_check(
+		world.pending_records().is_empty(),
+		"a restored record must leave the pending list",
+	)
+	var restored: Variant = world._entities.get(id)
+	_check(restored != null, "restore keeps the entity id")
+	if restored == null:
+		return
+	_check(
+		restored.get("impulse_count") == 0,
+		"restoring a parked entity must not replay the impulse, got %s"
+		% restored.get("impulse_count"),
+	)
+	_check(
+		_state_of(restored).get("position") == state_before.get("position"),
+		"restore keeps the persisted state, before=%s after=%s"
+		% [state_before.get("position"), _state_of(restored).get("position")],
+	)
+
+
+func _test_purge_drops_parked_records() -> void:
+	var world := _make_world()
+	world.setup(_make_stamp_registry(), null)
+	var entity := world.spawn_entity(
+		STAMP_CRATE_TYPE, {"state": {"position": [4.0, 5.0]}}
+	)
+	_check(entity != null, "the purge test needs a spawned entity")
+	if entity == null:
+		return
+	world.park_package(STAMP_PACKAGE_NUMBER)
+	_check(
+		world.purge_package(STAMP_PACKAGE_NUMBER) == 1,
+		"purge must drop the parked record of the package",
+	)
+	_check(
+		world.pending_records().is_empty(),
+		"a purged record must not be restored later, got %s"
+		% [world.pending_records()],
+	)
+	_check(
+		world.restore_pending() == 0,
+		"restore_pending must not resurrect a purged record",
+	)
+
+	# `purge_missing_packages` keeps the records whose package id is listed.
+	world.seed_pending(
+		[
+			{"entity_id": 11, "type_id": "42/box", "state": {}},
+			{"entity_id": 12, "type_id": "43/box", "state": {}},
+		]
+	)
+	_check(
+		world.purge_missing_packages(PackedStringArray(["42"])) == 1,
+		"purge_missing_packages must drop the record of an unloaded package",
+	)
+	_check(
+		world.pending_records().size() == 1
+		and world.pending_records()[0].get("entity_id") == 11,
+		"purge_missing_packages must keep the record of a loaded package, got %s"
+		% [world.pending_records()],
+	)
+
+
+## The server snapshot names the package map it was authored against. An entity
+## of a package missing from that map is gone from the client world, so the
+## snapshot prunes it.
+func _test_snapshot_removes_entities_of_an_unloaded_package() -> void:
+	var world := _make_world()
+	world.setup(_make_stamp_registry(), null)
+	var first := world.spawn_entity(
+		STAMP_CRATE_TYPE, {"state": {"position": [1.0, 2.0]}}
+	)
+	var second := world.spawn_entity(
+		STAMP_CRATE_TYPE, {"state": {"position": [3.0, 4.0]}}
+	)
+	_check(
+		first != null and second != null,
+		"the prune test needs two spawned entities",
+	)
+	if first == null or second == null:
+		return
+	var first_id: int = first.entity_id
+
+	# The snapshot names no entity and its map does not contain package 42.
+	world.apply_snapshot([], {"7": {"revision": 1, "artifact_key": "other"}})
+
+	_check(
+		not world._entities.has(first_id),
+		"entity of a package missing from the map is pruned",
+	)
+	_check(
+		world._entities.is_empty() and _live_entities(world).is_empty(),
+		"every entity of an unloaded package must be pruned, got %d live"
+		% _live_entities(world).size(),
+	)
+
+
+## A snapshot is a diff, not a reset: an entity created after the snapshot was
+## taken still carries a current stamp and must survive.
+func _test_snapshot_keeps_entities_created_after_the_snapshot() -> void:
+	var world := _make_world()
+	world.setup(_make_stamp_registry(), null)
+	var entity := world.spawn_entity(
+		STAMP_CRATE_TYPE, {"state": {"position": [7.0, 8.0]}}
+	)
+	_check(entity != null, "the keep test needs a spawned entity")
+	if entity == null:
+		return
+	var id: int = entity.entity_id
+
+	world.apply_snapshot([], _stamp_map())
+
+	_check(
+		world._entities.has(id),
+		"entity with a current stamp survives an empty snapshot",
+	)
+
+
+## A snapshot authored against another revision rebuilds the entity under the
+## same id, so its state comes from the new revision instead of the old node.
+func _test_snapshot_replaces_a_stale_entity_by_id() -> void:
+	var registry := _make_stamp_registry(1, "k1")
+	var world := _make_world()
+	world.setup(registry, null)
+	var entity := world.spawn_entity(
+		STAMP_CRATE_TYPE, {"state": {"position": [1.0, 2.0]}}
+	)
+	_check(entity != null, "the replace test needs a spawned entity")
+	if entity == null:
+		return
+	var id: int = entity.entity_id
+	var instance_id := entity.get_instance_id()
+	var record := {
+		"entity_id": id,
+		"type_id": STAMP_CRATE_TYPE,
+		"owner_player_id": 0,
+		"state": {"position": [5.0, 6.0]},
+	}
+
+	# Adding the package revision to the registry is what a reload does before
+	# the snapshot of the new revision is applied.
+	registry.register_context(
+		STAMP_PACKAGE_ID, _make_stamp_context(2, "k2")
+	)
+	world.apply_snapshot([record], _stamp_map(2, "k2"))
+
+	var rebuilt: Variant = world._entities.get(id)
+	_check(rebuilt != null, "a stale entity must be rebuilt under the same id")
+	if rebuilt == null:
+		return
+	_check(
+		rebuilt.get_instance_id() != instance_id,
+		"the stale node itself must be replaced, not mutated",
+	)
+	_check(
+		rebuilt.get_meta(WiredProtocol.META_PACKAGE_REVISION) == 2,
+		"entity is rebuilt on the new revision, got %s"
+		% rebuilt.get_meta(WiredProtocol.META_PACKAGE_REVISION),
+	)
+	_check(
+		rebuilt.get_meta(WiredProtocol.META_PACKAGE_ARTIFACT_KEY) == "k2",
+		"the rebuilt entity must carry the new artifact key",
+	)
+	_check(
+		_state_of(rebuilt).get("position") == [5.0, 6.0],
+		"the rebuilt entity must load the snapshot state, got %s"
+		% [_state_of(rebuilt).get("position")],
+	)
+
+
 # --- helpers --------------------------------------------------------------
 
 
@@ -647,6 +871,48 @@ func _register_other_package(registry: WiredPackageRegistry) -> void:
 	registration.package_id = OTHER_PACKAGE_ID
 	registration.add_dynamic_entity(CRATE_SCENE.get_basename(), CRATE_SCENE)
 	registry.add_registration(registration)
+
+
+## Package with a numeric id, like a real backend package. The stamp of a
+## dynamic entity is derived from its `<package_id>/<local_type>` prefix, so a
+## numeric id is required to exercise the reload and prune paths.
+func _make_stamp_registry(
+	revision := 0, artifact_key := ""
+) -> WiredPackageRegistry:
+	var registry := WiredPackageRegistry.new()
+	_registries.append(registry)
+	registry.register_context(
+		STAMP_PACKAGE_ID, _make_stamp_context(revision, artifact_key)
+	)
+	var registration := WiredPackageRegistration.new()
+	registration.package_id = STAMP_PACKAGE_ID
+	registration.add_dynamic_entity("box", CRATE_SCENE)
+	registry.add_registration(registration)
+	return registry
+
+
+func _make_stamp_context(
+	revision := 0, artifact_key := ""
+) -> WiredPackageContext:
+	var context := _make_context(STAMP_PACKAGE_ID)
+	context.revision = revision
+	context.artifact_key = artifact_key
+	return context
+
+
+## Package map as the server authors it into a world snapshot.
+func _stamp_map(revision := 0, artifact_key := "") -> Dictionary:
+	return {
+		STAMP_PACKAGE_ID: {"revision": revision, "artifact_key": artifact_key},
+	}
+
+
+## Persisted state of an entity, read through its package hook.
+func _state_of(entity: Variant) -> Dictionary:
+	var state: Variant = entity.call("_wired_save_state")
+	if typeof(state) != TYPE_DICTIONARY:
+		return {}
+	return state
 
 
 func _make_context(package_id: String) -> WiredPackageContext:
