@@ -134,6 +134,78 @@ describe("GodotEditor script readiness", () => {
     expect(document.querySelectorAll("#editor-canvas")).toHaveLength(1);
   });
 
+  it("restarts the editor once after an editor-mode exit", async () => {
+    const instances = installEngine();
+    const editor = new GodotEditorInstance();
+    const canvas = document.createElement("canvas");
+    document.body.appendChild(canvas);
+    editor.setCanvas(canvas);
+
+    try {
+      await editor.init();
+      editor.Execute(["--editor", "--path", "/home/web_user/room-7/wired"]);
+      expect(editor.OnEditorExit).toBeTypeOf("function");
+
+      await act(async () => {
+        editor.OnEditorExit?.(0);
+      });
+      // The restart waits 100 ms for the previous engine to tear down.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      });
+
+      expect(instances).toHaveLength(1);
+      expect(instances[0].init).toHaveBeenCalledTimes(2);
+      expect(instances[0].start).toHaveBeenCalledWith({
+        args: ["--editor", "--path", "/home/web_user/room-7/wired"],
+        persistentDrops: false,
+        canvas,
+      });
+      // One-shot: the exit handler is gone, so a second exit cannot start yet
+      // another engine.
+      expect(editor.OnEditorExit).toBeNull();
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      });
+      expect(instances[0].start).toHaveBeenCalledTimes(1);
+    } finally {
+      canvas.remove();
+    }
+  });
+
+  it("does not restart a game run and keeps the project manager persistent", async () => {
+    const instances = installEngine();
+    const editor = new GodotEditorInstance();
+    const canvas = document.createElement("canvas");
+    document.body.appendChild(canvas);
+    editor.setCanvas(canvas);
+
+    try {
+      editor.Execute([]);
+      expect(editor.OnEditorExit).toBeNull();
+
+      await editor.init();
+      editor.Execute(["--project-manager"]);
+      await act(async () => {
+        editor.OnEditorExit?.(0);
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      });
+
+      expect(instances).toHaveLength(1);
+      expect(instances[0].init).toHaveBeenCalledTimes(2);
+      expect(instances[0].start).toHaveBeenCalledWith({
+        args: ["--project-manager"],
+        persistentDrops: true,
+        canvas,
+      });
+    } finally {
+      canvas.remove();
+    }
+  });
+
   it("reuses the same canvas node on repeated onExit and setCanvas", () => {
     const host = document.createElement("div");
     const canvas = document.createElement("canvas");

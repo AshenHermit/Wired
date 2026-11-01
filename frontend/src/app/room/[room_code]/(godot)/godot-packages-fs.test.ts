@@ -124,6 +124,47 @@ describe("PackageFileSystem", () => {
     expect([...collected[0].contents]).toEqual([116, 101, 115, 116]);
   });
 
+  it("decodes binary payloads and wrapped base64 without a JS string", async () => {
+    // 0x00 0xff 0x80 0x0a are not valid UTF-8 text, and the plugin may wrap a
+    // long payload. Both must survive decoding byte for byte.
+    const bytes = [0x00, 0xff, 0x80, 0x0a, 0x7f];
+    const encoded = btoa(String.fromCharCode(...bytes));
+    const wrapped = `${encoded.slice(0, 4)}\n${encoded.slice(4)}`;
+    const { files } = makeWorkspace({
+      collect: () => ({
+        files: [
+          {
+            filepath: "assets/icon.png",
+            size: bytes.length,
+            sha256: "b".repeat(64),
+            contents_base64: wrapped,
+          },
+        ],
+      }),
+    });
+
+    const collected = await files.collectFiles(3);
+
+    expect([...collected[0].contents]).toEqual(bytes);
+  });
+
+  it("rejects a malformed base64 payload as GodotFsError", async () => {
+    const { files } = makeWorkspace({
+      collect: () => ({
+        files: [
+          {
+            filepath: "main.gd",
+            size: 4,
+            sha256: "a".repeat(64),
+            contents_base64: "not base64!*",
+          },
+        ],
+      }),
+    });
+
+    await expect(files.collectFiles(3)).rejects.toBeInstanceOf(GodotFsError);
+  });
+
   it("writes staging then swaps", async () => {
     const { files, tree, order } = makeWorkspace({
       replace: () => ({ written: ["main.gd", "scenes/a.tscn"], deleted: ["old.gd"] }),

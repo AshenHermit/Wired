@@ -617,7 +617,7 @@ export function useRoomPackages(
         await refresh();
         return created;
       }),
-    [guarded, refresh, roomId, setAction],
+    [filesRef, guarded, refresh, roomId, setAction],
   );
 
   const beginAction = React.useCallback(
@@ -693,7 +693,7 @@ export function useRoomPackages(
           endAction(packageId);
         }
       }),
-    [beginAction, endAction, guarded, refresh, setAction],
+    [beginAction, endAction, filesRef, guarded, refresh, setAction],
   );
 
   const removePackage = React.useCallback(
@@ -738,7 +738,7 @@ export function useRoomPackages(
           endAction(packageId);
         }
       }),
-    [beginAction, endAction, guarded, refresh, setAction],
+    [beginAction, endAction, filesRef, guarded, refresh, setAction],
   );
 
   const adoptPackage = React.useCallback(
@@ -766,7 +766,7 @@ export function useRoomPackages(
           endAction(packageId);
         }
       }),
-    [beginAction, endAction, guarded, refresh, setAction],
+    [beginAction, endAction, filesRef, guarded, refresh, setAction],
   );
 
   const emitPackage = React.useCallback(
@@ -823,7 +823,7 @@ export function useRoomPackages(
           endAction(packageId);
         }
       }),
-    [beginAction, endAction, guarded, refresh, setAction],
+    [beginAction, endAction, filesRef, guarded, refresh, setAction],
   );
 
   return {

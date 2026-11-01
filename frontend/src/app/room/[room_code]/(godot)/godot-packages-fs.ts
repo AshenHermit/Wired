@@ -122,13 +122,60 @@ function assertStagingPath(stagingPath: string, packageId: number): string {
   return stagingPath;
 }
 
-function decodeBase64(contentsBase64: string): Uint8Array {
-  const binary = atob(contentsBase64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
+const BASE64_ALPHABET =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+const BASE64_LOOKUP = (() => {
+  const table = new Uint8Array(128);
+  table.fill(255);
+  for (let index = 0; index < BASE64_ALPHABET.length; index += 1) {
+    table[BASE64_ALPHABET.charCodeAt(index)] = index;
   }
-  return bytes;
+  return table;
+})();
+
+/**
+ * Decodes the plugin's base64 payload directly into a byte buffer.
+ *
+ * Package files are binary (`import` caches, scenes, PNGs), so routing them
+ * through `atob` — a JavaScript string with one code unit per byte — is both
+ * wasteful and easy to get wrong for non-UTF-8 contents. The buffer path writes
+ * every sextet into a preallocated `Uint8Array`; platforms that expose the
+ * staged `Uint8Array.fromBase64` use it directly.
+ */
+function decodeBase64(contentsBase64: string): Uint8Array {
+  const fromBase64 = (
+    Uint8Array as unknown as {
+      fromBase64?: (value: string) => Uint8Array;
+    }
+  ).fromBase64;
+  if (typeof fromBase64 === "function") {
+    return fromBase64(contentsBase64);
+  }
+
+  const clean = contentsBase64.replace(/[\s=]/g, "");
+  const length = clean.length;
+  const output = new Uint8Array(Math.floor((length * 3) / 4));
+  let buffer = 0;
+  let bits = 0;
+  let offset = 0;
+  for (let index = 0; index < length; index += 1) {
+    const code = clean.charCodeAt(index);
+    const value = code < BASE64_LOOKUP.length ? BASE64_LOOKUP[code] : 255;
+    if (value === 255) {
+      throw new GodotFsError(
+        "Редактор вернул некорректный base64-файл пакета",
+      );
+    }
+    buffer = (buffer << 6) | value;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      output[offset] = (buffer >> bits) & 0xff;
+      offset += 1;
+    }
+  }
+  return offset === output.length ? output : output.subarray(0, offset);
 }
 
 /**

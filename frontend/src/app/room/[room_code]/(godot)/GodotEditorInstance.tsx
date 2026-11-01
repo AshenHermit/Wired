@@ -182,49 +182,38 @@ export class GodotEditorInstance {
   }
 
   Execute(args: string[]) {
-    const is_editor =
-      args.filter(function (v) {
-        return v === "--editor" || v === "-e";
-      }).length !== 0;
-    const is_project_manager =
-      args.filter(function (v) {
-        return v === "--project-manager";
-      }).length !== 0;
+    const is_editor = args.some(
+      (value) => value === "--editor" || value === "-e",
+    );
+    const is_project_manager = args.includes("--project-manager");
     const is_game = !is_editor && !is_project_manager;
     if (this.video_driver) {
       args.push("--rendering-driver", this.video_driver);
     }
-    if (!is_game) {
-      this.OnEditorExit = () => {
-        setTimeout(() => {
-          this.editor.init().then(() => {
-            this.OnEditorExit = function () {};
-            this.editor.start({
-              args: args,
-              persistentDrops: is_project_manager,
-              canvas: this.canvas,
-            });
-          });
-        }, 100);
-        this.OnEditorExit = null;
-      };
+    if (is_game) {
+      // A game run does not restart the engine when it exits.
+      this.OnEditorExit = null;
+      return;
     }
+
+    // The editor (and the project manager) restart themselves in the same
+    // mode after the engine exits. The callback is one-shot: it clears itself
+    // before scheduling, so one exit starts exactly one new session.
+    this.OnEditorExit = () => {
+      this.OnEditorExit = null;
+      void this.restart(args, is_project_manager);
+    };
   }
-  async clearPersistence() {
-    function deleteDB(path: string) {
-      return new Promise(function (resolve, reject) {
-        const req = indexedDB.deleteDatabase(path);
-        req.onsuccess = function () {
-          resolve(void 0);
-        };
-        req.onerror = function (err) {
-          reject(err);
-        };
-        req.onblocked = function (err) {
-          reject(err);
-        };
-      });
-    }
-    return await deleteDB(this.rootPath);
+
+  private async restart(args: string[], persistentDrops: boolean) {
+    // Give the engine a moment to finish tearing the previous session down
+    // before intialising a new instance in the persistent FS.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await this.editor.init();
+    await this.editor.start({
+      args,
+      persistentDrops,
+      canvas: this.canvas,
+    });
   }
 }

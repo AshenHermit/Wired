@@ -94,6 +94,7 @@ async function reachReady(view: ReturnType<typeof render>) {
 describe("GameTab bridge", () => {
   beforeEach(() => {
     vi.mocked(createGameConnection).mockReset();
+    vi.mocked(createGameConnection).mockResolvedValue(connection);
     vi.mocked(getGameRoomStatus).mockReset();
     vi.mocked(getRoomPackages).mockReset();
     vi.mocked(getRoomPackages).mockResolvedValue({
@@ -232,6 +233,50 @@ describe("GameTab bridge", () => {
         await vi.advanceTimersByTimeAsync(1_000);
       });
       expect(view.container.querySelector("iframe")).not.toBe(iframe);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up after three automatic reconnects", async () => {
+    vi.useFakeTimers();
+    try {
+      const view = render(<GameTab room={room} />);
+      let iframe = await reachReady(view);
+
+      for (let autoRetry = 1; autoRetry <= 3; autoRetry += 1) {
+        send(iframe, {
+          source: "wired-game",
+          type: "wired:game-status",
+          payload: { stage: "disconnected", detail: "" },
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(view.container.textContent).toContain(
+          `Автоматическая попытка ${autoRetry} из 3`,
+        );
+
+        // The backoff reloads the frame, but it never rejoins.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2 ** (autoRetry - 1) * 1_000);
+        });
+        const reloaded = view.container.querySelector("iframe");
+        expect(reloaded).not.toBeNull();
+        iframe = reloaded as HTMLIFrameElement;
+      }
+
+      send(iframe, {
+        source: "wired-game",
+        type: "wired:game-status",
+        payload: { stage: "disconnected", detail: "" },
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(view.container.textContent).toContain("Игра недоступна");
+      expect(view.container.textContent).toContain("Соединение потеряно");
     } finally {
       vi.useRealTimers();
     }
