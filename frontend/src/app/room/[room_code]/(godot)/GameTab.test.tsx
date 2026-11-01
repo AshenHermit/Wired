@@ -140,6 +140,7 @@ describe("GameTab bridge", () => {
           payload: expect.objectContaining({
             ticket: "one-time-ticket",
             apiBase: `${window.location.origin}/api`,
+            apiToken: expect.any(String),
             packages: [{ packageId: 20, revision: 2 }],
           }),
         }),

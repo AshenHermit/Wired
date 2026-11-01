@@ -20,7 +20,7 @@ import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
 import path from 'path';
 import request from 'supertest';
-import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
+import { RuntimeAuthGuard } from './guards/runtime-auth.guard';
 import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
 import { Room } from 'src/database/entities/room.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
@@ -422,7 +422,7 @@ describe('ScriptingPackagesController runtime endpoint authorization', () => {
         { provide: getRepositoryToken(ScriptingPackage), useValue: packages },
       ],
     })
-      .overrideGuard(JwtAuthGuard)
+      .overrideGuard(RuntimeAuthGuard)
       .useValue({
         canActivate: (context: {
           switchToHttp: () => {

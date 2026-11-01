@@ -305,6 +305,9 @@ func _run_server(cfg: Dictionary) -> void:
 		_fail("WIRED_GAME_TICKET_SECRET is not set")
 		get_tree().quit(2)
 		return
+	# The backend injects a room-scoped token; package routes reject requests
+	# without it.
+	_packages.set_api_token(OS.get_environment("WIRED_RUNTIME_API_TOKEN"))
 	_server_port = int(cfg.port)
 	print(
 		"WIRED_SERVER_STARTING room=%s port=%d bind=%s"
@@ -502,6 +505,9 @@ func _run_client(cfg: Dictionary) -> void:
 		if not _packages.set_api_base(api_base):
 			_fail("Invalid API base received from the Wired host")
 			return
+		# The browser is logged in, so package requests carry the user's access
+		# token. Without it the runtime routes answer 401.
+		_packages.set_api_token(str(bridge_config.get("apiToken", "")))
 		cfg["packages"] = bridge_config.get("packages", [])
 	if str(cfg.url).is_empty():
 		_fail("No game endpoint: pass --url or open the Game tab")

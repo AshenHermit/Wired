@@ -9,7 +9,7 @@ import { ScriptingPackage } from 'src/database/entities/scripting-package.entity
 import { RoomMembershipGuard } from './room-membership.guard';
 
 type RequestFixture = {
-  user?: { id: number } | null;
+  user?: { id: number; runtimeService?: boolean } | null;
   query?: Record<string, unknown>;
   params?: Record<string, unknown>;
 };
@@ -51,7 +51,7 @@ describe('RoomMembershipGuard', () => {
   });
 
   const contextFor = (
-    user: { id: number } | null,
+    user: { id: number; runtimeService?: boolean } | null,
     roomId: unknown = '7',
     packageId: unknown = '5',
   ) =>
@@ -73,6 +73,23 @@ describe('RoomMembershipGuard', () => {
 
   it('allows a room contributor', async () => {
     await expect(guard.canActivate(contextFor({ id: 43 }))).resolves.toBe(true);
+  });
+
+  it('allows the room runtime without a membership row', async () => {
+    await expect(
+      guard.canActivate(contextFor({ id: 0, runtimeService: true })),
+    ).resolves.toBe(true);
+    expect(packages.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 5 } }),
+    );
+  });
+
+  it('rejects the runtime when the package belongs to another room', async () => {
+    packages.findOne.mockResolvedValueOnce({ id: pkg.id, room: { id: 8 } });
+
+    await expect(
+      guard.canActivate(contextFor({ id: 0, runtimeService: true })),
+    ).rejects.toThrow(ForbiddenException);
   });
 
   it('rejects an authenticated non-member', async () => {

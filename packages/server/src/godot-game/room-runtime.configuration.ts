@@ -2,6 +2,7 @@ import { AppConfigService } from 'src/config/config.service';
 import { resolve, join } from 'node:path';
 import { RoomRuntimeError } from './room-runtime.errors';
 import { safeRoomName } from './room-runtime.names';
+import { createRuntimeServiceToken } from './runtime-service-token';
 import { GodotRuntimeConfig, RuntimeSpawnOptions } from './room-runtime.types';
 
 const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -138,7 +139,7 @@ export class RoomRuntimeConfiguration {
         config.apiUrl,
       ],
       cwd: projectPath,
-      env: this.buildRuntimeEnv(config.ticketSecret),
+      env: this.buildRuntimeEnv(config.ticketSecret, roomId),
     };
   }
 
@@ -162,7 +163,10 @@ export class RoomRuntimeConfiguration {
     return `ws://${host}:${port}`;
   }
 
-  private buildRuntimeEnv(ticketSecret: string): NodeJS.ProcessEnv {
+  private buildRuntimeEnv(
+    ticketSecret: string,
+    roomId: string,
+  ): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {};
     for (const name of RUNTIME_ENV_ALLOWLIST) {
       const value = process.env[name];
@@ -171,6 +175,12 @@ export class RoomRuntimeConfiguration {
       }
     }
     env.WIRED_GAME_TICKET_SECRET = ticketSecret;
+    // Authenticates the runtime on the room-scoped package routes. It is
+    // derived from the ticket secret and never leaves the server host.
+    env.WIRED_RUNTIME_API_TOKEN = createRuntimeServiceToken(
+      ticketSecret,
+      roomId,
+    );
     return env;
   }
 }

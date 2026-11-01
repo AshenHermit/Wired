@@ -157,6 +157,17 @@
 						typeof payload.apiBase === 'string'
 							? sameOriginApiBase(payload.apiBase)
 							: '';
+					// Access token of the logged-in user. The package routes are
+					// authenticated, so the engine must send it as a bearer
+					// header. Anything that does not look like a token is
+					// dropped instead of reaching the engine.
+					var apiToken =
+						typeof payload.apiToken === 'string'
+							? payload.apiToken.trim()
+							: '';
+					if (apiToken.length > 4096 || /\s/.test(apiToken)) {
+						apiToken = '';
+					}
 
 					if (!/^wss?:\/\/\S+$/.test(endpoint)) {
 						return false;
@@ -191,6 +202,7 @@
 						ticket: ticket,
 						room: room,
 						apiBase: apiBase,
+						apiToken: apiToken,
 						packages: packages
 					};
 					post('wired:game-configured', { room: room });

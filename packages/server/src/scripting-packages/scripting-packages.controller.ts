@@ -21,7 +21,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { createReadStream } from 'fs';
 import { once } from 'events';
 import { Response } from 'express';
@@ -42,6 +42,7 @@ import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 import { MAX_PACKAGE_FILE_SIZE } from './package-manifest';
 import { ArtifactBuildRateLimiter } from './artifact-build.rate-limiter';
 import { RoomMembershipGuard } from './guards/room-membership.guard';
+import { RuntimeAuthGuard } from './guards/runtime-auth.guard';
 
 @ApiTags('scripting-packages')
 @Controller('scripting-packages')
@@ -200,11 +201,13 @@ export class ScriptingPackagesController {
   // gzipping this JSON. Godot's Web HTTPRequest receives an already-decoded
   // body but still sees `Content-Encoding: gzip` and fails to decompress it.
   @Header('Cache-Control', 'no-store, no-transform')
-  // The membership guard is listed above the auth decorator on purpose:
-  // decorators apply bottom-up, so JwtAuthGuard is registered (and therefore
-  // runs) first and `req.user` is populated before the membership lookup.
+  // The membership guard is listed above the auth guard on purpose: decorators
+  // apply bottom-up, so RuntimeAuthGuard is registered (and therefore runs)
+  // first and `req.user` is populated before the membership lookup. The runtime
+  // authenticates with a room-scoped service token, users with their JWT.
   @UseGuards(RoomMembershipGuard)
-  @UseAuthGuard()
+  @UseGuards(RuntimeAuthGuard)
+  @ApiBearerAuth()
   @Get(':id/revisions/:revision/runtime-manifest')
   async runtimeManifest(
     @Param('id', ParseIntPipe) id: number,
@@ -222,7 +225,8 @@ export class ScriptingPackagesController {
     schema: { type: 'string', format: 'binary' },
   })
   @UseGuards(RoomMembershipGuard)
-  @UseAuthGuard()
+  @UseGuards(RuntimeAuthGuard)
+  @ApiBearerAuth()
   @Get(':id/revisions/:revision/runtime-files/*path')
   async runtimeFile(
     @Param('id', ParseIntPipe) id: number,

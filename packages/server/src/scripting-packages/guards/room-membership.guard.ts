@@ -10,6 +10,8 @@ import { Repository } from 'typeorm';
 import { Room } from 'src/database/entities/room.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
+import { readPositiveInt } from './request-ids';
+import { isRuntimeServiceUser } from './runtime-service-user';
 
 type RoomMemberSubject = {
   author?: { id: number } | null;
@@ -26,16 +28,6 @@ export function isRoomMember(
   return (room.contributors ?? []).some(
     (contributor) => contributor.id === userId,
   );
-}
-
-/** Route/query ids arrive as raw strings: guards run before ParseIntPipe. */
-function readId(value: unknown): number | null {
-  if (typeof value === 'number') {
-    return Number.isInteger(value) && value > 0 ? value : null;
-  }
-  if (typeof value !== 'string' || value.trim() === '') return null;
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 /**
@@ -68,8 +60,8 @@ export class RoomMembershipGuard implements CanActivate {
       throw new UnauthorizedException('authentication_required');
     }
 
-    const roomId = readId(request.query?.room);
-    const packageId = readId(request.params?.id);
+    const roomId = readPositiveInt(request.query?.room);
+    const packageId = readPositiveInt(request.params?.id);
     if (roomId === null || packageId === null) {
       throw new ForbiddenException('room_access_denied');
     }
@@ -78,7 +70,9 @@ export class RoomMembershipGuard implements CanActivate {
       where: { id: roomId },
       relations: ['author', 'contributors'],
     });
-    if (!room || !isRoomMember(room, user.id)) {
+    // The room's own runtime is not a user, so it has no membership row. It is
+    // still confined to its room: the package binding below applies to it too.
+    if (!room || (!isRuntimeServiceUser(user) && !isRoomMember(room, user.id))) {
       throw new ForbiddenException('room_access_denied');
     }
 

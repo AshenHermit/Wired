@@ -9,6 +9,7 @@ import {
 } from "@/api/services/godot-game";
 import { Spinner } from "@/components/ui/spinner";
 import { API_PREFIX } from "@/utils/variables";
+import { readAccessToken } from "@/utils/auth-cookie";
 import {
   type GameStatusStage,
   isGameMessage,
@@ -376,6 +377,7 @@ export function GameTab({ room }: { room: Room }) {
           // The Web build cannot guess the backend: it is proxied under the
           // same prefix that serves the Game tab.
           apiBase: `${window.location.origin}${API_PREFIX}`,
+          apiToken: readAccessToken() ?? "",
           packages,
         });
       } catch (error) {

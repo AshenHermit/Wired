@@ -52,6 +52,10 @@ enum ApplyLock { ACQUIRED, WAITED, TIMEOUT }
 var base_url := DEFAULT_API_URL
 ## Room code the loader works for. Safe as a single path segment.
 var room := UNASSIGNED_ROOM
+## Credential sent as `Authorization: Bearer` on package requests. The server
+## runtime receives a room-scoped service token from the backend; the web client
+## receives the logged-in user's access token from the host bridge.
+var api_token := ""
 ## Test seam: when set, replaces the HTTP transport. It receives the relative
 ## request path and must return the same shape as `_request`.
 var request_override: Callable = Callable()
@@ -95,6 +99,12 @@ func configure(url: String, room_id: String = "") -> void:
 
 ## Sets the room without touching the API URL. Ignored when the code is empty.
 ## Applied state belongs to one room, so a real change starts from scratch.
+## Sets the credential used by every package request. An empty value leaves
+## requests unauthenticated, which only works for routes that do not require auth.
+func set_api_token(token: String) -> void:
+	api_token = token.strip_edges()
+
+
 func set_room(room_id: String) -> void:
 	var sanitized := _sanitize_room(room_id)
 	if sanitized.is_empty() or sanitized == room:
@@ -672,7 +682,10 @@ func _request(path: String) -> Dictionary:
 	# HTTPRequest builds its client only after entering the tree.
 	if is_inside_tree():
 		await get_tree().process_frame
-	var error := http.request(base_url + path)
+	var headers := PackedStringArray()
+	if not api_token.is_empty():
+		headers.append("Authorization: Bearer %s" % api_token)
+	var error := http.request(base_url + path, headers)
 	if error != OK:
 		http.queue_free()
 		return {"ok": false, "status": 0, "error": error_string(error), "body": PackedByteArray()}

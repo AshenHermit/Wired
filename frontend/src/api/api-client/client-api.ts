@@ -1,6 +1,7 @@
 import axios from "axios";
 import { ApiClient } from "./api-client";
 import { BACKEND_URL } from "@/utils/variables";
+import { readAccessToken } from "@/utils/auth-cookie";
 
 function createAxiosClient() {
   const axiosClient = axios.create({
@@ -8,9 +9,9 @@ function createAxiosClient() {
   });
   axiosClient.interceptors.request.use((config) => {
     if (typeof window !== "undefined") {
-      const match = document.cookie.match(/(?:^|; )access_token=([^;]*)/);
-      if (match) {
-        config.headers.Authorization = `Bearer ${match[1]}`;
+      const token = readAccessToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
       }
     }
     return config;
