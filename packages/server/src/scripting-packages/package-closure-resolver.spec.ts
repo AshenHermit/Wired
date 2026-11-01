@@ -432,6 +432,91 @@ describe('PackageClosureResolver', () => {
     });
   });
 
+  describe('pinned dependencies', () => {
+    it('keeps the artifact key stable when a dependency publishes later', async () => {
+      definePackage(5, 'Heroes', 7);
+      definePackage(6, 'Library', null);
+      await writePublished(
+        6,
+        9,
+        { 'lib.gd': 'lib-v9' },
+        new Date('2026-10-29T00:00:00.000Z'),
+      );
+      await writePublished(
+        5,
+        3,
+        { 'main.gd': 'preload("res://packages/6/lib.gd")' },
+        new Date('2026-10-30T00:00:00.000Z'),
+      );
+      await storage.writePinnedDependencies(5, 3, new Map([[6, 9]]));
+
+      const first = await resolver.resolve(5, 3, 7);
+      await writePublished(
+        6,
+        10,
+        { 'lib.gd': 'lib-v10' },
+        new Date('2026-11-01T00:00:00.000Z'),
+      );
+      const second = await resolver.resolve(5, 3, 7);
+
+      expect(first.revisionByPackage.get(6)).toBe(9);
+      expect(second.revisionByPackage.get(6)).toBe(9);
+      expect(second.artifactKeys.get(5)).toBe(first.artifactKeys.get(5));
+      expect(second.artifactKeys.get(6)).toBe(first.artifactKeys.get(6));
+    });
+
+    it('follows a pin through a transitive dependency', async () => {
+      definePackage(5, 'Heroes', 7);
+      definePackage(6, 'Library', null);
+      definePackage(7, 'Base', null);
+      await writePublished(7, 1, { 'base.gd': 'base-v1' });
+      await writePublished(6, 9, {
+        'lib.gd': 'preload("res://packages/7/base.gd")',
+      });
+      await writePublished(5, 3, {
+        'main.gd': 'preload("res://packages/6/lib.gd")',
+      });
+      await storage.writePinnedDependencies(6, 9, new Map([[7, 1]]));
+      await storage.writePinnedDependencies(5, 3, new Map([[6, 9]]));
+
+      await writePublished(7, 2, { 'base.gd': 'base-v2' });
+      const resolved = await resolver.resolve(5, 3, 7);
+
+      expect(resolved.revisionByPackage.get(7)).toBe(1);
+    });
+
+    it('falls back to the latest published revision without a pin', async () => {
+      definePackage(5, 'Heroes', 7);
+      definePackage(6, 'Library', null);
+      await writePublished(6, 9, { 'lib.gd': 'lib-v9' });
+      await writePublished(5, 3, {
+        'main.gd': 'preload("res://packages/6/lib.gd")',
+      });
+      await writePublished(6, 10, { 'lib.gd': 'lib-v10' });
+
+      const resolved = await resolver.resolve(5, 3, 7);
+
+      expect(resolved.revisionByPackage.get(6)).toBe(10);
+    });
+
+    it('rejects a pinned revision that is no longer published', async () => {
+      definePackage(5, 'Heroes', 7);
+      definePackage(6, 'Library', null);
+      await writePublished(6, 9, { 'lib.gd': 'lib-v9' });
+      await writePublished(5, 3, {
+        'main.gd': 'preload("res://packages/6/lib.gd")',
+      });
+      revisions.find(
+        (row) => row.packageId === 6 && row.revision === 9,
+      )!.status = 'discarded';
+      await storage.writePinnedDependencies(5, 3, new Map([[6, 9]]));
+
+      await expect(resolver.resolve(5, 3, 7)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+  });
+
   describe('computeArtifactKeys', () => {
     it('gives the same key for the same closure regardless of iteration order', () => {
       const revisionsA = new Map([

@@ -476,7 +476,7 @@ describe('PackageDeliveryService', () => {
   });
 
   describe('artifact identity and cache', () => {
-    it('rebuilds a dependent artifact when a dependency publishes', async () => {
+    it('rebuilds a dependent artifact when an unpinned dependency publishes', async () => {
       definePackage(5, 'Heroes', 7);
       definePackage(6, 'Library', null);
       await writePublished(6, 9, { 'lib.gd': 'lib-v9' });
@@ -530,6 +530,28 @@ describe('PackageDeliveryService', () => {
         'main.gd',
       );
       expect(resolved.path).toBe(path.join(secondDir, 'main.gd'));
+    });
+
+    it('keeps one (package, revision) artifact when a pinned dependency publishes', async () => {
+      definePackage(5, 'Heroes', 7);
+      definePackage(6, 'Library', null);
+      await writePublished(6, 9, { 'lib.gd': 'lib-v9' });
+      await writePublished(5, 3, {
+        'main.gd': 'const Lib = preload("res://packages/6/lib.gd")',
+      });
+      await storage.writePinnedDependencies(5, 3, new Map([[6, 9]]));
+
+      const first = await service.getRuntimeManifest(5, 3, 7);
+
+      await writePublished(6, 10, { 'lib.gd': 'lib-v10' });
+      const second = await service.getRuntimeManifest(5, 3, 7);
+
+      expect(second.artifactKey).toBe(first.artifactKey);
+      expect(second.dependencies[0]).toMatchObject({
+        packageId: 6,
+        revision: 9,
+      });
+      expect(await artifactDirs(5, 3, 7)).toHaveLength(1);
     });
 
     it('shares one build between concurrent requests', async () => {

@@ -225,10 +225,13 @@ export class PackageClosureResolver {
 
   /**
    * Recursively resolves every cross-package reference starting from the root
-   * revision, pinning each dependency to its latest published revision. The
-   * whole closure must be valid (same-or-global room, published, referenced
-   * files present, no cycles) or the build fails with a 4xx before any bytes
-   * are written.
+   * revision. A dependency is pinned to the revision recorded when the
+   * revision that references it was published; revisions published before
+   * pins existed fall back to their latest published revision.
+   *
+   * The whole closure must be valid (same-or-global room, published,
+   * referenced files present, no cycles) or the build fails with a 4xx before
+   * any bytes are written.
    */
   async resolve(
     packageId: number,
@@ -261,6 +264,13 @@ export class PackageClosureResolver {
       nameByPackage.set(id, loaded.name);
       publishedAtByPackage.set(id, loaded.publishedAt);
       filesByPackage.set(id, loaded.files);
+      // Dependencies recorded when *this* revision was published. A pinned
+      // closure keeps `(packageId, revision)` deterministic; an older revision
+      // without pins falls back to the latest published dependency below.
+      const pinned = await this.storage.readPinnedDependencies(
+        id,
+        loaded.revision,
+      );
 
       const fileSet = new Set(loaded.files.map((file) => file.filepath));
       const bytes = new Map<string, Buffer>();
@@ -310,7 +320,10 @@ export class PackageClosureResolver {
           }
 
           if (!revisionByPackage.has(ref.packageId)) {
-            await resolvePackage(ref.packageId, null);
+            await resolvePackage(
+              ref.packageId,
+              pinned?.get(ref.packageId) ?? null,
+            );
           }
 
           const dependencyFiles = filesByPackage.get(ref.packageId)!;

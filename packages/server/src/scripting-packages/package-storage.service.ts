@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PackageFileEntry } from '@wired-io/shared';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'fs';
 import {
   mkdir,
@@ -22,6 +23,8 @@ import { resolvePackagePath } from './package-path';
 
 const DRAFTS_DIR = 'drafts';
 const REVISIONS_DIR = 'revisions';
+/** Dependency pins recorded next to (not inside) each published revision. */
+const PINS_DIR = 'pins';
 
 export type SavedDraftFile = {
   size: number;
@@ -104,6 +107,88 @@ export class PackageStorageService {
 
   publishedRevisionExists(packageId: number, revision: number): boolean {
     return existsSync(this.publishedRevisionDir(packageId, revision));
+  }
+
+  /**
+   * Records the revisions every direct dependency was pinned to when this
+   * revision was published.
+   *
+   * Published revisions are immutable, so the closure resolved for them must
+   * be immutable too: without this, the artifact key of one `(packageId,
+   * revision)` pair would change every time a dependency publishes. The pins
+   * live next to the revision (not inside it) so the published file set stays
+   * exactly the declared manifest. Revisions published before pins existed
+   * have no pin file and fall back to "latest published".
+   */
+  async writePinnedDependencies(
+    packageId: number,
+    revision: number,
+    pins: ReadonlyMap<number, number>,
+  ): Promise<void> {
+    const target = this.pinnedDependenciesPath(packageId, revision);
+    await mkdir(path.dirname(target), { recursive: true });
+    const body = JSON.stringify({
+      dependencies: [...pins.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([dependencyId, dependencyRevision]) => ({
+          packageId: dependencyId,
+          revision: dependencyRevision,
+        })),
+    });
+    const staging = target + '.' + process.pid + '-' + randomBytes(4).toString('hex') + '.tmp';
+    try {
+      await writeFile(staging, body, 'utf8');
+      await rename(staging, target);
+    } catch (error) {
+      await rm(staging, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /**
+   * Reads the dependency pins recorded for a published revision. Returns
+   * `null` when no usable pin file exists, so callers fall back to the latest
+   * published revision.
+   */
+  async readPinnedDependencies(
+    packageId: number,
+    revision: number,
+  ): Promise<Map<number, number> | null> {
+    let body: unknown;
+    try {
+      body = JSON.parse(
+        await readFile(this.pinnedDependenciesPath(packageId, revision), 'utf8'),
+      );
+    } catch {
+      return null;
+    }
+    const dependencies = (body as { dependencies?: unknown }).dependencies;
+    if (!Array.isArray(dependencies)) {
+      return null;
+    }
+    const pins = new Map<number, number>();
+    for (const entry of dependencies as Array<{
+      packageId?: unknown;
+      revision?: unknown;
+    }>) {
+      if (
+        typeof entry?.packageId === 'number' &&
+        Number.isInteger(entry.packageId) &&
+        typeof entry?.revision === 'number' &&
+        Number.isInteger(entry.revision)
+      ) {
+        pins.set(entry.packageId, entry.revision);
+      }
+    }
+    return pins;
+  }
+
+  private pinnedDependenciesPath(packageId: number, revision: number): string {
+    return path.join(
+      this.packageRootDir(packageId),
+      PINS_DIR,
+      revision + '.json',
+    );
   }
 
   /**

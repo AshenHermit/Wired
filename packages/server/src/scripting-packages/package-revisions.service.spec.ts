@@ -52,6 +52,7 @@ describe('PackageRevisionsService', () => {
     discardDraft: jest.Mock;
     readPublishedFile: jest.Mock;
     resolvePublishedFile: jest.Mock;
+    writePinnedDependencies: jest.Mock;
   };
   let service: PackageRevisionsService;
   let dispatcher: { revisionPublished: jest.Mock };
@@ -83,6 +84,7 @@ describe('PackageRevisionsService', () => {
         path: '/tmp/a.txt',
         size: 1,
       })),
+      writePinnedDependencies: jest.fn(async () => undefined),
     };
     service = new PackageRevisionsService(
       repository as never,
@@ -239,6 +241,55 @@ describe('PackageRevisionsService', () => {
       expect(published.status).toBe('published');
       expect(published.publishedAt).toEqual(expect.any(String));
       expect(dispatcher.revisionPublished).toHaveBeenCalledWith(7, 3);
+    });
+
+    it('records the dependency revisions resolved at publish time', async () => {
+      const row = draftRow(3, [
+        file('main.gd', 'preload("res://packages/6/lib.gd")'),
+      ]);
+      repository.findOne.mockImplementation(
+        async (opts: {
+          where: { package: { id: number }; revision?: number; status?: string };
+        }) => {
+          if (opts.where.package.id === 7) {
+            return row;
+          }
+          if (
+            opts.where.package.id === 6 &&
+            opts.where.status === 'published'
+          ) {
+            return { revision: 9 };
+          }
+          return null;
+        },
+      );
+      storage.readPublishedFile.mockResolvedValue(
+        Buffer.from('preload("res://packages/6/lib.gd")'),
+      );
+
+      await service.publish(7, 3);
+
+      expect(storage.writePinnedDependencies).toHaveBeenCalledWith(
+        7,
+        3,
+        new Map([[6, 9]]),
+      );
+    });
+
+    it('keeps the publication even when the pins cannot be recorded', async () => {
+      repository.findOne.mockResolvedValue(
+        draftRow(3, [file('main.gd', 'preload("res://packages/6/lib.gd")')]),
+      );
+      storage.readPublishedFile.mockResolvedValue(
+        Buffer.from('preload("res://packages/6/lib.gd")'),
+      );
+      storage.writePinnedDependencies.mockRejectedValue(
+        new Error('disk full'),
+      );
+
+      await expect(service.publish(7, 3)).resolves.toMatchObject({
+        status: 'published',
+      });
     });
 
     it('returns the fixed revision even when runtime dispatch fails', async () => {

@@ -21,6 +21,11 @@ import {
   PackageStorageService,
 } from './package-storage.service';
 import { validatePackageRevisionFiles } from './package-manifest';
+import {
+  collectPackageReferences,
+  decodePackageText,
+  isTextPackageFile,
+} from './package-runtime-references';
 import { ScriptingPackagesService } from './scripting-packages.service';
 import {
   PACKAGE_REVISION_DISPATCHER,
@@ -167,8 +172,73 @@ export class PackageRevisionsService {
       this.publishing.delete(packageId);
     }
 
+    await this.recordPinnedDependencies(packageId, revision, row.files);
     await this.dispatchPublished(packageId, revision);
     return toRevision(row, packageId);
+  }
+
+  /**
+   * Records the dependency revisions this revision references right now.
+   *
+   * A published revision is immutable, so the closure built from it must be
+   * immutable too. Resolving dependencies against "latest published" at build
+   * time made the same `(packageId, revision)` produce a different artifact
+   * key whenever a library published. Pinning at publish time keeps the key
+   * stable and still lets a client re-dispatch on a new library revision (the
+   * dependents of the library are refreshed explicitly).
+   *
+   * The bytes are already committed at this point, so a failure here must not
+   * turn a successful publication into an error: the resolver falls back to
+   * "latest published" for a revision without pins.
+   */
+  private async recordPinnedDependencies(
+    packageId: number,
+    revision: number,
+    files: PackageFileEntry[],
+  ): Promise<void> {
+    try {
+      const referenced = new Set<number>();
+      for (const entry of files) {
+        if (!isTextPackageFile(entry.filepath)) {
+          continue;
+        }
+        const data = await this.storage.readPublishedFile(
+          packageId,
+          revision,
+          entry.filepath,
+        );
+        let text: string;
+        try {
+          text = decodePackageText(entry.filepath, data);
+        } catch {
+          // An undecodable file is reported by the artifact build instead.
+          continue;
+        }
+        for (const ref of collectPackageReferences(text)) {
+          if (ref.packageId !== packageId) {
+            referenced.add(ref.packageId);
+          }
+        }
+      }
+
+      const pins = new Map<number, number>();
+      for (const dependencyId of [...referenced].sort((a, b) => a - b)) {
+        const dependency = await this.revisionsRepository.findOne({
+          where: { package: { id: dependencyId }, status: 'published' },
+          order: { revision: 'DESC' },
+        });
+        if (dependency) {
+          pins.set(dependencyId, dependency.revision);
+        }
+      }
+      await this.storage.writePinnedDependencies(packageId, revision, pins);
+    } catch (error) {
+      this.logger.warn(
+        `Package ${packageId} revision ${revision} was published but its dependency pins were not recorded: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /**
