@@ -420,6 +420,17 @@ func load_state(records: Array) -> void:
 ## spawn record, then returns the node without adding it: the spawner owns
 ## parenting, and the entity's `_ready()` applies the spawn exactly once.
 func spawn_function(data: Dictionary) -> Node:
+	var entity_id := int(data.get(WiredProtocol.KEY_ENTITY_ID, 0))
+	if entity_id > 0 and _entities.has(entity_id):
+		# A package reload respawns the entity under the same id, and the spawner
+		# delivers that packet while the peer may still hold the previous copy.
+		# `MultiplayerSpawner` requires a Node from this function, so replace the
+		# tracked copy instead of rejecting the spawn: returning null would drop
+		# the entity and abort the rest of the replication packet.
+		var previous = _entities[entity_id]
+		_entities.erase(entity_id)
+		if is_instance_valid(previous):
+			_detach_and_free(previous)
 	var entity := _instantiate_entity(data)
 	if entity == null:
 		return null

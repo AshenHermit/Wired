@@ -48,6 +48,7 @@ func _run() -> void:
 	_test_setup_uses_the_passed_spawner_without_duplicating_it()
 	_test_spawn_entity_instantiates_and_tracks_the_entity()
 	_test_spawn_entity_rejects_unknown_types()
+	_test_spawn_function_replaces_an_entity_with_the_same_id()
 	_test_client_freeze_disables_bodies()
 	_test_save_state_omits_spawn_data()
 	_test_despawn_and_restore_do_not_replay_the_impulse()
@@ -185,6 +186,63 @@ func _test_spawn_entity_rejects_unknown_types() -> void:
 		_live_entities(world).is_empty(),
 		"a rejected spawn must not add any entity, got %d"
 		% _live_entities(world).size(),
+	)
+
+
+## Emit parks an entity and respawns it under the same id. The authoritative
+## spawn packet can reach a peer that still tracks the old instance, and
+## MultiplayerSpawner requires the spawn function to return a Node.
+func _test_spawn_function_replaces_an_entity_with_the_same_id() -> void:
+	var world := _make_world()
+	world.setup(_make_registry(), null)
+
+	var original := world.spawn_entity(
+		CRATE_TYPE,
+		{"state": {"position": [16.0, 32.0]}},
+	)
+	_check(original != null, "the duplicate-spawn test needs an original entity")
+	if original == null:
+		return
+	var entity_id: int = original.entity_id
+
+	var replaced := world.spawn_function(
+		{
+			"entity_id": entity_id,
+			"type_id": CRATE_TYPE,
+			"owner_player_id": 0,
+			"state": {"position": [80.0, 96.0]},
+			"restore": true,
+		}
+	)
+
+	_check(
+		replaced != null,
+		"spawn_function must return a Node even when the id is already tracked",
+	)
+	if replaced == null:
+		return
+	var dynamic := replaced as WiredDynamicEntity
+	_check(dynamic != null, "the replacement must be a WiredDynamicEntity")
+	if dynamic == null:
+		return
+	_check(replaced != original, "the tracked instance must be replaced")
+	_check(
+		dynamic.entity_id == entity_id,
+		"the replacement must keep the authoritative entity id, got %d"
+		% dynamic.entity_id,
+	)
+	_check(
+		world._entities.get(entity_id) == replaced,
+		"the entity index must point at the replacement",
+	)
+	_check(
+		not is_instance_valid(original) or original.is_queued_for_deletion(),
+		"the previous instance must be detached from the spawner",
+	)
+	_check(
+		world._entities.size() == 1,
+		"only the replacement may stay tracked, got %d"
+		% world._entities.size(),
 	)
 
 
