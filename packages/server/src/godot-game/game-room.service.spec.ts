@@ -86,7 +86,6 @@ describe('GameRoomService', () => {
   let rooms: { findOne: jest.Mock };
   let runtime: {
     getConnection: jest.Mock;
-    refreshConnection: jest.Mock;
     stopRoom: jest.Mock;
     getRuntime: jest.Mock;
   };
@@ -97,7 +96,6 @@ describe('GameRoomService', () => {
     rooms = { findOne: jest.fn() };
     runtime = {
       getConnection: jest.fn(),
-      refreshConnection: jest.fn(),
       stopRoom: jest.fn(),
       getRuntime: jest.fn(),
     };
@@ -113,7 +111,6 @@ describe('GameRoomService', () => {
     );
     rooms.findOne.mockResolvedValue(room());
     runtime.getConnection.mockResolvedValue(connection());
-    runtime.refreshConnection.mockReturnValue(connection());
   };
 
   beforeEach(() => {
@@ -241,9 +238,6 @@ describe('GameRoomService', () => {
     const result = await service.connect(user(1), 42);
 
     expect(runtime.getConnection).toHaveBeenCalledTimes(1);
-    // A second mint would discard the first ticket and can stop the runtime
-    // through the handshake window, so the wait must not re-mint.
-    expect(runtime.refreshConnection).not.toHaveBeenCalled();
     expect(runtime.stopRoom).not.toHaveBeenCalled();
     expect(result.ticket).toBe('ticket-value');
     expect(result.ticketExpiresAt).toBe(1_800_000_000);
@@ -261,7 +255,6 @@ describe('GameRoomService', () => {
     await rejection;
 
     expect(runtime.getConnection).toHaveBeenCalledTimes(1);
-    expect(runtime.refreshConnection).not.toHaveBeenCalled();
   });
 
   it('does not wait for clients', async () => {

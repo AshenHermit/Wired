@@ -59,30 +59,6 @@ export class RoomRuntimeService implements OnModuleDestroy {
     };
   }
 
-  /**
-   * Mints a fresh ticket for an already running room. Used after a readiness
-   * wait, which can consume most of the original ticket's TTL. The handshake
-   * lease is renewed through `reserveConnection`, and a room that is no longer
-   * playable fails with the same explicit lifecycle error as `getConnection`.
-   */
-  refreshConnection(roomId: string): RoomConnection {
-    const session = this.registry.get(roomId);
-    if (!session || !session.isActive()) {
-      throw new RoomRuntimeError(
-        'room_not_running',
-        `Room ${roomId} has no running runtime`,
-        roomId,
-      );
-    }
-    const ticketTtlSec = session.reserveConnection();
-    const ticket = this.tickets.mint(roomId, ticketTtlSec);
-    return {
-      ...session.info(),
-      ticket: ticket.ticket,
-      ticketExpiresAt: ticket.expiresAt,
-    };
-  }
-
   /** Current runtime status; never starts a process. */
   getRuntime(roomId: string): RoomRuntimeInfo | null {
     return this.registry.get(roomId)?.info() ?? null;

@@ -22,7 +22,6 @@ const STATUS_BY_ERROR: Record<RoomRuntimeErrorCode, HttpStatus> = {
   invalid_room: HttpStatus.BAD_REQUEST,
   config: HttpStatus.SERVICE_UNAVAILABLE,
   ticket_secret_missing: HttpStatus.SERVICE_UNAVAILABLE,
-  room_starting: HttpStatus.CONFLICT,
   room_stopping: HttpStatus.CONFLICT,
   room_not_running: HttpStatus.CONFLICT,
   handshake_window_expired: HttpStatus.CONFLICT,
@@ -37,7 +36,6 @@ const MESSAGE_BY_ERROR: Record<RoomRuntimeErrorCode, string> = {
   invalid_room: 'Invalid room identifier',
   config: 'The Godot runtime is not configured on this server',
   ticket_secret_missing: 'Game tickets are not configured on this server',
-  room_starting: 'The room runtime is starting; retry shortly',
   room_stopping: 'The room runtime is stopping; retry shortly',
   room_not_running: 'The room runtime is not running',
   handshake_window_expired:

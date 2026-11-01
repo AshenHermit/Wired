@@ -1,7 +1,6 @@
 export type RoomRuntimeErrorCode =
   | 'config'
   | 'room_not_running'
-  | 'room_starting'
   | 'room_stopping'
   | 'start_failed'
   | 'ticket_secret_missing'
