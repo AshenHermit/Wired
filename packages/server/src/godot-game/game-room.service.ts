@@ -7,7 +7,11 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { GameRoomConnection, GameRoomRuntimeStatus, RoomPackagesStatus } from '@wired-io/shared';
+import {
+  GameRoomConnection,
+  GameRoomRuntimeStatus,
+  RoomPackagesStatus,
+} from '@wired-io/shared';
 import { Room } from 'src/database/entities/room.entity';
 import { User } from 'src/database/entities/user.entity';
 import { RoomsService } from 'src/rooms/rooms.service';
