@@ -68,6 +68,30 @@ static func is_editor_metadata(rel_path: String) -> bool:
 	return false
 
 
+## Package-relative path for an editor path under [method package_dir] or for a
+## package-relative path. Returns an empty string for an empty path, an absolute
+## filesystem path, the package root itself, or a path that escapes the package.
+static func package_relative_path(package_id: int, raw_path: String) -> String:
+	if not is_valid_id(package_id):
+		return ""
+	var path := raw_path.trim_suffix("/")
+	if path.is_empty() or path.begins_with("/") or path.contains("\\"):
+		return ""
+	var prefix := package_dir(package_id) + "/"
+	if path.contains("://"):
+		# Any scheme (`res://`, or `user://` for the smoke test root) must name
+		# the live package directory, otherwise the path is out of scope.
+		if not path.begins_with(prefix):
+			return ""
+		path = path.substr(prefix.length())
+	elif path.contains(":"):
+		# Absolute filesystem paths (`C:/...`).
+		return ""
+	if not is_valid_relative_path(path):
+		return ""
+	return path
+
+
 ## Undoes a swap that was interrupted between the two renames.
 ## Returns an empty string on success, or a message when the rename fails.
 static func restore_previous_if_needed(package_id: int) -> String:
@@ -261,6 +285,51 @@ static func op_delete(package_id: int) -> Dictionary:
 		if error != OK:
 			return {"error": "не удалось удалить %s: %s" % [path, error_string(error)]}
 	return {}
+
+
+## Deletes selected files or directories inside the live package. Every path is
+## either an editor path under [method package_dir] or package-relative. Missing
+## paths are ignored. Editor metadata next to a selected file is left alone;
+## metadata inside a selected directory is removed with that directory.
+static func op_delete_files(package_id: int, paths: Array) -> Dictionary:
+	var invalid := _invalid_id(package_id)
+	if not invalid.is_empty():
+		return {"error": invalid}
+	if paths.is_empty():
+		return {"error": "не выбран ни один файл пакета"}
+	var restore_error := restore_previous_if_needed(package_id)
+	if not restore_error.is_empty():
+		return {"error": restore_error}
+
+	var root := package_dir(package_id)
+	# Validate every path before touching the tree so a bad entry cannot leave a
+	# half-applied selection behind.
+	var rel_paths: Array[String] = []
+	for raw_path: Variant in paths:
+		if not raw_path is String:
+			return {"error": "некорректный путь: %s" % str(raw_path)}
+		var raw := str(raw_path)
+		if raw.trim_suffix("/") == root:
+			return {
+				"error": "нельзя удалить корень пакета %d: используйте операцию delete" % package_id,
+			}
+		var rel_path := package_relative_path(package_id, raw)
+		if rel_path.is_empty():
+			return {"error": "путь вне пакета %d: %s" % [package_id, raw]}
+		rel_paths.append(rel_path)
+
+	var deleted: Array[String] = []
+	for rel_path: String in rel_paths:
+		var abs_path := root.path_join(rel_path)
+		if not DirAccess.dir_exists_absolute(abs_path) and not FileAccess.file_exists(abs_path):
+			continue
+		var error := _remove_tree(abs_path)
+		if error != OK:
+			return {"error": "не удалось удалить %s: %s" % [abs_path, error_string(error)]}
+		var editor_path := root.path_join(rel_path)
+		if not deleted.has(editor_path):
+			deleted.append(editor_path)
+	return {"deleted": deleted}
 
 
 # --- helpers --------------------------------------------------------------
