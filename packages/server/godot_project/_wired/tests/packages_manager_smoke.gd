@@ -58,6 +58,9 @@ func _run() -> void:
 	_test_room_normalization()
 	_manager = PackagesManager.new()
 	_manager.configure("http://127.0.0.1:1", ROOM)
+	# Apply-order diagnostics are off in a runtime build; this suite asserts the
+	# order, so it opts in explicitly.
+	_manager.trace_sync_order = true
 	_manager.request_override = _transport
 	_manager.package_applied.connect(_on_package_applied)
 	_manager.package_failed.connect(_on_package_failed)
@@ -69,6 +72,7 @@ func _run() -> void:
 	await _test_revision_rotation()
 	await _test_failure_atomicity()
 	await _test_missing_manifest()
+	await _test_stale_lock_is_reclaimed()
 	await _test_restart_pruning()
 	await _test_concurrent_shared_dependency()
 	await _test_concurrent_revisions()
@@ -562,6 +566,11 @@ func _test_missing_manifest() -> void:
 	var missing: Dictionary = await _manager.sync_package(999, 1)
 	_check(not bool(missing.get("ok", false)), "a missing runtime manifest must fail")
 	_check(
+		_manager._applying.is_empty(),
+		"a failed apply must release the per-package lock, got %s"
+		% [_manager._applying],
+	)
+	_check(
 		str(missing.get("error", "")).contains("runtime_manifest_missing"),
 		"a 404 runtime manifest must be reported as runtime_manifest_missing"
 	)
@@ -569,6 +578,40 @@ func _test_missing_manifest() -> void:
 		_failed.size() == 1 and int(_failed[0].get("package_id", 0)) == 999,
 		"a failed sync must emit package_failed"
 	)
+
+
+## A coroutine that aborted inside `await` (an engine error never resumes) cannot
+## run its cleanup line, so the lock carries an acquisition time and a waiter
+## takes over an abandoned one instead of blocking the package for the full
+## `APPLY_LOCK_TIMEOUT_MS`.
+func _test_stale_lock_is_reclaimed() -> void:
+	var manager := PackagesManager.new()
+	# A lock entry without a usable timestamp is what an interrupted acquisition
+	# leaves behind; it can never be released by its owner.
+	manager._applying[77] = 0
+	var reclaimed: int = await manager._acquire_apply_lock(77)
+	_check(
+		reclaimed == PackagesManager.ApplyLock.ACQUIRED,
+		"an abandoned apply lock must be reclaimed",
+	)
+	_check(
+		manager._applying.has(77),
+		"the reclaimed lock must belong to the new owner",
+	)
+	manager._release_apply_lock(77)
+
+	var free_lock: int = await manager._acquire_apply_lock(78)
+	_check(
+		free_lock == PackagesManager.ApplyLock.ACQUIRED,
+		"a free lock must be acquired without waiting",
+	)
+	_check(
+		not manager._apply_lock_is_stale(78),
+		"a lock taken now must not be considered abandoned",
+	)
+	manager._release_apply_lock(78)
+
+	manager.free()
 
 
 func _test_restart_pruning() -> void:
