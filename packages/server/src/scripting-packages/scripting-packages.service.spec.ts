@@ -234,4 +234,94 @@ describe('ScriptingPackagesService', () => {
       await expect(service.remove(10)).resolves.toBeUndefined();
     });
   });
+
+  describe('room lifecycle notifications', () => {
+    function makeService(options: {
+      pkg?: unknown;
+      dispatcher?: {
+        packageEnabledChanged: jest.Mock;
+        packageRemoved: jest.Mock;
+      };
+    }) {
+      const pkg =
+        options.pkg !== undefined ? options.pkg : { id: 10, enabled: true };
+      const packagesRepository = {
+        findOne: jest.fn(async () => pkg),
+        save: jest.fn(async (value: unknown) => value),
+        delete: jest.fn(async () => ({ affected: 1 })),
+      };
+      const dispatcher = options.dispatcher ?? {
+        packageEnabledChanged: jest.fn(async () => undefined),
+        packageRemoved: jest.fn(),
+      };
+      return {
+        packagesRepository,
+        dispatcher,
+        service: new ScriptingPackagesService(
+          packagesRepository as never,
+          {} as never,
+          undefined,
+          dispatcher as never,
+        ),
+      };
+    }
+
+    it('notifies the dispatcher when enabled flips', async () => {
+      const { service, dispatcher } = makeService({});
+
+      await service.update(10, { enabled: false });
+
+      expect(dispatcher.packageEnabledChanged).toHaveBeenCalledWith(10);
+    });
+
+    it('does not notify when enabled is unchanged', async () => {
+      const { service, dispatcher } = makeService({});
+
+      await service.update(10, { enabled: true });
+
+      expect(dispatcher.packageEnabledChanged).not.toHaveBeenCalled();
+    });
+
+    it('notifies removal with the room id', async () => {
+      const { service, dispatcher } = makeService({
+        pkg: { id: 10, room: { id: 7 } },
+      });
+
+      await service.remove(10);
+
+      expect(dispatcher.packageRemoved).toHaveBeenCalledWith(10, 7);
+    });
+
+    it('does not notify removal for a package outside a room', async () => {
+      const { service, dispatcher } = makeService({
+        pkg: { id: 10, room: null },
+      });
+
+      await service.remove(10);
+
+      expect(dispatcher.packageRemoved).not.toHaveBeenCalled();
+    });
+
+    it('keeps the deletion when the dispatcher throws', async () => {
+      const { service, dispatcher } = makeService({
+        pkg: { id: 10, room: { id: 7 } },
+      });
+      dispatcher.packageRemoved.mockImplementation(() => {
+        throw new Error('runtime offline');
+      });
+
+      await expect(service.remove(10)).resolves.toBeUndefined();
+    });
+
+    it('keeps the update when the dispatcher rejects', async () => {
+      const { service, dispatcher } = makeService({});
+      dispatcher.packageEnabledChanged.mockRejectedValue(
+        new Error('runtime offline'),
+      );
+
+      await expect(service.update(10, { enabled: false })).resolves.toEqual(
+        expect.objectContaining({ id: 10 }),
+      );
+    });
+  });
 });

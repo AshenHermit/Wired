@@ -1,5 +1,6 @@
 import {
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -14,6 +15,10 @@ import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
 import { canEditRoom } from 'src/rooms/room-access';
 import { PackageStorageService } from './package-storage.service';
+import {
+  PACKAGE_REVISION_DISPATCHER,
+  PackageRevisionDispatcher,
+} from 'src/godot-game/package-sync.types';
 
 @Injectable()
 export class ScriptingPackagesService {
@@ -26,6 +31,9 @@ export class ScriptingPackagesService {
     private readonly roomsRepository: Repository<Room>,
     @Optional()
     private readonly storage?: PackageStorageService,
+    @Optional()
+    @Inject(PACKAGE_REVISION_DISPATCHER)
+    private readonly dispatcher?: PackageRevisionDispatcher,
   ) {}
 
   assertPackageCreation(user: User, dto: CreateScriptingPackageDto): void {
@@ -165,7 +173,21 @@ export class ScriptingPackagesService {
     if (dto.scripts !== undefined) pkg.scripts = dto.scripts;
     if (dto.physicalFiles !== undefined) pkg.physicalFiles = dto.physicalFiles;
 
+    const previousEnabled = pkg.enabled !== false;
+    if (dto.enabled !== undefined) pkg.enabled = dto.enabled;
+
     const saved = await this.packagesRepository.save(pkg);
+    if (dto.enabled !== undefined && dto.enabled !== previousEnabled) {
+      try {
+        await this.dispatcher?.packageEnabledChanged(id);
+      } catch (error) {
+        this.logger.warn(
+          `Package ${id} was saved but its room was not notified: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
     return this.findOne(saved.id);
   }
 
@@ -178,7 +200,8 @@ export class ScriptingPackagesService {
    * completed deletion into an error.
    */
   async remove(id: number): Promise<void> {
-    await this.findOne(id);
+    const pkg = await this.findOne(id);
+    const roomId = pkg.room?.id ?? null;
     const result = await this.packagesRepository.delete(id);
     if (!result.affected) {
       throw new NotFoundException(`ScriptingPackage with id=${id} not found`);
@@ -191,6 +214,17 @@ export class ScriptingPackagesService {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+    }
+    if (roomId !== null) {
+      try {
+        this.dispatcher?.packageRemoved(id, roomId);
+      } catch (error) {
+        this.logger.warn(
+          `Package ${id} was deleted but its room was not notified: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
   }
 }

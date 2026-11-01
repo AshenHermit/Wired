@@ -502,3 +502,42 @@ describe('ScriptingPackagesController runtime endpoint authorization', () => {
     );
   });
 });
+
+describe('ScriptingPackagesController lifecycle routes', () => {
+  const user = { id: 11 } as User;
+  const request = { user } as AuthenticatedRequest;
+  let packagesService: {
+    assertPackageEditing: jest.Mock;
+    update: jest.Mock;
+    remove: jest.Mock;
+  };
+  let controller: ScriptingPackagesController;
+
+  beforeEach(() => {
+    packagesService = {
+      assertPackageEditing: jest.fn(),
+      update: jest.fn(async () => ({ id: 7 })),
+      remove: jest.fn(async () => undefined),
+    };
+    controller = new ScriptingPackagesController(
+      packagesService as unknown as ScriptingPackagesService,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+  });
+
+  it('checks editing rights before toggling a package', async () => {
+    await expect(
+      controller.update(request, 7, { enabled: false }),
+    ).resolves.toEqual({ id: 7 });
+    expect(packagesService.assertPackageEditing).toHaveBeenCalledWith(user, 7);
+    expect(packagesService.update).toHaveBeenCalledWith(7, { enabled: false });
+  });
+
+  it('keeps a completed deletion successful when the dispatcher fails', async () => {
+    await expect(controller.remove(7, request)).resolves.toBeUndefined();
+    expect(packagesService.assertPackageEditing).toHaveBeenCalledWith(user, 7);
+    expect(packagesService.remove).toHaveBeenCalledWith(7);
+  });
+});
