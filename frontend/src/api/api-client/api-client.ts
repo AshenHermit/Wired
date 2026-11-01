@@ -29,7 +29,20 @@ export class ApiClient {
       const response = await res;
       return response.data as T;
     } catch (error) {
-      throw new APIError(extractMessage(error));
+      if (axios.isAxiosError(error)) {
+        // Keep the response: callers need the HTTP status and the structured
+        // `code` (for example `packages_pending` is a wait, not a failure).
+        throw new APIError(
+          extractMessage(error),
+          error.code,
+          error.config,
+          error.request,
+          error.response,
+        );
+      }
+      throw new APIError(
+        error instanceof Error ? error.message : "Request failed",
+      );
     }
   }
 
