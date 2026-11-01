@@ -12,7 +12,7 @@ import {
   DependentRoomPackage,
   PackageDeliveryService,
 } from 'src/scripting-packages/package-delivery.service';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { RoomRuntimeService } from './room-runtime.service';
 import { RuntimeObserver } from './room-runtime.types';
 
@@ -127,27 +127,24 @@ export class PackageSyncService
   /** Latest published revision per package of the room plus target states. */
   async getStatuses(roomId: string): Promise<PackageSyncStatus[]> {
     const roomNumber = Number(roomId);
-    if (!Number.isInteger(roomNumber)) {
-      return [];
-    }
     const packages = await this.packages.find({
       where: { room: { id: roomNumber } },
     });
+    const latest = await this.latestPublishedRevisions(
+      packages.map((pkg) => pkg.id),
+    );
     const statuses: PackageSyncStatus[] = [];
     for (const pkg of packages) {
-      const latest = await this.revisions.findOne({
-        where: { package: { id: pkg.id }, status: 'published' },
-        order: { revision: 'DESC' },
-      });
-      if (!latest?.publishedAt) {
+      const revision = latest.get(pkg.id);
+      if (!revision?.publishedAt) {
         continue;
       }
       statuses.push(
         this.toStatus(
           pkg,
           String(roomNumber),
-          latest.revision,
-          latest.publishedAt,
+          revision.revision,
+          revision.publishedAt,
         ),
       );
     }
@@ -160,24 +157,21 @@ export class PackageSyncService
    */
   async reconcileRoom(roomId: string, freshRuntime = false): Promise<void> {
     const roomNumber = Number(roomId);
-    if (!Number.isInteger(roomNumber)) {
-      return;
-    }
     const packages = await this.packages.find({
       where: { room: { id: roomNumber } },
     });
+    const latest = await this.latestPublishedRevisions(
+      packages.map((pkg) => pkg.id),
+    );
     for (const pkg of packages) {
-      const latest = await this.revisions.findOne({
-        where: { package: { id: pkg.id }, status: 'published' },
-        order: { revision: 'DESC' },
-      });
-      if (!latest?.publishedAt) {
+      const revision = latest.get(pkg.id);
+      if (!revision?.publishedAt) {
         continue;
       }
       const key = this.recordKey(roomId, pkg.id);
       const existing = this.records.get(key);
-      if (!existing || existing.revision !== latest.revision) {
-        const record = this.createRecord(roomId, pkg.id, latest.revision);
+      if (!existing || existing.revision !== revision.revision) {
+        const record = this.createRecord(roomId, pkg.id, revision.revision);
         this.records.set(key, record);
         this.dispatch(record);
         continue;
@@ -195,6 +189,33 @@ export class PackageSyncService
         this.dispatch(existing, freshRuntime);
       }
     }
+  }
+
+  /**
+   * One query for every room package instead of one `findOne` per package:
+   * the room status is polled every 100 ms while a client waits for packages,
+   * so a per-package lookup multiplies the load by the package count.
+   */
+  private async latestPublishedRevisions(
+    packageIds: number[],
+  ): Promise<Map<number, ScriptingPackageRevision>> {
+    if (packageIds.length === 0) {
+      return new Map();
+    }
+    const rows = await this.revisions.find({
+      where: { package: { id: In(packageIds) }, status: 'published' },
+      relations: { package: true },
+      order: { revision: 'DESC' },
+    });
+    const latest = new Map<number, ScriptingPackageRevision>();
+    for (const row of rows) {
+      const packageId = row.package?.id;
+      if (packageId === undefined || latest.has(packageId)) {
+        continue;
+      }
+      latest.set(packageId, row);
+    }
+    return latest;
   }
 
   // --- RuntimeObserver ----------------------------------------------------
