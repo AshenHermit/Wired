@@ -56,7 +56,7 @@ const connection = (): RoomConnection => ({
 
 type StatusOverrides = Omit<
   Partial<PackageSyncStatus>,
-  'runtime' | 'clients'
+  'runtime' | 'clients' | 'slug'
 > & {
   runtime?: Partial<PackageSyncStatus['runtime']>;
   clients?: PackageSyncStatus['clients'];
@@ -66,6 +66,7 @@ const status = (overrides: StatusOverrides = {}): PackageSyncStatus => {
   const { runtime, clients, ...rest } = overrides;
   return {
     packageId: 3,
+    slug: 'demo',
     name: 'Demo',
     enabled: true,
     revision: 2,

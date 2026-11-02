@@ -1,5 +1,8 @@
 import path from 'path';
-import { PackageSlugIndex, resolvePackageTarget } from './package-slug-index';
+import {
+  PackageSlugIndex,
+  resolvePackageTarget,
+} from './package-slug-index';
 
 /** A text file decoded from a package revision, keyed by its package-relative path. */
 export interface PackageTextFile {
@@ -23,8 +26,9 @@ const TEXT_FILE_EXTENSIONS = new Set(['.tscn', '.tres', '.gd']);
 
 const SCENE_EXTENSION = '.tscn';
 
-/** `res://packages/<id>/<path>` inside any single- or double-quoted literal. */
-const PACKAGE_REFERENCE_RE = /(["'])res:\/\/packages\/(\d+)\/([^"'\r\n]+)\1/g;
+/** `res://packages/<target>/<path>` inside any single- or double-quoted literal. */
+const PACKAGE_REFERENCE_RE =
+  /(["'])res:\/\/packages\/([a-z0-9_]{1,64})\/([^"'\r\n]+)\1/g;
 
 /**
  * `res://packages/<slug>/<path>` inside any single- or double-quoted literal.
@@ -34,8 +38,9 @@ const PACKAGE_REFERENCE_RE = /(["'])res:\/\/packages\/(\d+)\/([^"'\r\n]+)\1/g;
 const RAW_PACKAGE_REFERENCE_RE =
   /(["'])res:\/\/packages\/([a-z0-9_]{1,64})\/([^"'\r\n]+)\1/g;
 
-/** Absolute `res://packages/<id>/<path>` written out of a quoted literal. */
-const PACKAGE_PATH_RE = /^res:\/\/packages\/(\d+)\/([^"'\r\n]+)$/;
+/** Absolute `res://packages/<target>/<path>` written out of a quoted literal. */
+const PACKAGE_PATH_RE =
+  /^res:\/\/packages\/([a-z0-9_]{1,64})\/([^"'\r\n]+)$/;
 
 /** A `path="..."` attribute or a `preload("...")` / `load("...")` argument. */
 const REFERENCE_PATH_RE =
@@ -167,14 +172,16 @@ export function resolvePackageReferences(
 }
 
 /**
- * Rewrites every `res://packages/<id>/` reference inside a quoted string
+ * Rewrites every `res://packages/<target>/` reference inside a quoted string
  * literal to the artifact-keyed runtime location of the pinned revision:
- * `user://wired/rooms/<roomId>/packages/<id>/<revision>-<artifactKey>/`.
+ * `user://wired/rooms/<roomId>/packages/<slug>/<revision>-<artifactKey>/`.
  *
- * The key comes from the referenced package's own closure, so a root and its
- * dependencies agree on the same library directory. Whole-line comments are
- * left untouched; quoted references in multi-line strings are rewritten.
- * Throws when a quoted reference targets a package with no pinned revision.
+ * The slug and key come from the referenced package's own closure, so a root
+ * and its dependencies agree on the same library directory. There is no
+ * numeric fallback: a package without a slug cannot be addressed at runtime.
+ * Whole-line comments are left untouched; quoted references in multi-line
+ * strings are rewritten. Throws when a quoted reference targets a package with
+ * no pinned revision or no slug.
  */
 export function rewritePackageReferences(
   text: string,
@@ -182,20 +189,37 @@ export function rewritePackageReferences(
     roomId: number;
     revisionByPackage: ReadonlyMap<number, number>;
     artifactKeyByPackage: ReadonlyMap<number, string>;
+    slugByPackage: ReadonlyMap<number, string>;
   },
 ): string {
+  const index: PackageSlugIndex = {
+    byId: new Map(options.slugByPackage),
+    bySlug: new Map(
+      [...options.slugByPackage].map(
+        ([id, slug]) => [slug, id] as [string, number],
+      ),
+    ),
+  };
   return mapCodeLines(text, (line) =>
     line.replace(
       PACKAGE_REFERENCE_RE,
-      (match, quote: string, idGroup: string, rest: string) => {
+      (match, quote: string, target: string, rest: string) => {
         assertSafeRawPath(rest);
-        const id = Number(idGroup);
+        const id = resolvePackageTarget(target, index);
+        if (id === null) {
+          throw new Error(`package_reference_not_rewritable:${target}`);
+        }
         const revision = options.revisionByPackage.get(id);
         const artifactKey = options.artifactKeyByPackage.get(id);
-        if (revision === undefined || artifactKey === undefined) {
+        const slug = options.slugByPackage.get(id);
+        if (
+          revision === undefined ||
+          artifactKey === undefined ||
+          slug === undefined
+        ) {
           throw new Error(`package_reference_not_rewritable:${id}`);
         }
-        return `${quote}user://wired/rooms/${options.roomId}/packages/${id}/${revision}-${artifactKey}/${rest}${quote}`;
+        return `${quote}user://wired/rooms/${options.roomId}/packages/${slug}/${revision}-${artifactKey}/${rest}${quote}`;
       },
     ),
   );
@@ -219,27 +243,32 @@ export function stripExtResourceUids(filepath: string, text: string): string {
 
 /**
  * Computes, for each `.tscn` scene in `files`, the transitive set of files it
- * reaches through quoted relative paths and absolute `res://packages/<id>/...`
+ * reaches through quoted relative paths and absolute `res://packages/<target>/...`
  * references, in depth-first discovery order. Relative paths resolve against
  * the directory of the referencing file and stay within its own package;
- * cross-package targets come from `dependencies`. Each entry is the stable key
- * `"<packageId>:<filepath>"`. Targets without a known file are skipped — their
- * absence is validated later.
+ * cross-package targets are resolved through `index` (a numeric target is an
+ * id, anything else a slug) and looked up in `dependencies`. Each entry is the
+ * stable key `"<packageId>:<filepath>"`. Targets without a known package or
+ * file are skipped — their absence is validated later.
  */
 export function buildSceneDependencies(
   packageId: number,
   files: PackageTextFile[],
   dependencies: ReadonlyMap<number, readonly PackageTextFile[]>,
+  index: PackageSlugIndex,
 ): Record<string, string[]> {
   const byKey = new Map<string, { packageId: number; file: PackageTextFile }>();
-  const index = (pkg: number, list: readonly PackageTextFile[]): void => {
+  const addPackageFiles = (
+    pkg: number,
+    list: readonly PackageTextFile[],
+  ): void => {
     for (const file of list) {
       byKey.set(`${pkg}:${file.filepath}`, { packageId: pkg, file });
     }
   };
-  index(packageId, files);
+  addPackageFiles(packageId, files);
   for (const [pkg, list] of dependencies) {
-    index(pkg, list);
+    addPackageFiles(pkg, list);
   }
 
   const result: Record<string, string[]> = {};
@@ -266,7 +295,7 @@ export function buildSceneDependencies(
       }
 
       const dir = path.posix.dirname(filepath);
-      for (const ref of collectReferences(entry.file.text)) {
+      for (const ref of collectReferences(entry.file.text, index)) {
         if (ref.kind === 'package') {
           const target = byKey.get(`${ref.packageId}:${ref.filepath}`);
           if (target) {
@@ -296,7 +325,10 @@ type Reference =
   | { kind: 'relative'; filepath: string };
 
 /** Collects the paths a text file references via `path="..."` or preload/load. */
-function collectReferences(text: string): Reference[] {
+function collectReferences(
+  text: string,
+  index: PackageSlugIndex,
+): Reference[] {
   const refs: Reference[] = [];
   for (const line of text.split('\n')) {
     if (isCommentLine(line)) {
@@ -305,7 +337,7 @@ function collectReferences(text: string): Reference[] {
     for (const match of line.matchAll(REFERENCE_PATH_RE)) {
       const raw = match[2];
       if (raw.startsWith('res://')) {
-        const parsed = parsePackagePath(raw);
+        const parsed = parsePackagePath(raw, index);
         if (parsed) {
           refs.push({
             kind: 'package',
@@ -325,16 +357,28 @@ function collectReferences(text: string): Reference[] {
   return refs;
 }
 
-function parsePackagePath(raw: string): PackageFileReference | null {
+/**
+ * Resolves an absolute `res://packages/<target>/<path>` to its package id. An
+ * unknown slug returns `null`: the manifest build already rejected unknown
+ * references, and an unresolvable target contributes no dependency here.
+ */
+function parsePackagePath(
+  raw: string,
+  index: PackageSlugIndex,
+): PackageFileReference | null {
   const match = PACKAGE_PATH_RE.exec(raw);
   if (!match) {
+    return null;
+  }
+  const packageId = resolvePackageTarget(match[1], index);
+  if (packageId === null) {
     return null;
   }
   const filepath = normalizeReferencePath(match[2]);
   if (filepath === null) {
     return null;
   }
-  return { packageId: Number(match[1]), filepath };
+  return { packageId, filepath };
 }
 
 /** Normalizes a path out of a reference, rejecting empty results. */

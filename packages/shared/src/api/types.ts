@@ -54,6 +54,7 @@ export type PackageRevision = {
  */
 export type PackageManifest = {
   packageId: number;
+  slug: string;
   name: string;
   revision: number;
   files: PackageFileEntry[];
@@ -75,6 +76,7 @@ export type PackageRuntimeDependency = {
 
 export type PackageRuntimeManifest = {
   packageId: number;
+  slug: string;
   name: string;
   revision: number;
   roomId: number;
@@ -255,6 +257,7 @@ export type PackageClientSyncStatus = {
  */
 export type PackageSyncStatus = {
   packageId: number;
+  slug: string;
   name: string;
   enabled: boolean;
   revision: number;

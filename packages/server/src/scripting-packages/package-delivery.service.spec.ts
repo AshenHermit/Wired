@@ -1,7 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { PackageFileEntry } from '@wired-io/shared';
 import { mkdtempSync, rmSync } from 'fs';
-import { readdir, readFile } from 'fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
 import { AppConfigService } from 'src/config/config.service';
@@ -15,6 +15,7 @@ import { PackageStorageService } from './package-storage.service';
 type PackageFixture = {
   id: number;
   name: string;
+  slug: string;
   room: { id: number } | null;
 };
 
@@ -47,7 +48,7 @@ describe('PackageDeliveryService', () => {
 
     packages = [];
     revisions = [];
-    rooms = new Set([7, 8]);
+    rooms = new Set([3, 7, 8]);
 
     packagesRepository = {
       findOne: jest.fn((opts: { where: { id: number } }) => {
@@ -148,8 +149,14 @@ describe('PackageDeliveryService', () => {
     id: number,
     name: string,
     roomId: number | null,
+    slug = `package_${id}`,
   ): void {
-    packages.push({ id, name, room: roomId === null ? null : { id: roomId } });
+    packages.push({
+      id,
+      name,
+      slug,
+      room: roomId === null ? null : { id: roomId },
+    });
   }
 
   async function writePublished(
@@ -189,7 +196,7 @@ describe('PackageDeliveryService', () => {
       root,
       String(packageId),
       'runtime',
-      'v1',
+      'v2',
       String(roomId),
       String(revision),
     );
@@ -227,6 +234,41 @@ describe('PackageDeliveryService', () => {
     return readFile(path.join(dir, filepath));
   }
 
+  /** A `runtime/v1` manifest left behind by the previous artifact format. */
+  async function writeOldV1ManifestFixture(
+    packageId: number,
+    revision: number,
+    roomId: number,
+    artifactKey: string,
+  ): Promise<string> {
+    const dir = path.join(
+      root,
+      String(packageId),
+      'runtime',
+      'v1',
+      String(roomId),
+      String(revision),
+      artifactKey,
+    );
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      path.join(dir, 'manifest.json'),
+      JSON.stringify({
+        packageId,
+        name: 'Heroes',
+        revision,
+        roomId,
+        publishedAt: '2026-10-30T00:00:00.000Z',
+        artifactKey,
+        files: [],
+        totalSize: 0,
+        dependencies: [],
+        sceneDependencies: {},
+      }),
+    );
+    return dir;
+  }
+
   it('rewrites package paths, strips ext_resource uid and pins dependency revisions', async () => {
     definePackage(5, 'Heroes', 7);
     definePackage(6, 'Library', null);
@@ -257,15 +299,81 @@ describe('PackageDeliveryService', () => {
     ]);
     const dependencyKey = manifest.dependencies[0].artifactKey;
     expect(await readArtifact(5, 3, 7, 'main.tscn')).toContain(
-      `path="user://wired/rooms/7/packages/5/3-${manifest.artifactKey}/hero.gd"`,
+      `path="user://wired/rooms/7/packages/package_5/3-${manifest.artifactKey}/hero.gd"`,
     );
     expect(await readArtifact(5, 3, 7, 'main.tscn')).toContain(
-      `path="user://wired/rooms/7/packages/6/9-${dependencyKey}/tex.png"`,
+      `path="user://wired/rooms/7/packages/package_6/9-${dependencyKey}/tex.png"`,
     );
     expect(await readArtifact(5, 3, 7, 'main.tscn')).not.toContain(
       'uid="uid://x"',
     );
     expect(manifest.download.token).toBeTruthy();
+  });
+
+  it('writes the package slug into the runtime manifest', async () => {
+    definePackage(7, 'Heroes', 3, 'hero');
+    await writePublished(7, 1, { 'hero.gd': 'extends Node' });
+
+    const manifest = await service.getRuntimeManifest(7, 1, 3);
+
+    expect(manifest.slug).toBe('hero');
+  });
+
+  it('rewrites a reference authored with a dependency slug', async () => {
+    definePackage(5, 'Heroes', 7);
+    definePackage(6, 'Library', null, 'library');
+    await writePublished(6, 9, { 'lib.gd': 'extends Node' });
+    await writePublished(5, 3, {
+      'main.gd': 'const Lib = preload("res://packages/library/lib.gd")',
+    });
+
+    const manifest = await service.getRuntimeManifest(5, 3, 7);
+
+    expect(manifest.dependencies[0]).toMatchObject({
+      packageId: 6,
+      revision: 9,
+    });
+    expect(await readArtifact(5, 3, 7, 'main.gd')).toContain(
+      `user://wired/rooms/7/packages/library/9-${manifest.dependencies[0].artifactKey}/lib.gd`,
+    );
+  });
+
+  it('builds artifacts under runtime/v2', async () => {
+    definePackage(7, 'Heroes', 3, 'hero');
+    await writePublished(7, 1, { 'hero.gd': 'extends Node' });
+
+    const artifact = await (
+      service as unknown as {
+        buildArtifact: (
+          packageId: number,
+          revision: number,
+          roomId: number,
+        ) => Promise<{ dir: string }>;
+      }
+    ).buildArtifact(7, 1, 3);
+
+    expect(artifact.dir).toContain(path.join('runtime', 'v2'));
+  });
+
+  it('does not serve a v1 cached manifest without slug', async () => {
+    definePackage(7, 'Heroes', 3, 'hero');
+    await writePublished(7, 1, { 'hero.gd': 'extends Node' });
+    const oldDir = await writeOldV1ManifestFixture(7, 1, 3, 'b'.repeat(64));
+
+    const manifest = await service.getRuntimeManifest(7, 1, 3);
+    const resolved = await service.resolveRuntimeFile(
+      7,
+      1,
+      3,
+      manifest.artifactKey,
+      'hero.gd',
+    );
+
+    expect(manifest.slug).toBe('hero');
+    expect(manifest.artifactKey).not.toBe('b'.repeat(64));
+    expect(resolved.path).toContain(path.join('runtime', 'v2'));
+    expect(resolved.path).not.toContain(oldDir);
+    expect(await artifactDirs(7, 1, 3)).toHaveLength(1);
   });
 
   it('serves the cached artifact on a repeated call without re-reading sources', async () => {
@@ -516,17 +624,17 @@ describe('PackageDeliveryService', () => {
         root,
         '5',
         'runtime',
-        'v1',
+        'v2',
         '7',
         '3',
         second.artifactKey,
       );
       const rewritten = await readFile(path.join(secondDir, 'main.gd'), 'utf8');
       expect(rewritten).toContain(
-        `user://wired/rooms/7/packages/6/10-${second.dependencies[0].artifactKey}/lib.gd`,
+        `user://wired/rooms/7/packages/package_6/10-${second.dependencies[0].artifactKey}/lib.gd`,
       );
       expect(rewritten).not.toContain(
-        `user://wired/rooms/7/packages/6/9-${first.dependencies[0].artifactKey}/lib.gd`,
+        `user://wired/rooms/7/packages/package_6/9-${first.dependencies[0].artifactKey}/lib.gd`,
       );
 
       // The pinned manifest resolves only the new artifact directory.
@@ -603,10 +711,10 @@ describe('PackageDeliveryService', () => {
       const dirs = await artifactDirs(5, 3, 7);
       expect(dirs).toHaveLength(3);
       expect(dirs).toContain(
-        path.join(root, '5', 'runtime', 'v1', '7', '3', keys[4]),
+        path.join(root, '5', 'runtime', 'v2', '7', '3', keys[4]),
       );
       expect(dirs).not.toContain(
-        path.join(root, '5', 'runtime', 'v1', '7', '3', keys[0]),
+        path.join(root, '5', 'runtime', 'v2', '7', '3', keys[0]),
       );
     });
   });

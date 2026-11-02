@@ -16,6 +16,7 @@ import type { PackageRevisionDispatcher } from 'src/godot-game/package-sync.type
 const pkg = {
   id: 7,
   name: 'Heroes',
+  slug: 'hero',
 } as ScriptingPackage;
 
 const file = (filepath: string, text: string): PackageFileEntry => {
@@ -472,10 +473,24 @@ describe('PackageRevisionsService', () => {
       expect(manifest).toMatchObject({
         packageId: 7,
         name: 'Heroes',
+        slug: 'hero',
         revision: 3,
         totalSize: 5,
         publishedAt: '2026-10-29T11:00:00.000Z',
       });
+    });
+
+    it('returns an older published revision with the package slug', async () => {
+      repository.findOne.mockResolvedValue({
+        ...draftRow(2, [file('a.txt', 'a')]),
+        status: 'published',
+        publishedAt: new Date('2026-10-29T10:30:00.000Z'),
+      });
+
+      const manifest = await service.getManifestForRevision(7, 2);
+
+      expect(manifest.slug).toBe('hero');
+      expect(manifest.revision).toBe(2);
     });
   });
 

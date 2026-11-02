@@ -571,7 +571,7 @@ export class PackageRevisionsService {
       );
     }
 
-    return toManifest(row, packageId, pkg.name);
+    return toManifest(row, packageId, pkg.name, pkg.slug);
   }
 
   async getManifestForRevision(
@@ -587,7 +587,7 @@ export class PackageRevisionsService {
       );
     }
 
-    return toManifest(row, packageId, pkg.name);
+    return toManifest(row, packageId, pkg.name, pkg.slug);
   }
 
   async readPublishedFile(
@@ -658,9 +658,11 @@ function toManifest(
   row: ScriptingPackageRevision,
   packageId: number,
   packageName: string,
+  packageSlug: string,
 ): PackageManifest {
   return {
     packageId,
+    slug: packageSlug,
     name: packageName,
     revision: row.revision,
     files: row.files,

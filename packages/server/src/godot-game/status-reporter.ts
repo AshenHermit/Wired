@@ -21,6 +21,7 @@ export class StatusReporter {
   ): PackageSyncStatus {
     const base = {
       packageId: pkg.id,
+      slug: pkg.slug,
       name: pkg.name,
       enabled: pkg.enabled !== false,
       publishedAt: publishedAt ? publishedAt.toISOString() : null,

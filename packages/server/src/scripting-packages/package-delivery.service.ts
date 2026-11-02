@@ -37,6 +37,7 @@ import {
   stripExtResourceUids,
 } from './package-runtime-references';
 import { PackageReadUrlService } from './package-read-url.service';
+import type { PackageSlugIndex } from './package-slug-index';
 import { PackageStorageService } from './package-storage.service';
 
 export type { DependentRoomPackage };
@@ -44,7 +45,7 @@ export type { DependentRoomPackage };
 const MANIFEST_FILENAME = 'manifest.json';
 
 /** Bumped whenever the artifact layout or manifest shape changes. */
-const ARTIFACT_FORMAT_VERSION = 'v1';
+const ARTIFACT_FORMAT_VERSION = 'v2';
 
 /** How many historical artifacts stay on disk per package/room/revision. */
 const ARTIFACT_RETENTION = 3;
@@ -54,8 +55,8 @@ const ARTIFACT_KEY_RE = /^[0-9a-f]{64}$/;
 
 /**
  * A per-room runtime artifact: the root package's files with every
- * `res://packages/<id>/...` reference rewritten to a pinned
- * `user://wired/rooms/<room>/packages/<id>/<revision>-<artifactKey>/...`
+ * `res://packages/<target>/...` reference rewritten to a pinned
+ * `user://wired/rooms/<room>/packages/<slug>/<revision>-<artifactKey>/...`
  * location, plus the transitive dependency closure it was built from.
  *
  * `artifactKey` identifies the exact resolved closure of *this* package. A
@@ -64,6 +65,7 @@ const ARTIFACT_KEY_RE = /^[0-9a-f]{64}$/;
  */
 type RuntimeArtifact = {
   packageId: number;
+  slug: string;
   name: string;
   revision: number;
   roomId: number;
@@ -155,6 +157,7 @@ export class PackageDeliveryService {
     const artifact = await this.ensureArtifact(packageId, revision, roomId);
     return {
       packageId: artifact.packageId,
+      slug: artifact.slug,
       name: artifact.name,
       revision: artifact.revision,
       roomId: artifact.roomId,
@@ -260,6 +263,12 @@ export class PackageDeliveryService {
     await this.assertRootPackageExists(packageId);
 
     const resolved = await this.resolver.resolve(packageId, revision, roomId);
+    const slug = resolved.slugByPackage.get(resolved.packageId);
+    if (slug === undefined) {
+      // Slugs are backfilled before publication; a slugless package would
+      // produce a runtime path the client cannot address.
+      throw new Error(`package_slug_missing:${resolved.packageId}`);
+    }
     const artifactKey = resolved.artifactKeys.get(packageId);
     if (!artifactKey) {
       // The root is always part of its own closure; this is an invariant.
@@ -268,7 +277,7 @@ export class PackageDeliveryService {
     const dir = this.artifactDir(packageId, revision, roomId, artifactKey);
 
     const cached = await this.readManifest(dir);
-    const artifact = cached ?? (await this.writeArtifact(dir, resolved));
+    const artifact = cached ?? (await this.writeArtifact(dir, resolved, slug));
     await this.pruneArtifacts(packageId, revision, roomId, artifactKey);
     return artifact;
   }
@@ -373,6 +382,7 @@ export class PackageDeliveryService {
   private async writeArtifact(
     dir: string,
     resolved: ResolvedClosure,
+    slug: string,
   ): Promise<RuntimeArtifact> {
     const staging = `${dir}.staging-${process.pid}-${randomBytes(4).toString('hex')}`;
     try {
@@ -391,6 +401,7 @@ export class PackageDeliveryService {
               resolved.roomId,
               resolved.revisionByPackage,
               resolved.artifactKeys,
+              resolved.slugByPackage,
             )
           : data;
         // Validate every written path symmetrically with the read paths: a
@@ -414,6 +425,7 @@ export class PackageDeliveryService {
         resolved.packageId,
         resolved.rootTextFiles,
         resolved.dependencyTextFiles,
+        this.toSlugIndex(resolved.slugByPackage),
       );
       const directDependencies: PackageRuntimeDependency[] =
         resolved.directDependencyIds.map((id) => ({
@@ -424,6 +436,7 @@ export class PackageDeliveryService {
         }));
       const manifestBody = {
         packageId: resolved.packageId,
+        slug,
         name: resolved.name,
         revision: resolved.revision,
         roomId: resolved.roomId,
@@ -461,6 +474,7 @@ export class PackageDeliveryService {
     roomId: number,
     revisionByPackage: Map<number, number>,
     artifactKeys: Map<number, string>,
+    slugByPackage: Map<number, string>,
   ): Buffer {
     let rewritten: string;
     try {
@@ -468,10 +482,26 @@ export class PackageDeliveryService {
         roomId,
         revisionByPackage,
         artifactKeyByPackage: artifactKeys,
+        slugByPackage,
       });
     } catch (error) {
       throw new BadRequestException((error as Error).message);
     }
     return Buffer.from(stripExtResourceUids(filepath, rewritten), 'utf8');
+  }
+
+  /**
+   * The slug index of one closure: only the packages reachable from this
+   * artifact are addressable, so resolution never needs a database round-trip.
+   */
+  private toSlugIndex(
+    slugByPackage: ReadonlyMap<number, string>,
+  ): PackageSlugIndex {
+    return {
+      byId: new Map(slugByPackage),
+      bySlug: new Map(
+        [...slugByPackage].map(([id, slug]) => [slug, id] as [string, number]),
+      ),
+    };
   }
 }

@@ -189,6 +189,7 @@ describe('ScriptingPackagesController revisions API', () => {
   it('serves the latest published manifest', async () => {
     const manifest: PackageManifest = {
       packageId: 7,
+      slug: 'hero',
       name: 'Hero',
       revision: 2,
       files: [file],

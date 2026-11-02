@@ -189,11 +189,15 @@ describe('package runtime references', () => {
           roomId: 7,
           revisionByPackage: revisions,
           artifactKeyByPackage: keys,
+          slugByPackage: new Map([
+            [5, 'hero'],
+            [6, 'library'],
+          ]),
         },
       ),
     ).toBe(
-      'preload("user://wired/rooms/7/packages/5/3-k5/lib/a.gd") + ' +
-        '"user://wired/rooms/7/packages/6/9-k6/tex.png"',
+      'preload("user://wired/rooms/7/packages/hero/3-k5/lib/a.gd") + ' +
+        '"user://wired/rooms/7/packages/library/9-k6/tex.png"',
     );
   });
 
@@ -208,10 +212,11 @@ describe('package runtime references', () => {
         roomId: 7,
         revisionByPackage: revisions,
         artifactKeyByPackage: keys,
+        slugByPackage: new Map([[5, 'hero']]),
       }),
     ).toBe(
       '# preload("res://packages/99/foo.gd")\n' +
-        'const A = preload("user://wired/rooms/7/packages/5/3-k5/a.gd")',
+        'const A = preload("user://wired/rooms/7/packages/hero/3-k5/a.gd")',
     );
   });
 
@@ -226,11 +231,12 @@ describe('package runtime references', () => {
           roomId: 7,
           revisionByPackage: revisions,
           artifactKeyByPackage: keys,
+          slugByPackage: new Map([[5, 'hero']]),
         },
       ),
     ).toBe(
       '; path="res://packages/99/missing.gd"\n' +
-        'preload("user://wired/rooms/7/packages/5/3-k5/a.gd")',
+        'preload("user://wired/rooms/7/packages/hero/3-k5/a.gd")',
     );
   });
 
@@ -242,8 +248,49 @@ describe('package runtime references', () => {
         roomId: 7,
         revisionByPackage: revisions,
         artifactKeyByPackage: keys,
+        slugByPackage: new Map([[5, 'hero']]),
       }),
     ).toThrow('package_reference_not_rewritable:99');
+  });
+
+  it('throws when a quoted reference has no slug', () => {
+    expect(() =>
+      rewritePackageReferences('preload("res://packages/5/a.gd")', {
+        roomId: 7,
+        revisionByPackage: new Map([[5, 3]]),
+        artifactKeyByPackage: new Map([[5, 'k5']]),
+        slugByPackage: new Map(),
+      }),
+    ).toThrow('package_reference_not_rewritable:5');
+  });
+
+  it('rewrites a reference into the slug runtime directory', () => {
+    const text = 'path="res://packages/42/scene.tscn"';
+    const rewritten = rewritePackageReferences(text, {
+      roomId: 3,
+      revisionByPackage: new Map([[42, 2]]),
+      artifactKeyByPackage: new Map([[42, 'a'.repeat(64)]]),
+      slugByPackage: new Map([[42, 'hero']]),
+    });
+    expect(rewritten).toContain(
+      `user://wired/rooms/3/packages/hero/2-${'a'.repeat(64)}/scene.tscn`,
+    );
+  });
+
+  it('rewrites a reference authored with a slug', () => {
+    expect(
+      rewritePackageReferences(
+        'const Lib = preload("res://packages/library/lib/a.gd")',
+        {
+          roomId: 7,
+          revisionByPackage: new Map([[6, 9]]),
+          artifactKeyByPackage: new Map([[6, 'k6']]),
+          slugByPackage: new Map([[6, 'library']]),
+        },
+      ),
+    ).toBe(
+      'const Lib = preload("user://wired/rooms/7/packages/library/9-k6/lib/a.gd")',
+    );
   });
 
   it('rejects reference paths with backslash separators', () => {
@@ -268,6 +315,7 @@ describe('package runtime references', () => {
         roomId: 7,
         revisionByPackage: revisions,
         artifactKeyByPackage: keys,
+        slugByPackage: new Map([[5, 'hero']]),
       }),
     ).toThrow('package_reference_invalid_path:a\\b.gd');
   });
@@ -287,11 +335,13 @@ describe('package runtime references', () => {
   it('rewritePackageReferences rejects the same unsafe paths', () => {
     const revisions = new Map([[5, 3]]);
     const keys = new Map([[5, 'k5']]);
+    const slugByPackage = new Map([[5, 'hero']]);
     expect(() =>
       rewritePackageReferences('preload("res://packages/5/./hero.gd")', {
         roomId: 7,
         revisionByPackage: revisions,
         artifactKeyByPackage: keys,
+        slugByPackage,
       }),
     ).toThrow('package_reference_invalid_path:./hero.gd');
     expect(() =>
@@ -299,6 +349,7 @@ describe('package runtime references', () => {
         roomId: 7,
         revisionByPackage: revisions,
         artifactKeyByPackage: keys,
+        slugByPackage,
       }),
     ).toThrow('package_reference_invalid_path:a/../b.gd');
   });
@@ -335,13 +386,37 @@ describe('package runtime references', () => {
     const dependencies = new Map([
       [6, [{ filepath: 'tex.png', text: 'binary-placeholder' }]],
     ]);
-    expect(buildSceneDependencies(5, files, dependencies)).toEqual({
+    expect(
+      buildSceneDependencies(5, files, dependencies, slugIndex),
+    ).toEqual({
       'main.tscn': [
         '5:main.tscn',
         '5:scripts/hero.gd',
         '5:lib/util.gd',
         '6:tex.png',
       ],
+    });
+  });
+
+  it('builds scene dependencies through the slug index', () => {
+    const index = {
+      bySlug: new Map([['hero', 9]]),
+      byId: new Map([[9, 'hero']]),
+    };
+    const rootFiles = [
+      {
+        filepath: 'scenes/main.tscn',
+        text:
+          '[ext_resource type="PackedScene" path="res://packages/hero/scenes/hero.tscn" id="1"]',
+      },
+    ];
+    const dependencyFiles = new Map([
+      [9, [{ filepath: 'scenes/hero.tscn', text: '[gd_scene format=3]' }]],
+    ]);
+    expect(
+      buildSceneDependencies(7, rootFiles, dependencyFiles, index),
+    ).toEqual({
+      'scenes/main.tscn': ['7:scenes/main.tscn', '9:scenes/hero.tscn'],
     });
   });
 });

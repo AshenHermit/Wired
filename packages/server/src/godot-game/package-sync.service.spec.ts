@@ -37,6 +37,7 @@ describe('PackageSyncService', () => {
   const roomPackage = {
     id: 42,
     name: 'Demo package',
+    slug: 'hero',
     room: { id: 7 },
   } as unknown as ScriptingPackage;
 
@@ -472,13 +473,14 @@ describe('PackageSyncService', () => {
   it('derives status for a room-filtered package without loading the room relation', async () => {
     await service.revisionPublished(42, 3);
     packages.find.mockResolvedValue([
-      { id: 42, name: 'Demo package' },
+      { id: 42, name: 'Demo package', slug: 'hero' },
     ] as unknown as ScriptingPackage[]);
 
     const status = (await service.getStatuses('7'))[0];
 
     expect(status).toMatchObject({
       packageId: 42,
+      slug: 'hero',
       revision: 3,
       runtime: { state: 'pending', revision: 3 },
     });
