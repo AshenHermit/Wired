@@ -33,6 +33,25 @@ export async function deleteScriptingPackage(id: number) {
   await apiClient.delete<void, void>(`scripting-packages/${id}`);
 }
 
+export type PackageSlugAvailability = {
+  slug: string;
+  available: boolean;
+  reason?: "taken" | "retired";
+};
+
+/**
+ * Asks the backend whether a new package may use this slug. Slugs are locked
+ * after creation, so a retired slug reports `retired` and cannot be reused.
+ */
+export async function checkPackageSlugAvailability(
+  slug: string
+): Promise<PackageSlugAvailability> {
+  return apiClient.get<PackageSlugAvailability, { slug: string }>(
+    "scripting-packages/slug-availability",
+    { slug }
+  );
+}
+
 // --- Package revisions ------------------------------------------------------
 // A revision is a set of files that is uploaded file by file and then
 // published as an immutable snapshot served to the Godot server and clients.

@@ -432,6 +432,7 @@ export function PackagesTab({
   authorId: number | null;
 }) {
   const [name, setName] = React.useState("");
+  const [slug, setSlug] = React.useState("");
   const [version, setVersion] = React.useState("0.1.0");
   const [creating, setCreating] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
@@ -517,8 +518,14 @@ export function PackagesTab({
     setCreating(true);
     setCreateError(null);
     try {
-      await packages.createPackage(name, authorId, version.trim() || "0.1.0");
+      await packages.createPackage(
+        name,
+        authorId,
+        version.trim() || "0.1.0",
+        slug.trim(),
+      );
       setName("");
+      setSlug("");
     } catch (error) {
       setCreateError(messageOf(error));
     } finally {
@@ -587,6 +594,18 @@ export function PackagesTab({
                 required
               />
             </div>
+            <div className="w-40 space-y-1.5">
+              <Label htmlFor="package-slug">Слаг</Label>
+              <Input
+                id="package-slug"
+                value={slug}
+                onChange={(event) => setSlug(event.target.value)}
+                placeholder="hero_controller"
+                pattern="[a-z0-9_]+"
+                title="Строчные латинские буквы, цифры и подчёркивания"
+                required
+              />
+            </div>
             <div className="w-32 space-y-1.5">
               <Label htmlFor="package-version">Версия</Label>
               <Input
@@ -598,7 +617,9 @@ export function PackagesTab({
             </div>
             <Button
               type="submit"
-              disabled={creating || !packages.fsReady || !name.trim()}
+              disabled={
+                creating || !packages.fsReady || !name.trim() || !slug.trim()
+              }
             >
               {creating ? (
                 <Loader2Icon className="size-4 animate-spin" />

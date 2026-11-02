@@ -45,6 +45,7 @@ function packageStatus(
     packages: [
       {
         packageId: 20,
+        slug: "platformer",
         name: "Platformer",
         enabled: true,
         revision: 2,
@@ -440,6 +441,7 @@ function pkg(
 ): RoomPackagesStatus["packages"][number] {
   return {
     packageId: 1,
+    slug: "package",
     name: "Package",
     enabled: true,
     revision: 1,

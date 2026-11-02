@@ -20,17 +20,20 @@ export type PublishPackageFilesResult = {
 /**
  * Publishes the current contents of the package directory of the Godot editor.
  *
- * The editor file system is the source of truth for drafts: files are read from
- * there, uploaded one by one to a new draft revision, checked against the size
- * and sha256 the server computed, and only then published. A failure at any
- * step leaves the previously published revision untouched.
+ * `packageId` identifies the package on the server; `slug` names its directory
+ * in the editor. The editor file system is the source of truth for drafts:
+ * files are read from there, uploaded one by one to a new draft revision,
+ * checked against the size and sha256 the server computed, and only then
+ * published. A failure at any step leaves the previously published revision
+ * untouched.
  */
 export async function publishPackageFiles(
   packageId: number,
+  slug: string,
   files: PackageFileSystem,
   onProgress?: (current: number, total: number) => void,
 ): Promise<PublishPackageFilesResult> {
-  const collected = await files.collectFiles(packageId);
+  const collected = await files.collectFiles(slug);
   if (collected.length === 0) {
     throw new Error(`Package ${packageId} has no files to publish`);
   }
@@ -233,12 +236,13 @@ export type ReconcilePackageResult =
  */
 export async function reconcilePackageRevision(
   packageId: number,
+  slug: string,
   files: PackageFileSystem,
   baseline: PackageBaseline | null,
   options: { force?: boolean; onProgress?: ApplyPackageRevisionOptions["onProgress"] } = {},
 ): Promise<ReconcilePackageResult> {
   const manifest = await getPackageManifest(packageId);
-  const local = await files.snapshot(packageId);
+  const local = await files.snapshot(slug);
   const plan = options.force
     ? ({ status: "apply", conflicts: [] } as PackageSyncPlan)
     : planPackageSync(local, manifest, baseline);
@@ -293,10 +297,11 @@ export async function reconcilePackageRevision(
  */
 export async function syncPackageRevision(
   packageId: number,
+  slug: string,
   files: PackageFileSystem,
   onProgress?: ApplyPackageRevisionOptions["onProgress"],
 ): Promise<{ written: string[]; deleted: string[] }> {
-  const result = await reconcilePackageRevision(packageId, files, null, {
+  const result = await reconcilePackageRevision(packageId, slug, files, null, {
     force: true,
     onProgress,
   });

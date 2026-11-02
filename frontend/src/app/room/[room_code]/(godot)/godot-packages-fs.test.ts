@@ -7,6 +7,7 @@ import {
 import {
   GodotFsError,
   applyPackageRevision,
+  assertPackageSlug,
   assertRelativePackagePath,
   createPackageFileSystem,
   type PackageEngine,
@@ -15,7 +16,7 @@ import {
 import { sha256Hex } from "@/utils/sha256";
 
 const projectRoot = "/home/web_user/Wired";
-const stagingPath = `${projectRoot}/packages/.7.staging`;
+const stagingPath = `${projectRoot}/packages/.hero.staging`;
 const encoder = new TextEncoder();
 const data = (value: string) => encoder.encode(value);
 
@@ -97,6 +98,27 @@ describe("assertRelativePackagePath", () => {
   });
 });
 
+describe("assertPackageSlug", () => {
+  it("accepts lowercase slugs and legacy numeric slugs", () => {
+    for (const slug of ["hero", "hero_2", "7"]) {
+      expect(assertPackageSlug(slug)).toBe(slug);
+    }
+  });
+
+  it("rejects unsafe, uppercase or overlong slugs", () => {
+    for (const slug of [
+      "Hero",
+      "../escape",
+      "",
+      "hero-2",
+      "hero/2",
+      "a".repeat(65),
+    ]) {
+      expect(() => assertPackageSlug(slug)).toThrow(GodotFsError);
+    }
+  });
+});
+
 describe("PackageFileSystem", () => {
   it("decodes base64 from collect", async () => {
     const { files, bridge } = makeWorkspace({
@@ -112,9 +134,11 @@ describe("PackageFileSystem", () => {
       }),
     });
 
-    const collected = await files.collectFiles(3);
+    const collected = await files.collectFiles("demo");
 
-    expect(bridge.call).toHaveBeenCalledWith("collect", { packageId: 3 });
+    expect(bridge.call).toHaveBeenCalledWith("collect", {
+      packageSlug: "demo",
+    });
     expect(collected).toHaveLength(1);
     expect(collected[0].entry).toEqual({
       filepath: "main.gd",
@@ -143,7 +167,7 @@ describe("PackageFileSystem", () => {
       }),
     });
 
-    const collected = await files.collectFiles(3);
+    const collected = await files.collectFiles("demo");
 
     expect([...collected[0].contents]).toEqual(bytes);
   });
@@ -162,7 +186,7 @@ describe("PackageFileSystem", () => {
       }),
     });
 
-    await expect(files.collectFiles(3)).rejects.toBeInstanceOf(GodotFsError);
+    await expect(files.collectFiles("demo")).rejects.toBeInstanceOf(GodotFsError);
   });
 
   it("writes staging then swaps", async () => {
@@ -171,7 +195,7 @@ describe("PackageFileSystem", () => {
     });
 
     const result = await files.replaceContents(
-      7,
+      "hero",
       new Map([
         ["main.gd", data("main")],
         ["scenes/a.tscn", data("[gd_scene]")],
@@ -182,8 +206,8 @@ describe("PackageFileSystem", () => {
       written: ["main.gd", "scenes/a.tscn"],
       deleted: ["old.gd"],
     });
-    expect(tree.get("packages/.7.staging/main.gd")).toEqual(data("main"));
-    expect(tree.get("packages/.7.staging/scenes/a.tscn")).toEqual(
+    expect(tree.get("packages/.hero.staging/main.gd")).toEqual(data("main"));
+    expect(tree.get("packages/.hero.staging/scenes/a.tscn")).toEqual(
       data("[gd_scene]"),
     );
     expect(order).toEqual([
@@ -203,7 +227,7 @@ describe("PackageFileSystem", () => {
     });
 
     await expect(
-      files.replaceContents(7, new Map([["main.gd", data("main")]])),
+      files.replaceContents("hero", new Map([["main.gd", data("main")]])),
     ).rejects.toThrow("staging не найден");
 
     expect(order).not.toContain("sync");
@@ -215,7 +239,7 @@ describe("PackageFileSystem", () => {
     });
 
     const replacement = files.replaceContents(
-      7,
+      "hero",
       new Map([["main.gd", data("main")]]),
     );
 
@@ -229,16 +253,34 @@ describe("PackageFileSystem", () => {
   it("rejects an absolute staging path outside the package tree", async () => {
     const { files, engine, order } = makeWorkspace({
       prepareReplace: () => ({
-        staging_path: "/home/web_user/other/.7.staging",
+        staging_path: "/home/web_user/other/.hero.staging",
       }),
     });
 
     const replacement = files.replaceContents(
-      7,
+      "hero",
       new Map([["main.gd", data("main")]]),
     );
 
     await expect(replacement).rejects.toBeInstanceOf(GodotFsError);
+    await expect(replacement).rejects.toThrow(/некорректный каталог staging/);
+    expect(engine.copyToFS).not.toHaveBeenCalled();
+    expect(order).not.toContain("replace");
+    expect(order).not.toContain("sync");
+  });
+
+  it("rejects a staging path of another package", async () => {
+    const { files, engine, order } = makeWorkspace({
+      prepareReplace: () => ({
+        staging_path: `${projectRoot}/packages/.demo.staging`,
+      }),
+    });
+
+    const replacement = files.replaceContents(
+      "hero",
+      new Map([["main.gd", data("main")]]),
+    );
+
     await expect(replacement).rejects.toThrow(/некорректный каталог staging/);
     expect(engine.copyToFS).not.toHaveBeenCalled();
     expect(order).not.toContain("replace");
@@ -260,7 +302,7 @@ describe("PackageFileSystem", () => {
     );
 
     const replacement = files.replaceContents(
-      7,
+      "hero",
       new Map([["main.gd", data("main")]]),
     );
 
@@ -281,7 +323,7 @@ describe("PackageFileSystem", () => {
     );
 
     await expect(
-      files.replaceContents(7, new Map([["main.gd", data("main")]])),
+      files.replaceContents("hero", new Map([["main.gd", data("main")]])),
     ).rejects.toBeInstanceOf(GodotFsError);
     expect(bridge.call).not.toHaveBeenCalled();
     expect(order).toEqual([]);
@@ -311,7 +353,7 @@ describe("PackageFileSystem", () => {
     ];
     const { files, bridge } = makeWorkspace({ collect: () => ({ files: entries }) });
 
-    const collected = await files.collectFiles(7);
+    const collected = await files.collectFiles("hero");
 
     // Filtering is the plugin's job: whatever it collected is passed through.
     expect(bridge.call).toHaveBeenCalledTimes(1);
@@ -330,21 +372,52 @@ describe("PackageFileSystem", () => {
       snapshot: () => ({ files: hashes }),
     });
 
-    await expect(files.exists(4)).resolves.toBe(false);
-    await expect(files.snapshot(4)).resolves.toEqual(hashes);
-    expect(bridge.call).toHaveBeenCalledWith("exists", { packageId: 4 });
-    expect(bridge.call).toHaveBeenCalledWith("snapshot", { packageId: 4 });
+    await expect(files.exists("demo")).resolves.toBe(false);
+    await expect(files.snapshot("demo")).resolves.toEqual(hashes);
+    expect(bridge.call).toHaveBeenCalledWith("exists", {
+      packageSlug: "demo",
+    });
+    expect(bridge.call).toHaveBeenCalledWith("snapshot", {
+      packageSlug: "demo",
+    });
+  });
+
+  it("creates and addresses a package directory by slug", async () => {
+    const { files, bridge, order, syncHandler } = makeWorkspace();
+
+    await files.createPackageDir("hero");
+
+    expect(files.packageDir("hero")).toBe(`${projectRoot}/packages/hero`);
+    expect(bridge.call).toHaveBeenCalledWith(
+      "createDir",
+      expect.objectContaining({ packageSlug: "hero" }),
+    );
+    expect(order).toEqual(["createDir", "sync"]);
+    expect(syncHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an invalid slug before calling the bridge", async () => {
+    const { files, bridge, order } = makeWorkspace();
+
+    await expect(files.createPackageDir("../escape")).rejects.toBeInstanceOf(
+      GodotFsError,
+    );
+    expect(bridge.call).not.toHaveBeenCalled();
+    expect(order).toEqual([]);
   });
 
   it("creates and deletes the package directory through the bridge", async () => {
-    const { files, order, syncHandler } = makeWorkspace();
+    const { files, bridge, order, syncHandler } = makeWorkspace();
 
-    await files.createPackageDir(4);
-    await files.deletePackage(4);
+    await files.createPackageDir("demo");
+    await files.deletePackage("demo");
 
     expect(order).toEqual(["createDir", "sync", "delete", "sync"]);
     expect(syncHandler).toHaveBeenCalledTimes(2);
-    expect(files.packageDir(4)).toBe(`${projectRoot}/packages/4`);
+    expect(bridge.call).toHaveBeenCalledWith("delete", {
+      packageSlug: "demo",
+    });
+    expect(files.packageDir("demo")).toBe(`${projectRoot}/packages/demo`);
   });
 
   it("uses the live engine", async () => {
@@ -354,7 +427,7 @@ describe("PackageFileSystem", () => {
     workspace.swapEngine(nextEngine);
 
     await workspace.files.replaceContents(
-      7,
+      "hero",
       new Map([["main.gd", data("main")]]),
     );
 
@@ -363,7 +436,7 @@ describe("PackageFileSystem", () => {
       `${stagingPath}/main.gd`,
       data("main"),
     );
-    expect(workspace.tree.get("packages/.7.staging/main.gd")).toEqual(
+    expect(workspace.tree.get("packages/.hero.staging/main.gd")).toEqual(
       data("main"),
     );
   });
@@ -372,6 +445,7 @@ describe("PackageFileSystem", () => {
 describe("applyPackageRevision", () => {
   const manifest: PackageManifest = {
     packageId: 7,
+    slug: "hero",
     name: "Heroes",
     revision: 2,
     files: [],

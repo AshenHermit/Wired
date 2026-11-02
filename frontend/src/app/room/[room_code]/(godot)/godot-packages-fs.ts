@@ -13,7 +13,7 @@ import type { EditorBridgeClient } from "./editor-bridge";
  * payloads into typed values.
  *
  * Every path handled here is relative to the managed package directory
- * (`<project>/packages/<packageId>`), so a package revision can never read or
+ * (`<project>/packages/<slug>`), so a package revision can never read or
  * overwrite files outside its own directory.
  */
 
@@ -70,23 +70,38 @@ export type CollectedPackageFile = {
   contents: Uint8Array;
 };
 
+/**
+ * Editor folder names are package slugs: lowercase latin letters, digits and
+ * underscores. Legacy packages created before slugs may still use a numeric
+ * slug, which this pattern accepts; the server applies the stricter
+ * new-package regex on creation.
+ */
+export const PACKAGE_SLUG_PATTERN = /^[a-z0-9_]{1,64}$/;
+
+export function assertPackageSlug(slug: string): string {
+  if (typeof slug !== "string" || !PACKAGE_SLUG_PATTERN.test(slug)) {
+    throw new GodotFsError(`Invalid package slug: ${slug}`);
+  }
+  return slug;
+}
+
 /** The editor instance: only the write primitive packages need. */
 export type PackageEngine = {
   copyToFS(path: string, data: Uint8Array): void;
 };
 
 export type PackageFileSystem = {
-  exists(packageId: number): Promise<boolean>;
-  createPackageDir(packageId: number): Promise<void>;
-  snapshot(packageId: number): Promise<Record<string, string>>;
-  collectFiles(packageId: number): Promise<CollectedPackageFile[]>;
+  exists(slug: string): Promise<boolean>;
+  createPackageDir(slug: string): Promise<void>;
+  snapshot(slug: string): Promise<Record<string, string>>;
+  collectFiles(slug: string): Promise<CollectedPackageFile[]>;
   replaceContents(
-    packageId: number,
+    slug: string,
     contents: Map<string, Uint8Array>,
   ): Promise<{ written: string[]; deleted: string[] }>;
-  deletePackage(packageId: number): Promise<void>;
+  deletePackage(slug: string): Promise<void>;
   sync(): Promise<void>;
-  packageDir(packageId: number): string;
+  packageDir(slug: string): string;
 };
 
 /** Payloads the plugin answers with; `contents_base64` is its wire name. */
@@ -105,12 +120,12 @@ type ReplacePayload = { written: string[]; deleted: string[] };
 /**
  * The plugin answers with `ProjectSettings.globalize_path(...)`: an absolute
  * path inside the engine file system. An empty or relative answer, or one that
- * does not end with `<packages>/.<packageId>.staging`, would let `copyToFS`
- * write outside the package tree, so it is rejected before the first write and
+ * does not end with `<packages>/.<slug>.staging`, would let `copyToFS` write
+ * outside the package tree, so it is rejected before the first write and
  * before the swap.
  */
-function assertStagingPath(stagingPath: string, packageId: number): string {
-  const expectedSuffix = `/${PACKAGES_DIR}/.${packageId}.staging`;
+function assertStagingPath(stagingPath: string, slug: string): string {
+  const expectedSuffix = `/${PACKAGES_DIR}/.${slug}.staging`;
   if (
     typeof stagingPath !== "string" ||
     stagingPath.length === 0 ||
@@ -201,15 +216,8 @@ export function createPackageFileSystem({
     );
   }
 
-  const assertPackageId = (packageId: number): number => {
-    if (!Number.isInteger(packageId) || packageId <= 0) {
-      throw new GodotFsError(`Invalid package id: ${packageId}`);
-    }
-    return packageId;
-  };
-
-  const packageDir = (packageId: number): string =>
-    `${projectRoot}/${PACKAGES_DIR}/${assertPackageId(packageId)}`;
+  const packageDir = (slug: string): string =>
+    `${projectRoot}/${PACKAGES_DIR}/${assertPackageSlug(slug)}`;
 
   const sync = async (): Promise<void> => {
     await bridge.call("sync", {});
@@ -218,10 +226,10 @@ export function createPackageFileSystem({
   return {
     packageDir,
 
-    async exists(packageId) {
-      assertPackageId(packageId);
+    async exists(slug) {
+      assertPackageSlug(slug);
       const { exists: result } = await bridge.call<ExistsPayload>("exists", {
-        packageId,
+        packageSlug: slug,
       });
       return result;
     },
@@ -230,26 +238,26 @@ export function createPackageFileSystem({
      * Creates the package directory without touching any other package. A newly
      * created room package starts as an empty directory the user can fill in.
      */
-    async createPackageDir(packageId) {
-      assertPackageId(packageId);
-      await bridge.call("createDir", { packageId });
+    async createPackageDir(slug) {
+      assertPackageSlug(slug);
+      await bridge.call("createDir", { packageSlug: slug });
       await sync();
     },
 
     /** Hashes of the source files currently in the package directory. */
-    async snapshot(packageId) {
-      assertPackageId(packageId);
+    async snapshot(slug) {
+      assertPackageSlug(slug);
       const { files } = await bridge.call<SnapshotPayload>("snapshot", {
-        packageId,
+        packageSlug: slug,
       });
       return files;
     },
 
     /** Reads every package file the plugin collected, with size and sha256. */
-    async collectFiles(packageId) {
-      assertPackageId(packageId);
+    async collectFiles(slug) {
+      assertPackageSlug(slug);
       const { files } = await bridge.call<CollectPayload>("collect", {
-        packageId,
+        packageSlug: slug,
       });
       return files.map((file) => {
         const contentsBase64 = file.contents_base64;
@@ -272,8 +280,8 @@ export function createPackageFileSystem({
      * staging or swapping leaves the previous revision untouched and never
      * reaches `sync`.
      */
-    async replaceContents(packageId, contents) {
-      assertPackageId(packageId);
+    async replaceContents(slug, contents) {
+      assertPackageSlug(slug);
       const staged = [...contents].map(([filepath, data]) => ({
         filepath: assertRelativePackagePath(filepath),
         data,
@@ -291,30 +299,30 @@ export function createPackageFileSystem({
 
       const { staging_path: stagingPath } =
         await bridge.call<PrepareReplacePayload>("prepareReplace", {
-          packageId,
+          packageSlug: slug,
         });
-      assertStagingPath(stagingPath, packageId);
+      assertStagingPath(stagingPath, slug);
 
       for (const { filepath, data } of staged) {
         try {
           engine.copyToFS(`${stagingPath}/${filepath}`, data);
         } catch (error) {
           throw new GodotFsError(
-            `Package ${packageId}: cannot stage ${filepath}: ${errorMessage(error)}`,
+            `Package ${slug}: cannot stage ${filepath}: ${errorMessage(error)}`,
           );
         }
       }
 
       const result = await bridge.call<ReplacePayload>("replace", {
-        packageId,
+        packageSlug: slug,
       });
       await sync();
       return { written: result.written, deleted: result.deleted };
     },
 
-    async deletePackage(packageId) {
-      assertPackageId(packageId);
-      await bridge.call("delete", { packageId });
+    async deletePackage(slug) {
+      assertPackageSlug(slug);
+      await bridge.call("delete", { packageSlug: slug });
       await sync();
     },
 
@@ -367,7 +375,7 @@ export async function applyPackageRevision({
     onProgress?.(index + 1, total);
   }
 
-  return files.replaceContents(manifest.packageId, verified);
+  return files.replaceContents(manifest.slug, verified);
 }
 
 function errorMessage(error: unknown): string {

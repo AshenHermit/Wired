@@ -24,6 +24,7 @@ vi.mock("@/api/services/godot-game", () => ({
 
 vi.mock("@/api/services/scripting-packages", () => ({
   createScriptingPackage: vi.fn(),
+  checkPackageSlugAvailability: vi.fn(),
   createPackageRevision: vi.fn(),
   uploadRevisionFileAsUint8Array: vi.fn(),
   publishPackageRevision: vi.fn(),
@@ -60,29 +61,29 @@ const OTHER = "scripts/other.gd";
  * stay package-relative and `snapshot`/`collectFiles` hash what `put` wrote.
  */
 function createFakeFs() {
-  const dirs = new Set<number>();
-  const trees = new Map<number, Map<string, Uint8Array>>();
+  const dirs = new Set<string>();
+  const trees = new Map<string, Map<string, Uint8Array>>();
   const reads = { value: 0 };
 
-  const tree = (packageId: number): Map<string, Uint8Array> => {
-    const existing = trees.get(packageId);
+  const tree = (slug: string): Map<string, Uint8Array> => {
+    const existing = trees.get(slug);
     if (existing) return existing;
     const created = new Map<string, Uint8Array>();
-    trees.set(packageId, created);
+    trees.set(slug, created);
     return created;
   };
 
   const exists = vi.fn(
-    async (packageId: number): Promise<boolean> => dirs.has(packageId),
+    async (slug: string): Promise<boolean> => dirs.has(slug),
   );
-  const createPackageDir = vi.fn(async (packageId: number): Promise<void> => {
-    dirs.add(packageId);
-    tree(packageId);
+  const createPackageDir = vi.fn(async (slug: string): Promise<void> => {
+    dirs.add(slug);
+    tree(slug);
   });
   const snapshot = vi.fn(
-    async (packageId: number): Promise<Record<string, string>> => {
+    async (slug: string): Promise<Record<string, string>> => {
       const hashes: Record<string, string> = {};
-      for (const [filepath, contents] of tree(packageId)) {
+      for (const [filepath, contents] of tree(slug)) {
         reads.value += 1;
         hashes[filepath] = await sha256Hex(contents);
       }
@@ -90,9 +91,9 @@ function createFakeFs() {
     },
   );
   const collectFiles = vi.fn(
-    async (packageId: number): Promise<CollectedPackageFile[]> => {
+    async (slug: string): Promise<CollectedPackageFile[]> => {
       const collected: CollectedPackageFile[] = [];
-      for (const [filepath, contents] of tree(packageId)) {
+      for (const [filepath, contents] of tree(slug)) {
         collected.push({
           entry: {
             filepath,
@@ -107,17 +108,17 @@ function createFakeFs() {
   );
   const replaceContents = vi.fn(
     async (
-      packageId: number,
+      slug: string,
       contents: Map<string, Uint8Array>,
     ): Promise<{ written: string[]; deleted: string[] }> => {
-      const previous = tree(packageId);
+      const previous = tree(slug);
       const deleted = [...previous.keys()].filter(
         (filepath) => !contents.has(filepath),
       );
       const written = [...contents.keys()];
-      dirs.add(packageId);
+      dirs.add(slug);
       trees.set(
-        packageId,
+        slug,
         new Map(
           [...contents].map(([filepath, data]) => [
             filepath,
@@ -128,9 +129,9 @@ function createFakeFs() {
       return { written, deleted };
     },
   );
-  const deletePackage = vi.fn(async (packageId: number): Promise<void> => {
-    dirs.delete(packageId);
-    trees.delete(packageId);
+  const deletePackage = vi.fn(async (slug: string): Promise<void> => {
+    dirs.delete(slug);
+    trees.delete(slug);
   });
   const sync = vi.fn(async (): Promise<void> => {});
 
@@ -142,7 +143,7 @@ function createFakeFs() {
     replaceContents,
     deletePackage,
     sync,
-    packageDir: (packageId: number) => `${PROJECT}/packages/${packageId}`,
+    packageDir: (slug: string) => `${PROJECT}/packages/${slug}`,
   };
 
   return {
@@ -155,15 +156,15 @@ function createFakeFs() {
     deletePackage,
     sync,
     reads,
-    put(packageId: number, filepath: string, content: string) {
-      dirs.add(packageId);
-      tree(packageId).set(filepath, encoder.encode(content));
+    put(slug: string, filepath: string, content: string) {
+      dirs.add(slug);
+      tree(slug).set(filepath, encoder.encode(content));
     },
-    has(packageId: number, filepath: string): boolean {
-      return trees.get(packageId)?.has(filepath) ?? false;
+    has(slug: string, filepath: string): boolean {
+      return trees.get(slug)?.has(filepath) ?? false;
     },
-    read(packageId: number, filepath: string): string {
-      const contents = trees.get(packageId)?.get(filepath);
+    read(slug: string, filepath: string): string {
+      const contents = trees.get(slug)?.get(filepath);
       if (!contents) throw new Error(`ENOENT: ${filepath}`);
       return decoder.decode(contents);
     },
@@ -184,9 +185,14 @@ function bridgeWith(rescan?: () => void) {
   });
 }
 
-function roomPackage(id: number, name: string): ScriptingPackage {
+function roomPackage(
+  id: number,
+  name: string,
+  slug = name.toLowerCase(),
+): ScriptingPackage {
   return {
     id,
+    slug,
     name,
     version: "0.1.0",
     description: "",
@@ -209,6 +215,7 @@ async function manifestOf(
   const data = encoder.encode(content);
   return {
     packageId,
+    slug: packageId === 5 ? "demo" : "other",
     name: packageId === 5 ? "Demo" : "Other",
     revision,
     files: [
@@ -232,6 +239,7 @@ function roomStatus(
     roomId: 1,
     packages: packages.map(({ id, revision, enabled = true }) => ({
       packageId: id,
+      slug: id === 5 ? "demo" : id === 6 ? "other" : "new",
       name: id === 5 ? "Demo" : "Other",
       enabled,
       revision,
@@ -276,6 +284,10 @@ describe("useRoomPackages", () => {
     vi.mocked(packagesApi.createScriptingPackage).mockResolvedValue(
       roomPackage(7, "New"),
     );
+    vi.mocked(packagesApi.checkPackageSlugAvailability).mockResolvedValue({
+      slug: "new",
+      available: true,
+    });
     vi.mocked(packagesApi.createPackageRevision).mockResolvedValue(
       revision(5, 3, "draft"),
     );
@@ -542,7 +554,7 @@ describe("useRoomPackages", () => {
     vi.useFakeTimers();
     try {
       bridgeWith();
-      fs.put(5, HERO, "local draft");
+      fs.put("demo", HERO, "local draft");
       const { result, unmount } = renderHook(() =>
         useRoomPackages(1, ONE_PACKAGE),
       );
@@ -673,7 +685,7 @@ describe("useRoomPackages", () => {
 
   it("keeps readiness when the plugin rejects a single operation", async () => {
     const { result, unmount } = await startHook();
-    fs.put(5, HERO, "local draft");
+    fs.put("demo", HERO, "local draft");
     fs.snapshot.mockRejectedValue(
       new EditorBridgeOperationError("staging не найден"),
     );
@@ -722,7 +734,7 @@ describe("useRoomPackages", () => {
     const { result, unmount } = await startHook();
     await waitFor(() => expect(result.current.entries).toHaveLength(1));
 
-    expect(fs.has(5, HERO)).toBe(false);
+    expect(fs.has("demo", HERO)).toBe(false);
     expect(fs.createPackageDir).not.toHaveBeenCalled();
     expect(fs.replaceContents).not.toHaveBeenCalled();
     expect(packagesApi.getPackageManifest).not.toHaveBeenCalled();
@@ -777,26 +789,60 @@ describe("useRoomPackages", () => {
     const { result, unmount } = await startHook();
 
     await act(async () => {
-      await result.current.createPackage("New", 42);
+      await result.current.createPackage("New", 42, "0.1.0", "new");
     });
 
     expect(packagesApi.createScriptingPackage).toHaveBeenCalledWith({
+      slug: "new",
       name: "New",
       version: "0.1.0",
       authorId: 42,
       roomId: 1,
     });
-    expect(fs.createPackageDir).toHaveBeenCalledWith(7);
-    expect(fs.has(7, HERO)).toBe(false);
-    expect(fs.has(5, HERO)).toBe(false);
+    expect(fs.createPackageDir).toHaveBeenCalledWith("new");
+    expect(fs.has("new", HERO)).toBe(false);
+    expect(fs.has("demo", HERO)).toBe(false);
     const entry = result.current.entries.find((item) => item.packageId === 7);
     expect(entry).toMatchObject({
+      slug: "new",
       name: "New",
       status: "loaded",
       loaded: true,
       loadedRevision: 0,
       publishedRevision: null,
     });
+    unmount();
+  });
+
+  it("checks slug availability through the API", async () => {
+    vi.mocked(packagesApi.checkPackageSlugAvailability).mockResolvedValue({
+      slug: "hero",
+      available: false,
+      reason: "taken",
+    });
+    const { result, unmount } = await startHook();
+
+    await expect(result.current.checkSlugAvailability("hero")).resolves.toEqual(
+      { slug: "hero", available: false, reason: "taken" },
+    );
+    expect(packagesApi.checkPackageSlugAvailability).toHaveBeenCalledWith(
+      "hero",
+    );
+    unmount();
+  });
+
+  it("refuses to touch an editor directory when the package has no slug", async () => {
+    const { result, unmount } = await startHook({
+      packages: [roomPackage(5, "Demo", "")],
+    });
+
+    await expect(result.current.downloadPackage(5)).rejects.toThrow(
+      /package_slug_missing:5/,
+    );
+    // No `str(id)` fallback: the invalid slug never reaches the editor.
+    expect(fs.exists).not.toHaveBeenCalledWith("");
+    expect(fs.snapshot).not.toHaveBeenCalledWith("");
+    expect(fs.replaceContents).not.toHaveBeenCalled();
     unmount();
   });
 
@@ -810,7 +856,7 @@ describe("useRoomPackages", () => {
       await result.current.downloadPackage(5);
     });
 
-    expect(fs.read(5, HERO)).toBe("extends Node");
+    expect(fs.read("demo", HERO)).toBe("extends Node");
     expect(
       result.current.entries.find((item) => item.packageId === 5),
     ).toMatchObject({
@@ -820,7 +866,7 @@ describe("useRoomPackages", () => {
       localChanges: [],
     });
 
-    fs.put(5, HERO, "local edit");
+    fs.put("demo", HERO, "local edit");
     await act(async () => {
       await result.current.refresh();
     });
@@ -834,12 +880,12 @@ describe("useRoomPackages", () => {
     await expect(result.current.downloadPackage(5)).rejects.toBeInstanceOf(
       LocalChangesError,
     );
-    expect(fs.read(5, HERO)).toBe("local edit");
+    expect(fs.read("demo", HERO)).toBe("local edit");
 
     await act(async () => {
       await result.current.downloadPackage(5, { force: true });
     });
-    expect(fs.read(5, HERO)).toBe("extends Node");
+    expect(fs.read("demo", HERO)).toBe("extends Node");
     unmount();
   });
 
@@ -850,25 +896,25 @@ describe("useRoomPackages", () => {
     const { result, unmount } = await startHook({
       packages: TWO_PACKAGES,
     });
-    fs.put(6, OTHER, "keep me");
+    fs.put("other", OTHER, "keep me");
 
     await act(async () => {
       await result.current.downloadPackage(5);
     });
-    expect(fs.has(5, HERO)).toBe(true);
+    expect(fs.has("demo", HERO)).toBe(true);
 
-    fs.put(5, HERO, "local edit");
+    fs.put("demo", HERO, "local edit");
     await expect(result.current.removePackage(5)).rejects.toBeInstanceOf(
       LocalChangesError,
     );
-    expect(fs.has(5, HERO)).toBe(true);
+    expect(fs.has("demo", HERO)).toBe(true);
 
     await act(async () => {
       await result.current.removePackage(5, { force: true });
     });
 
-    expect(fs.has(5, HERO)).toBe(false);
-    expect(fs.has(6, OTHER)).toBe(true);
+    expect(fs.has("demo", HERO)).toBe(false);
+    expect(fs.has("other", OTHER)).toBe(true);
     expect(
       result.current.entries.find((item) => item.packageId === 5)?.status,
     ).toBe("not-loaded");
@@ -885,7 +931,7 @@ describe("useRoomPackages", () => {
       await result.current.downloadPackage(5);
     });
 
-    fs.put(5, HERO, "extends Node2D");
+    fs.put("demo", HERO, "extends Node2D");
     await act(async () => {
       await result.current.emitPackage(5);
     });
@@ -937,13 +983,13 @@ describe("useRoomPackages", () => {
       publishedRevision: 3,
       loadedRevision: 2,
     });
-    expect(fs.read(5, HERO)).toBe("extends Node");
+    expect(fs.read("demo", HERO)).toBe("extends Node");
     expect(packagesApi.getRevisionFile).toHaveBeenCalledTimes(downloads);
     unmount();
   });
 
   it("keeps files left by a previous session and warns before replacing them", async () => {
-    fs.put(5, HERO, "stale draft");
+    fs.put("demo", HERO, "stale draft");
     vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
       await manifestOf("extends Node"),
     );
@@ -959,17 +1005,17 @@ describe("useRoomPackages", () => {
       name: "LocalChangesError",
       files: [HERO],
     });
-    expect(fs.read(5, HERO)).toBe("stale draft");
+    expect(fs.read("demo", HERO)).toBe("stale draft");
 
     await act(async () => {
       await result.current.downloadPackage(5, { force: true });
     });
-    expect(fs.read(5, HERO)).toBe("extends Node");
+    expect(fs.read("demo", HERO)).toBe("extends Node");
     unmount();
   });
 
   it("adopts a leftover directory so its files can be emitted", async () => {
-    fs.put(5, HERO, "stale draft");
+    fs.put("demo", HERO, "stale draft");
     const { result, unmount } = await startHook();
 
     await waitFor(() => {
@@ -996,7 +1042,7 @@ describe("useRoomPackages", () => {
     expect(packagesApi.createPackageRevision).toHaveBeenCalledWith(5, {
       files: [expect.objectContaining({ filepath: HERO })],
     });
-    expect(fs.read(5, HERO)).toBe("stale draft");
+    expect(fs.read("demo", HERO)).toBe("stale draft");
     unmount();
   });
 
@@ -1114,6 +1160,7 @@ describe("useRoomPackages", () => {
       expect(
         result.current.entries.find((item) => item.packageId === 6),
       ).toMatchObject({
+        slug: "other",
         name: "Other",
         version: "",
         publishedRevision: 4,
@@ -1131,7 +1178,7 @@ describe("useRoomPackages", () => {
     const { result, unmount } = await startHook({ rescan });
 
     await act(async () => {
-      await result.current.createPackage("New", 42);
+      await result.current.createPackage("New", 42, "0.1.0", "new");
     });
     expect(rescan).toHaveBeenCalledTimes(1);
 
@@ -1187,15 +1234,15 @@ describe("useRoomPackages", () => {
 
   it("deletes the package, its editor directory and the entry", async () => {
     const { result } = await startHook();
-    fs.put(5, HERO, "extends Node");
+    fs.put("demo", HERO, "extends Node");
 
     await act(async () => {
       await result.current.deletePackage(5);
     });
 
     expect(packagesApi.deleteScriptingPackage).toHaveBeenCalledWith(5);
-    expect(fs.deletePackage).toHaveBeenCalledWith(5);
-    expect(await fs.files.exists(5)).toBe(false);
+    expect(fs.deletePackage).toHaveBeenCalledWith("demo");
+    expect(await fs.files.exists("demo")).toBe(false);
     // The refresh after the delete still sees the old status response; the
     // tombstone must keep the deleted package out of the panel.
     expect(

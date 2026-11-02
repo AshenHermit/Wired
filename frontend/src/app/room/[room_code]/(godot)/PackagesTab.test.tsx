@@ -10,6 +10,7 @@ import { PackagesTab } from "./PackagesTab";
 function entry(overrides: Partial<RoomPackageEntry> = {}): RoomPackageEntry {
   return {
     packageId: 5,
+    slug: "demo",
     name: "Demo",
     version: "0.1.0",
     status: "loaded",
@@ -47,6 +48,9 @@ function controller(
     afterEditorStart: vi.fn(),
     refresh: vi.fn().mockResolvedValue(undefined),
     createPackage: vi.fn().mockResolvedValue({ id: 7, name: "New" }),
+    checkSlugAvailability: vi
+      .fn()
+      .mockResolvedValue({ slug: "new", available: true }),
     downloadPackage: vi.fn().mockResolvedValue(undefined),
     removePackage: vi.fn().mockResolvedValue(undefined),
     setPackageEnabled: vi.fn().mockResolvedValue(undefined),
@@ -216,10 +220,18 @@ describe("PackagesTab", () => {
     fireEvent.change(screen.getByLabelText(/имя пакета/i), {
       target: { value: "New" },
     });
+    fireEvent.change(screen.getByLabelText(/слаг/i), {
+      target: { value: "new" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /создать пакет/i }));
 
     await waitFor(() =>
-      expect(createPackage).toHaveBeenCalledWith("New", 42, "0.1.0"),
+      expect(createPackage).toHaveBeenCalledWith(
+        "New",
+        42,
+        "0.1.0",
+        "new",
+      ),
     );
   });
 

@@ -8,9 +8,11 @@ import type {
 } from "@wired-io/shared";
 import { getRoomPackages } from "@/api/services/godot-game";
 import {
+  checkPackageSlugAvailability,
   createScriptingPackage,
   deleteScriptingPackage,
   updateScriptingPackage,
+  type PackageSlugAvailability,
 } from "@/api/services/scripting-packages";
 import type { GodotEditorInstance } from "./GodotEditorInstance";
 import {
@@ -43,6 +45,8 @@ export type RoomPackageStatus =
 
 export type RoomPackageEntry = {
   packageId: number;
+  /** The editor directory of the package is `packages/<slug>`. */
+  slug: string;
   name: string;
   version: string;
   status: RoomPackageStatus;
@@ -93,8 +97,11 @@ export type RoomPackagesController = {
   createPackage: (
     name: string,
     authorId: number,
-    version?: string,
+    version: string,
+    slug: string,
   ) => Promise<ScriptingPackage>;
+  /** Asks the backend whether a new package may use this slug. */
+  checkSlugAvailability: (slug: string) => Promise<PackageSlugAvailability>;
   downloadPackage: (
     packageId: number,
     options?: { force?: boolean },
@@ -220,6 +227,7 @@ function packageFromStatus(status: PackageSyncStatus): ScriptingPackage {
   const timestamp = status.publishedAt ?? "";
   return {
     id: status.packageId,
+    slug: status.slug,
     name: status.name,
     version: "",
     description: "",
@@ -288,6 +296,7 @@ function buildEntries(
 
     return {
       packageId: pkg.id,
+      slug: pkg.slug,
       name: pkg.name,
       version: pkg.version,
       status,
@@ -540,6 +549,20 @@ export function useRoomPackages(
     [state.actions],
   );
 
+  /**
+   * The editor directory of a package is named by its slug. A package without
+   * a slug cannot be addressed, and falling back to its numeric id would write
+   * into a folder that belongs to something else, so every file-system call
+   * resolves the slug here instead.
+   */
+  const slugOf = React.useCallback((packageId: number): string => {
+    const pkg = stateRef.current.packages.find((item) => item.id === packageId);
+    if (!pkg?.slug) {
+      throw new Error(`package_slug_missing:${packageId}`);
+    }
+    return pkg.slug;
+  }, []);
+
   const load = React.useCallback(
     async (local: boolean): Promise<void> => {
       const request = ++requestRef.current;
@@ -560,8 +583,11 @@ export function useRoomPackages(
         const present = new Set<number>();
         if (files) {
           for (const pkg of known.values()) {
+            // Package data is the only source of the slug; there is no id
+            // fallback, and an invalid/missing slug is simply not queried.
+            if (!pkg.slug) continue;
             try {
-              if (await files.exists(pkg.id)) present.add(pkg.id);
+              if (await files.exists(pkg.slug)) present.add(pkg.id);
             } catch (cause) {
               if (cause instanceof EditorBridgeError) throw cause;
             }
@@ -575,8 +601,9 @@ export function useRoomPackages(
         if (files && local) {
           const fresh = new Map<number, Record<string, string>>();
           for (const pkg of known.values()) {
+            if (!pkg.slug) continue;
             try {
-              fresh.set(pkg.id, await files.snapshot(pkg.id));
+              fresh.set(pkg.id, await files.snapshot(pkg.slug));
             } catch (cause) {
               if (cause instanceof EditorBridgeError) throw cause;
               fresh.set(pkg.id, {});
@@ -681,17 +708,23 @@ export function useRoomPackages(
     (
       name: string,
       authorId: number,
-      version = "0.1.0",
+      version: string,
+      slug: string,
     ): Promise<ScriptingPackage> =>
       guarded(async () => {
         const trimmed = name.trim();
         if (!trimmed) {
           throw new Error("Укажите имя пакета");
         }
+        const trimmedSlug = slug.trim();
+        if (!trimmedSlug) {
+          throw new Error("Укажите слаг пакета");
+        }
         const files = requireFileSystem(filesRef.current);
         let created: ScriptingPackage;
         try {
           created = await createScriptingPackage({
+            slug: trimmedSlug,
             name: trimmed,
             version,
             authorId,
@@ -701,7 +734,7 @@ export function useRoomPackages(
           throw new Error(`Не удалось создать пакет: ${errorMessage(cause)}`);
         }
         try {
-          await files.createPackageDir(created.id);
+          await files.createPackageDir(created.slug);
           requestEditorRescan();
         } catch (cause) {
           if (cause instanceof EditorBridgeError) throw cause;
@@ -719,6 +752,16 @@ export function useRoomPackages(
         return created;
       }),
     [filesRef, guarded, refresh, roomId, setAction],
+  );
+
+  /**
+   * Availability is advisory for the creation form; the server still rejects a
+   * taken or retired slug on POST.
+   */
+  const checkSlugAvailability = React.useCallback(
+    (slug: string): Promise<PackageSlugAvailability> =>
+      checkPackageSlugAvailability(slug),
+    [],
   );
 
   const beginAction = React.useCallback(
@@ -754,8 +797,9 @@ export function useRoomPackages(
         beginAction(packageId);
         try {
           const files = requireFileSystem(filesRef.current);
+          const slug = slugOf(packageId);
           const baseline = loadedRef.current.get(packageId) ?? null;
-          const current = await files.snapshot(packageId);
+          const current = await files.snapshot(slug);
           const changed = baseline
             ? changedPackageFiles(baseline.files, current)
             : Object.keys(current);
@@ -763,13 +807,19 @@ export function useRoomPackages(
             throw new LocalChangesError(packageId, changed);
           }
 
-          const result = await reconcilePackageRevision(packageId, files, null, {
-            force: true,
-            onProgress: (currentCount, total) =>
-              setAction(packageId, {
-                progress: { current: currentCount, total },
-              }),
-          });
+          const result = await reconcilePackageRevision(
+            packageId,
+            slug,
+            files,
+            null,
+            {
+              force: true,
+              onProgress: (currentCount, total) =>
+                setAction(packageId, {
+                  progress: { current: currentCount, total },
+                }),
+            },
+          );
           if (result.status === "conflict") {
             throw new Error(
               "опубликованная ревизия не была применена из-за конфликта",
@@ -794,7 +844,7 @@ export function useRoomPackages(
           endAction(packageId);
         }
       }),
-    [beginAction, endAction, filesRef, guarded, refresh, setAction],
+    [beginAction, endAction, filesRef, guarded, refresh, setAction, slugOf],
   );
 
   const removePackage = React.useCallback(
@@ -806,14 +856,15 @@ export function useRoomPackages(
         beginAction(packageId);
         try {
           const files = requireFileSystem(filesRef.current);
-          if (!(await files.exists(packageId))) {
+          const slug = slugOf(packageId);
+          if (!(await files.exists(slug))) {
             loadedRef.current.delete(packageId);
             await refresh();
             return;
           }
 
           const baseline = loadedRef.current.get(packageId) ?? null;
-          const current = await files.snapshot(packageId);
+          const current = await files.snapshot(slug);
           const changed = baseline
             ? changedPackageFiles(baseline.files, current)
             : Object.keys(current);
@@ -821,7 +872,7 @@ export function useRoomPackages(
             throw new LocalChangesError(packageId, changed);
           }
 
-          await files.deletePackage(packageId);
+          await files.deletePackage(slug);
           requestEditorRescan();
           loadedRef.current.delete(packageId);
           setAction(packageId, {
@@ -839,7 +890,7 @@ export function useRoomPackages(
           endAction(packageId);
         }
       }),
-    [beginAction, endAction, filesRef, guarded, refresh, setAction],
+    [beginAction, endAction, filesRef, guarded, refresh, setAction, slugOf],
   );
 
   const setPackageEnabled = React.useCallback(
@@ -868,6 +919,7 @@ export function useRoomPackages(
   const deletePackage = React.useCallback(
     (packageId: number): Promise<void> =>
       guarded(async () => {
+        const slug = slugOf(packageId);
         beginAction(packageId);
         try {
           try {
@@ -885,7 +937,7 @@ export function useRoomPackages(
           try {
             const files = filesRef.current;
             if (files) {
-              await files.deletePackage(packageId);
+              await files.deletePackage(slug);
               requestEditorRescan();
             }
           } catch {
@@ -900,7 +952,7 @@ export function useRoomPackages(
           endAction(packageId);
         }
       }),
-    [beginAction, endAction, filesRef, guarded, refresh, setAction],
+    [beginAction, endAction, filesRef, guarded, refresh, setAction, slugOf],
   );
 
   const adoptPackage = React.useCallback(
@@ -909,10 +961,11 @@ export function useRoomPackages(
         beginAction(packageId);
         try {
           const files = requireFileSystem(filesRef.current);
-          if (!(await files.exists(packageId))) {
+          const slug = slugOf(packageId);
+          if (!(await files.exists(slug))) {
             throw new Error("каталог пакета не найден в редакторе");
           }
-          const snapshot = await files.snapshot(packageId);
+          const snapshot = await files.snapshot(slug);
           loadedRef.current.set(packageId, { revision: 0, files: snapshot });
           setAction(packageId, {
             notice:
@@ -928,7 +981,7 @@ export function useRoomPackages(
           endAction(packageId);
         }
       }),
-    [beginAction, endAction, filesRef, guarded, refresh, setAction],
+    [beginAction, endAction, filesRef, guarded, refresh, setAction, slugOf],
   );
 
   const emitPackage = React.useCallback(
@@ -958,15 +1011,17 @@ export function useRoomPackages(
           );
         }
 
+        const slug = slugOf(packageId);
         beginAction(packageId);
         try {
           const result = await publishPackageFiles(
             packageId,
+            slug,
             files,
             (current, total) =>
               setAction(packageId, { progress: { current, total } }),
           );
-          const snapshot = await files.snapshot(packageId);
+          const snapshot = await files.snapshot(slug);
           loadedRef.current.set(packageId, {
             revision: result.revision.revision,
             files: snapshot,
@@ -985,7 +1040,7 @@ export function useRoomPackages(
           endAction(packageId);
         }
       }),
-    [beginAction, endAction, filesRef, guarded, refresh, setAction],
+    [beginAction, endAction, filesRef, guarded, refresh, setAction, slugOf],
   );
 
   return {
@@ -998,6 +1053,7 @@ export function useRoomPackages(
     afterEditorStart: transport.afterEditorStart,
     refresh,
     createPackage,
+    checkSlugAvailability,
     downloadPackage,
     removePackage,
     setPackageEnabled,

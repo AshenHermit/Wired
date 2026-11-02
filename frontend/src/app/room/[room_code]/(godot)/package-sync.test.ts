@@ -27,46 +27,45 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const projectRoot = "/home/web_user/Wired";
 
-/** Package files by package id and package-relative path. */
-type PackageTree = Map<number, Map<string, string>>;
+/** Package files by package slug and package-relative path. */
+type PackageTree = Map<string, Map<string, string>>;
 
 function put(
   tree: PackageTree,
-  packageId: number,
+  slug: string,
   filepath: string,
   contents: string
 ): void {
-  const files = tree.get(packageId) ?? new Map<string, string>();
+  const files = tree.get(slug) ?? new Map<string, string>();
   files.set(filepath, contents);
-  tree.set(packageId, files);
+  tree.set(slug, files);
 }
 
 /**
  * In-memory stand-in for `PackageFileSystem`. The bridge and the editor plugin
  * are covered by `godot-packages-fs.test.ts`; here only the calls `package-sync`
- * makes matter, so every method is a spy backed by a simple package tree.
+ * makes matter, so every method is a spy backed by a simple package tree keyed
+ * by slug.
  */
 function makeFiles() {
   const tree: PackageTree = new Map();
 
   const files: PackageFileSystem = {
-    packageDir: vi.fn(
-      (packageId: number) => `${projectRoot}/packages/${packageId}`
-    ),
-    exists: vi.fn(async (packageId: number) => tree.has(packageId)),
-    createPackageDir: vi.fn(async (packageId: number) => {
-      tree.set(packageId, new Map());
+    packageDir: vi.fn((slug: string) => `${projectRoot}/packages/${slug}`),
+    exists: vi.fn(async (slug: string) => tree.has(slug)),
+    createPackageDir: vi.fn(async (slug: string) => {
+      tree.set(slug, new Map());
     }),
-    snapshot: vi.fn(async (packageId: number) => {
+    snapshot: vi.fn(async (slug: string) => {
       const hashes: Record<string, string> = {};
-      for (const [filepath, contents] of tree.get(packageId) ?? []) {
+      for (const [filepath, contents] of tree.get(slug) ?? []) {
         hashes[filepath] = await sha256Hex(encoder.encode(contents));
       }
       return hashes;
     }),
-    collectFiles: vi.fn(async (packageId: number) => {
+    collectFiles: vi.fn(async (slug: string) => {
       const collected: CollectedPackageFile[] = [];
-      const packageFiles = tree.get(packageId) ?? new Map<string, string>();
+      const packageFiles = tree.get(slug) ?? new Map<string, string>();
       for (const filepath of [...packageFiles.keys()].sort()) {
         const contents = encoder.encode(packageFiles.get(filepath) ?? "");
         collected.push({
@@ -81,13 +80,13 @@ function makeFiles() {
       return collected;
     }),
     replaceContents: vi.fn(
-      async (packageId: number, contents: Map<string, Uint8Array>) => {
+      async (slug: string, contents: Map<string, Uint8Array>) => {
         const next = new Map<string, string>();
         for (const [filepath, bytes] of contents) {
           next.set(filepath, decoder.decode(bytes));
         }
-        const previous = tree.get(packageId) ?? new Map<string, string>();
-        tree.set(packageId, next);
+        const previous = tree.get(slug) ?? new Map<string, string>();
+        tree.set(slug, next);
         return {
           written: [...next.keys()].sort(),
           deleted: [...previous.keys()]
@@ -96,8 +95,8 @@ function makeFiles() {
         };
       }
     ),
-    deletePackage: vi.fn(async (packageId: number) => {
-      tree.delete(packageId);
+    deletePackage: vi.fn(async (slug: string) => {
+      tree.delete(slug);
     }),
     sync: vi.fn(async () => {}),
   };
@@ -129,8 +128,8 @@ describe("publishPackageFiles", () => {
 
   it("uploads every file of the package directory and publishes the revision", async () => {
     const { tree, files } = makeFiles();
-    put(tree, 5, "scripts/hero.gd", "extends Node");
-    put(tree, 5, "scenes/hero.tscn", "[gd_scene]");
+    put(tree, "hero", "scripts/hero.gd", "extends Node");
+    put(tree, "hero", "scenes/hero.tscn", "[gd_scene]");
     vi.mocked(api.createPackageRevision).mockResolvedValue(revision(3, "draft"));
     vi.mocked(api.uploadRevisionFileAsUint8Array).mockImplementation(
       async (_packageId, _revision, file) => ({
@@ -142,10 +141,10 @@ describe("publishPackageFiles", () => {
       revision(3, "published")
     );
 
-    const result = await publishPackageFiles(5, files);
+    const result = await publishPackageFiles(7, "hero", files);
 
-    expect(files.collectFiles).toHaveBeenCalledWith(5);
-    expect(api.createPackageRevision).toHaveBeenCalledWith(5, {
+    expect(files.collectFiles).toHaveBeenCalledWith("hero");
+    expect(api.createPackageRevision).toHaveBeenCalledWith(7, {
       files: [
         await entry("scenes/hero.tscn", "[gd_scene]"),
         await entry("scripts/hero.gd", "extends Node"),
@@ -159,24 +158,26 @@ describe("publishPackageFiles", () => {
         file.filepath,
       ]);
     expect(uploadedPaths).toEqual([
-      [5, 3, "scenes/hero.tscn"],
-      [5, 3, "scripts/hero.gd"],
+      [7, 3, "scenes/hero.tscn"],
+      [7, 3, "scripts/hero.gd"],
     ]);
-    expect(api.publishPackageRevision).toHaveBeenCalledWith(5, 3);
+    expect(api.publishPackageRevision).toHaveBeenCalledWith(7, 3);
     expect(result.revision.status).toBe("published");
     expect(result.uploaded).toBe(2);
   });
 
   it("stops before publishing when the server stored a different file", async () => {
     const { tree, files } = makeFiles();
-    put(tree, 5, "scripts/hero.gd", "extends Node");
+    put(tree, "hero", "scripts/hero.gd", "extends Node");
     vi.mocked(api.createPackageRevision).mockResolvedValue(revision(3, "draft"));
     vi.mocked(api.uploadRevisionFileAsUint8Array).mockResolvedValue({
       size: 99,
       sha256: "b".repeat(64),
     });
 
-    await expect(publishPackageFiles(5, files)).rejects.toThrow(/sha256|hash/i);
+    await expect(publishPackageFiles(7, "hero", files)).rejects.toThrow(
+      /sha256|hash/i
+    );
 
     expect(api.publishPackageRevision).not.toHaveBeenCalled();
   });
@@ -184,7 +185,9 @@ describe("publishPackageFiles", () => {
   it("refuses to publish an empty package", async () => {
     const { files } = makeFiles();
 
-    await expect(publishPackageFiles(7, files)).rejects.toThrow(/no files/i);
+    await expect(publishPackageFiles(7, "hero", files)).rejects.toThrow(
+      /no files/i
+    );
     expect(api.createPackageRevision).not.toHaveBeenCalled();
   });
 });
@@ -199,6 +202,7 @@ describe("syncPackageRevision", () => {
     const hero = await entry("scripts/hero.gd", "extends Node");
     const manifest: PackageManifest = {
       packageId: 5,
+      slug: "hero",
       name: "Heroes",
       revision: 4,
       files: [hero],
@@ -210,20 +214,22 @@ describe("syncPackageRevision", () => {
       encoder.encode("extends Node").buffer
     );
 
-    const result = await syncPackageRevision(5, files);
+    const result = await syncPackageRevision(5, "hero", files);
 
     expect(api.getRevisionFile).toHaveBeenCalledWith(5, 4, "scripts/hero.gd");
     expect(result.written).toEqual(["scripts/hero.gd"]);
-    expect(files.replaceContents).toHaveBeenCalledWith(5, expect.any(Map));
-    expect(tree.get(5)?.get("scripts/hero.gd")).toBe("extends Node");
+    // The editor folder is addressed by the manifest slug, not the package id.
+    expect(files.replaceContents).toHaveBeenCalledWith("hero", expect.any(Map));
+    expect(tree.get("hero")?.get("scripts/hero.gd")).toBe("extends Node");
   });
 
   it("keeps the previous files when a download is corrupt", async () => {
     const { tree, files } = makeFiles();
-    put(tree, 5, "scripts/hero.gd", "extends Node");
+    put(tree, "hero", "scripts/hero.gd", "extends Node");
     const hero = await entry("scripts/hero.gd", "extends Node");
     vi.mocked(api.getPackageManifest).mockResolvedValue({
       packageId: 5,
+      slug: "hero",
       name: "Heroes",
       revision: 4,
       files: [hero],
@@ -234,9 +240,11 @@ describe("syncPackageRevision", () => {
       encoder.encode("corrupted!!").buffer
     );
 
-    await expect(syncPackageRevision(5, files)).rejects.toThrow(/size|sha256/i);
+    await expect(syncPackageRevision(5, "hero", files)).rejects.toThrow(
+      /size|sha256/i
+    );
 
-    expect(tree.get(5)?.get("scripts/hero.gd")).toBe("extends Node");
+    expect(tree.get("hero")?.get("scripts/hero.gd")).toBe("extends Node");
     expect(files.replaceContents).not.toHaveBeenCalled();
   });
 });
@@ -252,6 +260,7 @@ function manifestOf(
   }));
   return {
     packageId: 5,
+    slug: "hero",
     name: "Heroes",
     revision: revisionNumber,
     files: entries,
@@ -364,7 +373,7 @@ describe("reconcilePackageRevision", () => {
 
   it("keeps local edits and reports a conflict instead of overwriting", async () => {
     const { tree, files } = makeFiles();
-    put(tree, 5, "hero.gd", "local draft");
+    put(tree, "hero", "hero.gd", "local draft");
     vi.mocked(api.getPackageManifest).mockResolvedValue(
       manifestOf(4, { "hero.gd": await sha256Hex(encoder.encode("published")) })
     );
@@ -372,20 +381,20 @@ describe("reconcilePackageRevision", () => {
       encoder.encode("published").buffer
     );
 
-    const result = await reconcilePackageRevision(5, files, {
+    const result = await reconcilePackageRevision(5, "hero", files, {
       revision: 3,
       files: { "hero.gd": await sha256Hex(encoder.encode("old")) },
     });
 
     expect(result.status).toBe("conflict");
-    expect(tree.get(5)?.get("hero.gd")).toBe("local draft");
+    expect(tree.get("hero")?.get("hero.gd")).toBe("local draft");
     expect(files.replaceContents).not.toHaveBeenCalled();
     expect(api.getRevisionFile).not.toHaveBeenCalled();
   });
 
   it("replaces local files when the user explicitly forces the revision", async () => {
     const { tree, files } = makeFiles();
-    put(tree, 5, "hero.gd", "local draft");
+    put(tree, "hero", "hero.gd", "local draft");
     vi.mocked(api.getPackageManifest).mockResolvedValue(
       manifestOf(4, { "hero.gd": await sha256Hex(encoder.encode("published")) })
     );
@@ -395,13 +404,15 @@ describe("reconcilePackageRevision", () => {
 
     const result = await reconcilePackageRevision(
       5,
+      "hero",
       files,
       { revision: 3, files: { "hero.gd": await sha256Hex(encoder.encode("old")) } },
       { force: true }
     );
 
     expect(result.status).toBe("applied");
-    expect(tree.get(5)?.get("hero.gd")).toBe("published");
+    expect(files.replaceContents).toHaveBeenCalledWith("hero", expect.any(Map));
+    expect(tree.get("hero")?.get("hero.gd")).toBe("published");
     expect(vi.mocked(files.snapshot).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(files.replaceContents).mock.invocationCallOrder[0]
     );
