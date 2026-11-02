@@ -95,6 +95,37 @@ export class RoomRuntimeConfiguration {
         'GODOT_ROOM_PUBLIC_WS_BASE is required in production; clients must not receive internal ports',
       );
     }
+    if (config.publicWsBaseUrl) {
+      if (!/^wss?:\/\//.test(config.publicWsBaseUrl)) {
+        throw new RoomRuntimeError(
+          'config',
+          'GODOT_ROOM_PUBLIC_WS_BASE must start with ws:// or wss://',
+        );
+      }
+      if (
+        !config.publicWsBaseUrl.includes('{room}') &&
+        !config.publicWsBaseUrl.includes('{port}')
+      ) {
+        throw new RoomRuntimeError(
+          'config',
+          'GODOT_ROOM_PUBLIC_WS_BASE must contain the {room} placeholder',
+        );
+      }
+      if (this.configService.isProduction) {
+        if (!config.publicWsBaseUrl.startsWith('wss://')) {
+          throw new RoomRuntimeError(
+            'config',
+            'GODOT_ROOM_PUBLIC_WS_BASE must use wss:// in production',
+          );
+        }
+        if (!config.publicWsBaseUrl.includes('{room}')) {
+          throw new RoomRuntimeError(
+            'config',
+            'GODOT_ROOM_PUBLIC_WS_BASE must contain {room} in production; a port-only base leaks internal ports',
+          );
+        }
+      }
+    }
   }
 
   resolvePaths(config: GodotRuntimeConfig): {
@@ -156,11 +187,34 @@ export class RoomRuntimeConfiguration {
         .split('{port}')
         .join(String(port));
     }
-    const host =
-      !config.bindAddress || config.bindAddress === '0.0.0.0'
-        ? '127.0.0.1'
-        : config.bindAddress;
-    return `ws://${host}:${port}`;
+    return this.deriveEndpoint(config.apiUrl, roomId);
+  }
+
+  private deriveEndpoint(apiUrl: string, roomId: string): string {
+    let url: URL;
+    try {
+      url = new URL(apiUrl);
+    } catch {
+      throw new RoomRuntimeError(
+        'config',
+        `Invalid GODOT_ROOM_API_URL ${apiUrl}`,
+      );
+    }
+    if (url.protocol === 'http:') {
+      url.protocol = 'ws:';
+    } else if (url.protocol === 'https:') {
+      url.protocol = 'wss:';
+    } else {
+      throw new RoomRuntimeError(
+        'config',
+        `GODOT_ROOM_API_URL must be http(s), got ${url.protocol}`,
+      );
+    }
+    url.search = '';
+    url.hash = '';
+    const base = url.pathname.replace(/\/+$/, '');
+    url.pathname = `${base}/rooms/${encodeURIComponent(roomId)}/game/ws`;
+    return url.toString();
   }
 
   private buildRuntimeEnv(

@@ -38,8 +38,9 @@ export interface GodotRuntimeConfig {
    */
   exportDir: string;
   /**
-   * Public WebSocket base for deployed environments. Supports `{room}` and
-   * `{port}` placeholders. Empty means the local `ws://127.0.0.1:<port>`.
+   * Public WebSocket base for deployed environments. Supports `{room}` and,
+   * for legacy deployments, `{port}`. Empty means the endpoint is derived
+   * from `apiUrl` outside production; production requires this value.
    */
   publicWsBaseUrl: string;
   logBufferLines: number;

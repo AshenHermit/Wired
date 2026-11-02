@@ -72,4 +72,70 @@ describe('RoomRuntimeConfiguration', () => {
       false,
     );
   });
+
+  const production = new RoomRuntimeConfiguration({
+    isProduction: true,
+  } as unknown as AppConfigService);
+
+  it('derives the API WebSocket route from apiUrl outside production', () => {
+    expect(configuration.buildEndpoint(config, '42', 19100)).toBe(
+      'ws://127.0.0.1:4123/rooms/42/game/ws',
+    );
+  });
+
+  it('keeps a base path and upgrades https to wss', () => {
+    expect(
+      configuration.buildEndpoint(
+        { ...config, apiUrl: 'https://api.example.com/wired/' },
+        '42',
+        19100,
+      ),
+    ).toBe('wss://api.example.com/wired/rooms/42/game/ws');
+  });
+
+  it('interpolates room and port in an explicit public base', () => {
+    expect(
+      configuration.buildEndpoint(
+        {
+          ...config,
+          publicWsBaseUrl: 'wss://games.example/godot/{room}?p={port}',
+        },
+        '42',
+        19100,
+      ),
+    ).toBe('wss://games.example/godot/42?p=19100');
+  });
+
+  it('rejects a public base without placeholders', () => {
+    expect(() =>
+      configuration.validate({
+        ...config,
+        publicWsBaseUrl: 'wss://games.example/godot',
+      }),
+    ).toThrow(/placeholder|\{room\}/i);
+  });
+
+  it('rejects a port-only public base in production', () => {
+    expect(() =>
+      production.validate({
+        ...config,
+        publicWsBaseUrl: 'wss://games.example/godot?p={port}',
+      }),
+    ).toThrow(/room/i);
+  });
+
+  it('requires a wss public base in production', () => {
+    expect(() =>
+      production.validate({
+        ...config,
+        publicWsBaseUrl: 'ws://games.example/rooms/{room}/game/ws',
+      }),
+    ).toThrow(/wss/i);
+  });
+
+  it('still requires a public base in production', () => {
+    expect(() =>
+      production.validate({ ...config, publicWsBaseUrl: '' }),
+    ).toThrow(/GODOT_ROOM_PUBLIC_WS_BASE/);
+  });
 });

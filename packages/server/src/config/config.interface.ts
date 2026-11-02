@@ -39,6 +39,11 @@ export interface AppConfig {
     /** Base URL of this backend as seen by the local Godot runtime. */
     apiUrl: string;
     stateDir: string;
+    /**
+     * Public WebSocket base for deployed environments. Supports `{room}` and
+     * `{port}`. Empty derives the endpoint from `apiUrl` outside production;
+     * production requires this value.
+     */
     publicWsBaseUrl: string;
     logBufferLines: number;
     /** Directory of the generated Web export, outside the Godot project. */
