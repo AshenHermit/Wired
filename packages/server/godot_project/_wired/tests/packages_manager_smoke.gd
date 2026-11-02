@@ -28,6 +28,9 @@ const DIAMOND_ROOT_ID := 63
 const KEY_LIB_ID := 70
 const KEY_DEP_ID := 71
 const KEY_ROOT_ID := 72
+const SLUG_ID := 80
+const SLUG_OTHER_ID := 81
+const SLUG_MISSING_ID := 82
 
 var _manager: PackagesManager
 # "package:revision" -> runtime manifest dictionary
@@ -58,6 +61,9 @@ func _run() -> void:
 	_test_room_normalization()
 	_test_forget_package_clears_applied_state()
 	_manager = PackagesManager.new()
+	# Drop the room before the manager loads its slug index: a previous run must
+	# not leak folder mappings into this one.
+	_manager._remove_tree("user://wired/rooms/%s" % ROOM)
 	_manager.configure("http://127.0.0.1:1", ROOM)
 	# Apply-order diagnostics are off in a runtime build; this suite asserts the
 	# order, so it opts in explicitly.
@@ -65,7 +71,6 @@ func _run() -> void:
 	_manager.request_override = _transport
 	_manager.package_applied.connect(_on_package_applied)
 	_manager.package_failed.connect(_on_package_failed)
-	_manager._remove_tree("user://wired/rooms/%s" % ROOM)
 	await _test_recursive_sync()
 	await _test_same_revision_refresh()
 	await _test_artifact_key_refresh()
@@ -75,6 +80,10 @@ func _run() -> void:
 	await _test_missing_manifest()
 	await _test_stale_lock_is_reclaimed()
 	await _test_restart_pruning()
+	await _test_unknown_slug_never_touches_the_packages_root()
+	await _test_slug_index_survives_restart()
+	await _test_independent_slug_revisions()
+	await _test_missing_slug_fails_the_apply()
 	await _test_concurrent_shared_dependency()
 	await _test_concurrent_revisions()
 	await _test_cycle()
@@ -122,13 +131,29 @@ func _test_forget_package_clears_applied_state() -> void:
 func _test_runtime_path_and_changed_files() -> void:
 	var manager := PackagesManager.new()
 	manager.configure("http://127.0.0.1:1", "7")
+	# A previous run may have left its slug index in this room.
+	manager._slugs.clear()
+	_check(
+		manager.packages_dir(5).is_empty(),
+		"a package whose manifest has not named a slug must not resolve a folder",
+	)
+	_check(
+		manager.runtime_path(5, 3, "scripts/hero.gd", "abc").is_empty(),
+		"an unknown slug must not resolve a file path",
+	)
+	# The runtime manifest is what assigns a folder; the id never becomes one.
+	manager._slugs[5] = "hero"
+	_check(
+		manager.packages_dir(5) == "user://wired/rooms/7/packages/hero",
+		"the package directory must use the slug",
+	)
 	_check(
 		manager.runtime_path(5, 3, "scripts/hero.gd", "abc")
-		== "user://wired/rooms/7/packages/5/3-abc/scripts/hero.gd",
+		== "user://wired/rooms/7/packages/hero/3-abc/scripts/hero.gd",
 		"an explicit artifact key must select the keyed directory"
 	)
 	assert(manager.runtime_path(5, 3, "scripts/hero.gd") ==
-		"user://wired/rooms/7/packages/5/3/scripts/hero.gd")
+		"user://wired/rooms/7/packages/hero/3/scripts/hero.gd")
 	assert(manager._changed_files(
 		{"a.gd": "1", "b.gd": "2"},
 		{"a.gd": "1", "b.gd": "3", "c.gd": "4"},
@@ -204,6 +229,15 @@ func _test_recursive_sync() -> void:
 		and _manager.current_revision(DEP_ID) == 2
 		and _manager.current_revision(ROOT_ID) == 3,
 		"every package of the closure must store its applied revision"
+	)
+	var applied_snapshot := _manager.applied_packages()
+	_check(
+		applied_snapshot.has(str(ROOT_ID)),
+		"applied_packages must key packages by numeric id, got %s" % [applied_snapshot],
+	)
+	_check(
+		not applied_snapshot.has(_slug_for(ROOT_ID)),
+		"applied_packages must not key packages by slug, got %s" % [applied_snapshot],
 	)
 	_check(
 		_manager.scene_dependencies(ROOT_ID, "scenes/root.tscn")
@@ -663,6 +697,183 @@ func _test_restart_pruning() -> void:
 	restarted.free()
 
 
+## A package with no slug yet must not resolve, enumerate or delete a path: an
+## empty slug used to be the packages root itself.
+func _test_unknown_slug_never_touches_the_packages_root() -> void:
+	var root := _manager.packages_root()
+	_check(
+		DirAccess.dir_exists_absolute(root),
+		"the packages root must exist after the applies above",
+	)
+	var unknown := PackagesManager.new()
+	unknown.configure("http://127.0.0.1:1", ROOM)
+	_check(
+		unknown.packages_dir(987654).is_empty(),
+		"an unknown package must not resolve a folder",
+	)
+	_check(
+		unknown.revision_dir(987654, 1, "abc").is_empty(),
+		"an unknown package must not resolve a revision folder",
+	)
+	_check(
+		unknown.runtime_path(987654, 1, "scripts/x.gd").is_empty(),
+		"an unknown package must not resolve a file path",
+	)
+	unknown.forget_package(987654, true)
+	_check(
+		DirAccess.dir_exists_absolute(root),
+		"purging an unknown package must not delete the packages root",
+	)
+	_check(
+		DirAccess.dir_exists_absolute(_manager.packages_dir(ROOT_ID)),
+		"purging an unknown package must not delete another package's folder",
+	)
+	unknown.free()
+
+
+## The folder of an applied package outlives the process: a restart resolves it
+## from `package_slugs.json`, and a purge removes exactly that folder.
+func _test_slug_index_survives_restart() -> void:
+	_publish(SLUG_ID, 1, {"scripts/slug.gd": "slug-v1"})
+	var result: Dictionary = await _manager.sync_package(SLUG_ID, 1)
+	_check(
+		bool(result.get("ok", false)),
+		"the slug fixture must apply: %s" % result.get("error", ""),
+	)
+	if not bool(result.get("ok", false)):
+		return
+	var folder := _manager.packages_dir(SLUG_ID)
+	_check(
+		folder
+		== "user://wired/rooms/%s/packages/%s" % [ROOM, _slug_for(SLUG_ID)],
+		"the artifact must live in the slug folder, got %s" % folder,
+	)
+	var index_path := "user://wired/rooms/%s/package_slugs.json" % ROOM
+	_check(
+		FileAccess.file_exists(index_path),
+		"a successful apply must write the slug index",
+	)
+	_check(
+		not FileAccess.file_exists(index_path + ".tmp"),
+		"the temporary slug index must be renamed into place",
+	)
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(index_path))
+	_check(
+		typeof(parsed) == TYPE_DICTIONARY
+		and str((parsed as Dictionary).get(str(SLUG_ID), "")) == _slug_for(SLUG_ID),
+		"the index must map the numeric id to its slug, got %s" % [parsed],
+	)
+
+	var restarted := PackagesManager.new()
+	restarted.configure("http://127.0.0.1:1", ROOM)
+	restarted.request_override = _transport
+	_check(
+		str(restarted._slugs.get(SLUG_ID, "")) == _slug_for(SLUG_ID),
+		"a restart must restore the id -> slug mapping, got %s" % [restarted._slugs],
+	)
+	_check(
+		restarted.packages_dir(SLUG_ID) == folder,
+		"a restart must resolve the same folder before any manifest is read",
+	)
+	restarted.forget_package(SLUG_ID, true)
+	_check(
+		not DirAccess.dir_exists_absolute(folder),
+		"a purge must remove the slug folder the restart restored",
+	)
+	_check(
+		DirAccess.dir_exists_absolute(_manager.packages_dir(ROOT_ID)),
+		"a purge must not touch another package's slug folder",
+	)
+	restarted.free()
+
+
+## Each package owns one folder, so a stale revision directory of one package
+## must never make another package look newer on disk.
+func _test_independent_slug_revisions() -> void:
+	_publish(SLUG_ID, 2, {"scripts/slug.gd": "slug-v2"})
+	_publish(SLUG_OTHER_ID, 3, {"scripts/other.gd": "other-v3"})
+	var first: Dictionary = await _manager.sync_package(SLUG_ID, 2)
+	_check(bool(first.get("ok", false)), "the first slug fixture must apply")
+	var second: Dictionary = await _manager.sync_package(SLUG_OTHER_ID, 3)
+	_check(bool(second.get("ok", false)), "the second slug fixture must apply")
+	if not (bool(first.get("ok", false)) and bool(second.get("ok", false))):
+		return
+	# A stale artifact of the other package: nothing may consult it for SLUG_ID.
+	DirAccess.make_dir_recursive_absolute(
+		_manager.packages_dir(SLUG_OTHER_ID).path_join("9-stale")
+	)
+	_publish(SLUG_ID, 3, {"scripts/slug.gd": "slug-v3"})
+	_publish(SLUG_OTHER_ID, 4, {"scripts/other.gd": "other-v4"})
+
+	var restarted := PackagesManager.new()
+	restarted.configure("http://127.0.0.1:1", ROOM)
+	restarted.request_override = _transport
+	var advanced: Dictionary = await restarted.sync_package(SLUG_ID, 3)
+	_check(
+		bool(advanced.get("ok", false)) and not bool(advanced.get("skipped", false)),
+		"another slug's stale revision must not skip this package, got %s"
+		% [advanced],
+	)
+	_check(
+		restarted.current_revision(SLUG_ID) == 3,
+		"the newer revision of its own slug must apply",
+	)
+	_check(
+		_revision_dirs_for(restarted, SLUG_ID) == PackedStringArray(["2", "3"]),
+		"only its own slug's revision window may rotate, got %s"
+		% [_revision_dirs_for(restarted, SLUG_ID)],
+	)
+	var blocked: Dictionary = await restarted.sync_package(SLUG_OTHER_ID, 4)
+	_check(
+		bool(blocked.get("ok", false)) and bool(blocked.get("skipped", false)),
+		"its own stale revision must still block an older apply, got %s"
+		% [blocked],
+	)
+	_check(
+		int(blocked.get("revision", 0)) == 9,
+		"the skip must report the on-disk revision, got %s"
+		% blocked.get("revision", 0),
+	)
+	restarted.free()
+
+
+## A runtime manifest without a slug is malformed: no file may land in a
+## `<numeric id>` folder as a fallback.
+func _test_missing_slug_fails_the_apply() -> void:
+	_publish(SLUG_MISSING_ID, 1, {"scripts/missing.gd": "missing-v1"})
+	(_manifests["%d:1" % SLUG_MISSING_ID] as Dictionary).erase("slug")
+	_applied.clear()
+	_failed.clear()
+	var result: Dictionary = await _manager.sync_package(SLUG_MISSING_ID, 1)
+	_check(
+		not bool(result.get("ok", false)),
+		"a runtime manifest without a slug must fail",
+	)
+	_check(
+		str(result.get("error", "")).contains("slug"),
+		"the failure must name the missing slug, got %s" % result.get("error", ""),
+	)
+	_check(
+		_manager.packages_dir(SLUG_MISSING_ID).is_empty(),
+		"a slugless manifest must not resolve a folder",
+	)
+	_check(
+		not DirAccess.dir_exists_absolute(
+			"user://wired/rooms/%s/packages/%d" % [ROOM, SLUG_MISSING_ID]
+		),
+		"the numeric id must never become a fallback folder",
+	)
+	_check(
+		_failed.size() == 1
+		and int(_failed[0].get("package_id", 0)) == SLUG_MISSING_ID,
+		"a slugless manifest must emit package_failed, got %s" % [_failed],
+	)
+	_check(
+		_applied_for(SLUG_MISSING_ID).is_empty(),
+		"a slugless manifest must not emit package_applied",
+	)
+
+
 func _test_concurrent_shared_dependency() -> void:
 	_publish(SHARED_LIB_ID, 1, {"scripts/shared.gd": "shared-v1"})
 	_publish(
@@ -792,6 +1003,11 @@ func _test_cycle() -> void:
 		and not DirAccess.dir_exists_absolute(_manager.revision_dir(CYCLE_B_ID, 1)),
 		"a cycle must not create revision directories"
 	)
+	_check(
+		not DirAccess.dir_exists_absolute(_manager.packages_dir(CYCLE_A_ID))
+		and not DirAccess.dir_exists_absolute(_manager.packages_dir(CYCLE_B_ID)),
+		"a cycle must not create package folders"
+	)
 	_check(_manager._sync_order.is_empty(), "a cycle must not apply any package")
 	_check(
 		not _has_request_containing("/runtime-files/"),
@@ -869,6 +1085,7 @@ func _transport(path: String) -> Dictionary:
 			return _not_found()
 		return _json({
 			"packageId": package_id,
+			"slug": _slug_for(package_id),
 			"name": "package-%d" % package_id,
 			"revision": int(_latest[package_id]),
 		})
@@ -963,6 +1180,7 @@ func _publish(
 		})
 	_manifests["%d:%d" % [package_id, revision]] = {
 		"packageId": package_id,
+		"slug": _slug_for(package_id),
 		"name": "package-%d" % package_id,
 		"revision": revision,
 		"roomId": int(ROOM),
@@ -984,6 +1202,12 @@ func _dependency(package_id: int, revision: int) -> Dictionary:
 		"name": "package-%d" % package_id,
 		"artifactKey": _manifest_key(package_id, revision),
 	}
+
+
+## On-disk folder of a fixture package. The numeric id stays the identity in
+## state and snapshots; only the folder is addressed by a slug.
+func _slug_for(package_id: int) -> String:
+	return "pkg_%d" % package_id
 
 
 ## Artifact key of a manifest already in the fixture, or a deterministic
@@ -1115,8 +1339,14 @@ func _result_ok(result: Variant) -> bool:
 
 
 func _revision_dirs(package_id: int) -> PackedStringArray:
+	return _revision_dirs_for(_manager, package_id)
+
+
+func _revision_dirs_for(
+	manager: PackagesManager, package_id: int
+) -> PackedStringArray:
 	var names := PackedStringArray()
-	var dir := DirAccess.open(_manager.packages_dir(package_id))
+	var dir := DirAccess.open(manager.packages_dir(package_id))
 	if dir == null:
 		return names
 	for name: String in dir.get_directories():

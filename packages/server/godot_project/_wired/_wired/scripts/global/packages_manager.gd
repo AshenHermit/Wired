@@ -3,12 +3,19 @@ class_name PackagesManager
 
 ## Downloads published package runtime artifacts from the Wired backend and
 ## materializes them under
-## user://wired/rooms/<room>/packages/<package_id>/<revision>-<artifact_key>/.
+## user://wired/rooms/<room>/packages/<slug>/<revision>-<artifact_key>/.
 ##
 ## `user://` is a single directory per Godot project name, so every room runtime
 ## on the machine shares it. The room code is therefore part of the path: two
 ## rooms never see or overwrite each other's package files, and a room's data
 ## can be cleaned up on its own.
+##
+## The folder of a package is its slug, which the runtime manifest names. The
+## numeric package id stays the identity of every state dictionary, signal,
+## snapshot and `applied_packages()` key; only the on-disk path uses the slug.
+## The mapping is persisted in `<room>/package_slugs.json`, so a restart can
+## resolve folders before any manifest arrives, and it is never derived from the
+## id: an invalid or missing slug is an error, not a `str(id)` fallback.
 ##
 ## The artifact key is the backend's identity of the package's resolved
 ## closure. A same-revision publish of any dependency changes it, so the bytes
@@ -39,6 +46,8 @@ const PROTOCOL_VERSION := 1
 const DEFAULT_API_URL := "http://127.0.0.1:3000"
 const PACKAGES_ROOT := "user://wired/rooms"
 const UNASSIGNED_ROOM := "_unknown"
+## Slug of every package this room applied, next to its `packages/` directory.
+const SLUG_INDEX_FILE := "package_slugs.json"
 ## How long a sync waits for another coroutine that is applying the same package.
 const APPLY_LOCK_TIMEOUT_MS := 300_000
 ## A lock held longer than this is leaked: the applying coroutine aborted (an
@@ -68,6 +77,8 @@ var trace_sync_order := false
 var _current_revisions: Dictionary = {}
 # package id -> artifact key of the applied revision
 var _current_artifact_keys: Dictionary = {}
+# package id -> folder slug of the applied runtime manifest
+var _slugs: Dictionary = {}
 # package id -> { scene filepath: ["<package id>:<filepath>", ...] }
 var _scene_dependencies: Dictionary = {}
 # package id -> { filepath: sha256 } of the applied runtime artifact
@@ -114,6 +125,7 @@ func set_room(room_id: String) -> void:
 	_current_artifact_keys.clear()
 	_scene_dependencies.clear()
 	_file_hashes.clear()
+	_load_slug_index()
 
 
 ## Overrides the API root after `configure`. The Web build is served from the
@@ -136,8 +148,10 @@ func packages_root() -> String:
 	return PACKAGES_ROOT.path_join(room).path_join("packages")
 
 
+## Folder of one package, or an empty string when its manifest has not named a
+## slug yet.
 func packages_dir(package_id: int) -> String:
-	return _artifacts.package_dir(package_id)
+	return _artifacts.package_dir(str(_slugs.get(package_id, "")))
 
 
 ## Directory of one applied artifact. An empty `artifact_key` falls back to the
@@ -149,7 +163,7 @@ func revision_dir(
 	var key := artifact_key
 	if key.is_empty() and current_revision(package_id) == revision:
 		key = current_artifact_key(package_id)
-	return _artifacts.revision_dir(package_id, revision, key)
+	return _artifacts.revision_dir(str(_slugs.get(package_id, "")), revision, key)
 
 
 ## Absolute (user://) location of a file of an applied runtime artifact.
@@ -157,7 +171,76 @@ func revision_dir(
 func runtime_path(
 	package_id: int, revision: int, filepath: String, artifact_key: String = ""
 ) -> String:
-	return revision_dir(package_id, revision, artifact_key).path_join(filepath)
+	var dir := revision_dir(package_id, revision, artifact_key)
+	if dir.is_empty():
+		return ""
+	return dir.path_join(filepath)
+
+
+## `<room>/package_slugs.json`: the folder slug of every package this room has
+## applied.
+func _slug_index_path() -> String:
+	return PACKAGES_ROOT.path_join(room).path_join(SLUG_INDEX_FILE)
+
+
+## Restores the id -> slug mapping of the room. The file only holds data written
+## by a previous apply, so anything malformed is ignored instead of trusted.
+func _load_slug_index() -> void:
+	_slugs.clear()
+	var path := _slug_index_path()
+	if not FileAccess.file_exists(path):
+		return
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	if typeof(parsed) != TYPE_DICTIONARY:
+		push_warning("WIRED_PACKAGES_SLUG_INDEX_INVALID path=%s" % path)
+		return
+	var index: Dictionary = parsed
+	for raw_id: Variant in index:
+		var package_id := int(str(raw_id))
+		var slug := str(index[raw_id])
+		if package_id > 0 and ArtifactStore.is_valid_slug(slug):
+			_slugs[package_id] = slug
+
+
+## Remembers the folder a manifest assigned to a package. Slugs are immutable
+## per id, so this only confirms or introduces the mapping.
+func _remember_slug(package_id: int, slug: String) -> void:
+	if package_id <= 0 or not ArtifactStore.is_valid_slug(slug):
+		return
+	_slugs[package_id] = slug
+
+
+## Persists the index atomically: a crash mid-write leaves the previous file
+## intact instead of a truncated mapping a restart cannot read.
+func _save_slug_index() -> void:
+	var path := _slug_index_path()
+	var dir_error := DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	if dir_error != OK:
+		push_warning(
+			"WIRED_PACKAGES_SLUG_INDEX_SAVE_FAILED path=%s err=%s"
+			% [path, error_string(dir_error)]
+		)
+		return
+	var payload := {}
+	for package_id: Variant in _slugs:
+		payload[str(int(package_id))] = str(_slugs[package_id])
+	var temp := path + ".tmp"
+	var handle := FileAccess.open(temp, FileAccess.WRITE)
+	if handle == null:
+		push_warning(
+			"WIRED_PACKAGES_SLUG_INDEX_SAVE_FAILED path=%s err=%s"
+			% [temp, error_string(FileAccess.get_open_error())]
+		)
+		return
+	handle.store_string(JSON.stringify(payload))
+	handle.close()
+	var rename_error := DirAccess.rename_absolute(temp, path)
+	if rename_error != OK:
+		DirAccess.remove_absolute(temp)
+		push_warning(
+			"WIRED_PACKAGES_SLUG_INDEX_SAVE_FAILED path=%s err=%s"
+			% [path, error_string(rename_error)]
+		)
 
 
 ## Revision currently materialized for a package, or 0 when it was never
@@ -197,8 +280,11 @@ func forget_package(package_id: int, purge: bool = false) -> void:
 	_current_artifact_keys.erase(package_id)
 	_scene_dependencies.erase(package_id)
 	_file_hashes.erase(package_id)
-	if purge:
-		_remove_tree(packages_dir(package_id))
+	# No slug means no folder was ever resolved for this id: touching a path
+	# would risk deleting the packages root itself.
+	var slug := str(_slugs.get(package_id, ""))
+	if purge and not slug.is_empty():
+		_remove_tree(_artifacts.package_dir(slug))
 	print(
 		"WIRED_PACKAGES_FORGOTTEN package=%d purge=%s" % [package_id, purge]
 	)
@@ -365,18 +451,48 @@ func _sync_package_chain(
 			"package %d revision %d: another apply did not finish in time"
 			% [package_id, revision],
 		)
+	# A revision this process already published, or one that another coroutine
+	# applied while this call waited, needs no manifest read. A fresh call at
+	# the same revision still refreshes a changed artifact.
+	var known_revision := current_revision(package_id)
+	if known_revision > revision or (lock == ApplyLock.WAITED and known_revision == revision):
+		_release_apply_lock(package_id)
+		applied[package_id] = known_revision
+		return _skipped(known_revision, current_artifact_key(package_id))
+
+	# The runtime manifest names the package's slug, so it is read before any
+	# path is resolved. The numeric id can never become a folder name.
+	var manifest_result := await fetch_runtime_manifest(package_id, revision)
+	if not bool(manifest_result.get("ok", false)):
+		_release_apply_lock(package_id)
+		return _report_failure(
+			package_id,
+			revision,
+			"package %d revision %d: cannot read the runtime manifest: %s"
+			% [package_id, revision, manifest_result.get("error", "")],
+		)
+	var manifest: Dictionary = manifest_result.get("manifest", {})
+	var validated := PackageManifest.validate_runtime(manifest, package_id)
+	if not bool(validated.get("ok", false)):
+		_release_apply_lock(package_id)
+		return _report_failure(package_id, revision, str(validated.get("error", "")))
+	var slug := str(validated.get("slug", ""))
+	_remember_slug(package_id, slug)
+
 	# A revision already on disk (or one that another coroutine applied while
 	# this call waited) is not applied again. An older revision never replaces
 	# a newer one; an equal one is only skipped for a caller that had to wait,
 	# because a fresh call must still refresh a changed artifact.
 	var applied_revision := maxi(
-		current_revision(package_id), _artifacts.highest_revision(package_id)
+		current_revision(package_id), _artifacts.highest_revision(slug)
 	)
 	if applied_revision > revision or (lock == ApplyLock.WAITED and applied_revision == revision):
 		_release_apply_lock(package_id)
 		applied[package_id] = applied_revision
 		return _skipped(applied_revision, current_artifact_key(package_id))
-	var result := await _sync_package(package_id, revision, chain, applied)
+	var result := await _sync_package(
+		package_id, revision, chain, applied, manifest, validated
+	)
 	# Always released, successful or not: a failure result must not keep the
 	# package locked. An *aborted* coroutine cannot reach this line, so the lock
 	# also carries an acquisition timestamp and `_acquire_apply_lock` takes over
@@ -458,21 +574,18 @@ func _skipped(revision: int, artifact_key: String = "") -> Dictionary:
 	}
 
 
+## Applies a runtime manifest already fetched and validated by
+## `_sync_package_chain`, which needs its slug before it can resolve any path.
 func _sync_package(
-	package_id: int, revision: int, chain: Array, applied: Dictionary
+	package_id: int,
+	revision: int,
+	chain: Array,
+	applied: Dictionary,
+	manifest: Dictionary,
+	validated: Dictionary,
 ) -> Dictionary:
-	var manifest_result := await fetch_runtime_manifest(package_id, revision)
-	if not bool(manifest_result.get("ok", false)):
-		return _failure(
-			"package %d revision %d: cannot read the runtime manifest: %s"
-			% [package_id, revision, manifest_result.get("error", "")],
-			revision,
-		)
-	var manifest: Dictionary = manifest_result.get("manifest", {})
-	var validated := PackageManifest.validate_runtime(manifest, package_id)
-	if not bool(validated.get("ok", false)):
-		return _failure(str(validated.get("error", "")), revision)
 	var artifact_key := str(validated.get("artifact_key", ""))
+	var slug := str(validated.get("slug", ""))
 	var declared: Array = validated.get("files", [])
 	var token := str(validated.get("token", ""))
 
@@ -500,21 +613,21 @@ func _sync_package(
 	# 2. Stage the new artifact next to the old one, derive the runtime form of
 	# its raw images and audio, then swap. The final directory is keyed, so a
 	# refreshed closure never overwrites the bytes of the previous one.
-	var target_dir := revision_dir(package_id, revision, artifact_key)
-	var staging_error := _artifacts.stage(package_id, verified)
+	var target_dir := _artifacts.revision_dir(slug, revision, artifact_key)
+	var staging_error := _artifacts.stage(slug, verified)
 	if not staging_error.is_empty():
 		return _failure(staging_error, revision)
 	var derive_result := AssetDeriver.derive(
-		_artifacts.staging_dir(package_id),
+		_artifacts.staging_dir(slug),
 		target_dir,
 		verified.map(func(file: Dictionary) -> String: return str(file.filepath)),
 	)
 	if not bool(derive_result.get("ok", false)):
 		# Nothing derived stays in staging, so dropping it keeps the current
 		# artifact untouched.
-		_artifacts.remove_tree(_artifacts.staging_dir(package_id))
+		_artifacts.remove_tree(_artifacts.staging_dir(slug))
 		return _failure(str(derive_result.get("error", "")), revision)
-	var swap_error := _artifacts.swap(package_id, revision, artifact_key)
+	var swap_error := _artifacts.swap(slug, revision, artifact_key)
 	if not swap_error.is_empty():
 		return _failure(swap_error, revision)
 
@@ -526,6 +639,9 @@ func _sync_package(
 	_current_artifact_keys[package_id] = artifact_key
 	_scene_dependencies[package_id] = PackageManifest.scene_map(manifest)
 	_file_hashes[package_id] = hashes
+	# A restart resolves folders before any manifest arrives, so the slug of
+	# every applied package has to outlive the process.
+	_save_slug_index()
 
 	print(
 		"WIRED_PACKAGES_APPLIED package=%d revision=%d artifact=%s files=%d"

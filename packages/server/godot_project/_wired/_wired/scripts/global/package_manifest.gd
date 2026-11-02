@@ -24,13 +24,21 @@ const MAX_FILES := 2000
 const MAX_FILE_SIZE := 64 * 1024 * 1024
 ## sha256 digests are lowercase hex in the backend manifest.
 const SHA256_HEX_LENGTH := 64
+## A package slug becomes the runtime's on-disk folder name, so it is validated
+## here before any path is resolved. Numeric legacy slugs (`"7"`) are valid.
+const SLUG_PATTERN := "^[a-z0-9_]{1,64}$"
+
+static var _slug_regex := RegEx.create_from_string(SLUG_PATTERN)
 
 
-## Validates the file list, the artifact key and the download token of a
-## runtime manifest. Returns
-## `{ok, error, artifact_key, token, files}` where every file is
+## Validates the slug, the file list, the artifact key and the download token of
+## a runtime manifest. Returns
+## `{ok, error, slug, artifact_key, token, files}` where every file is
 ## `{filepath, size, sha256}` and already safe to use as a relative path.
 static func validate_runtime(manifest: Dictionary, package_id: int) -> Dictionary:
+	var slug := str(manifest.get("slug", ""))
+	if not is_valid_slug(slug):
+		return _invalid("runtime manifest of package %d has no valid slug" % package_id)
 	var artifact_key := str(manifest.get("artifactKey", ""))
 	if not is_valid_artifact_key(artifact_key):
 		return _invalid(
@@ -70,6 +78,7 @@ static func validate_runtime(manifest: Dictionary, package_id: int) -> Dictionar
 	return {
 		"ok": true,
 		"error": "",
+		"slug": slug,
 		"artifact_key": artifact_key,
 		"token": token,
 		"files": files,
@@ -157,6 +166,14 @@ static func is_valid_artifact_key(value: String) -> bool:
 		if not ((ch >= "0" and ch <= "9") or (ch >= "a" and ch <= "f")):
 			return false
 	return true
+
+
+## Whether `slug` is a safe package folder name: lowercase latin letters, digits
+## and underscores. Requiring the match to consume the whole input rejects
+## `"hero\n"`, which PCRE2's `$` would otherwise accept.
+static func is_valid_slug(value: String) -> bool:
+	var found := _slug_regex.search(value)
+	return found != null and found.get_string() == value
 
 
 ## A manifest path must stay inside the package artifact: relative, forward
