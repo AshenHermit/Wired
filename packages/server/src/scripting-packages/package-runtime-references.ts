@@ -1,8 +1,5 @@
 import path from 'path';
-import {
-  PackageSlugIndex,
-  resolvePackageTarget,
-} from './package-slug-index';
+import { PackageSlugIndex, resolvePackageTarget } from './package-slug-index';
 
 /** A text file decoded from a package revision, keyed by its package-relative path. */
 export interface PackageTextFile {
@@ -26,21 +23,18 @@ const TEXT_FILE_EXTENSIONS = new Set(['.tscn', '.tres', '.gd']);
 
 const SCENE_EXTENSION = '.tscn';
 
-/** `res://packages/<target>/<path>` inside any single- or double-quoted literal. */
-const PACKAGE_REFERENCE_RE =
-  /(["'])res:\/\/packages\/([a-z0-9_]{1,64})\/([^"'\r\n]+)\1/g;
-
 /**
- * `res://packages/<slug>/<path>` inside any single- or double-quoted literal.
- * Path validation allows numeric legacy slugs (`^[a-z0-9_]+$`, 1-64 chars);
- * digits are still interpreted as an id when the reference is resolved.
+ * `res://packages/<target>/<path>` inside any single- or double-quoted literal.
+ * The target is a numeric id or a slug; path validation allows numeric legacy
+ * slugs (`^[a-z0-9_]+$`, 1-64 chars), so digits are still interpreted as an id
+ * when the reference is resolved. The same grammar collects raw references and
+ * rewrites them, so it lives in one place.
  */
-const RAW_PACKAGE_REFERENCE_RE =
+export const PACKAGE_REFERENCE_RE =
   /(["'])res:\/\/packages\/([a-z0-9_]{1,64})\/([^"'\r\n]+)\1/g;
 
 /** Absolute `res://packages/<target>/<path>` written out of a quoted literal. */
-const PACKAGE_PATH_RE =
-  /^res:\/\/packages\/([a-z0-9_]{1,64})\/([^"'\r\n]+)$/;
+const PACKAGE_PATH_RE = /^res:\/\/packages\/([a-z0-9_]{1,64})\/([^"'\r\n]+)$/;
 
 /** A `path="..."` attribute or a `preload("...")` / `load("...")` argument. */
 const REFERENCE_PATH_RE =
@@ -117,7 +111,7 @@ export function collectRawPackageReferences(
   const refs: RawPackageFileReference[] = [];
   const seen = new Set<string>();
   mapCodeLines(text, (line) => {
-    for (const match of line.matchAll(RAW_PACKAGE_REFERENCE_RE)) {
+    for (const match of line.matchAll(PACKAGE_REFERENCE_RE)) {
       assertSafeRawPath(match[3]);
       const filepath = normalizeReferencePath(match[3]);
       if (filepath === null) {
@@ -325,10 +319,7 @@ type Reference =
   | { kind: 'relative'; filepath: string };
 
 /** Collects the paths a text file references via `path="..."` or preload/load. */
-function collectReferences(
-  text: string,
-  index: PackageSlugIndex,
-): Reference[] {
+function collectReferences(text: string, index: PackageSlugIndex): Reference[] {
   const refs: Reference[] = [];
   for (const line of text.split('\n')) {
     if (isCommentLine(line)) {

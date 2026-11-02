@@ -567,6 +567,67 @@ describe("PackagesTab", () => {
     expect(screen.getByLabelText("Slug")).toBeTruthy();
   });
 
+  it("shows a server slug conflict inside the open modal", async () => {
+    const createPackage = vi
+      .fn()
+      .mockRejectedValue(new Error("Slug уже занят"));
+
+    render(
+      <PackagesTab
+        packages={controller({ createPackage })}
+        authorId={42}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
+    fireEvent.change(screen.getByLabelText("Имя пакета"), {
+      target: { value: "New" },
+    });
+    fireEvent.change(screen.getByLabelText("Slug"), {
+      target: { value: "new" },
+    });
+
+    const submit = screen.getByRole("button", { name: "Создать" });
+    await waitFor(() => expect(submit).toHaveProperty("disabled", false));
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(screen.getByText("Slug уже занят")).toBeTruthy());
+    expect(screen.getByLabelText("Slug")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Создать" })).toBeTruthy();
+  });
+
+  it("retries a failed slug availability check from the modal", async () => {
+    const checkSlugAvailability = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue({ slug: "hero", available: true });
+
+    render(
+      <PackagesTab
+        packages={controller({ checkSlugAvailability })}
+        authorId={42}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
+    fireEvent.change(screen.getByLabelText("Slug"), {
+      target: { value: "hero" },
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Не удалось проверить slug. Попробуйте ещё раз"),
+      ).toBeTruthy(),
+    );
+    expect(checkSlugAvailability).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Проверить снова" }));
+
+    await waitFor(() => expect(screen.getByText("Slug свободен")).toBeTruthy());
+    expect(checkSlugAvailability).toHaveBeenCalledTimes(2);
+    expect(checkSlugAvailability).toHaveBeenLastCalledWith("hero");
+  });
+
   it("saves an edited package name", async () => {
     const updatePackageMetadata = vi
       .fn()

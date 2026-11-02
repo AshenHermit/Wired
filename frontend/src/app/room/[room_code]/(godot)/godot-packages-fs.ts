@@ -80,7 +80,7 @@ export const PACKAGE_SLUG_PATTERN = /^[a-z0-9_]{1,64}$/;
 
 export function assertPackageSlug(slug: string): string {
   if (typeof slug !== "string" || !PACKAGE_SLUG_PATTERN.test(slug)) {
-    throw new GodotFsError(`Invalid package slug: ${slug}`);
+    throw new GodotFsError(`Недопустимый slug пакета: ${slug}`);
   }
   return slug;
 }

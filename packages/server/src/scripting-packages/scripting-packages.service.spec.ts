@@ -85,6 +85,7 @@ describe('ScriptingPackagesService', () => {
       return new ScriptingPackagesService(
         packagesRepository as never,
         {} as never,
+        { findOne: jest.fn(async () => null) } as never,
       );
     }
 
@@ -177,6 +178,7 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           roomsRepository as never,
+          { findOne: jest.fn(async () => null) } as never,
         ),
       };
     }
@@ -231,6 +233,7 @@ describe('ScriptingPackagesService', () => {
       const service = new ScriptingPackagesService(
         packagesRepository as never,
         roomsRepository as never,
+        { findOne: jest.fn(async () => null) } as never,
       );
 
       await service.update(10, {
@@ -268,6 +271,7 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           {} as never,
+          { findOne: jest.fn(async () => null) } as never,
           storage as never,
         ),
       };
@@ -337,6 +341,7 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           {} as never,
+          { findOne: jest.fn(async () => null) } as never,
           undefined,
           dispatcher as never,
         ),
@@ -428,6 +433,7 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           {} as never,
+          { findOne: jest.fn(async () => null) } as never,
           undefined,
           undefined,
           delivery as never,
@@ -468,6 +474,7 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     options: {
       query?: jest.Mock;
       findOne?: jest.Mock;
+      liveFindOne?: jest.Mock;
       retiredFindOne?: jest.Mock;
       save?: jest.Mock;
       manager?: FakeManager;
@@ -477,7 +484,11 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     const retiredFindOne = options.retiredFindOne ?? jest.fn(async () => null);
     const manager =
       options.manager ??
-      makeTransactionManager({ retiredFindOne, save: options.save });
+      makeTransactionManager({
+        liveFindOne: options.liveFindOne,
+        retiredFindOne,
+        save: options.save,
+      });
     const packagesRepository = {
       query: options.query ?? jest.fn(async () => []),
       findOne:
@@ -490,11 +501,11 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     return new ScriptingPackagesService(
       packagesRepository as never,
       roomsRepository as never,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
       retiredRepository as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
     );
   }
 
@@ -571,30 +582,57 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     });
   });
 
-  it('rejects creation with a retired slug', async () => {
+  it('rejects creation with a retired slug and an actionable message', async () => {
     const service = makeSlugService({
       retiredFindOne: jest.fn(async () => ({ slug: 'hero', packageId: 7 })),
     });
-    await expect(
-      service.create(
-        { name: 'Hero', version: '0.1.0', slug: 'hero', authorId: 1 },
-        { id: 1 } as never,
-      ),
-    ).rejects.toMatchObject({ status: 409 });
+    const error = await service
+      .create({ name: 'Hero', version: '0.1.0', slug: 'hero', authorId: 1 }, {
+        id: 1,
+      } as never)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toEqual({
+      code: 'slug_retired',
+      slug: 'hero',
+      message: 'Этот slug был удалён и не может быть использован снова',
+    });
   });
 
-  it('maps a unique violation to slug_taken', async () => {
+  it('rejects creation with a live slug and an actionable message', async () => {
+    const service = makeSlugService({
+      liveFindOne: jest.fn(async () => ({ id: 7, slug: 'hero' })),
+    });
+    const error = await service
+      .create({ name: 'Hero', version: '0.1.0', slug: 'hero', authorId: 1 }, {
+        id: 1,
+      } as never)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toEqual({
+      code: 'slug_taken',
+      slug: 'hero',
+      message: 'Slug уже занят',
+    });
+  });
+
+  it('maps a unique violation to slug_taken with an actionable message', async () => {
     const service = makeSlugService({
       save: jest.fn(async () => {
-        throw { code: '23505' };
+        throw Object.assign(new Error('duplicate slug'), { code: '23505' });
       }),
     });
-    await expect(
-      service.create(
-        { name: 'Hero', version: '0.1.0', slug: 'hero', authorId: 1 },
-        { id: 1 } as never,
-      ),
-    ).rejects.toMatchObject({ status: 409, response: { code: 'slug_taken' } });
+    const error = await service
+      .create({ name: 'Hero', version: '0.1.0', slug: 'hero', authorId: 1 }, {
+        id: 1,
+      } as never)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toEqual({
+      code: 'slug_taken',
+      slug: 'hero',
+      message: 'Slug уже занят',
+    });
   });
 
   it('tombstones the slug before deleting the package', async () => {
@@ -669,6 +707,7 @@ describe('ScriptingPackagesService enable guard', () => {
     const service = new ScriptingPackagesService(
       packagesRepository as never,
       {} as never,
+      { findOne: jest.fn(async () => null) } as never,
       storage as never,
       undefined,
       undefined,

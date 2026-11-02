@@ -676,6 +676,7 @@ export function PackagesTab({
   const [slug, setSlug] = React.useState("");
   const [version, setVersion] = React.useState("0.1.0");
   const [slugState, setSlugState] = React.useState<SlugCheckState>("idle");
+  const [slugCheckAttempt, setSlugCheckAttempt] = React.useState(0);
   const [creating, setCreating] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
 
@@ -688,6 +689,7 @@ export function PackagesTab({
     setSlug("");
     setVersion("0.1.0");
     setSlugState("idle");
+    setSlugCheckAttempt(0);
     setCreateError(null);
   }, []);
 
@@ -738,7 +740,13 @@ export function PackagesTab({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [checkSlugAvailability, createOpen, slug]);
+  }, [checkSlugAvailability, createOpen, slug, slugCheckAttempt]);
+
+  const retrySlugCheck = () => {
+    const trimmed = slug.trim();
+    if (!trimmed || !isSlugValid(trimmed)) return;
+    setSlugCheckAttempt((attempt) => attempt + 1);
+  };
 
   const canCreate =
     Boolean(authorId) &&
@@ -963,6 +971,17 @@ export function PackagesTab({
                     <p className={`text-xs ${slugHintClass(slugState)}`}>
                       {SLUG_HINT[slugState]}
                     </p>
+                  )}
+                  {slugState === "error" && (
+                    <Button
+                      type="button"
+                      variant="link"
+                      size="sm"
+                      className="h-auto px-0 text-xs"
+                      onClick={retrySlugCheck}
+                    >
+                      Проверить снова
+                    </Button>
                   )}
                 </div>
               </div>

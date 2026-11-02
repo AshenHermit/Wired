@@ -31,6 +31,7 @@ const KEY_ROOT_ID := 72
 const SLUG_ID := 80
 const SLUG_OTHER_ID := 81
 const SLUG_MISSING_ID := 82
+const SLUG_SKIPPED_ID := 83
 
 var _manager: PackagesManager
 # "package:revision" -> runtime manifest dictionary
@@ -82,6 +83,7 @@ func _run() -> void:
 	await _test_restart_pruning()
 	await _test_unknown_slug_never_touches_the_packages_root()
 	await _test_slug_index_survives_restart()
+	await _test_skipped_apply_persists_slug_index()
 	await _test_independent_slug_revisions()
 	await _test_missing_slug_fails_the_apply()
 	await _test_concurrent_shared_dependency()
@@ -785,6 +787,86 @@ func _test_slug_index_survives_restart() -> void:
 		"a purge must not touch another package's slug folder",
 	)
 	restarted.free()
+
+
+## A skipped apply still has to persist the slug it learns. A folder can exist
+## from an older runtime that never wrote the index, and the next restart must
+## still resolve and purge exactly that folder.
+func _test_skipped_apply_persists_slug_index() -> void:
+	_publish(SLUG_SKIPPED_ID, 1, {"scripts/skipped.gd": "skipped-v1"})
+	_publish(SLUG_SKIPPED_ID, 2, {"scripts/skipped.gd": "skipped-v2"})
+	# A newer revision is on disk, so a request for revision 1 is a skipped
+	# apply rather than a same-revision refresh.
+	var applied: Dictionary = await _manager.sync_package(SLUG_SKIPPED_ID, 2)
+	_check(
+		bool(applied.get("ok", false)),
+		"the skipped-apply fixture must apply first: %s" % applied.get("error", ""),
+	)
+	if not bool(applied.get("ok", false)):
+		return
+	var folder := _manager.packages_dir(SLUG_SKIPPED_ID)
+	var slug := _slug_for(SLUG_SKIPPED_ID)
+	var index_path := "user://wired/rooms/%s/package_slugs.json" % ROOM
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(index_path))
+	var index: Dictionary = parsed if typeof(parsed) == TYPE_DICTIONARY else {}
+	# Simulate a missing entry: the folder is there, the index is not.
+	index.erase(str(SLUG_SKIPPED_ID))
+	var handle := FileAccess.open(index_path, FileAccess.WRITE)
+	handle.store_string(JSON.stringify(index))
+	handle.close()
+
+	var restarted := PackagesManager.new()
+	restarted.configure("http://127.0.0.1:1", ROOM)
+	restarted.request_override = _transport
+	_check(
+		not restarted._slugs.has(SLUG_SKIPPED_ID),
+		"the fixture must start without an index entry for the skipped package",
+	)
+	_check(
+		DirAccess.dir_exists_absolute(folder),
+		"the skipped fixture folder must still be on disk at %s" % folder,
+	)
+	_check(
+		restarted._artifacts.highest_revision(slug) == 2,
+		"the restart must see revision 2 on disk, got %d"
+		% restarted._artifacts.highest_revision(slug),
+	)
+	var skipped: Dictionary = await restarted.sync_package(SLUG_SKIPPED_ID, 1)
+	_check(
+		bool(skipped.get("ok", false)) and bool(skipped.get("skipped", false)),
+		"the older revision already on disk must be skipped, got %s" % [skipped],
+	)
+	_check(
+		int(skipped.get("revision", 0)) == 2,
+		"the skip must report the on-disk revision, got %s"
+		% skipped.get("revision", 0),
+	)
+	restarted.free()
+
+	var after_skip: Variant = JSON.parse_string(FileAccess.get_file_as_string(index_path))
+	_check(
+		typeof(after_skip) == TYPE_DICTIONARY
+		and str((after_skip as Dictionary).get(str(SLUG_SKIPPED_ID), "")) == slug,
+		"a skipped apply must persist the slug it learned, got %s" % [after_skip],
+	)
+
+	var after_restart := PackagesManager.new()
+	after_restart.configure("http://127.0.0.1:1", ROOM)
+	after_restart.request_override = _transport
+	_check(
+		after_restart.packages_dir(SLUG_SKIPPED_ID) == folder,
+		"a restart must resolve the slug persisted by a skipped apply",
+	)
+	after_restart.forget_package(SLUG_SKIPPED_ID, true)
+	_check(
+		not DirAccess.dir_exists_absolute(folder),
+		"a purge must remove the folder of a slug learned by a skipped apply",
+	)
+	_check(
+		DirAccess.dir_exists_absolute(_manager.packages_dir(ROOT_ID)),
+		"the skipped-apply purge must not touch another package's folder",
+	)
+	after_restart.free()
 
 
 ## Each package owns one folder, so a stale revision directory of one package

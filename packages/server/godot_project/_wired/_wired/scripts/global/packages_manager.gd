@@ -203,11 +203,16 @@ func _load_slug_index() -> void:
 
 
 ## Remembers the folder a manifest assigned to a package. Slugs are immutable
-## per id, so this only confirms or introduces the mapping.
+## per id, so this only confirms or introduces the mapping. A changed mapping
+## is written immediately: a skipped apply has no later `_save_slug_index`, and
+## a restart without the index could not purge the package's folder.
 func _remember_slug(package_id: int, slug: String) -> void:
 	if package_id <= 0 or not ArtifactStore.is_valid_slug(slug):
 		return
+	if str(_slugs.get(package_id, "")) == slug:
+		return
 	_slugs[package_id] = slug
+	_save_slug_index()
 
 
 ## Persists the index atomically: a crash mid-write leaves the previous file

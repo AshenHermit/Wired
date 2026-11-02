@@ -47,6 +47,8 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     private readonly packagesRepository: Repository<ScriptingPackage>,
     @InjectRepository(Room)
     private readonly roomsRepository: Repository<Room>,
+    @InjectRepository(RetiredPackageSlug)
+    private readonly retiredSlugsRepository: Repository<RetiredPackageSlug>,
     @Optional()
     private readonly storage?: PackageStorageService,
     @Optional()
@@ -57,9 +59,6 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     @Optional()
     @InjectRepository(ScriptingPackageRevision)
     private readonly revisionsRepository?: Repository<ScriptingPackageRevision>,
-    @Optional()
-    @InjectRepository(RetiredPackageSlug)
-    private readonly retiredSlugsRepository?: Repository<RetiredPackageSlug>,
   ) {}
 
   /**
@@ -124,7 +123,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     if (live) {
       return { slug: normalized, available: false, reason: 'taken' };
     }
-    const retired = await this.retiredSlugsRepository?.findOne({
+    const retired = await this.retiredSlugsRepository.findOne({
       where: { slug: normalized },
     });
     if (retired) {
@@ -250,13 +249,21 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
         const packages = manager.getRepository(ScriptingPackage);
         const live = await packages.findOne({ where: { slug } });
         if (live) {
-          throw new ConflictException({ code: 'slug_taken', slug });
+          throw new ConflictException({
+            code: 'slug_taken',
+            slug,
+            message: 'Slug уже занят',
+          });
         }
         const retired = await manager
           .getRepository(RetiredPackageSlug)
           .findOne({ where: { slug } });
         if (retired) {
-          throw new ConflictException({ code: 'slug_retired', slug });
+          throw new ConflictException({
+            code: 'slug_retired',
+            slug,
+            message: 'Этот slug был удалён и не может быть использован снова',
+          });
         }
 
         const pkg = packages.create({
@@ -272,7 +279,11 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
           return saved.id;
         } catch (error) {
           if (isUniqueViolation(error)) {
-            throw new ConflictException({ code: 'slug_taken', slug });
+            throw new ConflictException({
+              code: 'slug_taken',
+              slug,
+              message: 'Slug уже занят',
+            });
           }
           throw error;
         }

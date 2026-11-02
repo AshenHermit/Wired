@@ -22,6 +22,7 @@ import path from 'path';
 import request from 'supertest';
 import { RuntimeAuthGuard } from './guards/runtime-auth.guard';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
+import { createValidationPipe } from 'src/common/validation';
 import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
 import { Room } from 'src/database/entities/room.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
@@ -560,14 +561,15 @@ describe('ScriptingPackagesController lifecycle routes', () => {
 describe('ScriptingPackagesController slug route ordering', () => {
   let app: INestApplication;
   let findOne: jest.Mock;
+  let update: jest.Mock;
   let checkSlugAvailability: jest.Mock;
 
   beforeAll(async () => {
-    findOne = jest.fn(async (id: number) => ({ id, slug: 'hero' }));
-    checkSlugAvailability = jest.fn(async (slug: string) => ({
-      slug,
-      available: true,
-    }));
+    findOne = jest.fn((id: number) => Promise.resolve({ id, slug: 'hero' }));
+    update = jest.fn((id: number) => Promise.resolve({ id, slug: 'hero' }));
+    checkSlugAvailability = jest.fn((slug: string) =>
+      Promise.resolve({ slug, available: true }),
+    );
 
     const moduleRef = await Test.createTestingModule({
       controllers: [ScriptingPackagesController],
@@ -577,6 +579,7 @@ describe('ScriptingPackagesController slug route ordering', () => {
           useValue: {
             assertPackageEditing: jest.fn(),
             findOne,
+            update,
             checkSlugAvailability,
           },
         },
@@ -598,6 +601,7 @@ describe('ScriptingPackagesController slug route ordering', () => {
       .compile();
 
     app = moduleRef.createNestApplication();
+    app.useGlobalPipes(createValidationPipe());
     await app.init();
   });
 
@@ -622,5 +626,23 @@ describe('ScriptingPackagesController slug route ordering', () => {
     await request(app.getHttpServer()).get('/scripting-packages/7').expect(200);
 
     expect(findOne).toHaveBeenCalledWith(7);
+  });
+
+  it('rejects a slug field in PATCH through the global validation pipe', async () => {
+    await request(app.getHttpServer())
+      .patch('/scripting-packages/7')
+      .send({ slug: 'other', name: 'Renamed' })
+      .expect(400);
+
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('accepts a PATCH without slug', async () => {
+    await request(app.getHttpServer())
+      .patch('/scripting-packages/7')
+      .send({ name: 'Renamed' })
+      .expect(200);
+
+    expect(update).toHaveBeenCalledWith(7, { name: 'Renamed' });
   });
 });

@@ -114,7 +114,7 @@ describe("assertPackageSlug", () => {
       "hero/2",
       "a".repeat(65),
     ]) {
-      expect(() => assertPackageSlug(slug)).toThrow(GodotFsError);
+      expect(() => assertPackageSlug(slug)).toThrow("Недопустимый slug пакета");
     }
   });
 });
