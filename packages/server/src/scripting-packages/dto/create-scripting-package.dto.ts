@@ -4,6 +4,8 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Matches,
+  MaxLength,
   MinLength,
   ValidateNested,
 } from 'class-validator';
@@ -36,6 +38,14 @@ export class PhysicalFileDto implements PhysicalFile {
 }
 
 export class CreateScriptingPackageDto {
+  @IsString()
+  @MaxLength(64)
+  @Matches(/^(?=.*[a-z])[a-z0-9_]+$/, {
+    message:
+      'slug must contain lowercase latin letters, digits or _, and at least one letter',
+  })
+  slug: string;
+
   @ApiProperty({ example: 'My package', description: 'Package title' })
   @IsString()
   @MinLength(1)

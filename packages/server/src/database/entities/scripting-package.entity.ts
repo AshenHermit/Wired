@@ -40,6 +40,9 @@ export class ScriptingPackage {
   })
   public updatedAt: Date;
 
+  @Column({ type: 'varchar', length: 64, unique: true, nullable: true })
+  slug: string;
+
   @ApiProperty({ example: 'Untitled', description: 'package title' })
   @Column({ default: 'Untitled' })
   name: string;

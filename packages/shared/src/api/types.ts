@@ -109,6 +109,7 @@ export type Room = {
 
 export type ScriptingPackage = {
   id: number;
+  slug: string;
   name: string;
   version: string;
   description: string;
@@ -137,6 +138,7 @@ export type CreateRoomPayload = {
 export type UpdateRoomPayload = Partial<CreateRoomPayload>;
 
 export type CreateScriptingPackagePayload = {
+  slug: string;
   name: string;
   version: string;
   description?: string;
@@ -148,7 +150,7 @@ export type CreateScriptingPackagePayload = {
 };
 
 export type UpdateScriptingPackagePayload =
-  Partial<CreateScriptingPackagePayload> & {
+  Partial<Omit<CreateScriptingPackagePayload, "slug">> & {
     enabled?: boolean;
   };
 

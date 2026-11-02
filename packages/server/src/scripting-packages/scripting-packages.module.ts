@@ -4,6 +4,7 @@ import { ScriptingPackage } from 'src/database/entities/scripting-package.entity
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { User } from 'src/database/entities/user.entity';
 import { Room } from 'src/database/entities/room.entity';
+import { RetiredPackageSlug } from 'src/database/entities/retired-package-slug.entity';
 import { ScriptingPackagesService } from './scripting-packages.service';
 import { ScriptingPackagesController } from './scripting-packages.controller';
 import { PackageRevisionsService } from './package-revisions.service';
@@ -19,6 +20,7 @@ import { GodotGameModule } from 'src/godot-game/godot-game.module';
     TypeOrmModule.forFeature([
       ScriptingPackage,
       ScriptingPackageRevision,
+      RetiredPackageSlug,
       User,
       Room,
     ]),
