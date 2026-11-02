@@ -38,7 +38,9 @@ FROM base AS final
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build /app/frontend ./frontend
-# Прод-зависимости кладутся последними: иначе их перетрёт dev-дерево из build.
+# Dev-дерево из build приносит свои node_modules: без удаления они останутся
+# в образе, потому что COPY из prod-deps только добавляет файлы поверх.
+RUN rm -rf /app/frontend/node_modules
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=prod-deps /app/frontend/node_modules ./frontend/node_modules
 EXPOSE 3000

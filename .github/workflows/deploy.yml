@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: Ветка или тег для деплоя (по умолчанию main)
+        required: false
+        default: main
+        type: string
 
 concurrency:
   group: deploy-production
@@ -54,6 +60,8 @@ jobs:
       SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/home/Wired' }}
       PROD_ENV: ${{ secrets.PROD_ENV }}
+      # Ручной запуск с ветки не должен уезжать в прод незаметно: по умолчанию main.
+      DEPLOY_REF: ${{ inputs.ref || 'main' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -67,15 +75,34 @@ jobs:
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
+      - name: Проверить каталог деплоя
+        run: |
+          set -euo pipefail
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "$(printf 'DEPLOY_PATH=%q bash -s' "$DEPLOY_PATH")" <<'REMOTE'
+          set -euo pipefail
+          hint="sudo chown -R $(id -un) $DEPLOY_PATH"
+          if ! mkdir -p "$DEPLOY_PATH" 2>/dev/null; then
+            printf '[deploy] ОШИБКА: нет прав создать %s; выполните: %s\n' "$DEPLOY_PATH" "$hint" >&2
+            exit 2
+          fi
+          if [ ! -w "$DEPLOY_PATH" ] || { [ -e "$DEPLOY_PATH/.env" ] && [ ! -w "$DEPLOY_PATH/.env" ]; }; then
+            printf '[deploy] ОШИБКА: нет прав на запись в %s; выполните: %s\n' "$DEPLOY_PATH" "$hint" >&2
+            exit 2
+          fi
+          REMOTE
+
       - name: Записать .env на сервер
         run: |
           set -euo pipefail
+          env_file=$(printf %q "$DEPLOY_PATH/.env")
           printf '%s\n' "$PROD_ENV" | ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
-            "umask 077 && mkdir -p '$DEPLOY_PATH' && cat > '$DEPLOY_PATH/.env'"
+            "umask 077 && cat > $env_file"
 
       - name: Собрать и пересоздать контейнеры
         run: |
           set -euo pipefail
+          ref=$(printf %q "$DEPLOY_REF")
           ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
-            "DEPLOY_PATH='$DEPLOY_PATH' bash -s -- '$GITHUB_REF_NAME'" \
+            "DEPLOY_PATH=$(printf %q "$DEPLOY_PATH") bash -s -- $ref" \
             < scripts/deploy-remote.sh

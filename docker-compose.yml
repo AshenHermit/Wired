@@ -13,7 +13,8 @@ services:
     volumes:
       - wired_db:/var/lib/postgresql
     ports:
-      - "${DB_EXTERNAL_PORT}:5432"
+      # Только loopback: бэкенд подключается по имени сервиса, наружу БД не нужна.
+      - "127.0.0.1:${DB_EXTERNAL_PORT}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 10s

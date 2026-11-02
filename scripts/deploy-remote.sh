@@ -98,6 +98,21 @@ ensure_network() {
   fi
 }
 
+check_path_ownership() {
+  if [ ! -e "$DEPLOY_PATH" ]; then
+    return 0
+  fi
+  if [ "$DRY_RUN" = "1" ]; then
+    log "dry-run: проверка владельца $DEPLOY_PATH пропущена"
+    return 0
+  fi
+  local foreign
+  foreign=$(find "$DEPLOY_PATH" -maxdepth 2 ! -user "$(id -un)" -print -quit 2>/dev/null || true)
+  if [ -n "$foreign" ]; then
+    die "в $DEPLOY_PATH есть файлы другого владельца (например $foreign); выполните: $SUDO chown -R $(id -un) $DEPLOY_PATH" 2
+  fi
+}
+
 sync_code() {
   if [ -d "$DEPLOY_PATH/.git" ]; then
     git config --global --add safe.directory "$DEPLOY_PATH" >/dev/null 2>&1 || true
@@ -177,6 +192,7 @@ main() {
   detect_sudo
   ensure_docker
   ensure_network
+  check_path_ownership
   sync_code
   normalize_env
   validate_env

@@ -56,6 +56,7 @@ COPY . .
 RUN pnpm build:shared \
     && pnpm build:server
 COPY --from=assets /opt/godot-data /opt/godot-data
+COPY --from=assets /app/packages/server/godot_editor ./packages/server/godot_editor
 COPY --from=runtime /app/packages/server/godot_runtime ./packages/server/godot_runtime
 RUN node packages/server/scripts/export-godot-web.mjs
 
