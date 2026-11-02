@@ -8,12 +8,14 @@ import {
   Loader2Icon,
   MoreHorizontalIcon,
   PackageIcon,
+  PencilIcon,
   PlusIcon,
   PowerIcon,
   RefreshCwIcon,
   Trash2Icon,
   TriangleAlertIcon,
   UploadIcon,
+  XIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -71,6 +73,45 @@ const RUNTIME_LABEL: Record<string, string> = {
   applied: "runtime применил ревизию",
   failed: "runtime не смог применить ревизию",
 };
+
+/** Mirrors the server: lowercase latin letters, digits or `_`, one letter. */
+const SLUG_PATTERN = /^(?=.*[a-z])[a-z0-9_]+$/;
+const SLUG_MAX_LENGTH = 64;
+/** How long the creation form waits before asking the backend about a slug. */
+const SLUG_CHECK_DEBOUNCE_MS = 300;
+
+type SlugCheckState =
+  | "idle"
+  | "invalid"
+  | "checking"
+  | "available"
+  | "taken"
+  | "retired"
+  | "error";
+
+const SLUG_HINT: Partial<Record<SlugCheckState, string>> = {
+  invalid: "Строчные латинские буквы, цифры и _, минимум одна буква",
+  checking: "Проверяем slug…",
+  available: "Slug свободен",
+  taken: "Slug уже занят",
+  retired: "Этот slug был удалён и не может быть использован снова",
+  error: "Не удалось проверить slug. Попробуйте ещё раз",
+};
+
+function isSlugValid(slug: string): boolean {
+  return (
+    slug.length > 0 &&
+    slug.length <= SLUG_MAX_LENGTH &&
+    SLUG_PATTERN.test(slug)
+  );
+}
+
+function slugHintClass(state: SlugCheckState): string {
+  if (state === "taken" || state === "retired" || state === "error") {
+    return "text-destructive";
+  }
+  return "text-muted-foreground";
+}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -209,6 +250,185 @@ function useConfirmedAction(
   );
 }
 
+/**
+ * Inline editor of one package metadata field. The pencils stay visible for
+ * every viewer: the backend enforces who may edit, and a failure is rendered in
+ * the card through the controller's action state.
+ */
+function MetadataField({
+  entry,
+  field,
+  packages,
+  emptyError,
+}: {
+  entry: RoomPackageEntry;
+  field: "name" | "version";
+  packages: RoomPackagesController;
+  emptyError: string;
+}) {
+  const [editing, setEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const inputLabel = field === "name" ? "Имя пакета" : "Версия";
+  const actionError = packages.actionFor(entry.packageId).error;
+
+  const start = () => {
+    setDraft(entry[field]);
+    setError(null);
+    setEditing(true);
+  };
+
+  const cancel = () => {
+    setEditing(false);
+    setDraft("");
+    setError(null);
+  };
+
+  const save = async () => {
+    const value = draft.trim();
+    if (!value) {
+      setError(emptyError);
+      return;
+    }
+    if (value === entry[field]) {
+      cancel();
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await packages.updatePackageMetadata(entry.packageId, {
+        [field]: value,
+      });
+      setEditing(false);
+      setDraft("");
+    } catch (failure) {
+      setError(messageOf(failure));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void save();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      cancel();
+    }
+  };
+
+  const controls = (
+    <>
+      <Input
+        aria-label={inputLabel}
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={handleKeyDown}
+        disabled={saving}
+        autoFocus
+        className={field === "name" ? "h-8 w-44" : "h-7 w-28 text-xs"}
+      />
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        className="size-6"
+        aria-label={`Сохранить ${field === "name" ? "имя" : "версию"} пакета`}
+        title="Сохранить"
+        onClick={() => void save()}
+        disabled={saving}
+      >
+        {saving ? (
+          <Loader2Icon className="size-3.5 animate-spin" />
+        ) : (
+          <CheckIcon className="size-3.5" />
+        )}
+      </Button>
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        className="size-6"
+        aria-label={`Отменить редактирование ${field === "name" ? "имени" : "версии"}`}
+        title="Отмена"
+        onClick={cancel}
+        disabled={saving}
+      >
+        <XIcon className="size-3.5" />
+      </Button>
+    </>
+  );
+
+  const errorBlock =
+    error && error !== actionError ? (
+      <span className="text-xs text-destructive">{error}</span>
+    ) : null;
+
+  if (field === "name") {
+    return (
+      <span className="flex min-w-0 flex-col gap-1">
+        <span className="flex min-w-0 items-center gap-1">
+          <PackageIcon className="size-4 shrink-0 text-muted-foreground" />
+          {editing ? (
+            controls
+          ) : (
+            <>
+              <span className="truncate text-base font-semibold">
+                {entry.name}
+              </span>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="size-6"
+                aria-label="Редактировать имя пакета"
+                title="Редактировать имя пакета"
+                onClick={start}
+              >
+                <PencilIcon className="size-3.5" />
+              </Button>
+            </>
+          )}
+        </span>
+        {errorBlock}
+      </span>
+    );
+  }
+
+  return (
+    <span className="flex flex-col gap-1">
+      <span className="flex items-center gap-1">
+        {editing ? (
+          controls
+        ) : (
+          <>
+            <span>
+              {entry.version ? `версия ${entry.version}` : "версия не указана"}
+            </span>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="size-5"
+              aria-label="Редактировать версию"
+              title="Редактировать версию"
+              onClick={start}
+            >
+              <PencilIcon className="size-3" />
+            </Button>
+          </>
+        )}
+      </span>
+      {errorBlock}
+    </span>
+  );
+}
+
 function PackageCard({
   entry,
   packages,
@@ -236,25 +456,45 @@ function PackageCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="flex items-center gap-2 text-base font-semibold">
-              <PackageIcon className="size-4 text-muted-foreground" />
-              {entry.name}
+            <MetadataField
+              entry={entry}
+              field="name"
+              packages={packages}
+              emptyError="Имя пакета не может быть пустым"
+            />
+            <span
+              className="font-mono text-xs text-muted-foreground"
+              title="Slug пакета"
+            >
+              #{entry.slug}
             </span>
-            <span className="text-xs text-muted-foreground">#{entry.packageId}</span>
             <span
               className={`rounded-full border px-2 py-0.5 text-xs ${STATUS_CLASS[entry.status]}`}
             >
               {STATUS_LABEL[entry.status]}
             </span>
           </div>
-          <div className="mt-1 text-xs text-muted-foreground">
-            {entry.version ? `версия ${entry.version}` : "версия не указана"}
-            {entry.publishedRevision !== null
-              ? ` · опубликована ревизия ${entry.publishedRevision}`
-              : " · опубликованных ревизий нет"}
-            {entry.loaded && entry.loadedRevision !== null
-              ? ` · в редакторе ревизия ${entry.loadedRevision === 0 ? "не опубликована" : entry.loadedRevision}`
-              : ""}
+          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+            <MetadataField
+              entry={entry}
+              field="version"
+              packages={packages}
+              emptyError="Версия не может быть пустой"
+            />
+            <span>
+              {entry.publishedRevision !== null
+                ? `· опубликована ревизия ${entry.publishedRevision}`
+                : "· опубликованных ревизий нет"}
+            </span>
+            {entry.loaded && entry.loadedRevision !== null && (
+              <span>
+                {`· в редакторе ревизия ${
+                  entry.loadedRevision === 0
+                    ? "не опубликована"
+                    : entry.loadedRevision
+                }`}
+              </span>
+            )}
           </div>
         </div>
 
@@ -431,14 +671,94 @@ export function PackagesTab({
   packages: RoomPackagesController;
   authorId: number | null;
 }) {
+  const [createOpen, setCreateOpen] = React.useState(false);
   const [name, setName] = React.useState("");
   const [slug, setSlug] = React.useState("");
   const [version, setVersion] = React.useState("0.1.0");
+  const [slugState, setSlugState] = React.useState<SlugCheckState>("idle");
   const [creating, setCreating] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
 
   const { confirm, dialog } = useConfirmDialog();
   const runConfirmed = useConfirmedAction(confirm);
+  const checkSlugAvailability = packages.checkSlugAvailability;
+
+  const resetCreateForm = React.useCallback(() => {
+    setName("");
+    setSlug("");
+    setVersion("0.1.0");
+    setSlugState("idle");
+    setCreateError(null);
+  }, []);
+
+  const openCreate = () => {
+    resetCreateForm();
+    setCreating(false);
+    setCreateOpen(true);
+  };
+
+  const closeCreate = () => {
+    setCreateOpen(false);
+    resetCreateForm();
+  };
+
+  /**
+   * Availability is advisory: the server still rejects a taken or retired slug
+   * on POST. A response that arrives after the field changed is ignored.
+   */
+  React.useEffect(() => {
+    if (!createOpen) return;
+    const trimmed = slug.trim();
+    if (!trimmed) {
+      setSlugState("idle");
+      return;
+    }
+    if (!isSlugValid(trimmed)) {
+      setSlugState("invalid");
+      return;
+    }
+    setSlugState("checking");
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void checkSlugAvailability(trimmed)
+        .then((result) => {
+          if (cancelled) return;
+          if (result.available) {
+            setSlugState("available");
+          } else {
+            setSlugState(result.reason === "retired" ? "retired" : "taken");
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setSlugState("error");
+        });
+    }, SLUG_CHECK_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [checkSlugAvailability, createOpen, slug]);
+
+  const canCreate =
+    Boolean(authorId) &&
+    packages.fsReady &&
+    name.trim().length > 0 &&
+    slugState === "available" &&
+    !creating;
+
+  /**
+   * The state follows the input synchronously, so a submit can never rely on a
+   * stale `available` from the previous value while the debounce is pending.
+   */
+  const handleSlugChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const next = event.target.value.toLowerCase();
+    setSlug(next);
+    const trimmed = next.trim();
+    setSlugState(
+      !trimmed ? "idle" : isSlugValid(trimmed) ? "checking" : "invalid",
+    );
+  };
 
   const handleDownload = (entry: RoomPackageEntry) => {
     void runConfirmed(
@@ -494,8 +814,9 @@ export function PackagesTab({
       title: "Удалить пакет из комнаты?",
       description: (
         <>
-          Пакет <strong>{entry.name}</strong> (#{entry.packageId}) будет удалён
-          вместе с ревизиями и артефактами. Отменить это нельзя.
+          Пакет <strong>{entry.name}</strong>{" "}
+          <span className="font-mono">#{entry.slug}</span> будет удалён вместе с
+          ревизиями и артефактами. Отменить это нельзя.
         </>
       ),
       confirmLabel: "Удалить навсегда",
@@ -509,23 +830,23 @@ export function PackagesTab({
     }
   };
 
-  const handleCreate = async (event: React.FormEvent) => {
+  const handleCreate = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!authorId) {
       setCreateError("Войдите в аккаунт, чтобы создавать пакеты.");
       return;
     }
+    if (!canCreate) return;
     setCreating(true);
     setCreateError(null);
     try {
       await packages.createPackage(
-        name,
+        name.trim(),
         authorId,
         version.trim() || "0.1.0",
         slug.trim(),
       );
-      setName("");
-      setSlug("");
+      closeCreate();
     } catch (error) {
       setCreateError(messageOf(error));
     } finally {
@@ -543,21 +864,27 @@ export function PackagesTab({
               Пакеты не загружаются в редактор автоматически. Скачайте нужный
               пакет, отредактируйте его каталог{" "}
               <span className="font-mono text-foreground">
-                packages/&lt;id&gt;
+                packages/&lt;slug&gt;
               </span>{" "}
               и нажмите Emit, чтобы опубликовать ревизию для игры.
             </p>
           </div>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => void packages.refresh()}
-            title="Проверить опубликованные ревизии и локальные изменения"
-          >
-            <RefreshCwIcon className="size-4" />
-            Обновить
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" size="sm" onClick={openCreate}>
+              <PlusIcon className="size-4" />
+              Создать пакет
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void packages.refresh()}
+              title="Проверить опубликованные ревизии и локальные изменения"
+            >
+              <RefreshCwIcon className="size-4" />
+              Обновить
+            </Button>
+          </div>
         </div>
 
         {!packages.fsReady && !packages.error && (
@@ -579,70 +906,108 @@ export function PackagesTab({
           </div>
         )}
 
-        <form
-          onSubmit={handleCreate}
-          className="rounded-lg border border-border bg-card p-4"
+        <Dialog
+          open={createOpen}
+          onOpenChange={(open) => {
+            setCreateOpen(open);
+            if (!open) resetCreateForm();
+          }}
         >
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="min-w-56 flex-1 space-y-1.5">
-              <Label htmlFor="package-name">Имя пакета</Label>
-              <Input
-                id="package-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="Например, Hero Controller"
-                required
-              />
-            </div>
-            <div className="w-40 space-y-1.5">
-              <Label htmlFor="package-slug">Слаг</Label>
-              <Input
-                id="package-slug"
-                value={slug}
-                onChange={(event) => setSlug(event.target.value)}
-                placeholder="hero_controller"
-                pattern="[a-z0-9_]+"
-                title="Строчные латинские буквы, цифры и подчёркивания"
-                required
-              />
-            </div>
-            <div className="w-32 space-y-1.5">
-              <Label htmlFor="package-version">Версия</Label>
-              <Input
-                id="package-version"
-                value={version}
-                onChange={(event) => setVersion(event.target.value)}
-                placeholder="0.1.0"
-              />
-            </div>
-            <Button
-              type="submit"
-              disabled={
-                creating || !packages.fsReady || !name.trim() || !slug.trim()
-              }
-            >
-              {creating ? (
-                <Loader2Icon className="size-4 animate-spin" />
-              ) : (
-                <PlusIcon className="size-4" />
+          <DialogContent showCloseButton={!creating}>
+            <form onSubmit={handleCreate} className="space-y-4">
+              <DialogHeader>
+                <DialogTitle>Новый пакет</DialogTitle>
+                <DialogDescription>
+                  Slug задаёт каталог{" "}
+                  <span className="font-mono text-foreground">
+                    packages/&lt;slug&gt;
+                  </span>{" "}
+                  в редакторе и не меняется после создания. Новый пакет сразу
+                  появится в редакторе пустым каталогом, остальные пакеты
+                  комнаты при этом не загружаются.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="package-create-name">Имя пакета</Label>
+                  <Input
+                    id="package-create-name"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder="Например, Hero Controller"
+                    autoFocus
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="package-create-version">Версия</Label>
+                  <Input
+                    id="package-create-version"
+                    value={version}
+                    onChange={(event) => setVersion(event.target.value)}
+                    placeholder="0.1.0"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="package-create-slug">Slug</Label>
+                  <Input
+                    id="package-create-slug"
+                    value={slug}
+                    onChange={handleSlugChange}
+                    placeholder="hero_controller"
+                    autoComplete="off"
+                    spellCheck={false}
+                    autoCapitalize="none"
+                  />
+                  {SLUG_HINT[slugState] && (
+                    <p className={`text-xs ${slugHintClass(slugState)}`}>
+                      {SLUG_HINT[slugState]}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {createError && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive">
+                  {createError}
+                </div>
               )}
-              Создать пакет
-            </Button>
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Новый пакет сразу появится в редакторе пустым каталогом. Остальные
-            пакеты комнаты при этом не загружаются.
-          </p>
-          {createError && (
-            <div className="mt-2 text-sm text-destructive">{createError}</div>
-          )}
-        </form>
+
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={closeCreate}
+                  disabled={creating}
+                >
+                  Отмена
+                </Button>
+                <Button type="submit" disabled={!canCreate}>
+                  {creating ? (
+                    <Loader2Icon className="size-4 animate-spin" />
+                  ) : (
+                    <PlusIcon className="size-4" />
+                  )}
+                  Создать
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
 
         {packages.entries.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-            {packages.statusLoaded
-              ? "В комнате пока нет пакетов. Создайте первый пакет."
-              : "Загружаем список пакетов комнаты…"}
+            {packages.statusLoaded ? (
+              <div className="flex flex-col items-center gap-3">
+                <p>В комнате пока нет пакетов. Создайте первый пакет.</p>
+                <Button type="button" size="sm" onClick={openCreate}>
+                  <PlusIcon className="size-4" />
+                  Создать первый пакет
+                </Button>
+              </div>
+            ) : (
+              "Загружаем список пакетов комнаты…"
+            )}
           </div>
         ) : (
           <ul className="space-y-3">

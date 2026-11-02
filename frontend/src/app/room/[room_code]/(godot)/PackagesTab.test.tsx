@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PackageSlugAvailability } from "@/api/services/scripting-packages";
 import type {
   RoomPackageEntry,
   RoomPackagesController,
@@ -51,6 +52,7 @@ function controller(
     checkSlugAvailability: vi
       .fn()
       .mockResolvedValue({ slug: "new", available: true }),
+    updatePackageMetadata: vi.fn().mockResolvedValue({} as never),
     downloadPackage: vi.fn().mockResolvedValue(undefined),
     removePackage: vi.fn().mockResolvedValue(undefined),
     setPackageEnabled: vi.fn().mockResolvedValue(undefined),
@@ -217,13 +219,19 @@ describe("PackagesTab", () => {
       <PackagesTab authorId={42} packages={controller({ createPackage })} />,
     );
 
-    fireEvent.change(screen.getByLabelText(/имя пакета/i), {
+    fireEvent.click(
+      screen.getByRole("button", { name: "Создать пакет" }),
+    );
+    fireEvent.change(screen.getByLabelText("Имя пакета"), {
       target: { value: "New" },
     });
-    fireEvent.change(screen.getByLabelText(/слаг/i), {
+    fireEvent.change(screen.getByLabelText("Slug"), {
       target: { value: "new" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /создать пакет/i }));
+
+    const submit = screen.getByRole("button", { name: "Создать" });
+    await waitFor(() => expect(submit).toHaveProperty("disabled", false));
+    fireEvent.click(submit);
 
     await waitFor(() =>
       expect(createPackage).toHaveBeenCalledWith(
@@ -366,7 +374,7 @@ describe("PackagesTab", () => {
     fireEvent.click(menu.getByRole("menuitem", { name: "Удалить из комнаты" }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/#42/)).toBeTruthy();
+    expect(within(dialog).getByText(/#demo/)).toBeTruthy();
     expect(deletePackage).not.toHaveBeenCalled();
 
     fireEvent.click(
@@ -374,5 +382,336 @@ describe("PackagesTab", () => {
     );
 
     await waitFor(() => expect(deletePackage).toHaveBeenCalledWith(42));
+  });
+
+  it("opens the creation modal from the header button", () => {
+    render(<PackagesTab packages={controller()} authorId={42} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
+
+    expect(screen.getByLabelText("Slug")).toBeTruthy();
+    expect(screen.getByLabelText("Версия")).toHaveProperty("value", "0.1.0");
+  });
+
+  it("lowercases the typed slug", () => {
+    render(<PackagesTab packages={controller()} authorId={42} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
+    const slugInput = screen.getByLabelText("Slug");
+    fireEvent.change(slugInput, { target: { value: "Hero_One" } });
+
+    expect(slugInput).toHaveProperty("value", "hero_one");
+  });
+
+  it("shows a taken slug and disables submit", async () => {
+    const checkSlugAvailability = vi.fn().mockResolvedValue({
+      slug: "hero",
+      available: false,
+      reason: "taken",
+    });
+
+    render(
+      <PackagesTab
+        packages={controller({ checkSlugAvailability })}
+        authorId={42}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
+    fireEvent.change(screen.getByLabelText("Slug"), {
+      target: { value: "hero" },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByText("Slug уже занят")).toBeTruthy(),
+    );
+    expect(checkSlugAvailability).toHaveBeenCalledWith("hero");
+    expect(screen.getByRole("button", { name: "Создать" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+  });
+
+  it("explains that a retired slug cannot be reused", async () => {
+    const checkSlugAvailability = vi.fn().mockResolvedValue({
+      slug: "hero",
+      available: false,
+      reason: "retired",
+    });
+
+    render(
+      <PackagesTab
+        packages={controller({ checkSlugAvailability })}
+        authorId={42}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
+    fireEvent.change(screen.getByLabelText("Slug"), {
+      target: { value: "hero" },
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "Этот slug был удалён и не может быть использован снова",
+        ),
+      ).toBeTruthy(),
+    );
+    expect(screen.getByRole("button", { name: "Создать" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+  });
+
+  it("ignores an availability response for a slug that was changed", async () => {
+    const resolvers = new Map<
+      string,
+      (value: PackageSlugAvailability) => void
+    >();
+    const checkSlugAvailability = vi.fn(
+      (slug: string) =>
+        new Promise<PackageSlugAvailability>((resolve) => {
+          resolvers.set(slug, resolve);
+        }),
+    );
+
+    render(
+      <PackagesTab
+        packages={controller({ checkSlugAvailability })}
+        authorId={42}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
+    const slugInput = screen.getByLabelText("Slug");
+
+    fireEvent.change(slugInput, { target: { value: "aaa" } });
+    await waitFor(() => expect(resolvers.has("aaa")).toBe(true));
+
+    fireEvent.change(slugInput, { target: { value: "hero" } });
+    await waitFor(() => expect(resolvers.has("hero")).toBe(true));
+
+    await act(async () => {
+      resolvers.get("hero")?.({ slug: "hero", available: true });
+    });
+    expect(screen.getByText("Slug свободен")).toBeTruthy();
+
+    await act(async () => {
+      resolvers.get("aaa")?.({ slug: "aaa", available: false, reason: "taken" });
+    });
+    expect(screen.queryByText("Slug уже занят")).toBeNull();
+    expect(screen.getByText("Slug свободен")).toBeTruthy();
+  });
+
+  it("disables creation while the editor is not ready", async () => {
+    render(
+      <PackagesTab
+        packages={controller({ fsReady: false })}
+        authorId={42}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
+    fireEvent.change(screen.getByLabelText("Имя пакета"), {
+      target: { value: "New" },
+    });
+    fireEvent.change(screen.getByLabelText("Slug"), {
+      target: { value: "new" },
+    });
+
+    const submit = screen.getByRole("button", { name: "Создать" });
+    await waitFor(() => expect(screen.getByText("Slug свободен")).toBeTruthy());
+    expect(submit).toHaveProperty("disabled", true);
+  });
+
+  it("disables creation without an author", async () => {
+    render(<PackagesTab packages={controller()} authorId={null} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
+    fireEvent.change(screen.getByLabelText("Имя пакета"), {
+      target: { value: "New" },
+    });
+    fireEvent.change(screen.getByLabelText("Slug"), {
+      target: { value: "new" },
+    });
+
+    const submit = screen.getByRole("button", { name: "Создать" });
+    await waitFor(() => expect(screen.getByText("Slug свободен")).toBeTruthy());
+    expect(submit).toHaveProperty("disabled", true);
+  });
+
+  it("shows a creation error inside the modal", async () => {
+    const createPackage = vi.fn().mockRejectedValue(new Error("boom"));
+
+    render(
+      <PackagesTab
+        packages={controller({ createPackage })}
+        authorId={42}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
+    fireEvent.change(screen.getByLabelText("Имя пакета"), {
+      target: { value: "New" },
+    });
+    fireEvent.change(screen.getByLabelText("Slug"), {
+      target: { value: "new" },
+    });
+
+    const submit = screen.getByRole("button", { name: "Создать" });
+    await waitFor(() => expect(submit).toHaveProperty("disabled", false));
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(screen.getByText("boom")).toBeTruthy());
+    expect(screen.getByLabelText("Slug")).toBeTruthy();
+  });
+
+  it("saves an edited package name", async () => {
+    const updatePackageMetadata = vi
+      .fn()
+      .mockResolvedValue({ id: 7, slug: "hero", name: "Renamed" } as never);
+
+    render(
+      <PackagesTab
+        packages={controller({
+          entries: [entry({ packageId: 7, slug: "hero", name: "Demo" })],
+          updatePackageMetadata,
+        })}
+        authorId={42}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Редактировать имя пакета" }),
+    );
+    const input = screen.getByLabelText("Имя пакета");
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.change(input, { target: { value: "Renamed" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(updatePackageMetadata).toHaveBeenCalledWith(7, {
+        name: "Renamed",
+      }),
+    );
+  });
+
+  it("saves an edited package version", async () => {
+    const updatePackageMetadata = vi
+      .fn()
+      .mockResolvedValue({ id: 7, slug: "hero", version: "1.2.3" } as never);
+
+    render(
+      <PackagesTab
+        packages={controller({
+          entries: [entry({ packageId: 7, slug: "hero" })],
+          updatePackageMetadata,
+        })}
+        authorId={42}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Редактировать версию" }),
+    );
+    const input = screen.getByLabelText("Версия");
+    fireEvent.change(input, { target: { value: "1.2.3" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(updatePackageMetadata).toHaveBeenCalledWith(7, {
+        version: "1.2.3",
+      }),
+    );
+  });
+
+  it("cancels inline editing with Escape", () => {
+    const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
+
+    render(
+      <PackagesTab
+        packages={controller({
+          entries: [entry({ packageId: 7, slug: "hero", name: "Demo" })],
+          updatePackageMetadata,
+        })}
+        authorId={42}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Редактировать имя пакета" }),
+    );
+    const input = screen.getByLabelText("Имя пакета");
+    fireEvent.change(input, { target: { value: "Renamed" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(screen.queryByLabelText("Имя пакета")).toBeNull();
+    expect(screen.getByText("Demo")).toBeTruthy();
+    expect(updatePackageMetadata).not.toHaveBeenCalled();
+  });
+
+  it("does not submit an empty package name", () => {
+    const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
+
+    render(
+      <PackagesTab
+        packages={controller({
+          entries: [entry({ packageId: 7, slug: "hero", name: "Demo" })],
+          updatePackageMetadata,
+        })}
+        authorId={42}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Редактировать имя пакета" }),
+    );
+    const input = screen.getByLabelText("Имя пакета");
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(updatePackageMetadata).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("Имя пакета не может быть пустым"),
+    ).toBeTruthy();
+  });
+
+  it("does not submit an empty package version", () => {
+    const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
+
+    render(
+      <PackagesTab
+        packages={controller({
+          entries: [entry({ packageId: 7, slug: "hero" })],
+          updatePackageMetadata,
+        })}
+        authorId={42}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Редактировать версию" }),
+    );
+    const input = screen.getByLabelText("Версия");
+    fireEvent.change(input, { target: { value: "  " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(updatePackageMetadata).not.toHaveBeenCalled();
+    expect(screen.getByText("Версия не может быть пустой")).toBeTruthy();
+  });
+
+  it("renders the slug instead of the numeric id", () => {
+    render(
+      <PackagesTab
+        packages={controller({
+          entries: [entry({ packageId: 7, slug: "hero" })],
+        })}
+        authorId={42}
+      />,
+    );
+
+    expect(screen.getByText("#hero")).toBeTruthy();
+    expect(screen.queryByText("#7")).toBeNull();
   });
 });
