@@ -33,6 +33,9 @@ services:
       - GOOGLE_AUTH_CALLBACK=${GOOGLE_AUTH_CALLBACK}
       - SITE_HOST=${SITE_HOST}
       - COMMON_DOMAIN=${COMMON_DOMAIN}
+      - WIRED_GAME_TICKET_SECRET=${WIRED_GAME_TICKET_SECRET}
+      # Game sockets use the same public API vhost; the room id is in the path.
+      - GODOT_ROOM_PUBLIC_WS_BASE=wss://api.${COMMON_DOMAIN}/rooms/{room}/game/ws
       - TZ=${TZ}
     ports:
       - "${BACKEND_EXTERNAL_PORT}:3000"
