@@ -3,3 +3,12 @@ node_modules
 .gitignore
 *.md
 dist
+**/.env
+**/.env.*
+.worktrees
+.superpowers
+docs
+packages/server/godot_editor
+packages/server/godot_runtime
+packages/server/game_export
+packages/server/storage

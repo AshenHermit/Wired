@@ -1,6 +1,9 @@
 node_modules
 dist
 .env
+.env.prod
+.env.prod.*
+!.env.prod.example
 .superpowers/
 packages/server/storage/
 packages/server/game_export/
