@@ -108,7 +108,25 @@ sync_code() {
     run git -C "$DEPLOY_PATH" fetch --depth 1 origin "$REF"
     run git -C "$DEPLOY_PATH" reset --hard FETCH_HEAD
   elif [ -e "$DEPLOY_PATH" ]; then
-    die "$DEPLOY_PATH существует, но это не git-репозиторий; освободите каталог вручную" 3
+    if [ ! -d "$DEPLOY_PATH" ]; then
+      die "$DEPLOY_PATH существует и это не каталог" 3
+    fi
+    # Workflow пишет .env до первого клонирования, поэтому пустой каталог
+    # (или каталог только с .env) — ожидаемое состояние первого деплоя.
+    local unexpected
+    unexpected=$(find "$DEPLOY_PATH" -mindepth 1 -maxdepth 1 ! -name '.env' -print -quit)
+    if [ -n "$unexpected" ]; then
+      die "$DEPLOY_PATH существует, но это не git-репозиторий (найден $unexpected); освободите каталог вручную" 3
+    fi
+    log "клонирую $GIT_REMOTE ($REF) в $DEPLOY_PATH"
+    local staging="${DEPLOY_PATH%/}.clone"
+    run rm -rf "$staging"
+    run git clone --depth 1 --branch "$REF" "$GIT_REMOTE" "$staging"
+    if [ -f "$DEPLOY_PATH/.env" ]; then
+      run mv "$DEPLOY_PATH/.env" "$staging/.env"
+    fi
+    run rmdir "$DEPLOY_PATH"
+    run mv "$staging" "$DEPLOY_PATH"
   else
     log "клонирую $GIT_REMOTE ($REF) в $DEPLOY_PATH"
     run git clone --depth 1 --branch "$REF" "$GIT_REMOTE" "$DEPLOY_PATH"
