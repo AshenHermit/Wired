@@ -21,6 +21,7 @@ import { tmpdir } from 'os';
 import path from 'path';
 import request from 'supertest';
 import { RuntimeAuthGuard } from './guards/runtime-auth.guard';
+import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
 import { Room } from 'src/database/entities/room.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
@@ -510,6 +511,7 @@ describe('ScriptingPackagesController lifecycle routes', () => {
     assertPackageEditing: jest.Mock;
     update: jest.Mock;
     remove: jest.Mock;
+    checkSlugAvailability: jest.Mock;
   };
   let controller: ScriptingPackagesController;
 
@@ -518,6 +520,10 @@ describe('ScriptingPackagesController lifecycle routes', () => {
       assertPackageEditing: jest.fn(),
       update: jest.fn(async () => ({ id: 7 })),
       remove: jest.fn(async () => undefined),
+      checkSlugAvailability: jest.fn(async (slug: string) => ({
+        slug,
+        available: true,
+      })),
     };
     controller = new ScriptingPackagesController(
       packagesService as unknown as ScriptingPackagesService,
@@ -525,6 +531,14 @@ describe('ScriptingPackagesController lifecycle routes', () => {
       {} as never,
       {} as never,
     );
+  });
+
+  it('delegates slug availability to the service', async () => {
+    await expect(controller.slugAvailability('hero')).resolves.toEqual({
+      slug: 'hero',
+      available: true,
+    });
+    expect(packagesService.checkSlugAvailability).toHaveBeenCalledWith('hero');
   });
 
   it('checks editing rights before toggling a package', async () => {
@@ -539,5 +553,73 @@ describe('ScriptingPackagesController lifecycle routes', () => {
     await expect(controller.remove(7, request)).resolves.toBeUndefined();
     expect(packagesService.assertPackageEditing).toHaveBeenCalledWith(user, 7);
     expect(packagesService.remove).toHaveBeenCalledWith(7);
+  });
+});
+
+describe('ScriptingPackagesController slug route ordering', () => {
+  let app: INestApplication;
+  let findOne: jest.Mock;
+  let checkSlugAvailability: jest.Mock;
+
+  beforeAll(async () => {
+    findOne = jest.fn(async (id: number) => ({ id, slug: 'hero' }));
+    checkSlugAvailability = jest.fn(async (slug: string) => ({
+      slug,
+      available: true,
+    }));
+
+    const moduleRef = await Test.createTestingModule({
+      controllers: [ScriptingPackagesController],
+      providers: [
+        {
+          provide: ScriptingPackagesService,
+          useValue: {
+            assertPackageEditing: jest.fn(),
+            findOne,
+            checkSlugAvailability,
+          },
+        },
+        { provide: PackageRevisionsService, useValue: {} },
+        { provide: PackageDeliveryService, useValue: {} },
+        {
+          provide: PackageReadUrlService,
+          useValue: { verifyToken: () => true },
+        },
+        { provide: getRepositoryToken(Room), useValue: { findOne: jest.fn() } },
+        {
+          provide: getRepositoryToken(ScriptingPackage),
+          useValue: { findOne: jest.fn() },
+        },
+      ],
+    })
+      .overrideGuard(JwtAuthGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
+
+    app = moduleRef.createNestApplication();
+    await app.init();
+  });
+
+  afterAll(async () => {
+    await app?.close();
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('serves slug availability instead of falling through to :id', async () => {
+    await request(app.getHttpServer())
+      .get('/scripting-packages/slug-availability?slug=hero')
+      .expect(200);
+
+    expect(checkSlugAvailability).toHaveBeenCalledWith('hero');
+    expect(findOne).not.toHaveBeenCalled();
+  });
+
+  it('still parses numeric ids for the :id route', async () => {
+    await request(app.getHttpServer()).get('/scripting-packages/7').expect(200);
+
+    expect(findOne).toHaveBeenCalledWith(7);
   });
 });

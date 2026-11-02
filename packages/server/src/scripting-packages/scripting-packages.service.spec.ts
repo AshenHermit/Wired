@@ -1,9 +1,77 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
+import { RetiredPackageSlug } from 'src/database/entities/retired-package-slug.entity';
 import { ScriptingPackagesService } from './scripting-packages.service';
+
+type FakeManager = {
+  query: jest.Mock;
+  findOne: jest.Mock;
+  save: jest.Mock;
+  delete: jest.Mock;
+  getRepository: jest.Mock;
+  transaction: jest.Mock;
+};
+
+/**
+ * Transaction-manager double: `transaction` hands the callback the manager
+ * itself and `getRepository` returns per-entity repository doubles.
+ */
+function makeTransactionManager(
+  options: {
+    liveFindOne?: jest.Mock;
+    retiredFindOne?: jest.Mock;
+    save?: jest.Mock;
+    delete?: jest.Mock;
+  } = {},
+): FakeManager {
+  const retiredFindOne = options.retiredFindOne ?? jest.fn(async () => null);
+  const manager = {
+    query: jest.fn(async () => []),
+    findOne: options.liveFindOne ?? jest.fn(async () => null),
+    save:
+      options.save ??
+      jest.fn(async (_entity: unknown, value: unknown) => value),
+    delete: options.delete ?? jest.fn(async () => ({ affected: 1 })),
+    getRepository: jest.fn(),
+    transaction: jest.fn(),
+  } as FakeManager;
+  manager.getRepository.mockImplementation((entity: unknown) => {
+    if (entity === RetiredPackageSlug) {
+      return { findOne: retiredFindOne };
+    }
+    return {
+      create: (value: unknown) => value,
+      findOne: manager.findOne,
+      save: manager.save,
+    };
+  });
+  manager.transaction.mockImplementation(
+    async (work: (current: FakeManager) => Promise<unknown>) => work(manager),
+  );
+  return manager;
+}
+
+/** Gives a fake repository the `manager.transaction` the service expects. */
+function attachTransactionManager(
+  repository: Record<string, unknown> & {
+    delete?: (id: number) => Promise<unknown>;
+  },
+  options: { save?: jest.Mock; liveFindOne?: jest.Mock } = {},
+): void {
+  const manager = makeTransactionManager({
+    save: options.save,
+    liveFindOne: options.liveFindOne,
+    delete: jest.fn(async (_entity: unknown, id: number) =>
+      repository.delete ? repository.delete(id) : { affected: 1 },
+    ),
+  });
+  repository.manager = { transaction: manager.transaction };
+}
 
 describe('ScriptingPackagesService', () => {
   describe('assertPackageEditing', () => {
@@ -99,6 +167,9 @@ describe('ScriptingPackagesService', () => {
         save: jest.fn(async (value: unknown) => value),
         findOne: jest.fn(async () => ({ id: 10 })),
       };
+      attachTransactionManager(packagesRepository, {
+        save: packagesRepository.save,
+      });
       const roomsRepository = { findOne: jest.fn(async () => room) };
       return {
         packagesRepository,
@@ -119,7 +190,7 @@ describe('ScriptingPackagesService', () => {
 
       await expect(
         service.create(
-          { name: 'pkg', version: '0.1.0', roomId: 5 } as never,
+          { name: 'pkg', version: '0.1.0', slug: 'pkg', roomId: 5 } as never,
           stranger as never,
         ),
       ).rejects.toBeInstanceOf(ForbiddenException);
@@ -134,7 +205,7 @@ describe('ScriptingPackagesService', () => {
       });
 
       await service.create(
-        { name: 'pkg', version: '0.1.0', roomId: 5 } as never,
+        { name: 'pkg', version: '0.1.0', slug: 'pkg', roomId: 5 } as never,
         user as never,
       );
 
@@ -187,6 +258,7 @@ describe('ScriptingPackagesService', () => {
         ),
         delete: jest.fn(async () => ({ affected: options.affected ?? 1 })),
       };
+      attachTransactionManager(packagesRepository);
       const storage = {
         removePackage: options.removePackage ?? jest.fn(async () => undefined),
       };
@@ -254,6 +326,7 @@ describe('ScriptingPackagesService', () => {
         save: jest.fn(async (value: unknown) => value),
         delete: jest.fn(async () => ({ affected: 1 })),
       };
+      attachTransactionManager(packagesRepository);
       const dispatcher = options.dispatcher ?? {
         packageEnabledChanged: jest.fn(async () => undefined),
         packageRemoved: jest.fn(),
@@ -331,7 +404,11 @@ describe('ScriptingPackagesService', () => {
 
   describe('delete dependency guard', () => {
     function makeService(options: {
-      dependents?: Array<{ packageId: number; roomId: number; revision: number }>;
+      dependents?: Array<{
+        packageId: number;
+        roomId: number;
+        revision: number;
+      }>;
       rows?: Array<{ id: number; name: string; enabled: boolean }>;
     }) {
       const packagesRepository = {
@@ -339,6 +416,7 @@ describe('ScriptingPackagesService', () => {
         find: jest.fn(async () => options.rows ?? []),
         delete: jest.fn(async () => ({ affected: 1 })),
       };
+      attachTransactionManager(packagesRepository);
       const delivery = {
         findDependentRoomPackages: jest.fn(
           async () => options.dependents ?? [],
@@ -385,6 +463,130 @@ describe('ScriptingPackagesService', () => {
   });
 });
 
+describe('ScriptingPackagesService slug lifecycle', () => {
+  function makeSlugService(
+    options: {
+      query?: jest.Mock;
+      findOne?: jest.Mock;
+      retiredFindOne?: jest.Mock;
+      save?: jest.Mock;
+      manager?: FakeManager;
+      pkg?: unknown;
+    } = {},
+  ) {
+    const retiredFindOne = options.retiredFindOne ?? jest.fn(async () => null);
+    const manager =
+      options.manager ??
+      makeTransactionManager({ retiredFindOne, save: options.save });
+    const packagesRepository = {
+      query: options.query ?? jest.fn(async () => []),
+      findOne:
+        options.findOne ??
+        jest.fn(async () => options.pkg ?? { id: 7, slug: 'hero' }),
+      manager,
+    };
+    const roomsRepository = { findOne: jest.fn(async () => null) };
+    const retiredRepository = { findOne: retiredFindOne };
+    return new ScriptingPackagesService(
+      packagesRepository as never,
+      roomsRepository as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      retiredRepository as never,
+    );
+  }
+
+  it('backfills null slugs from the numeric id', async () => {
+    const query = jest.fn(async () => []);
+    const service = makeSlugService({ query });
+    await service.onApplicationBootstrap();
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE scripting_package'),
+    );
+  });
+
+  it('reports a live slug as taken', async () => {
+    const service = makeSlugService({
+      findOne: jest.fn(async () => ({ id: 7, slug: 'hero' })),
+    });
+    await expect(service.checkSlugAvailability('hero')).resolves.toEqual({
+      slug: 'hero',
+      available: false,
+      reason: 'taken',
+    });
+  });
+
+  it('reports a retired slug as retired', async () => {
+    const service = makeSlugService({
+      findOne: jest.fn(async () => null),
+      retiredFindOne: jest.fn(async () => ({ slug: 'hero', packageId: 7 })),
+    });
+    await expect(service.checkSlugAvailability('hero')).resolves.toEqual({
+      slug: 'hero',
+      available: false,
+      reason: 'retired',
+    });
+  });
+
+  it('reports an unused slug as available', async () => {
+    const service = makeSlugService({ findOne: jest.fn(async () => null) });
+    await expect(service.checkSlugAvailability('  hero_2  ')).resolves.toEqual({
+      slug: 'hero_2',
+      available: true,
+    });
+  });
+
+  it('rejects an invalid slug with 400 invalid_slug', async () => {
+    const service = makeSlugService();
+    const error = await service
+      .checkSlugAvailability('Hero')
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect((error as BadRequestException).getResponse()).toMatchObject({
+      code: 'invalid_slug',
+    });
+  });
+
+  it('rejects creation with a retired slug', async () => {
+    const service = makeSlugService({
+      retiredFindOne: jest.fn(async () => ({ slug: 'hero', packageId: 7 })),
+    });
+    await expect(
+      service.create(
+        { name: 'Hero', version: '0.1.0', slug: 'hero', authorId: 1 },
+        { id: 1 } as never,
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('maps a unique violation to slug_taken', async () => {
+    const service = makeSlugService({
+      save: jest.fn(async () => {
+        throw { code: '23505' };
+      }),
+    });
+    await expect(
+      service.create(
+        { name: 'Hero', version: '0.1.0', slug: 'hero', authorId: 1 },
+        { id: 1 } as never,
+      ),
+    ).rejects.toMatchObject({ status: 409, response: { code: 'slug_taken' } });
+  });
+
+  it('tombstones the slug before deleting the package', async () => {
+    const manager = makeTransactionManager();
+    const service = makeSlugService({ manager });
+    await service.remove(7);
+    expect(manager.save).toHaveBeenCalledWith(
+      RetiredPackageSlug,
+      expect.objectContaining({ slug: 'hero', packageId: 7 }),
+    );
+    expect(manager.delete).toHaveBeenCalledWith(ScriptingPackage, 7);
+  });
+});
+
 describe('ScriptingPackagesService enable guard', () => {
   function makeService(options: {
     pkg?: {
@@ -396,8 +598,12 @@ describe('ScriptingPackagesService enable guard', () => {
     dependencies?: Record<number, unknown>;
     pins?: Map<number, Map<number, number>>;
   }) {
-    const pkg =
-      options.pkg ?? { id: 42, name: 'B', enabled: false, room: { id: 7 } };
+    const pkg = options.pkg ?? {
+      id: 42,
+      name: 'B',
+      enabled: false,
+      room: { id: 7 },
+    };
     const packagesRepository = {
       findOne: jest.fn(async (opts: { where: { id: number } }) => {
         if (opts.where.id === pkg.id) return pkg;
@@ -406,11 +612,13 @@ describe('ScriptingPackagesService enable guard', () => {
       save: jest.fn(async (value: unknown) => value),
     };
     const revisionsRepository = {
-      findOne: jest.fn(async (opts: { where: { package: { id: number } } }) => ({
-        package: { id: opts.where.package.id },
-        revision: 1,
-        status: 'published',
-      })),
+      findOne: jest.fn(
+        async (opts: { where: { package: { id: number } } }) => ({
+          package: { id: opts.where.package.id },
+          revision: 1,
+          status: 'published',
+        }),
+      ),
     };
     const storage = {
       readPinnedDependencies: jest.fn(

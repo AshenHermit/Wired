@@ -1,16 +1,19 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
   Logger,
   NotFoundException,
+  OnApplicationBootstrap,
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
+import { RetiredPackageSlug } from 'src/database/entities/retired-package-slug.entity';
 import { User } from 'src/database/entities/user.entity';
 import { Room } from 'src/database/entities/room.entity';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
@@ -23,8 +26,20 @@ import {
   PackageRevisionDispatcher,
 } from 'src/godot-game/package-sync.types';
 
+/** Same rule as `CreateScriptingPackageDto`: lowercase, digits, `_`, 1-64. */
+const SLUG_PATTERN = /^(?=.*[a-z])[a-z0-9_]+$/;
+const SLUG_MAX_LENGTH = 64;
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: string }).code === '23505'
+  );
+}
+
 @Injectable()
-export class ScriptingPackagesService {
+export class ScriptingPackagesService implements OnApplicationBootstrap {
   private readonly logger = new Logger(ScriptingPackagesService.name);
 
   constructor(
@@ -42,7 +57,66 @@ export class ScriptingPackagesService {
     @Optional()
     @InjectRepository(ScriptingPackageRevision)
     private readonly revisionsRepository?: Repository<ScriptingPackageRevision>,
+    @Optional()
+    @InjectRepository(RetiredPackageSlug)
+    private readonly retiredSlugsRepository?: Repository<RetiredPackageSlug>,
   ) {}
+
+  /**
+   * Packages created before slugs existed get their numeric id as a slug.
+   * Idempotent: rows that already have a slug are left alone, so this also
+   * covers a rolling deploy where an old build writes NULL slugs.
+   */
+  async onApplicationBootstrap(): Promise<void> {
+    const updated = await this.packagesRepository.query(
+      `UPDATE scripting_package
+       SET slug = id::text
+       WHERE slug IS NULL
+       RETURNING id`,
+    );
+    this.logger.log(
+      `Package slug backfill: ${
+        Array.isArray(updated) ? updated.length : 0
+      } row(s) updated`,
+    );
+  }
+
+  private normalizeSlug(slug: string): string {
+    const normalized = typeof slug === 'string' ? slug.trim() : '';
+    if (
+      normalized.length === 0 ||
+      normalized.length > SLUG_MAX_LENGTH ||
+      !SLUG_PATTERN.test(normalized)
+    ) {
+      throw new BadRequestException({
+        code: 'invalid_slug',
+        message:
+          'slug must contain lowercase latin letters, digits or _, and at least one letter',
+      });
+    }
+    return normalized;
+  }
+
+  async checkSlugAvailability(slug: string): Promise<{
+    slug: string;
+    available: boolean;
+    reason?: 'taken' | 'retired';
+  }> {
+    const normalized = this.normalizeSlug(slug);
+    const live = await this.packagesRepository.findOne({
+      where: { slug: normalized },
+    });
+    if (live) {
+      return { slug: normalized, available: false, reason: 'taken' };
+    }
+    const retired = await this.retiredSlugsRepository?.findOne({
+      where: { slug: normalized },
+    });
+    if (retired) {
+      return { slug: normalized, available: false, reason: 'retired' };
+    }
+    return { slug: normalized, available: true };
+  }
 
   assertPackageCreation(user: User, dto: CreateScriptingPackageDto): void {
     if (dto.authorId !== user.id) {
@@ -107,11 +181,7 @@ export class ScriptingPackagesService {
     user: User,
   ): Promise<ScriptingPackage> {
     const { authorId, roomId, parentPackageId, ...data } = dto;
-
-    const pkg = this.packagesRepository.create({
-      ...data,
-      author: user,
-    });
+    const slug = this.normalizeSlug(dto.slug);
 
     if (authorId !== undefined && authorId !== user.id) {
       throw new ForbiddenException(
@@ -119,25 +189,29 @@ export class ScriptingPackagesService {
       );
     }
 
+    let room: Room | undefined;
     if (roomId) {
-      const room = await this.roomsRepository.findOne({
+      const foundRoom = await this.roomsRepository.findOne({
         where: { id: roomId },
         relations: ['author', 'contributors'],
       });
-      if (!room) {
+      if (!foundRoom) {
         throw new NotFoundException(`Room with id=${roomId} not found`);
       }
       const canEditRoom =
-        room.author?.id === user.id ||
-        room.contributors?.some((contributor) => contributor.id === user.id);
+        foundRoom.author?.id === user.id ||
+        foundRoom.contributors?.some(
+          (contributor) => contributor.id === user.id,
+        );
       if (!canEditRoom) {
         throw new ForbiddenException(
           'You are not allowed to attach a package to this room',
         );
       }
-      pkg.room = room;
+      room = foundRoom;
     }
 
+    let parentPackage: ScriptingPackage | undefined;
     if (parentPackageId) {
       const parent = await this.packagesRepository.findOne({
         where: { id: parentPackageId },
@@ -147,11 +221,50 @@ export class ScriptingPackagesService {
           `Parent package with id=${parentPackageId} not found`,
         );
       }
-      pkg.parentPackage = parent;
+      parentPackage = parent;
     }
 
-    const saved = await this.packagesRepository.save(pkg);
-    return this.findOne(saved.id);
+    const savedId = await this.packagesRepository.manager.transaction(
+      async (manager) => {
+        // Creates for the same slug are serialized across processes, so the
+        // unique violation below only fires for a race with another writer.
+        await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+          `package_slug:${slug}`,
+        ]);
+
+        const packages = manager.getRepository(ScriptingPackage);
+        const live = await packages.findOne({ where: { slug } });
+        if (live) {
+          throw new ConflictException({ code: 'slug_taken', slug });
+        }
+        const retired = await manager
+          .getRepository(RetiredPackageSlug)
+          .findOne({ where: { slug } });
+        if (retired) {
+          throw new ConflictException({ code: 'slug_retired', slug });
+        }
+
+        const pkg = packages.create({
+          ...data,
+          slug,
+          author: user,
+          room,
+          parentPackage,
+        });
+
+        try {
+          const saved = await packages.save(pkg);
+          return saved.id;
+        } catch (error) {
+          if (isUniqueViolation(error)) {
+            throw new ConflictException({ code: 'slug_taken', slug });
+          }
+          throw error;
+        }
+      },
+    );
+
+    return this.findOne(savedId);
   }
 
   async update(
@@ -305,10 +418,16 @@ export class ScriptingPackagesService {
     await this.assertNoEnabledDependents(id);
     const pkg = await this.findOne(id);
     const roomId = pkg.room?.id ?? null;
-    const result = await this.packagesRepository.delete(id);
-    if (!result.affected) {
-      throw new NotFoundException(`ScriptingPackage with id=${id} not found`);
-    }
+    // The tombstone must exist before the row disappears; the fallback only
+    // covers a row created before the startup backfill ran.
+    const slug = pkg.slug ?? String(id);
+    await this.packagesRepository.manager.transaction(async (manager) => {
+      await manager.save(RetiredPackageSlug, { slug, packageId: id });
+      const result = await manager.delete(ScriptingPackage, id);
+      if (!result.affected) {
+        throw new NotFoundException(`ScriptingPackage with id=${id} not found`);
+      }
+    });
     try {
       await this.storage?.removePackage(id);
     } catch (error) {

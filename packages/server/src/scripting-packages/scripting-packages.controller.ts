@@ -64,6 +64,14 @@ export class ScriptingPackagesController {
     return this.packagesService.findAll();
   }
 
+  // Declared before `:id` so `slug-availability` is not parsed as an id.
+  @UseAuthGuard()
+  @ApiOkResponse({ description: 'Package slug availability' })
+  @Get('slug-availability')
+  slugAvailability(@Query('slug') slug: string) {
+    return this.packagesService.checkSlugAvailability(slug);
+  }
+
   @ApiOkResponse({ type: ScriptingPackage })
   @Get(':id')
   findOne(@Param('id', ParseIntPipe) id: number) {
