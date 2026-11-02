@@ -102,6 +102,15 @@ export type RoomPackagesController = {
   ) => Promise<ScriptingPackage>;
   /** Asks the backend whether a new package may use this slug. */
   checkSlugAvailability: (slug: string) => Promise<PackageSlugAvailability>;
+  /**
+   * Renames a package or changes its version on the backend. Only the
+   * metadata fields of the entry change; local files and runtime state are
+   * untouched.
+   */
+  updatePackageMetadata: (
+    packageId: number,
+    patch: { name?: string; version?: string },
+  ) => Promise<ScriptingPackage>;
   downloadPackage: (
     packageId: number,
     options?: { force?: boolean },
@@ -352,6 +361,7 @@ type RoomPackagesAction =
   | { type: "reset"; packages: ScriptingPackage[] }
   | { type: "merged"; packages: ScriptingPackage[] }
   | { type: "created"; package: ScriptingPackage }
+  | { type: "updated"; package: ScriptingPackage }
   | { type: "removed"; ids: number[] }
   | {
       type: "loaded";
@@ -393,6 +403,38 @@ function roomPackagesReducer(
         state.removedIds,
       );
       return packages === state.packages ? state : { ...state, packages };
+    }
+    case "updated": {
+      // A PATCH that resolves after an explicit delete must not resurrect the
+      // package, and an unknown package has nothing to update.
+      if (state.removedIds.has(action.package.id)) return state;
+      const index = state.packages.findIndex(
+        (pkg) => pkg.id === action.package.id,
+      );
+      if (index === -1) return state;
+      const packages = state.packages.slice();
+      packages[index] = action.package;
+      // Only metadata fields are copied into the entry: status, revisions,
+      // runtime state and local changes stay exactly as they were.
+      const hasEntry = state.entries.some(
+        (entry) => entry.packageId === action.package.id,
+      );
+      return {
+        ...state,
+        packages,
+        entries: hasEntry
+          ? state.entries.map((entry) =>
+              entry.packageId === action.package.id
+                ? {
+                    ...entry,
+                    slug: action.package.slug,
+                    name: action.package.name,
+                    version: action.package.version,
+                  }
+                : entry,
+            )
+          : state.entries,
+      };
     }
     case "removed": {
       const removed = new Set([...state.removedIds, ...action.ids]);
@@ -764,6 +806,48 @@ export function useRoomPackages(
     [],
   );
 
+  /**
+   * Metadata lives in the room package list only: the editor files, the
+   * stored status and the runtime state are untouched. Name and version are
+   * the only editable fields, and an empty value is refused before any
+   * request is made.
+   */
+  const updatePackageMetadata = React.useCallback(
+    async (
+      packageId: number,
+      patch: { name?: string; version?: string },
+    ): Promise<ScriptingPackage> => {
+      const trimmed: { name?: string; version?: string } = {};
+      if (patch.name !== undefined) {
+        const name = patch.name.trim();
+        if (!name) throw new Error("package_metadata_empty");
+        trimmed.name = name;
+      }
+      if (patch.version !== undefined) {
+        const version = patch.version.trim();
+        if (!version) throw new Error("package_metadata_empty");
+        trimmed.version = version;
+      }
+      if (Object.keys(trimmed).length === 0) {
+        throw new Error("package_metadata_empty");
+      }
+
+      let updated: ScriptingPackage;
+      try {
+        updated = await updateScriptingPackage(packageId, trimmed);
+      } catch (cause) {
+        const message = `Не удалось изменить данные пакета: ${errorMessage(cause)}`;
+        setAction(packageId, { error: message });
+        throw new Error(message);
+      }
+      dispatch({ type: "updated", package: updated });
+      // A successful retry must not leave the previous failure on the card.
+      setAction(packageId, { error: null });
+      return updated;
+    },
+    [setAction],
+  );
+
   const beginAction = React.useCallback(
     (packageId: number) => {
       if (inFlightRef.current.has(packageId)) {
@@ -1054,6 +1138,7 @@ export function useRoomPackages(
     refresh,
     createPackage,
     checkSlugAvailability,
+    updatePackageMetadata,
     downloadPackage,
     removePackage,
     setPackageEnabled,

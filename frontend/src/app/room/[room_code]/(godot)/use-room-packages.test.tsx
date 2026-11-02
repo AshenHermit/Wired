@@ -1232,6 +1232,134 @@ describe("useRoomPackages", () => {
     );
   });
 
+  it("updates only metadata in the entry", async () => {
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValue(roomStatus([]));
+    vi.mocked(packagesApi.createScriptingPackage).mockResolvedValue(
+      roomPackage(7, "Hero", "hero"),
+    );
+    vi.mocked(packagesApi.updateScriptingPackage).mockResolvedValue({
+      ...roomPackage(7, "Hero", "hero"),
+      name: "Renamed",
+      version: "1.2.3",
+    });
+    const { result, unmount } = await startHook({ packages: [] });
+
+    await act(async () => {
+      await result.current.createPackage("Hero", 42, "0.1.0", "hero");
+    });
+    await act(async () => {
+      await result.current.updatePackageMetadata(7, { name: "Renamed" });
+    });
+
+    expect(packagesApi.updateScriptingPackage).toHaveBeenCalledWith(7, {
+      name: "Renamed",
+    });
+    expect(result.current.entries[0]).toMatchObject({
+      packageId: 7,
+      slug: "hero",
+      name: "Renamed",
+      version: "1.2.3",
+      status: "loaded",
+      localChanges: [],
+    });
+    unmount();
+  });
+
+  it("keeps local changes and status when metadata changes", async () => {
+    vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
+      await manifestOf("extends Node"),
+    );
+    const { result, unmount } = await startHook();
+
+    await act(async () => {
+      await result.current.downloadPackage(5);
+    });
+    fs.put("demo", HERO, "local edit");
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.entries[0].status).toBe("local-changes");
+
+    vi.mocked(packagesApi.updateScriptingPackage).mockResolvedValue({
+      ...roomPackage(5, "Demo"),
+      name: "Renamed",
+      version: "1.2.3",
+    });
+    await act(async () => {
+      await result.current.updatePackageMetadata(5, { version: "1.2.3" });
+    });
+
+    expect(result.current.entries[0]).toMatchObject({
+      packageId: 5,
+      slug: "demo",
+      name: "Renamed",
+      version: "1.2.3",
+      status: "local-changes",
+      localChanges: [HERO],
+      loaded: true,
+      loadedRevision: 2,
+      publishedRevision: 2,
+      enabled: true,
+    });
+    expect(fs.read("demo", HERO)).toBe("local edit");
+    unmount();
+  });
+
+  it("reports a metadata failure on the package action", async () => {
+    const { result, unmount } = await startHook();
+    vi.mocked(packagesApi.updateScriptingPackage).mockRejectedValue(
+      new Error("Request failed with status code 500"),
+    );
+
+    await act(async () => {
+      await expect(
+        result.current.updatePackageMetadata(5, { name: "Renamed" }),
+      ).rejects.toThrow(/Не удалось изменить данные пакета/);
+    });
+
+    expect(result.current.actionFor(5).error).toContain(
+      "Не удалось изменить данные пакета",
+    );
+    expect(result.current.entries[0]).toMatchObject({
+      name: "Demo",
+      version: "0.1.0",
+    });
+
+    // A successful retry clears the error left by the failed attempt.
+    vi.mocked(packagesApi.updateScriptingPackage).mockResolvedValue(
+      roomPackage(5, "Renamed"),
+    );
+    await act(async () => {
+      await result.current.updatePackageMetadata(5, { name: "Renamed" });
+    });
+    expect(result.current.actionFor(5).error).toBeNull();
+    unmount();
+  });
+
+  it("trims metadata and rejects empty values before the API", async () => {
+    const { result, unmount } = await startHook();
+
+    await expect(
+      result.current.updatePackageMetadata(5, { name: "   " }),
+    ).rejects.toThrow("package_metadata_empty");
+    await expect(
+      result.current.updatePackageMetadata(5, { version: "" }),
+    ).rejects.toThrow("package_metadata_empty");
+    expect(packagesApi.updateScriptingPackage).not.toHaveBeenCalled();
+
+    vi.mocked(packagesApi.updateScriptingPackage).mockResolvedValue({
+      ...roomPackage(5, "Demo"),
+      name: "Trimmed",
+    });
+    await act(async () => {
+      await result.current.updatePackageMetadata(5, { name: "  Trimmed  " });
+    });
+    expect(packagesApi.updateScriptingPackage).toHaveBeenCalledWith(5, {
+      name: "Trimmed",
+    });
+    unmount();
+  });
+
   it("deletes the package, its editor directory and the entry", async () => {
     const { result } = await startHook();
     fs.put("demo", HERO, "extends Node");
