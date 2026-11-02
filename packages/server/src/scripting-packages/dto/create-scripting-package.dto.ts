@@ -38,6 +38,7 @@ export class PhysicalFileDto implements PhysicalFile {
 }
 
 export class CreateScriptingPackageDto {
+  @ApiProperty({ example: 'hero_controller' })
   @IsString()
   @MaxLength(64)
   @Matches(/^(?=.*[a-z])[a-z0-9_]+$/, {

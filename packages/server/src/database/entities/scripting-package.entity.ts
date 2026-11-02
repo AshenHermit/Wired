@@ -40,6 +40,10 @@ export class ScriptingPackage {
   })
   public updatedAt: Date;
 
+  @ApiProperty({
+    example: 'hero_controller',
+    description: 'Stable package slug',
+  })
   @Column({ type: 'varchar', length: 64, unique: true, nullable: true })
   slug: string;
 
