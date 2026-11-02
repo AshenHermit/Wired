@@ -50,11 +50,11 @@ const STATUS_LABEL: Record<RoomPackageStatus, string> = {
 };
 
 const STATUS_CLASS: Record<RoomPackageStatus, string> = {
-  "not-loaded": "border-white/20 bg-white/5 text-white/60",
-  loaded: "border-emerald-400/30 bg-emerald-400/10 text-emerald-200",
-  "new-revision": "border-sky-400/30 bg-sky-400/10 text-sky-200",
-  "local-changes": "border-amber-400/30 bg-amber-400/10 text-amber-200",
-  disabled: "border-white/15 bg-white/5 text-white/40",
+  "not-loaded": "border-border bg-muted/50 text-muted-foreground",
+  loaded: "border-border bg-secondary text-secondary-foreground",
+  "new-revision": "border-foreground/25 bg-foreground/10 text-foreground",
+  "local-changes": "border-border bg-muted text-foreground",
+  disabled: "border-border/60 bg-transparent text-muted-foreground",
 };
 
 const BACKEND_LABEL: Record<string, string> = {
@@ -232,22 +232,22 @@ function PackageCard({
   const disabled = !packages.fsReady || action.busy;
 
   return (
-    <li className="rounded-lg border border-white/15 bg-slate-900/70 p-4 text-sm text-white">
+    <li className="rounded-lg border border-border bg-card p-4 text-sm text-foreground">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="flex items-center gap-2 text-base font-semibold">
-              <PackageIcon className="size-4 text-white/60" />
+              <PackageIcon className="size-4 text-muted-foreground" />
               {entry.name}
             </span>
-            <span className="text-xs text-white/45">#{entry.packageId}</span>
+            <span className="text-xs text-muted-foreground">#{entry.packageId}</span>
             <span
               className={`rounded-full border px-2 py-0.5 text-xs ${STATUS_CLASS[entry.status]}`}
             >
               {STATUS_LABEL[entry.status]}
             </span>
           </div>
-          <div className="mt-1 text-xs text-white/50">
+          <div className="mt-1 text-xs text-muted-foreground">
             {entry.version ? `версия ${entry.version}` : "версия не указана"}
             {entry.publishedRevision !== null
               ? ` · опубликована ревизия ${entry.publishedRevision}`
@@ -345,17 +345,17 @@ function PackageCard({
       </div>
 
       {!entry.enabled && (
-        <div className="mt-3 text-xs text-white/45">
+        <div className="mt-3 text-xs text-muted-foreground">
           Пакет отключён в комнате и не участвует в игре. Файлы и ревизии
           сохранены — пакет можно включить обратно.
         </div>
       )}
 
       {entry.enabled && entry.backendState && (
-        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-white/55">
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
           <span>
             Сервер:{" "}
-            <span className="text-white/80">
+            <span className="text-foreground">
               {BACKEND_LABEL[entry.backendState] ?? entry.backendState}
             </span>
           </span>
@@ -373,20 +373,20 @@ function PackageCard({
       )}
 
       {entry.runtimeError && (
-        <div className="mt-2 text-xs text-red-300">
+        <div className="mt-2 text-xs text-destructive">
           Ошибка runtime: {entry.runtimeError}
         </div>
       )}
 
       {entry.localChanges.length > 0 && (
-        <div className="mt-3 rounded-md border border-amber-400/20 bg-amber-400/5 p-2 text-xs text-amber-200">
+        <div className="mt-3 rounded-md border border-border bg-muted/50 p-2 text-xs text-foreground">
           <div className="flex items-center gap-1.5 font-medium">
             <TriangleAlertIcon className="size-3.5" />
             {entry.loaded
               ? "Локальные изменения не опубликованы"
               : "В редакторе остались файлы прошлой сессии"}
           </div>
-          <ul className="mt-1 space-y-0.5 font-mono text-amber-100/80">
+          <ul className="mt-1 space-y-0.5 font-mono text-muted-foreground">
             {entry.localChanges.slice(0, 5).map((filepath) => (
               <li key={filepath} className="truncate">
                 {filepath}
@@ -400,19 +400,19 @@ function PackageCard({
       )}
 
       {action.progress && (
-        <div className="mt-3 flex items-center gap-2 text-xs text-sky-200">
+        <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2Icon className="size-3.5 animate-spin" />
           Файлы: {action.progress.current}/{action.progress.total}
         </div>
       )}
       {action.notice && (
-        <div className="mt-3 flex items-center gap-1.5 text-xs text-emerald-300">
+        <div className="mt-3 flex items-center gap-1.5 text-xs text-foreground">
           <CheckIcon className="size-3.5" />
           {action.notice}
         </div>
       )}
       {action.error && (
-        <div className="mt-3 rounded-md border border-red-400/30 bg-red-400/10 p-2 text-xs text-red-200">
+        <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
           {action.error}
         </div>
       )}
@@ -527,15 +527,15 @@ export function PackagesTab({
   };
 
   return (
-    <div className="absolute inset-0 overflow-y-auto bg-slate-950 p-6 text-white">
+    <div className="absolute inset-0 overflow-y-auto bg-background p-6 text-foreground">
       <div className="mx-auto w-full max-w-4xl space-y-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-xl font-semibold">Пакеты комнаты</h1>
-            <p className="mt-1 max-w-2xl text-sm text-white/55">
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
               Пакеты не загружаются в редактор автоматически. Скачайте нужный
               пакет, отредактируйте его каталог{" "}
-              <span className="font-mono text-white/70">
+              <span className="font-mono text-foreground">
                 packages/&lt;id&gt;
               </span>{" "}
               и нажмите Emit, чтобы опубликовать ревизию для игры.
@@ -554,12 +554,12 @@ export function PackagesTab({
         </div>
 
         {!packages.fsReady && !packages.error && (
-          <div className="rounded-md border border-sky-400/30 bg-sky-400/10 p-3 text-sm text-sky-100">
+          <div className="rounded-md border border-border bg-muted/50 p-3 text-sm text-muted-foreground">
             Редактор ещё загружается. Список пакетов доступен, а действия с
             файлами станут доступны после запуска проекта Godot.
           </div>
         )}
-        <div className="rounded-md border border-amber-400/25 bg-amber-400/5 p-3 text-sm text-amber-100/90">
+        <div className="rounded-md border border-border bg-muted/50 p-3 text-sm text-foreground">
           После создания, скачивания и удаления пакета панель автоматически
           просит Godot пересканировать файловую систему. Если каталог всё равно
           не появился во вкладке FileSystem, сохраните сцены и переоткройте
@@ -567,14 +567,14 @@ export function PackagesTab({
           набор загруженных пакетов сбрасывается.
         </div>
         {packages.error && (
-          <div className="rounded-md border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200">
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
             {packages.error}
           </div>
         )}
 
         <form
           onSubmit={handleCreate}
-          className="rounded-lg border border-white/15 bg-slate-900/70 p-4"
+          className="rounded-lg border border-border bg-card p-4"
         >
           <div className="flex flex-wrap items-end gap-3">
             <div className="min-w-56 flex-1 space-y-1.5">
@@ -608,17 +608,17 @@ export function PackagesTab({
               Создать пакет
             </Button>
           </div>
-          <p className="mt-2 text-xs text-white/45">
+          <p className="mt-2 text-xs text-muted-foreground">
             Новый пакет сразу появится в редакторе пустым каталогом. Остальные
             пакеты комнаты при этом не загружаются.
           </p>
           {createError && (
-            <div className="mt-2 text-sm text-red-300">{createError}</div>
+            <div className="mt-2 text-sm text-destructive">{createError}</div>
           )}
         </form>
 
         {packages.entries.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-white/20 p-8 text-center text-sm text-white/50">
+          <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
             {packages.statusLoaded
               ? "В комнате пока нет пакетов. Создайте первый пакет."
               : "Загружаем список пакетов комнаты…"}
