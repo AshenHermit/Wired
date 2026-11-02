@@ -54,6 +54,7 @@ func _initialize() -> void:
 	_test_delete_files_missing_path()
 	_test_valid_relative_path()
 	_test_invalid_slug()
+	_test_slug_regex_recovers_after_reload()
 	_cleanup_root()
 	_finish()
 
@@ -666,6 +667,29 @@ func _test_invalid_slug() -> void:
 		"an invalid slug must return {error: invalid_slug}, got %s" % [rejected],
 	)
 	_report("invalid slugs are rejected", problems)
+
+
+func _test_slug_regex_recovers_after_reload() -> void:
+	var problems: Array = []
+	# The editor keeps this script alive across hot reloads; its static RegEx
+	# can be reset to null even though the method itself is usable.
+	WiredPackageFs._slug_regex = null
+	_expect(
+		problems,
+		WiredPackageFs.is_valid_slug("hero"),
+		"a valid slug must still work after the static regex is reset",
+	)
+	_expect(
+		problems,
+		WiredPackageFs.is_valid_slug("7"),
+		"the numeric legacy slug must still work after the static regex is reset",
+	)
+	_expect(
+		problems,
+		not WiredPackageFs.is_valid_slug("../escape"),
+		"path traversal must still be rejected after the static regex is reset",
+	)
+	_report("slug regex recovers after reload", problems)
 
 
 # --- helpers --------------------------------------------------------------

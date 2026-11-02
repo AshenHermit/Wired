@@ -21,7 +21,7 @@ const DEFAULT_ROOT := "res://packages"
 
 static var root_override: String = ""
 
-static var _slug_regex := RegEx.create_from_string("^[a-z0-9_]{1,64}$")
+static var _slug_regex: RegEx = null
 
 
 ## Root directory that holds one subdirectory per package.
@@ -48,6 +48,10 @@ static func previous_dir(package_slug: String) -> String:
 ## underscores. Numeric slugs (`"7"`) are valid so packages created before
 ## slugs existed keep their folder name.
 static func is_valid_slug(package_slug: String) -> bool:
+	# The static initializer does not survive a script hot reload in an open
+	# editor, so rebuild the RegEx lazily whenever it is missing.
+	if _slug_regex == null:
+		_slug_regex = RegEx.create_from_string("^[a-z0-9_]{1,64}$")
 	var found := _slug_regex.search(package_slug)
 	# PCRE2 lets `$` match before a trailing newline; require the whole string.
 	return found != null and found.get_string() == package_slug
