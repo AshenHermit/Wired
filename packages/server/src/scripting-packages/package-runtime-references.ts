@@ -96,35 +96,6 @@ export function decodePackageText(filepath: string, data: Buffer): string {
 }
 
 /**
- * Collects every `res://packages/<id>/<path>` reference inside quoted string
- * literals in real code. Whole-line comments are skipped, so a commented-out
- * reference neither creates a dependency nor blocks publishing. Paths are
- * normalized and deduplicated, keeping first-seen order.
- */
-export function collectPackageReferences(text: string): PackageFileReference[] {
-  const refs: PackageFileReference[] = [];
-  const seen = new Set<string>();
-  mapCodeLines(text, (line) => {
-    for (const match of line.matchAll(PACKAGE_REFERENCE_RE)) {
-      assertSafeRawPath(match[3]);
-      const filepath = normalizeReferencePath(match[3]);
-      if (filepath === null) {
-        continue;
-      }
-      const packageId = Number(match[2]);
-      const key = `${packageId}:${filepath}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      refs.push({ packageId, filepath });
-    }
-    return line;
-  });
-  return refs;
-}
-
-/**
  * Collects every raw `res://packages/<target>/<path>` reference inside quoted
  * string literals in real code, keeping the target exactly as authored (a
  * numeric id or a slug). Whole-line comments are skipped, so a commented-out

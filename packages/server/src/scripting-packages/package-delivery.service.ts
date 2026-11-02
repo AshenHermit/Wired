@@ -100,7 +100,11 @@ export class PackageDeliveryService {
     private readonly storage: PackageStorageService,
     private readonly readUrls: PackageReadUrlService,
   ) {
-    this.resolver = new PackageClosureResolver(revisionsRepository, storage);
+    this.resolver = new PackageClosureResolver(
+      revisionsRepository,
+      storage,
+      packagesRepository,
+    );
   }
 
   /**

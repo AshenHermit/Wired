@@ -13,6 +13,7 @@ import { PackageStorageService } from './package-storage.service';
 type PackageFixture = {
   id: number;
   name: string;
+  slug: string;
   room: { id: number } | null;
 };
 
@@ -31,6 +32,9 @@ describe('PackageClosureResolver', () => {
     findOne: jest.Mock;
     find: jest.Mock;
     createQueryBuilder: jest.Mock;
+  };
+  let packagesRepository: {
+    find: jest.Mock;
   };
   let resolver: PackageClosureResolver;
 
@@ -85,9 +89,16 @@ describe('PackageClosureResolver', () => {
       ),
     };
 
+    packagesRepository = {
+      find: jest.fn(() =>
+        packages.map((pkg) => ({ id: pkg.id, slug: pkg.slug })),
+      ),
+    };
+
     resolver = new PackageClosureResolver(
       revisionsRepository as never,
       storage,
+      packagesRepository as never,
     );
   });
 
@@ -152,8 +163,14 @@ describe('PackageClosureResolver', () => {
     id: number,
     name: string,
     roomId: number | null,
+    slug = String(id),
   ): void {
-    packages.push({ id, name, room: roomId === null ? null : { id: roomId } });
+    packages.push({
+      id,
+      name,
+      slug,
+      room: roomId === null ? null : { id: roomId },
+    });
   }
 
   async function writePublished(
@@ -183,6 +200,35 @@ describe('PackageClosureResolver', () => {
       files: entries,
       publishedAt,
     });
+  }
+
+  /**
+   * Builds a published fixture from a compact description: the first package
+   * is the root, every package is published unless `published` narrows that
+   * down. The root's `main.gd` references `reference`, so the closure can be
+   * resolved end to end.
+   */
+  async function makeResolver(options: {
+    packages: Array<{ id: number; slug: string; roomId?: number | null }>;
+    published?: number[];
+    reference: string;
+  }): Promise<PackageClosureResolver> {
+    for (const pkg of options.packages) {
+      definePackage(pkg.id, `Package${pkg.id}`, pkg.roomId ?? null, pkg.slug);
+    }
+    const rootId = options.packages[0].id;
+    const published =
+      options.published ?? options.packages.map((pkg) => pkg.id);
+    for (const id of published) {
+      await writePublished(
+        id,
+        1,
+        id === rootId
+          ? { 'main.gd': `preload("${options.reference}")` }
+          : { 'lib.gd': 'extends Node' },
+      );
+    }
+    return resolver;
   }
 
   function internals() {
@@ -391,6 +437,44 @@ describe('PackageClosureResolver', () => {
       warn.mockRestore();
     });
 
+    it('finds a dependent that references the package by slug', async () => {
+      definePackage(5, 'Library', null, 'library');
+      definePackage(10, 'Game', 7, 'game');
+      await writePublished(10, 1, {
+        'a.gd': 'preload("res://packages/library/x.gd")',
+      });
+      await writePublished(5, 2, { 'x.gd': 'extends Node' });
+
+      await expect(resolver.findDependentRoomPackages(5)).resolves.toEqual([
+        { packageId: 10, roomId: 7, revision: 1 },
+      ]);
+    });
+
+    it('skips and logs an edge that references an unknown slug', async () => {
+      definePackage(5, 'Library', null, 'library');
+      definePackage(20, 'Broken', 7, 'broken');
+      definePackage(10, 'Good', 7, 'good');
+      await writePublished(20, 1, {
+        'b.gd': 'preload("res://packages/nope/x.gd")',
+      });
+      await writePublished(10, 1, {
+        'a.gd': 'preload("res://packages/library/x.gd")',
+      });
+      await writePublished(5, 2, { 'x.gd': 'extends Node' });
+
+      const warn = jest
+        .spyOn(internals().logger, 'warn')
+        .mockImplementation(() => undefined);
+
+      await expect(resolver.findDependentRoomPackages(5)).resolves.toEqual([
+        { packageId: 10, roomId: 7, revision: 1 },
+      ]);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('unknown package slug "nope"'),
+      );
+      warn.mockRestore();
+    });
+
     it('walks a wide dependent graph without a quadratic queue', async () => {
       definePackage(5, 'Library', null);
       for (let id = 100; id < 140; id += 1) {
@@ -500,6 +584,61 @@ describe('PackageClosureResolver', () => {
 
       await expect(resolver.resolve(5, 4, 7)).rejects.toBeInstanceOf(
         NotFoundException,
+      );
+    });
+
+    it('resolves a dependency reference written with a slug', async () => {
+      const slugResolver = await makeResolver({
+        packages: [
+          { id: 7, slug: 'root' },
+          { id: 9, slug: 'hero' },
+        ],
+        published: [7, 9],
+        reference: 'res://packages/hero/lib.gd',
+      });
+
+      const closure = await slugResolver.resolve(7, 1, 3);
+
+      expect(closure.directDependencyIds).toEqual([9]);
+      expect(closure.slugByPackage.get(9)).toBe('hero');
+    });
+
+    it('still resolves a legacy numeric reference', async () => {
+      const numericResolver = await makeResolver({
+        packages: [
+          { id: 7, slug: '7' },
+          { id: 9, slug: 'hero' },
+        ],
+        published: [7, 9],
+        reference: 'res://packages/9/lib.gd',
+      });
+
+      const closure = await numericResolver.resolve(7, 1, 3);
+
+      expect(closure.directDependencyIds).toEqual([9]);
+    });
+
+    it('distinguishes an unknown slug from an unpublished package', async () => {
+      const unknown = await makeResolver({
+        packages: [{ id: 7, slug: 'root' }],
+        reference: 'res://packages/missing/lib.gd',
+      });
+      await expect(unknown.resolve(7, 1, 3)).rejects.toThrow(
+        'package_dependency_unknown_slug:missing',
+      );
+    });
+
+    it('keeps package_dependency_unpublished for a known unpublished slug', async () => {
+      const unpublished = await makeResolver({
+        packages: [
+          { id: 7, slug: 'root' },
+          { id: 9, slug: 'hero' },
+        ],
+        published: [7],
+        reference: 'res://packages/hero/lib.gd',
+      });
+      await expect(unpublished.resolve(7, 1, 3)).rejects.toThrow(
+        'package_dependency_unpublished',
       );
     });
   });

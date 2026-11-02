@@ -289,6 +289,90 @@ describe('PackageRevisionsService', () => {
       );
     });
 
+    it('records a dependency pinned through a slug reference', async () => {
+      const row = draftRow(3, [
+        file('main.gd', 'preload("res://packages/library/lib.gd")'),
+      ]);
+      repository.findOne.mockImplementation(
+        async (opts: {
+          where: {
+            package: { id: number };
+            revision?: number;
+            status?: string;
+          };
+        }) => {
+          if (opts.where.package.id === 7) {
+            return row;
+          }
+          if (
+            opts.where.package.id === 6 &&
+            opts.where.status === 'published'
+          ) {
+            return { revision: 9 };
+          }
+          return null;
+        },
+      );
+      storage.readPublishedFile.mockResolvedValue(
+        Buffer.from('preload("res://packages/library/lib.gd")'),
+      );
+      packagesRepository.find.mockImplementation(
+        async (opts?: { select?: unknown }) =>
+          opts?.select ? [{ id: 6, slug: 'library' }] : [],
+      );
+
+      await service.publish(7, 3);
+
+      expect(storage.writePinnedDependencies).toHaveBeenCalledWith(
+        7,
+        3,
+        new Map([[6, 9]]),
+      );
+    });
+
+    it('rejects publishing a reference to an unknown slug', async () => {
+      const row = draftRow(3, [
+        file('main.gd', 'preload("res://packages/missing/x.tscn")'),
+      ]);
+      repository.findOne.mockResolvedValue(row);
+      storage.readDraftFile.mockResolvedValue(
+        'preload("res://packages/missing/x.tscn")',
+      );
+
+      await expect(service.publish(7, 3)).rejects.toThrow(
+        'package_dependency_unknown_slug:missing',
+      );
+      expect(storage.publishRevision).not.toHaveBeenCalled();
+    });
+
+    it('rejects publishing when a slug dependency is disabled', async () => {
+      const row = draftRow(3, [
+        file('main.gd', 'preload("res://packages/off/a.tscn")'),
+      ]);
+      repository.findOne.mockImplementation(
+        async (opts: { where: { status?: string } }) =>
+          opts.where.status === 'published' ? null : row,
+      );
+      storage.readDraftFile.mockResolvedValue(
+        'preload("res://packages/off/a.tscn")',
+      );
+      packagesService.findOne.mockResolvedValue({ id: 42, room: { id: 7 } });
+      packagesRepository.find.mockImplementation(
+        async (opts?: { select?: unknown }) =>
+          opts?.select
+            ? [{ id: 9, slug: 'off' }]
+            : [{ id: 9, enabled: false, room: { id: 7 }, name: 'Off' }],
+      );
+
+      await expect(service.publish(42, 3)).rejects.toMatchObject({
+        response: {
+          code: 'dependency_disabled',
+          dependencyId: 9,
+        },
+      });
+      expect(storage.publishRevision).not.toHaveBeenCalled();
+    });
+
     it('rejects publishing when a same-room dependency is disabled', async () => {
       const row = draftRow(3, [
         file('main.gd', 'preload("res://packages/9/a.tscn")'),

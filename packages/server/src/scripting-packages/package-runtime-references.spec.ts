@@ -1,6 +1,5 @@
 import {
   buildSceneDependencies,
-  collectPackageReferences,
   collectRawPackageReferences,
   decodePackageText,
   isTextPackageFile,
@@ -14,10 +13,15 @@ const slugIndex = {
   byId: new Map([[9, 'hero']]),
 };
 
+/** Collects and resolves references the way every production caller does. */
+const collect = (text: string) =>
+  resolvePackageReferences(collectRawPackageReferences(text), slugIndex)
+    .resolved;
+
 describe('package runtime references', () => {
   it('collects absolute package references', () => {
     expect(
-      collectPackageReferences(
+      collect(
         'const A = preload("res://packages/5/lib/a.gd")\n' +
           '[ext_resource path="res://packages/6/tex.png" type="Texture2D"]',
       ),
@@ -29,7 +33,7 @@ describe('package runtime references', () => {
 
   it('ignores package references on whole-line comments', () => {
     expect(
-      collectPackageReferences(
+      collect(
         '# const OLD = preload("res://packages/99/a.gd")\n' +
           '  ; path="res://packages/98/b.gd"\n' +
           '## res://packages/97/c.gd\n' +
@@ -42,14 +46,12 @@ describe('package runtime references', () => {
     // Documented limitation: a quoted package path inside a multi-line string
     // is still a reference, because it is indistinguishable from code here.
     const text = 'var note = """see "res://packages/5/a.gd" """';
-    expect(collectPackageReferences(text)).toEqual([
-      { packageId: 5, filepath: 'a.gd' },
-    ]);
+    expect(collect(text)).toEqual([{ packageId: 5, filepath: 'a.gd' }]);
   });
 
   it('deduplicates repeated package references', () => {
     expect(
-      collectPackageReferences(
+      collect(
         'preload("res://packages/5/a.gd") + preload("res://packages/5/a.gd")',
       ),
     ).toEqual([{ packageId: 5, filepath: 'a.gd' }]);
@@ -247,15 +249,15 @@ describe('package runtime references', () => {
   it('rejects reference paths with backslash separators', () => {
     // Godot always addresses package files with `/`; a `\` is a Windows path
     // that would escape the artifact layout or silently address another file.
-    expect(() =>
-      collectPackageReferences('preload("res://packages/5/a\\b.gd")'),
-    ).toThrow('package_reference_invalid_path:a\\b.gd');
-    expect(() =>
-      collectPackageReferences('preload("res://packages/5/a\\\\b.gd")'),
-    ).toThrow('package_reference_invalid_path:a\\\\b.gd');
-    expect(() =>
-      collectPackageReferences('preload("res://packages/5/..\\\\6/x.gd")'),
-    ).toThrow('package_reference_invalid_path');
+    expect(() => collect('preload("res://packages/5/a\\b.gd")')).toThrow(
+      'package_reference_invalid_path:a\\b.gd',
+    );
+    expect(() => collect('preload("res://packages/5/a\\\\b.gd")')).toThrow(
+      'package_reference_invalid_path:a\\\\b.gd',
+    );
+    expect(() => collect('preload("res://packages/5/..\\\\6/x.gd")')).toThrow(
+      'package_reference_invalid_path',
+    );
   });
 
   it('rewritePackageReferences rejects backslash separators', () => {
@@ -271,15 +273,15 @@ describe('package runtime references', () => {
   });
 
   it('rejects reference paths containing a "." or ".." segment', () => {
-    expect(() =>
-      collectPackageReferences('preload("res://packages/5/./hero.gd")'),
-    ).toThrow('package_reference_invalid_path:./hero.gd');
-    expect(() =>
-      collectPackageReferences('preload("res://packages/5/a/../b.gd")'),
-    ).toThrow('package_reference_invalid_path:a/../b.gd');
-    expect(() =>
-      collectPackageReferences('preload("res://packages/5/../6/x")'),
-    ).toThrow('package_reference_invalid_path:../6/x');
+    expect(() => collect('preload("res://packages/5/./hero.gd")')).toThrow(
+      'package_reference_invalid_path:./hero.gd',
+    );
+    expect(() => collect('preload("res://packages/5/a/../b.gd")')).toThrow(
+      'package_reference_invalid_path:a/../b.gd',
+    );
+    expect(() => collect('preload("res://packages/5/../6/x")')).toThrow(
+      'package_reference_invalid_path:../6/x',
+    );
   });
 
   it('rewritePackageReferences rejects the same unsafe paths', () => {

@@ -23,10 +23,13 @@ import {
 } from './package-storage.service';
 import { validatePackageRevisionFiles } from './package-manifest';
 import {
-  collectPackageReferences,
+  collectRawPackageReferences,
   decodePackageText,
   isTextPackageFile,
+  PackageFileReference,
+  resolvePackageReferences,
 } from './package-runtime-references';
+import { loadPackageSlugIndex, PackageSlugIndex } from './package-slug-index';
 import { ScriptingPackagesService } from './scripting-packages.service';
 import {
   PACKAGE_REVISION_DISPATCHER,
@@ -200,6 +203,29 @@ export class PackageRevisionsService {
     if (!this.packagesRepository) {
       return;
     }
+
+    const index = await this.slugIndex();
+    const referenced = new Set<number>();
+    for (const entry of files) {
+      if (!isTextPackageFile(entry.filepath)) {
+        continue;
+      }
+      let text: string;
+      try {
+        text = await this.storage.readDraftFile(
+          packageId,
+          revision,
+          entry.filepath,
+        );
+      } catch {
+        // A missing upload is reported by publishRevision's own check.
+        continue;
+      }
+      for (const reference of this.resolveReferences(text, index)) {
+        referenced.add(reference.packageId);
+      }
+    }
+
     const pkg = await this.packagesService.findOne(packageId);
     const roomId = pkg.room?.id;
     if (roomId === undefined) {
@@ -216,24 +242,8 @@ export class PackageRevisionsService {
       queue.push(id);
     };
 
-    for (const entry of files) {
-      if (!isTextPackageFile(entry.filepath)) {
-        continue;
-      }
-      let text: string;
-      try {
-        text = await this.storage.readDraftFile(
-          packageId,
-          revision,
-          entry.filepath,
-        );
-      } catch {
-        // A missing upload is reported by publishRevision's own check.
-        continue;
-      }
-      for (const reference of collectPackageReferences(text)) {
-        visit(reference.packageId);
-      }
+    for (const id of referenced) {
+      visit(id);
     }
 
     while (queue.length > 0) {
@@ -280,6 +290,39 @@ export class PackageRevisionsService {
   /** Advisory lock key; `hashtext` maps it to the lock's bigint id. */
   private publishLockKey(packageId: number): string {
     return `wired.package-publish:${packageId}`;
+  }
+
+  /**
+   * Loads a fresh `slug <-> id` index for one publish operation. Without the
+   * repository (unit tests) only numeric references can be resolved, which is
+   * the legacy behaviour.
+   */
+  private async slugIndex(): Promise<PackageSlugIndex> {
+    if (!this.packagesRepository) {
+      return { bySlug: new Map(), byId: new Map() };
+    }
+    return loadPackageSlugIndex(this.packagesRepository);
+  }
+
+  /**
+   * Resolves the references of one file against the slug index. An unknown slug
+   * is a hard publication error: the artifact could never be rewritten to a
+   * runtime path, so publishing it would only move the failure to the player.
+   */
+  private resolveReferences(
+    text: string,
+    index: PackageSlugIndex,
+  ): PackageFileReference[] {
+    const { resolved, unknown } = resolvePackageReferences(
+      collectRawPackageReferences(text),
+      index,
+    );
+    if (unknown.length > 0) {
+      throw new BadRequestException(
+        `package_dependency_unknown_slug:${unknown[0]}`,
+      );
+    }
+    return resolved;
   }
 
   /**
@@ -423,6 +466,7 @@ export class PackageRevisionsService {
     files: PackageFileEntry[],
   ): Promise<void> {
     try {
+      const index = await this.slugIndex();
       const referenced = new Set<number>();
       for (const entry of files) {
         if (!isTextPackageFile(entry.filepath)) {
@@ -440,7 +484,7 @@ export class PackageRevisionsService {
           // An undecodable file is reported by the artifact build instead.
           continue;
         }
-        for (const ref of collectPackageReferences(text)) {
+        for (const ref of this.resolveReferences(text, index)) {
           if (ref.packageId !== packageId) {
             referenced.add(ref.packageId);
           }

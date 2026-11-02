@@ -1,15 +1,18 @@
 import { BadRequestException, Logger, NotFoundException } from '@nestjs/common';
 import { PackageFileEntry } from '@wired-io/shared';
 import { Repository } from 'typeorm';
+import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { MAX_PACKAGE_FILE_SIZE } from './package-manifest';
 import {
-  collectPackageReferences,
+  collectRawPackageReferences,
   decodePackageText,
   isTextPackageFile,
   PackageFileReference,
   PackageTextFile,
+  resolvePackageReferences,
 } from './package-runtime-references';
+import { loadPackageSlugIndex, PackageSlugIndex } from './package-slug-index';
 import { sha256Hex } from './package-hash';
 import { PackageStorageService } from './package-storage.service';
 
@@ -26,6 +29,7 @@ export type LoadedRevision = {
   files: PackageFileEntry[];
   publishedAt: string;
   name: string;
+  slug: string;
   room: { id: number } | null;
 };
 
@@ -45,6 +49,8 @@ export type ResolvedClosure = {
   publishedAt: string;
   revisionByPackage: Map<number, number>;
   nameByPackage: Map<number, string>;
+  /** package id -> slug, for the artifact path alias of this closure. */
+  slugByPackage: Map<number, string>;
   /** package id -> artifact key of that package's own resolved closure. */
   artifactKeys: Map<number, string>;
   rootFiles: PackageFileEntry[];
@@ -79,7 +85,20 @@ export class PackageClosureResolver {
   constructor(
     private readonly revisionsRepository: Repository<ScriptingPackageRevision>,
     private readonly storage: PackageStorageService,
+    private readonly packagesRepository: Pick<
+      Repository<ScriptingPackage>,
+      'find'
+    >,
   ) {}
+
+  /**
+   * Loads the `slug <-> id` index for one resolve/scan operation. The resolver
+   * instance is long-lived, so the index is never cached: packages are created
+   * and renamed while the server runs.
+   */
+  private loadSlugIndex(): Promise<PackageSlugIndex> {
+    return loadPackageSlugIndex(this.packagesRepository);
+  }
 
   /**
    * Finds every room package that (transitively) references `packageId`, so a
@@ -103,8 +122,11 @@ export class PackageClosureResolver {
       return [];
     }
 
-    const dependentsByReferenced =
-      await this.buildReverseReferenceGraph(latestByPackage);
+    const slugIndex = await this.loadSlugIndex();
+    const dependentsByReferenced = await this.buildReverseReferenceGraph(
+      latestByPackage,
+      slugIndex,
+    );
 
     const result: DependentRoomPackage[] = [];
     const visited = new Set<number>([packageId]);
@@ -194,12 +216,13 @@ export class PackageClosureResolver {
    */
   private async buildReverseReferenceGraph(
     latestByPackage: Map<number, LatestPublishedRevision>,
+    slugIndex: PackageSlugIndex,
   ): Promise<Map<number, Set<number>>> {
     const dependentsByReferenced = new Map<number, Set<number>>();
     for (const [id, entry] of latestByPackage) {
       let references: PackageFileReference[];
       try {
-        references = await this.collectRevisionReferences(id, entry);
+        references = await this.collectRevisionReferences(id, entry, slugIndex);
       } catch (error) {
         this.logger.warn(
           `Skipping package ${id} during dependent scan: ${
@@ -242,7 +265,9 @@ export class PackageClosureResolver {
     const textFilesByPackage = new Map<number, PackageTextFile[]>();
     const filesByPackage = new Map<number, PackageFileEntry[]>();
     const nameByPackage = new Map<number, string>();
+    const slugByPackage = new Map<number, string>();
     const publishedAtByPackage = new Map<number, string>();
+    const slugIndex = await this.loadSlugIndex();
     /** package id -> other package ids its files reference directly. */
     const referencesByPackage = new Map<number, Set<number>>();
     const directDependencyIds: number[] = [];
@@ -263,6 +288,7 @@ export class PackageClosureResolver {
       revisionByPackage.set(id, loaded.revision);
       visiting.push(id);
       nameByPackage.set(id, loaded.name);
+      slugByPackage.set(id, loaded.slug);
       publishedAtByPackage.set(id, loaded.publishedAt);
       filesByPackage.set(id, loaded.files);
       // Dependencies recorded when *this* revision was published. A pinned
@@ -311,7 +337,15 @@ export class PackageClosureResolver {
       for (const file of textFiles) {
         let references: PackageFileReference[];
         try {
-          references = collectPackageReferences(file.text);
+          const raw = collectRawPackageReferences(file.text);
+          const { resolved, unknown } = resolvePackageReferences(
+            raw,
+            slugIndex,
+          );
+          if (unknown.length > 0) {
+            throw new Error(`package_dependency_unknown_slug:${unknown[0]}`);
+          }
+          references = resolved;
         } catch (error) {
           throw new BadRequestException((error as Error).message);
         }
@@ -377,6 +411,7 @@ export class PackageClosureResolver {
       publishedAt: publishedAtByPackage.get(packageId)!,
       revisionByPackage,
       nameByPackage,
+      slugByPackage,
       artifactKeys,
       rootFiles: filesByPackage.get(packageId)!,
       bytes: rootBytes,
@@ -469,6 +504,7 @@ export class PackageClosureResolver {
       files: row.files,
       publishedAt: row.publishedAt.toISOString(),
       name: row.package.name,
+      slug: row.package.slug,
       room,
     };
   }
@@ -524,11 +560,14 @@ export class PackageClosureResolver {
    * Reads the textual files of a revision and collects every cross-package
    * reference they contain. Binary files are skipped. Throws when a file
    * cannot be read or a text file fails to decode, so callers can skip the
-   * whole package rather than building a partial reference graph.
+   * whole package rather than building a partial reference graph. A reference
+   * to an unknown slug is logged and left out of the graph: publication is
+   * where that error is reported, since a scan must not fail on one package.
    */
   private async collectRevisionReferences(
     packageId: number,
     entry: { revision: number; files: PackageFileEntry[] },
+    slugIndex: PackageSlugIndex,
   ): Promise<PackageFileReference[]> {
     const references: PackageFileReference[] = [];
     for (const file of entry.files) {
@@ -541,7 +580,16 @@ export class PackageClosureResolver {
         file.filepath,
       );
       const text = decodePackageText(file.filepath, data);
-      references.push(...collectPackageReferences(text));
+      const { resolved, unknown } = resolvePackageReferences(
+        collectRawPackageReferences(text),
+        slugIndex,
+      );
+      for (const slug of unknown) {
+        this.logger.warn(
+          `Skipping unknown package slug "${slug}" referenced by package ${packageId} (${file.filepath})`,
+        );
+      }
+      references.push(...resolved);
     }
     return references;
   }

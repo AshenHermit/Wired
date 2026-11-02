@@ -53,10 +53,10 @@ describe('PackageDeliveryService', () => {
       findOne: jest.fn((opts: { where: { id: number } }) => {
         return packages.find((pkg) => pkg.id === opts.where.id) ?? null;
       }),
-      find: jest.fn((opts: { where: { room?: { id: number } } }) =>
+      find: jest.fn((opts: { where?: { room?: { id: number } } }) =>
         packages.filter(
           (pkg) =>
-            opts.where.room === undefined ||
+            opts.where?.room === undefined ||
             pkg.room?.id === opts.where.room.id,
         ),
       ),
