@@ -11,7 +11,12 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/animate-ui/components/animate/tabs";
-import { GamepadIcon, GripVerticalIcon, PackageIcon, WrenchIcon } from "lucide-react";
+import {
+  GamepadIcon,
+  GripVerticalIcon,
+  PackageIcon,
+  WrenchIcon,
+} from "lucide-react";
 import React from "react";
 import { GameTab } from "./GameTab";
 import { useUserStore } from "@/store/user-store";
@@ -64,7 +69,7 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
             aria-label="Перетащить панель"
             title="Перетащить панель"
             {...gripProps}
-            className={`inline-flex h-9 w-7 items-center justify-center rounded-md border border-input bg-muted text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
+            className={`inline-flex h-9 w-7 items-center justify-center rounded-md bg-muted text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
           >
             <GripVerticalIcon className="size-4" />
           </button>

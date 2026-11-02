@@ -43,6 +43,7 @@ const config: () => AppConfig = () => ({
   },
   site: {
     commonDomain: process.env.COMMON_DOMAIN ?? 'localhost',
+    apiDomain: 'api.' + (process.env.COMMON_DOMAIN ?? 'localhost'),
     host: process.env.SITE_HOST ?? 'http://localhost:3001',
     authSecret: process.env.AUTH_SECRET ?? 'secret',
     authCookieName: process.env.AUTH_COOKIE_NAME ?? 'access_token',

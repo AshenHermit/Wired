@@ -10,6 +10,10 @@ import {
 } from "./GodotEditorInstance";
 import { Spinner } from "@/components/ui/spinner";
 import { getGodotProjectInfo } from "@/api/services/godot-game";
+import {
+  godotEditorSessionRoot,
+  prepareGodotEditorStorage,
+} from "./godot-editor-storage";
 
 export function GodotEditor({
   roomId,
@@ -46,9 +50,16 @@ export function GodotEditor({
   const loadEditor = React.useCallback(
     async (editor: GodotEditorInstance) => {
       try {
-        // Persistence is scoped per room: rooms must not see each other's
-        // files, and a reload must not throw away the room's own drafts.
-        editor.rootPath = `/home/web_user/room-${roomId}`;
+        // Drop the previous session before the engine mounts its file system:
+        // project files, the import cache and the editor layout live in
+        // IndexedDB and must not leak into this launch. Memoized per document,
+        // so remounting the editor in the same tab keeps the current session.
+        await prepareGodotEditorStorage();
+        // Persistence is scoped per room and per document: rooms must not see
+        // each other's files, and a reload must start from scratch. Inside the
+        // document the directory is reused, so the editor restart that Godot
+        // performs after an exit still finds the project it had before.
+        editor.rootPath = godotEditorSessionRoot(roomId);
         editor.persistentPaths = [editor.rootPath];
         await editor.init();
         const projectInfo = await getGodotProjectInfo();
