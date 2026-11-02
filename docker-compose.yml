@@ -46,6 +46,8 @@ services:
       - PORT=${PORT}
       # Абсолютный путь обязателен для compose; volume монтируется сюда же.
       - STORAGE_DIR=/app/storage
+      # Состояние комнат должно жить на volume, а не в образе.
+      - GODOT_ROOM_STATE_DIR=/app/storage/godot_rooms
       - GOOGLE_AUTH_CLIENT_ID=${GOOGLE_AUTH_CLIENT_ID}
       - GOOGLE_AUTH_CLIENT_SECRET=${GOOGLE_AUTH_CLIENT_SECRET}
       - GOOGLE_AUTH_CALLBACK=${GOOGLE_AUTH_CALLBACK}
