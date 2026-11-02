@@ -20,6 +20,8 @@ const baseConfig: GodotRuntimeConfig = {
   apiUrl: 'http://127.0.0.1:3000',
   exportDir: 'game_export/web',
   publicWsBaseUrl: '',
+  wsMaxClientsPerRoom: 32,
+  wsMaxTotal: 512,
   logBufferLines: 100,
 };
 

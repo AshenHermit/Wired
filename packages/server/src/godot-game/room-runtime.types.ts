@@ -43,6 +43,10 @@ export interface GodotRuntimeConfig {
    * from `apiUrl` outside production; production requires this value.
    */
   publicWsBaseUrl: string;
+  /** Concurrent proxied game sockets allowed per room. */
+  wsMaxClientsPerRoom: number;
+  /** Concurrent proxied game sockets allowed for the whole backend. */
+  wsMaxTotal: number;
   logBufferLines: number;
 }
 

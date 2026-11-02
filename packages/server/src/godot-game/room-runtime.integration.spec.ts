@@ -62,6 +62,8 @@ describeIntegration('RoomRuntimeService with real Godot', () => {
       stateDir,
       apiUrl: 'http://127.0.0.1:3000',
       publicWsBaseUrl: '',
+      wsMaxClientsPerRoom: 32,
+      wsMaxTotal: 512,
       logBufferLines: 2_000,
       exportDir: join(stateDir, 'export'),
     };

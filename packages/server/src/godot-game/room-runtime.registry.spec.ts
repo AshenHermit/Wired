@@ -19,6 +19,8 @@ const config: GodotRuntimeConfig = {
   stateDir: 'C:/wired/storage/rooms',
   exportDir: 'C:/wired/game_export/web',
   publicWsBaseUrl: '',
+  wsMaxClientsPerRoom: 32,
+  wsMaxTotal: 512,
   logBufferLines: 50,
 };
 

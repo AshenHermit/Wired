@@ -87,6 +87,8 @@ const config: () => AppConfig = () => ({
       process.env.GODOT_ROOM_STATE_DIR ?? './storage/godot_rooms',
     ),
     publicWsBaseUrl: process.env.GODOT_ROOM_PUBLIC_WS_BASE ?? '',
+    wsMaxClientsPerRoom: intFromEnv('GODOT_ROOM_WS_MAX_CLIENTS_PER_ROOM', 32),
+    wsMaxTotal: intFromEnv('GODOT_ROOM_WS_MAX_TOTAL', 512),
     logBufferLines: intFromEnv('GODOT_ROOM_LOG_BUFFER_LINES', 2000),
     // The Web export is a build artifact and must live outside
     // godot_project/_wired: that directory is the base project served to every

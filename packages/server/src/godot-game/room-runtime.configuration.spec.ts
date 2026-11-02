@@ -18,6 +18,8 @@ const config: GodotRuntimeConfig = {
   ticketRateLimitWindowMs: 60_000,
   stateDir: './storage/rooms',
   publicWsBaseUrl: '',
+  wsMaxClientsPerRoom: 32,
+  wsMaxTotal: 512,
   logBufferLines: 200,
   exportDir: './game_export/web',
   apiUrl: 'http://127.0.0.1:4123',

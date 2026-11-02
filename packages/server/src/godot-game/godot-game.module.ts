@@ -8,6 +8,7 @@ import { RoomsModule } from 'src/rooms/rooms.module';
 import { PackageDeliveryModule } from 'src/scripting-packages/package-delivery.module';
 import { GameExportController } from './game-export.controller';
 import { GameRoomController } from './game-room.controller';
+import { GameSocketProxyService } from './game-socket-proxy.service';
 import { GameRoomTicketRateLimiter } from './game-room.rate-limiter';
 import { GameRoomService } from './game-room.service';
 import { GameTicketService } from './game-ticket.service';
@@ -32,6 +33,7 @@ import { RuntimeProcessFactory } from './room-runtime.types';
   providers: [
     GameTicketService,
     RoomRuntimeService,
+    GameSocketProxyService,
     GameRoomService,
     GameRoomTicketRateLimiter,
     PackageSyncService,
