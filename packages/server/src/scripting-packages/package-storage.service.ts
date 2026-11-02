@@ -378,7 +378,8 @@ export class PackageStorageService {
    * revisions, dependency pins and every runtime artifact of every room.
    *
    * The database row is deleted by the caller; without this the package
-   * directory (`revisions/<n>`, `runtime/v1/...`) would stay on disk forever.
+   * directory (`revisions/<n>`, `runtime/v2/...`, plus orphaned legacy
+   * `runtime/v1/...`) would stay on disk forever.
    */
   async removePackage(packageId: number): Promise<void> {
     await this.removeDirectory(this.packageRootDir(packageId));

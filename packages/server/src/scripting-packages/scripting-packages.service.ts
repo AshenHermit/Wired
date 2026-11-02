@@ -424,7 +424,8 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
   /**
    * Deletes the package row and then every stored file of the package. The
    * revision rows cascade with the package, but nothing on disk does: without
-   * the cleanup `revisions/<n>` and `runtime/v1/<room>/...` stay orphaned.
+   * the cleanup `revisions/<n>` and `runtime/v2/<room>/...` stay orphaned.
+   * Legacy `runtime/v1` trees are ignored and left orphaned, never migrated.
    *
    * The row is authoritative, so a disk failure is logged instead of turning a
    * completed deletion into an error.
