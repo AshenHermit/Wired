@@ -27,6 +27,9 @@ interface ProxyPair {
   roomId: string;
   client: WebSocket;
   upstream: WebSocket;
+  /** Set by this service before it terminates a side, so the resulting
+   * error/close events are not reported as upstream failures. */
+  closed: boolean;
 }
 
 /**
@@ -105,6 +108,9 @@ export class GameSocketProxyService
     const roomId = match[1];
     const info = this.runtimes.getRuntime(roomId);
     if (!info || info.state !== 'running' || !info.port) {
+      this.logger.warn(
+        `Game socket upgrade for room ${roomId} rejected: runtime is not running`,
+      );
       this.reject(socket, 503);
       return;
     }
@@ -114,6 +120,9 @@ export class GameSocketProxyService
       roomConnections >= this.config.godotRuntime.wsMaxClientsPerRoom ||
       this.totalConnections() >= this.config.godotRuntime.wsMaxTotal
     ) {
+      this.logger.warn(
+        `Game socket upgrade for room ${roomId} rejected: connection limit reached`,
+      );
       this.reject(socket, 503);
       return;
     }
@@ -143,13 +152,19 @@ export class GameSocketProxyService
   }
 
   private reject(socket: Duplex, status: number): void {
-    if (socket.writable) {
-      socket.write(
-        `HTTP/1.1 ${status} ${HTTP_REASONS[status] ?? 'Error'}\r\n` +
-          'Connection: close\r\nContent-Length: 0\r\n\r\n',
-      );
+    // Node's HTTP server removes its own error listener before emitting
+    // 'upgrade'; a peer reset while the rejection is flushing must not become
+    // an unhandled 'error' that crashes the process.
+    socket.on('error', () => socket.destroy());
+    if (!socket.writable) {
+      socket.destroy();
+      return;
     }
-    socket.destroy();
+    socket.once('finish', () => socket.destroy());
+    socket.end(
+      `HTTP/1.1 ${status} ${HTTP_REASONS[status] ?? 'Error'}\r\n` +
+        'Connection: close\r\nContent-Length: 0\r\n\r\n',
+    );
   }
 
   private pipe(client: WebSocket, roomId: string, port: number): void {
@@ -157,7 +172,7 @@ export class GameSocketProxyService
       maxPayload: MAX_PAYLOAD_BYTES,
       handshakeTimeout: UPSTREAM_HANDSHAKE_TIMEOUT_MS,
     });
-    const pair: ProxyPair = { roomId, client, upstream };
+    const pair: ProxyPair = { roomId, client, upstream, closed: false };
     this.track(pair);
 
     const pending: Array<{ data: RawData; isBinary: boolean }> = [];
@@ -185,6 +200,7 @@ export class GameSocketProxyService
       pendingBytes += this.rawDataLength(data);
       if (pendingBytes > MAX_PAYLOAD_BYTES) {
         this.logger.warn(`Game client ${roomId} exceeded the upstream buffer`);
+        pair.closed = true;
         release();
         upstream.terminate();
         client.close(1011, 'upstream buffer overflow');
@@ -207,6 +223,7 @@ export class GameSocketProxyService
     });
 
     client.on('close', (code) => {
+      pair.closed = true;
       release();
       if (upstream.readyState === WebSocket.CONNECTING) {
         upstream.terminate();
@@ -216,12 +233,16 @@ export class GameSocketProxyService
     });
 
     client.on('error', () => {
+      pair.closed = true;
       release();
       upstream.terminate();
     });
 
     upstream.on('close', (code) => {
       release();
+      if (pair.closed) {
+        return;
+      }
       if (client.readyState === WebSocket.OPEN) {
         client.close(normalizeClose(code, 1011));
       }
@@ -229,6 +250,9 @@ export class GameSocketProxyService
 
     upstream.on('error', (error) => {
       release();
+      if (pair.closed) {
+        return;
+      }
       this.logger.warn(
         `Game socket upstream failed for room ${roomId}: ${error.message}`,
       );
@@ -258,6 +282,7 @@ export class GameSocketProxyService
   }
 
   private closeBoth(pair: ProxyPair, code: number, reason: string): void {
+    pair.closed = true;
     if (pair.client.readyState === WebSocket.OPEN) {
       pair.client.close(code, reason);
     } else {

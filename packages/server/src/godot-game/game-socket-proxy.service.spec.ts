@@ -1,6 +1,8 @@
 import { once } from 'node:events';
 import { createServer, Server } from 'node:http';
 import { AddressInfo } from 'node:net';
+import { PassThrough, Duplex } from 'node:stream';
+import { Logger } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
 import { RawData, WebSocket, WebSocketServer } from 'ws';
 import { AppConfigService } from 'src/config/config.service';
@@ -135,22 +137,51 @@ describe('GameSocketProxyService', () => {
     ).resolves.toBe(404);
   });
 
+  it('handles a socket error while rejecting an upgrade', () => {
+    const socket = new PassThrough() as unknown as Duplex;
+    const destroy = jest.spyOn(socket, 'destroy');
+    (
+      proxy as unknown as {
+        reject(socket: Duplex, status: number): void;
+      }
+    ).reject(socket, 404);
+
+    expect(() => socket.emit('error', new Error('reset'))).not.toThrow();
+    expect(destroy).toHaveBeenCalled();
+  });
+
   it('returns 503 when the room runtime is not running', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
     getRuntime.mockReturnValue({ state: 'starting', port: upstreamPort });
-    await expect(
-      rejectStatus(`ws://127.0.0.1:${httpPort}/rooms/7/game/ws`),
-    ).resolves.toBe(503);
+    try {
+      await expect(
+        rejectStatus(`ws://127.0.0.1:${httpPort}/rooms/7/game/ws`),
+      ).resolves.toBe(503);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/room 7.*not running/i),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('enforces the per-room connection cap', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
     getRuntime.mockReturnValue({ state: 'running', port: upstreamPort });
     const first = connect();
     await open(first);
 
-    await expect(
-      rejectStatus(`ws://127.0.0.1:${httpPort}/rooms/7/game/ws`),
-    ).resolves.toBe(503);
-    first.close();
+    try {
+      await expect(
+        rejectStatus(`ws://127.0.0.1:${httpPort}/rooms/7/game/ws`),
+      ).resolves.toBe(503);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/room 7.*limit/i),
+      );
+    } finally {
+      warn.mockRestore();
+      first.close();
+    }
   });
 
   it('enforces the global connection cap', async () => {
@@ -227,6 +258,28 @@ describe('GameSocketProxyService', () => {
     await new Promise<void>((resolve) => blackhole.close(() => resolve()));
   });
 
+  it('does not log an upstream error when the client aborts first', async () => {
+    const blackhole = createServer(() => undefined);
+    const blackholePort = await listen(blackhole);
+    getRuntime.mockReturnValue({ state: 'running', port: blackholePort });
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+
+    try {
+      const client = connect();
+      await open(client);
+      client.close();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      expect(warn).not.toHaveBeenCalledWith(
+        expect.stringMatching(/upstream failed/i),
+      );
+    } finally {
+      warn.mockRestore();
+      blackhole.closeAllConnections?.();
+      await new Promise<void>((resolve) => blackhole.close(() => resolve()));
+    }
+  });
+
   it('propagates a client close to the upstream', async () => {
     getRuntime.mockReturnValue({ state: 'running', port: upstreamPort });
     const upstreamClosed = new Promise<number>((resolve) => {
@@ -234,9 +287,15 @@ describe('GameSocketProxyService', () => {
         socket.once('close', (code) => resolve(code)),
       );
     });
+    const upstreamConnected = new Promise<void>((resolve) => {
+      upstream.once('connection', () => resolve());
+    });
 
     const client = connect();
     await open(client);
+    await upstreamConnected;
+    client.send('ping');
+    await message(client);
     client.close(1000, 'bye');
 
     await expect(upstreamClosed).resolves.toBe(1000);

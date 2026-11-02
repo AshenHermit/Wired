@@ -61,7 +61,9 @@ describeIntegration('RoomRuntimeService with real Godot', () => {
       ticketRateLimitWindowMs: 60_000,
       stateDir,
       apiUrl: 'http://127.0.0.1:3000',
-      publicWsBaseUrl: '',
+      // This spec talks to the runtime directly; the browser proxy is not
+      // involved, so use the legacy port placeholder to reach the listener.
+      publicWsBaseUrl: 'ws://127.0.0.1:{port}',
       wsMaxClientsPerRoom: 32,
       wsMaxTotal: 512,
       logBufferLines: 2_000,

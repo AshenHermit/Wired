@@ -108,6 +108,12 @@ describe('RoomRuntimeConfiguration', () => {
     ).toBe('wss://games.example/godot/42?p=19100');
   });
 
+  it('rejects an invalid apiUrl before spawning the runtime', () => {
+    expect(() =>
+      configuration.validate({ ...config, apiUrl: 'ftp://127.0.0.1:3000' }),
+    ).toThrow(/http\(s\)/i);
+  });
+
   it('rejects a public base without placeholders', () => {
     expect(() =>
       configuration.validate({

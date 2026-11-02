@@ -95,6 +95,11 @@ export class RoomRuntimeConfiguration {
         'GODOT_ROOM_PUBLIC_WS_BASE is required in production; clients must not receive internal ports',
       );
     }
+    if (!config.publicWsBaseUrl) {
+      // Validate the derived endpoint before a runtime is spawned; otherwise a
+      // malformed GODOT_ROOM_API_URL fails only after the child is running.
+      this.deriveEndpoint(config.apiUrl, '0');
+    }
     if (config.publicWsBaseUrl) {
       if (!/^wss?:\/\//.test(config.publicWsBaseUrl)) {
         throw new RoomRuntimeError(
