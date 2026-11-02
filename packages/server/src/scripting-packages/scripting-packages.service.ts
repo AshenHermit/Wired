@@ -79,6 +79,21 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
         Array.isArray(updated) ? updated.length : 0
       } row(s) updated`,
     );
+
+    // Anything still slugless after the UPDATE means the backfill cannot be
+    // trusted; refusing to start beats serving packages without a slug.
+    const missing: Array<{ id: number }> = await this.packagesRepository.query(
+      `SELECT id FROM scripting_package WHERE slug IS NULL OR slug = ''`,
+    );
+    if (Array.isArray(missing) && missing.length > 0) {
+      const ids = missing.map((row) => row.id);
+      this.logger.error(
+        `Package slug backfill left ${ids.length} package(s) without a slug: ${ids.join(
+          ', ',
+        )}`,
+      );
+      throw new Error('package_slug_backfill_incomplete');
+    }
   }
 
   private normalizeSlug(slug: string): string {
@@ -422,9 +437,15 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     // covers a row created before the startup backfill ran.
     const slug = pkg.slug ?? String(id);
     await this.packagesRepository.manager.transaction(async (manager) => {
+      // Serialize with `create()` so a slug cannot be tombstoned while another
+      // request is re-creating it.
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+        `package_slug:${slug}`,
+      ]);
       await manager.save(RetiredPackageSlug, { slug, packageId: id });
       const result = await manager.delete(ScriptingPackage, id);
       if (!result.affected) {
+        // Another request won the race: the row is already gone.
         throw new NotFoundException(`ScriptingPackage with id=${id} not found`);
       }
     });

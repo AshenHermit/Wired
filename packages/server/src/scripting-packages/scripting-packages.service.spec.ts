@@ -507,6 +507,28 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     );
   });
 
+  it('fails fast when the backfill leaves packages without a slug', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ id: 1 }])
+      .mockResolvedValueOnce([{ id: 5 }]);
+    const service = makeSlugService({ query });
+    const logger = (service as unknown as { logger: { error: jest.Mock } })
+      .logger;
+    const errorSpy = jest
+      .spyOn(logger, 'error')
+      .mockImplementation(() => undefined);
+
+    await expect(service.onApplicationBootstrap()).rejects.toThrow(
+      'package_slug_backfill_incomplete',
+    );
+    expect(query).toHaveBeenLastCalledWith(
+      expect.stringContaining('WHERE slug IS NULL'),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('5'));
+    errorSpy.mockRestore();
+  });
+
   it('reports a live slug as taken', async () => {
     const service = makeSlugService({
       findOne: jest.fn(async () => ({ id: 7, slug: 'hero' })),
@@ -584,6 +606,24 @@ describe('ScriptingPackagesService slug lifecycle', () => {
       expect.objectContaining({ slug: 'hero', packageId: 7 }),
     );
     expect(manager.delete).toHaveBeenCalledWith(ScriptingPackage, 7);
+  });
+
+  it('locks the slug before tombstoning it', async () => {
+    const manager = makeTransactionManager();
+    const service = makeSlugService({ manager });
+    await service.remove(7);
+    expect(manager.query).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+      ['package_slug:hero'],
+    );
+  });
+
+  it('reports a concurrent double delete as not found', async () => {
+    const manager = makeTransactionManager({
+      delete: jest.fn(async () => ({ affected: 0 })),
+    });
+    const service = makeSlugService({ manager });
+    await expect(service.remove(7)).rejects.toBeInstanceOf(NotFoundException);
   });
 });
 
