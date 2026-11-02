@@ -21,6 +21,8 @@ const DEFAULT_ROOT := "res://packages"
 
 static var root_override: String = ""
 
+static var _slug_regex := RegEx.create_from_string("^[a-z0-9_]{1,64}$")
+
 
 ## Root directory that holds one subdirectory per package.
 static func packages_root() -> String:
@@ -28,23 +30,27 @@ static func packages_root() -> String:
 
 
 ## Project path of the live directory of a package.
-static func package_dir(package_id: int) -> String:
-	return packages_root().path_join(str(package_id))
+static func package_dir(package_slug: String) -> String:
+	return packages_root().path_join(package_slug)
 
 
 ## Project path of the directory that receives the next revision.
-static func staging_dir(package_id: int) -> String:
-	return packages_root().path_join(".%d.staging" % package_id)
+static func staging_dir(package_slug: String) -> String:
+	return packages_root().path_join(".%s.staging" % package_slug)
 
 
 ## Project path of the backup kept while a swap is in flight.
-static func previous_dir(package_id: int) -> String:
-	return packages_root().path_join(".%d.previous" % package_id)
+static func previous_dir(package_slug: String) -> String:
+	return packages_root().path_join(".%s.previous" % package_slug)
 
 
-## A package id is a positive database id.
-static func is_valid_id(package_id: int) -> bool:
-	return package_id > 0
+## Package folder names are slugs: lowercase latin letters, digits and
+## underscores. Numeric slugs (`"7"`) are valid so packages created before
+## slugs existed keep their folder name.
+static func is_valid_slug(package_slug: String) -> bool:
+	var found := _slug_regex.search(package_slug)
+	# PCRE2 lets `$` match before a trailing newline; require the whole string.
+	return found != null and found.get_string() == package_slug
 
 
 ## A package file path must stay inside the package directory.
@@ -71,13 +77,13 @@ static func is_editor_metadata(rel_path: String) -> bool:
 ## Package-relative path for an editor path under [method package_dir] or for a
 ## package-relative path. Returns an empty string for an empty path, an absolute
 ## filesystem path, the package root itself, or a path that escapes the package.
-static func package_relative_path(package_id: int, raw_path: String) -> String:
-	if not is_valid_id(package_id):
+static func package_relative_path(package_slug: String, raw_path: String) -> String:
+	if not is_valid_slug(package_slug):
 		return ""
 	var path := raw_path.trim_suffix("/")
 	if path.is_empty() or path.begins_with("/") or path.contains("\\"):
 		return ""
-	var prefix := package_dir(package_id) + "/"
+	var prefix := package_dir(package_slug) + "/"
 	if path.contains("://"):
 		# Any scheme (`res://`, or `user://` for the smoke test root) must name
 		# the live package directory, otherwise the path is out of scope.
@@ -94,53 +100,55 @@ static func package_relative_path(package_id: int, raw_path: String) -> String:
 
 ## Undoes a swap that was interrupted between the two renames.
 ## Returns an empty string on success, or a message when the rename fails.
-static func restore_previous_if_needed(package_id: int) -> String:
-	var previous := previous_dir(package_id)
+static func restore_previous_if_needed(package_slug: String) -> String:
+	if not is_valid_slug(package_slug):
+		return ""
+	var previous := previous_dir(package_slug)
 	if not DirAccess.dir_exists_absolute(previous):
 		return ""
-	var root := package_dir(package_id)
+	var root := package_dir(package_slug)
 	if DirAccess.dir_exists_absolute(root):
 		return ""
 	var error := DirAccess.rename_absolute(previous, root)
 	if error != OK:
-		return "не удалось восстановить пакет %d из previous: %s" % [package_id, error_string(error)]
+		return "не удалось восстановить пакет %s из previous: %s" % [package_slug, error_string(error)]
 	return ""
 
 
 # --- operations -----------------------------------------------------------
 
 
-static func op_exists(package_id: int) -> Dictionary:
-	var invalid := _invalid_id(package_id)
+static func op_exists(package_slug: String) -> Dictionary:
+	var invalid := _invalid_slug(package_slug)
 	if not invalid.is_empty():
 		return {"error": invalid}
-	var restore_error := restore_previous_if_needed(package_id)
+	var restore_error := restore_previous_if_needed(package_slug)
 	if not restore_error.is_empty():
 		return {"error": restore_error}
-	return {"exists": DirAccess.dir_exists_absolute(package_dir(package_id))}
+	return {"exists": DirAccess.dir_exists_absolute(package_dir(package_slug))}
 
 
-static func op_create_dir(package_id: int) -> Dictionary:
-	var invalid := _invalid_id(package_id)
+static func op_create_dir(package_slug: String) -> Dictionary:
+	var invalid := _invalid_slug(package_slug)
 	if not invalid.is_empty():
 		return {"error": invalid}
-	var error := DirAccess.make_dir_recursive_absolute(package_dir(package_id))
+	var error := DirAccess.make_dir_recursive_absolute(package_dir(package_slug))
 	if error != OK:
 		return {
-			"error": "не удалось создать каталог пакета %d: %s" % [package_id, error_string(error)],
+			"error": "не удалось создать каталог пакета %s: %s" % [package_slug, error_string(error)],
 		}
 	return {}
 
 
-static func op_snapshot(package_id: int) -> Dictionary:
-	var invalid := _invalid_id(package_id)
+static func op_snapshot(package_slug: String) -> Dictionary:
+	var invalid := _invalid_slug(package_slug)
 	if not invalid.is_empty():
 		return {"error": invalid}
-	var restore_error := restore_previous_if_needed(package_id)
+	var restore_error := restore_previous_if_needed(package_slug)
 	if not restore_error.is_empty():
 		return {"error": restore_error}
 	var files := {}
-	var root := package_dir(package_id)
+	var root := package_dir(package_slug)
 	if not DirAccess.dir_exists_absolute(root):
 		return {"files": files}
 	for rel_path: String in _list_files(root):
@@ -150,15 +158,15 @@ static func op_snapshot(package_id: int) -> Dictionary:
 	return {"files": files}
 
 
-static func op_collect(package_id: int) -> Dictionary:
-	var invalid := _invalid_id(package_id)
+static func op_collect(package_slug: String) -> Dictionary:
+	var invalid := _invalid_slug(package_slug)
 	if not invalid.is_empty():
 		return {"error": invalid}
-	var restore_error := restore_previous_if_needed(package_id)
+	var restore_error := restore_previous_if_needed(package_slug)
 	if not restore_error.is_empty():
 		return {"error": restore_error}
 	var files: Array = []
-	var root := package_dir(package_id)
+	var root := package_dir(package_slug)
 	if not DirAccess.dir_exists_absolute(root):
 		return {"files": files}
 	for rel_path: String in _list_files(root):
@@ -177,43 +185,43 @@ static func op_collect(package_id: int) -> Dictionary:
 	return {"files": files}
 
 
-static func op_prepare_replace(package_id: int) -> Dictionary:
-	var invalid := _invalid_id(package_id)
+static func op_prepare_replace(package_slug: String) -> Dictionary:
+	var invalid := _invalid_slug(package_slug)
 	if not invalid.is_empty():
 		return {"error": invalid}
-	var restore_error := restore_previous_if_needed(package_id)
+	var restore_error := restore_previous_if_needed(package_slug)
 	if not restore_error.is_empty():
 		return {"error": restore_error}
-	var prepare_error := _remove_tree(previous_dir(package_id))
+	var prepare_error := _remove_tree(previous_dir(package_slug))
 	if prepare_error != OK:
 		return {
-			"error": "не удалось удалить previous пакета %d: %s"
-			% [package_id, error_string(prepare_error)],
+			"error": "не удалось удалить previous пакета %s: %s"
+			% [package_slug, error_string(prepare_error)],
 		}
-	prepare_error = _remove_tree(staging_dir(package_id))
+	prepare_error = _remove_tree(staging_dir(package_slug))
 	if prepare_error != OK:
 		return {
-			"error": "не удалось удалить staging пакета %d: %s"
-			% [package_id, error_string(prepare_error)],
+			"error": "не удалось удалить staging пакета %s: %s"
+			% [package_slug, error_string(prepare_error)],
 		}
-	var staging := staging_dir(package_id)
+	var staging := staging_dir(package_slug)
 	var error := DirAccess.make_dir_recursive_absolute(staging)
 	if error != OK:
-		return {"error": "не удалось создать staging пакета %d: %s" % [package_id, error_string(error)]}
+		return {"error": "не удалось создать staging пакета %s: %s" % [package_slug, error_string(error)]}
 	return {"staging_path": ProjectSettings.globalize_path(staging)}
 
 
-static func op_replace(package_id: int) -> Dictionary:
-	var invalid := _invalid_id(package_id)
+static func op_replace(package_slug: String) -> Dictionary:
+	var invalid := _invalid_slug(package_slug)
 	if not invalid.is_empty():
 		return {"error": invalid}
-	var restore_error := restore_previous_if_needed(package_id)
+	var restore_error := restore_previous_if_needed(package_slug)
 	if not restore_error.is_empty():
 		return {"error": restore_error}
 
-	var root := package_dir(package_id)
-	var staging := staging_dir(package_id)
-	var previous := previous_dir(package_id)
+	var root := package_dir(package_slug)
+	var staging := staging_dir(package_slug)
+	var previous := previous_dir(package_slug)
 	if not DirAccess.dir_exists_absolute(staging):
 		return {"error": "staging не найден"}
 
@@ -236,29 +244,29 @@ static func op_replace(package_id: int) -> Dictionary:
 		var backup_error := DirAccess.rename_absolute(root, previous)
 		if backup_error != OK:
 			return {
-				"error": "не удалось освободить каталог пакета %d: %s"
-				% [package_id, error_string(backup_error)],
+				"error": "не удалось освободить каталог пакета %s: %s"
+				% [package_slug, error_string(backup_error)],
 			}
 		var swap_error := DirAccess.rename_absolute(staging, root)
 		if swap_error != OK:
 			DirAccess.rename_absolute(previous, root)
 			_remove_tree(staging)
 			return {
-				"error": "не удалось переключить staging пакета %d: %s"
-				% [package_id, error_string(swap_error)],
+				"error": "не удалось переключить staging пакета %s: %s"
+				% [package_slug, error_string(swap_error)],
 			}
 		var cleanup_error := _remove_tree(previous)
 		if cleanup_error != OK:
 			push_error(
-				"не удалось удалить previous пакета %d: %s"
-				% [package_id, error_string(cleanup_error)]
+				"не удалось удалить previous пакета %s: %s"
+				% [package_slug, error_string(cleanup_error)]
 			)
 	else:
 		var swap_error := DirAccess.rename_absolute(staging, root)
 		if swap_error != OK:
 			return {
-				"error": "не удалось переключить staging пакета %d: %s"
-				% [package_id, error_string(swap_error)],
+				"error": "не удалось переключить staging пакета %s: %s"
+				% [package_slug, error_string(swap_error)],
 			}
 
 	var written: Array[String] = []
@@ -273,14 +281,14 @@ static func op_replace(package_id: int) -> Dictionary:
 	return {"written": written, "deleted": deleted}
 
 
-static func op_delete(package_id: int) -> Dictionary:
-	var invalid := _invalid_id(package_id)
+static func op_delete(package_slug: String) -> Dictionary:
+	var invalid := _invalid_slug(package_slug)
 	if not invalid.is_empty():
 		return {"error": invalid}
-	var restore_error := restore_previous_if_needed(package_id)
+	var restore_error := restore_previous_if_needed(package_slug)
 	if not restore_error.is_empty():
 		return {"error": restore_error}
-	for path: String in [package_dir(package_id), staging_dir(package_id), previous_dir(package_id)]:
+	for path: String in [package_dir(package_slug), staging_dir(package_slug), previous_dir(package_slug)]:
 		var error := _remove_tree(path)
 		if error != OK:
 			return {"error": "не удалось удалить %s: %s" % [path, error_string(error)]}
@@ -291,17 +299,17 @@ static func op_delete(package_id: int) -> Dictionary:
 ## either an editor path under [method package_dir] or package-relative. Missing
 ## paths are ignored. Editor metadata next to a selected file is left alone;
 ## metadata inside a selected directory is removed with that directory.
-static func op_delete_files(package_id: int, paths: Array) -> Dictionary:
-	var invalid := _invalid_id(package_id)
+static func op_delete_files(package_slug: String, paths: Array) -> Dictionary:
+	var invalid := _invalid_slug(package_slug)
 	if not invalid.is_empty():
 		return {"error": invalid}
 	if paths.is_empty():
 		return {"error": "не выбран ни один файл пакета"}
-	var restore_error := restore_previous_if_needed(package_id)
+	var restore_error := restore_previous_if_needed(package_slug)
 	if not restore_error.is_empty():
 		return {"error": restore_error}
 
-	var root := package_dir(package_id)
+	var root := package_dir(package_slug)
 	# Validate every path before touching the tree so a bad entry cannot leave a
 	# half-applied selection behind.
 	var rel_paths: Array[String] = []
@@ -311,11 +319,11 @@ static func op_delete_files(package_id: int, paths: Array) -> Dictionary:
 		var raw := str(raw_path)
 		if raw.trim_suffix("/") == root:
 			return {
-				"error": "нельзя удалить корень пакета %d: используйте операцию delete" % package_id,
+				"error": "нельзя удалить корень пакета %s: используйте операцию delete" % package_slug,
 			}
-		var rel_path := package_relative_path(package_id, raw)
+		var rel_path := package_relative_path(package_slug, raw)
 		if rel_path.is_empty():
-			return {"error": "путь вне пакета %d: %s" % [package_id, raw]}
+			return {"error": "путь вне пакета %s: %s" % [package_slug, raw]}
 		rel_paths.append(rel_path)
 
 	var deleted: Array[String] = []
@@ -335,10 +343,10 @@ static func op_delete_files(package_id: int, paths: Array) -> Dictionary:
 # --- helpers --------------------------------------------------------------
 
 
-static func _invalid_id(package_id: int) -> String:
-	if is_valid_id(package_id):
+static func _invalid_slug(package_slug: String) -> String:
+	if is_valid_slug(package_slug):
 		return ""
-	return "некорректный id пакета: %d" % package_id
+	return "invalid_slug"
 
 
 ## Relative paths of every file below [param dir_path], recursively.

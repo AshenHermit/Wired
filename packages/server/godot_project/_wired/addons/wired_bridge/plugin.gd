@@ -15,8 +15,8 @@ extends EditorPlugin
 ## stack.
 ##
 ## The plugin also adds the editor menu item [constant DELETE_SELECTED_ITEM],
-## which deletes the selected files and directories inside `res://packages/<id>`
-## without going through the shell.
+## which deletes the selected files and directories inside
+## `res://packages/<slug>` without going through the shell.
 
 ## Operations the shell may request. `sync` flushes the Emscripten filesystem
 ## and does not touch [WiredPackageFs].
@@ -98,28 +98,28 @@ func _scan_filesystem() -> void:
 
 
 ## Deletes the selected package files locally. The selection is grouped by
-## package id because [method WiredPackageFs.op_delete_files] works one package
+## package slug because [method WiredPackageFs.op_delete_files] works one package
 ## at a time.
 func _on_delete_selected_pressed() -> void:
 	var groups := {}
 	for path: String in EditorInterface.get_selected_paths():
-		var package_id := _package_id_of_path(path)
-		if package_id < 0:
+		var package_slug := _package_slug_of_path(path)
+		if package_slug.is_empty():
 			continue
-		if not groups.has(package_id):
-			groups[package_id] = []
-		(groups[package_id] as Array).append(path)
+		if not groups.has(package_slug):
+			groups[package_slug] = []
+		(groups[package_slug] as Array).append(path)
 	if groups.is_empty():
 		_notify(
-			"Wired: выберите файлы или каталоги внутри res://packages/<id>/",
+			"Wired: выберите файлы или каталоги внутри res://packages/<slug>/",
 			EditorToaster.SEVERITY_WARNING
 		)
 		return
 
 	var deleted: Array[String] = []
 	var errors: Array[String] = []
-	for package_id: int in groups:
-		var result := WiredPackageFs.op_delete_files(package_id, groups[package_id] as Array)
+	for package_slug: String in groups:
+		var result := WiredPackageFs.op_delete_files(package_slug, groups[package_slug] as Array)
 		if result.has("error"):
 			errors.append(str(result["error"]))
 			continue
@@ -145,20 +145,21 @@ func _on_delete_selected_pressed() -> void:
 	_notify("Wired: удалено файлов и каталогов: %d" % deleted.size())
 
 
-## Package id of an editor path under `res://packages/<id>/...`, or -1.
-func _package_id_of_path(path: String) -> int:
+## Package slug of an editor path under `res://packages/<slug>/...`, or an empty
+## string. Staging and previous directories are not live packages and are
+## ignored.
+func _package_slug_of_path(path: String) -> String:
 	var prefix := WiredPackageFs.packages_root() + "/"
 	if not path.begins_with(prefix):
-		return -1
+		return ""
 	var rest := path.substr(prefix.length())
 	var slash := rest.find("/")
 	if slash <= 0:
-		return -1
-	var id_text := rest.substr(0, slash)
-	if not id_text.is_valid_int():
-		return -1
-	var package_id := int(id_text)
-	return package_id if WiredPackageFs.is_valid_id(package_id) else -1
+		return ""
+	var package_slug := rest.substr(0, slash)
+	if package_slug.ends_with(".staging") or package_slug.ends_with(".previous"):
+		return ""
+	return package_slug if WiredPackageFs.is_valid_slug(package_slug) else ""
 
 
 ## Editor toast when the version has one, otherwise a console line.
@@ -197,34 +198,34 @@ func _on_bridge_request(args: Array) -> void:
 
 
 func _handle_request(request_id: int, op: String, params: Dictionary) -> void:
-	var raw_package_id: Variant = params.get("packageId", 0)
-	if not (raw_package_id is int or raw_package_id is float):
-		_respond_error(request_id, "некорректный packageId")
+	var raw_package_slug: Variant = params.get("packageSlug", "")
+	if not raw_package_slug is String:
+		_respond_error(request_id, "некорректный packageSlug")
 		return
-	var package_id := int(raw_package_id)
+	var package_slug := str(raw_package_slug)
 
 	var result: Dictionary
 	match op:
 		"exists":
-			result = WiredPackageFs.op_exists(package_id)
+			result = WiredPackageFs.op_exists(package_slug)
 		"createDir":
-			result = WiredPackageFs.op_create_dir(package_id)
+			result = WiredPackageFs.op_create_dir(package_slug)
 		"snapshot":
-			result = WiredPackageFs.op_snapshot(package_id)
+			result = WiredPackageFs.op_snapshot(package_slug)
 		"collect":
-			result = WiredPackageFs.op_collect(package_id)
+			result = WiredPackageFs.op_collect(package_slug)
 		"prepareReplace":
-			result = WiredPackageFs.op_prepare_replace(package_id)
+			result = WiredPackageFs.op_prepare_replace(package_slug)
 		"replace":
-			result = WiredPackageFs.op_replace(package_id)
+			result = WiredPackageFs.op_replace(package_slug)
 		"delete":
-			result = WiredPackageFs.op_delete(package_id)
+			result = WiredPackageFs.op_delete(package_slug)
 		"deleteFiles":
 			var raw_paths: Variant = params.get("paths", null)
 			if not raw_paths is Array:
 				_respond_error(request_id, "deleteFiles ожидает массив paths")
 				return
-			result = WiredPackageFs.op_delete_files(package_id, raw_paths as Array)
+			result = WiredPackageFs.op_delete_files(package_slug, raw_paths as Array)
 		"sync":
 			JavaScriptBridge.force_fs_sync()
 			result = {}

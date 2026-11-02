@@ -8,9 +8,11 @@ extends SceneTree
 ## metadata (dot directories, `*.uid`, `*.import`) is never part of the reported
 ## tree but must survive a swap.
 ##
-## `op_delete_files` runs against [member WiredPackageFs.root_override] here, so
-## the "editor paths" below use `package_dir(id)` instead of `res://packages/id`;
-## in production that helper returns exactly `res://packages/<id>`.
+## Packages are addressed by slug: `package_dir(slug)`. In production that
+## helper returns exactly `res://packages/<slug>`; `op_delete_files` runs
+## against [member WiredPackageFs.root_override] here, so the "editor paths"
+## below use `package_dir(slug)` instead. Numeric slugs such as `"7"` are
+## accepted for packages created before slugs existed.
 ##
 ## The dot-prefixed scenarios (`DirAccess.include_hidden`) only exercise
 ## production semantics on a POSIX host or the web editor: on Windows a dotfile
@@ -51,6 +53,7 @@ func _initialize() -> void:
 	_test_delete_files_traversal()
 	_test_delete_files_missing_path()
 	_test_valid_relative_path()
+	_test_invalid_slug()
 	_cleanup_root()
 	_finish()
 
@@ -60,7 +63,7 @@ func _initialize() -> void:
 
 func _test_empty_snapshot() -> void:
 	var problems: Array = []
-	var result := WiredPackageFs.op_snapshot(1)
+	var result := WiredPackageFs.op_snapshot("hero")
 	var files: Variant = result.get("files")
 	_expect(
 		problems,
@@ -72,27 +75,27 @@ func _test_empty_snapshot() -> void:
 
 func _test_create_dir() -> void:
 	var problems: Array = []
-	var created := WiredPackageFs.op_create_dir(7)
+	var created := WiredPackageFs.op_create_dir("hero")
 	_expect(problems, created.is_empty(), "op_create_dir must return {}, got %s" % [created])
 	_expect(
 		problems,
-		DirAccess.dir_exists_absolute(WiredPackageFs.package_dir(7)),
-		"op_create_dir must create %s" % WiredPackageFs.package_dir(7),
+		DirAccess.dir_exists_absolute(WiredPackageFs.package_dir("hero")),
+		"op_create_dir must create %s" % WiredPackageFs.package_dir("hero"),
 	)
-	var exists := WiredPackageFs.op_exists(7)
-	_expect(problems, exists == {"exists": true}, "op_exists(7) must be {exists: true}, got %s" % [exists])
+	var exists := WiredPackageFs.op_exists("hero")
+	_expect(problems, exists == {"exists": true}, "op_exists(\"hero\") must be {exists: true}, got %s" % [exists])
 	_report("create_dir creates the package directory", problems)
 
 
 func _test_prepare_replace() -> void:
 	var problems: Array = []
-	var result := WiredPackageFs.op_prepare_replace(7)
+	var result := WiredPackageFs.op_prepare_replace("hero")
 	var staging_path := String(result.get("staging_path", ""))
 	_expect(problems, result.has("staging_path"), "op_prepare_replace must return staging_path, got %s" % [result])
 	_expect(
 		problems,
-		staging_path.ends_with("/package_fs_smoke/packages/.7.staging"),
-		"staging_path must end with /package_fs_smoke/packages/.7.staging, got %s" % staging_path,
+		staging_path.ends_with("/package_fs_smoke/packages/.hero.staging"),
+		"staging_path must end with /package_fs_smoke/packages/.hero.staging, got %s" % staging_path,
 	)
 	_expect(
 		problems,
@@ -101,22 +104,22 @@ func _test_prepare_replace() -> void:
 	)
 	_expect(
 		problems,
-		DirAccess.dir_exists_absolute(WiredPackageFs.staging_dir(7)),
-		"op_prepare_replace must create %s" % WiredPackageFs.staging_dir(7),
+		DirAccess.dir_exists_absolute(WiredPackageFs.staging_dir("hero")),
+		"op_prepare_replace must create %s" % WiredPackageFs.staging_dir("hero"),
 	)
-	_report("prepare_replace creates .<id>.staging and returns an absolute path", problems)
+	_report("prepare_replace creates .<slug>.staging and returns an absolute path", problems)
 
 
 func _test_metadata_excluded() -> void:
 	var problems: Array = []
-	var root := WiredPackageFs.package_dir(7)
+	var root := WiredPackageFs.package_dir("hero")
 	_write(root.path_join(".config/x.tres"), "config")
 	_write(root.path_join("a.uid"), "uid://a")
 	_write(root.path_join("b.import"), "[remap]")
 	_write(root.path_join("main.gd"), "extends Node\n")
 	_write(root.path_join("sub/helper.gd"), "extends RefCounted\n")
 
-	var snapshot := WiredPackageFs.op_snapshot(7)
+	var snapshot := WiredPackageFs.op_snapshot("hero")
 	var names: Array = snapshot.get("files", {}).keys()
 	names.sort()
 	_expect(
@@ -125,7 +128,7 @@ func _test_metadata_excluded() -> void:
 		"snapshot must list only data files, got %s" % [names],
 	)
 
-	var collected := WiredPackageFs.op_collect(7)
+	var collected := WiredPackageFs.op_collect("hero")
 	var paths: Array = []
 	var main_entry: Dictionary = {}
 	for entry: Dictionary in collected.get("files", []):
@@ -160,8 +163,8 @@ func _test_metadata_excluded() -> void:
 
 func _test_replace_empty_staging() -> void:
 	var problems: Array = []
-	var result := WiredPackageFs.op_replace(7)
-	_expect(problems, not result.has("error"), "op_replace(7) failed: %s" % [result.get("error", "")])
+	var result := WiredPackageFs.op_replace("hero")
+	_expect(problems, not result.has("error"), "op_replace(\"hero\") failed: %s" % [result.get("error", "")])
 	var written: Array = result.get("written", [])
 	var deleted: Array = result.get("deleted", [])
 	deleted.sort()
@@ -173,14 +176,14 @@ func _test_replace_empty_staging() -> void:
 	)
 	_expect(
 		problems,
-		DirAccess.dir_exists_absolute(WiredPackageFs.package_dir(7)),
+		DirAccess.dir_exists_absolute(WiredPackageFs.package_dir("hero")),
 		"the package directory must exist after the swap",
 	)
-	var snapshot := WiredPackageFs.op_snapshot(7)
+	var snapshot := WiredPackageFs.op_snapshot("hero")
 	_expect(problems, snapshot.get("files", {}) == {}, "the new tree must be empty, got %s" % [snapshot])
 	_expect(
 		problems,
-		not DirAccess.dir_exists_absolute(WiredPackageFs.previous_dir(7)),
+		not DirAccess.dir_exists_absolute(WiredPackageFs.previous_dir("hero")),
 		"previous must be removed after a successful swap",
 	)
 	_report("replace with empty staging drops the previous tree", problems)
@@ -188,24 +191,24 @@ func _test_replace_empty_staging() -> void:
 
 func _test_replace_without_root() -> void:
 	var problems: Array = []
-	var missing := WiredPackageFs.op_replace(8)
+	var missing := WiredPackageFs.op_replace("7")
 	_expect(
 		problems,
 		String(missing.get("error", "")).contains("staging"),
 		"replace without staging must report the missing staging, got %s" % [missing],
 	)
 
-	var prepared := WiredPackageFs.op_prepare_replace(8)
-	_expect(problems, not prepared.has("error"), "op_prepare_replace(8) failed: %s" % [prepared.get("error", "")])
-	var staging := WiredPackageFs.staging_dir(8)
+	var prepared := WiredPackageFs.op_prepare_replace("7")
+	_expect(problems, not prepared.has("error"), "op_prepare_replace(\"7\") failed: %s" % [prepared.get("error", "")])
+	var staging := WiredPackageFs.staging_dir("7")
 	_write(staging.path_join("main.gd"), "extends Node\n")
 
-	var result := WiredPackageFs.op_replace(8)
-	_expect(problems, not result.has("error"), "op_replace(8) failed: %s" % [result.get("error", "")])
+	var result := WiredPackageFs.op_replace("7")
+	_expect(problems, not result.has("error"), "op_replace(\"7\") failed: %s" % [result.get("error", "")])
 	_expect(
 		problems,
-		WiredPackageFs.op_exists(8) == {"exists": true},
-		"package 8 must exist after the swap",
+		WiredPackageFs.op_exists("7") == {"exists": true},
+		"package \"7\" must exist after the swap",
 	)
 	_expect(
 		problems,
@@ -219,26 +222,26 @@ func _test_replace_without_root() -> void:
 	)
 	_expect(
 		problems,
-		FileAccess.get_file_as_string(WiredPackageFs.package_dir(8).path_join("main.gd")) == "extends Node\n",
+		FileAccess.get_file_as_string(WiredPackageFs.package_dir("7").path_join("main.gd")) == "extends Node\n",
 		"the staged file must land in the package directory",
 	)
-	_report("replace creates a package that had no root", problems)
+	_report("replace creates a numeric-slug package that had no root", problems)
 
 
 func _test_metadata_preserved() -> void:
 	var problems: Array = []
-	var root := WiredPackageFs.package_dir(8)
+	var root := WiredPackageFs.package_dir("7")
 	_write(root.path_join(".uid"), "uid://legacy")
 	_write(root.path_join("b.import"), "[remap]")
 	_write(root.path_join(".import/legacy.res"), "legacy")
 	_write(root.path_join("old.gd"), "extends Node\n")
 
-	var prepared := WiredPackageFs.op_prepare_replace(8)
-	_expect(problems, not prepared.has("error"), "op_prepare_replace(8) failed: %s" % [prepared.get("error", "")])
-	_write(WiredPackageFs.staging_dir(8).path_join("new.gd"), "extends RefCounted\n")
+	var prepared := WiredPackageFs.op_prepare_replace("7")
+	_expect(problems, not prepared.has("error"), "op_prepare_replace(\"7\") failed: %s" % [prepared.get("error", "")])
+	_write(WiredPackageFs.staging_dir("7").path_join("new.gd"), "extends RefCounted\n")
 
-	var result := WiredPackageFs.op_replace(8)
-	_expect(problems, not result.has("error"), "op_replace(8) failed: %s" % [result.get("error", "")])
+	var result := WiredPackageFs.op_replace("7")
+	_expect(problems, not result.has("error"), "op_replace(\"7\") failed: %s" % [result.get("error", "")])
 	_expect(problems, FileAccess.file_exists(root.path_join(".uid")), ".uid must survive the swap")
 	_expect(problems, FileAccess.file_exists(root.path_join("b.import")), ".import sidecar must survive the swap")
 	_expect(
@@ -246,7 +249,7 @@ func _test_metadata_preserved() -> void:
 		FileAccess.file_exists(root.path_join(".import/legacy.res")),
 		".import directory contents must survive the swap",
 	)
-	_expect(problems, FileAccess.file_exists(root.path_join("new.gd")), "the staged file must land in package 8")
+	_expect(problems, FileAccess.file_exists(root.path_join("new.gd")), "the staged file must land in package \"7\"")
 	_expect(problems, not FileAccess.file_exists(root.path_join("old.gd")), "old data files must be dropped")
 
 	var written: Array = result.get("written", [])
@@ -264,24 +267,24 @@ func _test_metadata_preserved() -> void:
 
 func _test_delete() -> void:
 	var problems: Array = []
-	DirAccess.make_dir_recursive_absolute(WiredPackageFs.staging_dir(8))
-	DirAccess.make_dir_recursive_absolute(WiredPackageFs.previous_dir(8))
+	DirAccess.make_dir_recursive_absolute(WiredPackageFs.staging_dir("7"))
+	DirAccess.make_dir_recursive_absolute(WiredPackageFs.previous_dir("7"))
 
-	var result := WiredPackageFs.op_delete(8)
+	var result := WiredPackageFs.op_delete("7")
 	_expect(problems, result.is_empty(), "op_delete must return {}, got %s" % [result])
 	_expect(
 		problems,
-		not DirAccess.dir_exists_absolute(WiredPackageFs.package_dir(8)),
+		not DirAccess.dir_exists_absolute(WiredPackageFs.package_dir("7")),
 		"op_delete must remove the package root",
 	)
 	_expect(
 		problems,
-		not DirAccess.dir_exists_absolute(WiredPackageFs.staging_dir(8)),
+		not DirAccess.dir_exists_absolute(WiredPackageFs.staging_dir("7")),
 		"op_delete must remove staging",
 	)
 	_expect(
 		problems,
-		not DirAccess.dir_exists_absolute(WiredPackageFs.previous_dir(8)),
+		not DirAccess.dir_exists_absolute(WiredPackageFs.previous_dir("7")),
 		"op_delete must remove previous",
 	)
 	_report("delete removes root, staging and previous", problems)
@@ -289,17 +292,21 @@ func _test_delete() -> void:
 
 func _test_restore_previous() -> void:
 	var problems: Array = []
-	var root := WiredPackageFs.package_dir(9)
+	var root := WiredPackageFs.package_dir("hero_9")
 	DirAccess.make_dir_recursive_absolute(root)
 	_write(root.path_join("keep.gd"), "extends Node\n")
 	_expect(
 		problems,
-		DirAccess.rename_absolute(root, WiredPackageFs.previous_dir(9)) == OK,
+		DirAccess.rename_absolute(root, WiredPackageFs.previous_dir("hero_9")) == OK,
 		"the test must be able to rename the root to previous",
 	)
 
-	var result := WiredPackageFs.op_exists(9)
-	_expect(problems, result == {"exists": true}, "op_exists(9) must restore and report the package, got %s" % [result])
+	var result := WiredPackageFs.op_exists("hero_9")
+	_expect(
+		problems,
+		result == {"exists": true},
+		"op_exists(\"hero_9\") must restore and report the package, got %s" % [result],
+	)
 	_expect(problems, DirAccess.dir_exists_absolute(root), "the interrupted swap must be rolled back")
 	_expect(
 		problems,
@@ -311,17 +318,17 @@ func _test_restore_previous() -> void:
 
 func _test_snapshot_restores_previous() -> void:
 	var problems: Array = []
-	var package_id := 10
-	var root := WiredPackageFs.package_dir(package_id)
+	var package_slug := "hero_10"
+	var root := WiredPackageFs.package_dir(package_slug)
 	DirAccess.make_dir_recursive_absolute(root)
 	_write(root.path_join("keep.gd"), "extends Node\n")
 	_expect(
 		problems,
-		DirAccess.rename_absolute(root, WiredPackageFs.previous_dir(package_id)) == OK,
+		DirAccess.rename_absolute(root, WiredPackageFs.previous_dir(package_slug)) == OK,
 		"the test must be able to rename the root to previous",
 	)
 
-	var snapshot := WiredPackageFs.op_snapshot(package_id)
+	var snapshot := WiredPackageFs.op_snapshot(package_slug)
 	_expect(problems, not snapshot.has("error"), "op_snapshot failed: %s" % [snapshot.get("error", "")])
 	var files: Dictionary = snapshot.get("files", {})
 	_expect(
@@ -335,17 +342,17 @@ func _test_snapshot_restores_previous() -> void:
 
 func _test_collect_restores_previous() -> void:
 	var problems: Array = []
-	var package_id := 11
-	var root := WiredPackageFs.package_dir(package_id)
+	var package_slug := "hero_11"
+	var root := WiredPackageFs.package_dir(package_slug)
 	DirAccess.make_dir_recursive_absolute(root)
 	_write(root.path_join("keep.gd"), "extends Node\n")
 	_expect(
 		problems,
-		DirAccess.rename_absolute(root, WiredPackageFs.previous_dir(package_id)) == OK,
+		DirAccess.rename_absolute(root, WiredPackageFs.previous_dir(package_slug)) == OK,
 		"the test must be able to rename the root to previous",
 	)
 
-	var collected := WiredPackageFs.op_collect(package_id)
+	var collected := WiredPackageFs.op_collect(package_slug)
 	_expect(problems, not collected.has("error"), "op_collect failed: %s" % [collected.get("error", "")])
 	var paths: Array = []
 	for entry: Dictionary in collected.get("files", []):
@@ -362,17 +369,17 @@ func _test_collect_restores_previous() -> void:
 
 func _test_dot_dir_survives_replace() -> void:
 	var problems: Array = []
-	var package_id := 12
-	var root := WiredPackageFs.package_dir(package_id)
+	var package_slug := "hero_12"
+	var root := WiredPackageFs.package_dir(package_slug)
 	DirAccess.make_dir_recursive_absolute(root)
 	_write(root.path_join(".config/settings.tres"), "[gd_resource]\n")
 	_write(root.path_join("old.gd"), "extends Node\n")
 
-	var prepared := WiredPackageFs.op_prepare_replace(package_id)
+	var prepared := WiredPackageFs.op_prepare_replace(package_slug)
 	_expect(problems, not prepared.has("error"), "op_prepare_replace failed: %s" % [prepared.get("error", "")])
-	_write(WiredPackageFs.staging_dir(package_id).path_join("new.gd"), "extends RefCounted\n")
+	_write(WiredPackageFs.staging_dir(package_slug).path_join("new.gd"), "extends RefCounted\n")
 
-	var result := WiredPackageFs.op_replace(package_id)
+	var result := WiredPackageFs.op_replace(package_slug)
 	_expect(problems, not result.has("error"), "op_replace failed: %s" % [result.get("error", "")])
 	_expect(
 		problems,
@@ -395,13 +402,13 @@ func _test_dot_dir_survives_replace() -> void:
 
 func _test_delete_with_dot_dir() -> void:
 	var problems: Array = []
-	var package_id := 13
-	var root := WiredPackageFs.package_dir(package_id)
+	var package_slug := "hero_13"
+	var root := WiredPackageFs.package_dir(package_slug)
 	DirAccess.make_dir_recursive_absolute(root)
 	_write(root.path_join(".config/settings.tres"), "[gd_resource]\n")
 	_write(root.path_join("main.gd"), "extends Node\n")
 
-	var result := WiredPackageFs.op_delete(package_id)
+	var result := WiredPackageFs.op_delete(package_slug)
 	_expect(problems, result.is_empty(), "op_delete must return {}, got %s" % [result])
 	_expect(
 		problems,
@@ -413,14 +420,14 @@ func _test_delete_with_dot_dir() -> void:
 
 func _test_delete_files_selected_file() -> void:
 	var problems: Array = []
-	var package_id := 14
-	var root := WiredPackageFs.package_dir(package_id)
+	var package_slug := "hero_14"
+	var root := WiredPackageFs.package_dir(package_slug)
 	DirAccess.make_dir_recursive_absolute(root)
 	_write(root.path_join("static/platform.tscn"), "[gd_scene]\n")
 	_write(root.path_join("main.gd"), "extends Node\n")
 
-	var selected := WiredPackageFs.package_dir(package_id).path_join("static/platform.tscn")
-	var result := WiredPackageFs.op_delete_files(package_id, [selected])
+	var selected := WiredPackageFs.package_dir(package_slug).path_join("static/platform.tscn")
+	var result := WiredPackageFs.op_delete_files(package_slug, [selected])
 	_expect(problems, not result.has("error"), "op_delete_files failed: %s" % [result.get("error", "")])
 	_expect(
 		problems,
@@ -438,13 +445,13 @@ func _test_delete_files_selected_file() -> void:
 
 func _test_delete_files_relative_path() -> void:
 	var problems: Array = []
-	var package_id := 15
-	var root := WiredPackageFs.package_dir(package_id)
+	var package_slug := "hero_15"
+	var root := WiredPackageFs.package_dir(package_slug)
 	DirAccess.make_dir_recursive_absolute(root)
 	_write(root.path_join("static/platform.tscn"), "[gd_scene]\n")
 
-	var result := WiredPackageFs.op_delete_files(package_id, ["static/platform.tscn"])
-	var expected := WiredPackageFs.package_dir(package_id).path_join("static/platform.tscn")
+	var result := WiredPackageFs.op_delete_files(package_slug, ["static/platform.tscn"])
+	var expected := WiredPackageFs.package_dir(package_slug).path_join("static/platform.tscn")
 	_expect(problems, not result.has("error"), "op_delete_files failed: %s" % [result.get("error", "")])
 	_expect(
 		problems,
@@ -461,8 +468,8 @@ func _test_delete_files_relative_path() -> void:
 
 func _test_delete_files_selected_directory() -> void:
 	var problems: Array = []
-	var package_id := 16
-	var root := WiredPackageFs.package_dir(package_id)
+	var package_slug := "hero_16"
+	var root := WiredPackageFs.package_dir(package_slug)
 	DirAccess.make_dir_recursive_absolute(root)
 	_write(root.path_join("levels/level1.tscn"), "[gd_scene]\n")
 	_write(root.path_join("levels/level1.tscn.uid"), "uid://level1")
@@ -471,8 +478,8 @@ func _test_delete_files_selected_directory() -> void:
 	_write(root.path_join("levels/nested/level2.tscn.import"), "[remap]\n")
 	_write(root.path_join("keep.gd"), "extends Node\n")
 
-	var selected := WiredPackageFs.package_dir(package_id).path_join("levels")
-	var result := WiredPackageFs.op_delete_files(package_id, [selected])
+	var selected := WiredPackageFs.package_dir(package_slug).path_join("levels")
+	var result := WiredPackageFs.op_delete_files(package_slug, [selected])
 	_expect(problems, not result.has("error"), "op_delete_files failed: %s" % [result.get("error", "")])
 	_expect(
 		problems,
@@ -505,16 +512,16 @@ func _test_delete_files_selected_directory() -> void:
 
 func _test_delete_files_keeps_metadata_of_selected_file() -> void:
 	var problems: Array = []
-	var package_id := 17
-	var root := WiredPackageFs.package_dir(package_id)
+	var package_slug := "hero_17"
+	var root := WiredPackageFs.package_dir(package_slug)
 	DirAccess.make_dir_recursive_absolute(root)
 	_write(root.path_join("main.gd"), "extends Node\n")
 	_write(root.path_join("main.gd.uid"), "uid://main")
 	_write(root.path_join("main.gd.import"), "[remap]\n")
 	_write(root.path_join(".config/settings.tres"), "[gd_resource]\n")
 
-	var selected := WiredPackageFs.package_dir(package_id).path_join("main.gd")
-	var result := WiredPackageFs.op_delete_files(package_id, [selected])
+	var selected := WiredPackageFs.package_dir(package_slug).path_join("main.gd")
+	var result := WiredPackageFs.op_delete_files(package_slug, [selected])
 	_expect(problems, not result.has("error"), "op_delete_files failed: %s" % [result.get("error", "")])
 	_expect(
 		problems,
@@ -542,21 +549,21 @@ func _test_delete_files_keeps_metadata_of_selected_file() -> void:
 
 func _test_delete_files_outside_package() -> void:
 	var problems: Array = []
-	var package_id := 18
-	var root := WiredPackageFs.package_dir(package_id)
+	var package_slug := "hero_18"
+	var root := WiredPackageFs.package_dir(package_slug)
 	DirAccess.make_dir_recursive_absolute(root)
 	_write(root.path_join("keep.gd"), "extends Node\n")
-	var other := WiredPackageFs.packages_root().path_join("19/other.gd")
+	var other := WiredPackageFs.packages_root().path_join("hero_19/other.gd")
 	_write(other, "extends Node\n")
 
 	var rejected := [
-		WiredPackageFs.packages_root().path_join("19/other.gd"),
+		WiredPackageFs.packages_root().path_join("hero_19/other.gd"),
 		"res://other/other.gd",
 		"C:/Windows/win.ini",
 		"user://elsewhere/file.gd",
 	]
 	for path: String in rejected:
-		var result := WiredPackageFs.op_delete_files(package_id, [path])
+		var result := WiredPackageFs.op_delete_files(package_slug, [path])
 		_expect(problems, result.has("error"), "\"%s\" must be rejected, got %s" % [path, result])
 	_expect(
 		problems,
@@ -569,7 +576,7 @@ func _test_delete_files_outside_package() -> void:
 		"the package must be untouched after rejected paths",
 	)
 
-	var root_result := WiredPackageFs.op_delete_files(package_id, [WiredPackageFs.package_dir(package_id)])
+	var root_result := WiredPackageFs.op_delete_files(package_slug, [WiredPackageFs.package_dir(package_slug)])
 	_expect(
 		problems,
 		String(root_result.get("error", "")).contains("delete"),
@@ -585,21 +592,21 @@ func _test_delete_files_outside_package() -> void:
 
 func _test_delete_files_traversal() -> void:
 	var problems: Array = []
-	var package_id := 19
-	var root := WiredPackageFs.package_dir(package_id)
+	var package_slug := "hero_19"
+	var root := WiredPackageFs.package_dir(package_slug)
 	DirAccess.make_dir_recursive_absolute(root)
 	_write(root.path_join("keep.gd"), "extends Node\n")
-	var victim := WiredPackageFs.packages_root().path_join("18/keep.gd")
+	var victim := WiredPackageFs.packages_root().path_join("hero_18/keep.gd")
 	_write(victim, "extends Node\n")
 
 	var rejected := [
-		"../18/keep.gd",
-		"a/../../18/keep.gd",
-		WiredPackageFs.package_dir(package_id).path_join("../18/keep.gd"),
-		"res://packages/%d/../../18/keep.gd" % package_id,
+		"../hero_18/keep.gd",
+		"a/../../hero_18/keep.gd",
+		WiredPackageFs.package_dir(package_slug).path_join("../hero_18/keep.gd"),
+		"res://packages/%s/../../hero_18/keep.gd" % package_slug,
 	]
 	for path: String in rejected:
-		var result := WiredPackageFs.op_delete_files(package_id, [path])
+		var result := WiredPackageFs.op_delete_files(package_slug, [path])
 		_expect(problems, result.has("error"), "\"%s\" must be rejected as traversal, got %s" % [path, result])
 	_expect(problems, FileAccess.file_exists(victim), "traversal must not reach another package")
 	_expect(problems, FileAccess.file_exists(root.path_join("keep.gd")), "traversal must not delete package files")
@@ -608,16 +615,16 @@ func _test_delete_files_traversal() -> void:
 
 func _test_delete_files_missing_path() -> void:
 	var problems: Array = []
-	var package_id := 20
-	var root := WiredPackageFs.package_dir(package_id)
+	var package_slug := "hero_20"
+	var root := WiredPackageFs.package_dir(package_slug)
 	DirAccess.make_dir_recursive_absolute(root)
 	_write(root.path_join("keep.gd"), "extends Node\n")
 
 	var result := WiredPackageFs.op_delete_files(
-		package_id,
+		package_slug,
 		[
 			"missing.gd",
-			WiredPackageFs.package_dir(package_id).path_join("nested/missing.tscn"),
+			WiredPackageFs.package_dir(package_slug).path_join("nested/missing.tscn"),
 		]
 	)
 	_expect(problems, not result.has("error"), "a missing path must not be an error, got %s" % [result])
@@ -640,6 +647,25 @@ func _test_valid_relative_path() -> void:
 			"\"%s\" must be rejected as a relative path" % path,
 		)
 	_report("relative path validation", problems)
+
+
+func _test_invalid_slug() -> void:
+	var problems: Array = []
+	_expect(problems, WiredPackageFs.is_valid_slug("hero"), "\"hero\" must be a valid slug")
+	_expect(problems, WiredPackageFs.is_valid_slug("7"), "the numeric legacy slug \"7\" must be valid")
+	for slug in ["", "../escape", "Hero", "hero-one", "hero one"]:
+		_expect(
+			problems,
+			not WiredPackageFs.is_valid_slug(slug),
+			"%s must be an invalid slug" % [slug],
+		)
+	var rejected := WiredPackageFs.op_exists("../escape")
+	_expect(
+		problems,
+		rejected == {"error": "invalid_slug"},
+		"an invalid slug must return {error: invalid_slug}, got %s" % [rejected],
+	)
+	_report("invalid slugs are rejected", problems)
 
 
 # --- helpers --------------------------------------------------------------
