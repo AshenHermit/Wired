@@ -1,0 +1,81 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Проверки
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Установить зависимости
+        run: pnpm install --frozen-lockfile
+
+      - name: Собрать общие типы
+        run: pnpm build:shared
+
+      - name: Тесты сервера
+        run: pnpm --filter server test
+
+      - name: Тесты фронтенда
+        run: pnpm --filter frontend test
+
+      - name: Типы фронтенда
+        run: pnpm check-types:frontend
+
+  deploy:
+    name: Деплой
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 60
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/home/Wired' }}
+      PROD_ENV: ${{ secrets.PROD_ENV }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Настроить SSH
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Записать .env на сервер
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$PROD_ENV" | ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "umask 077 && mkdir -p '$DEPLOY_PATH' && cat > '$DEPLOY_PATH/.env'"
+
+      - name: Собрать и пересоздать контейнеры
+        run: |
+          set -euo pipefail
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' bash -s -- '$GITHUB_REF_NAME'" \
+            < scripts/deploy-remote.sh
