@@ -1,4 +1,5 @@
 import path from 'path';
+import { PackageSlugIndex, resolvePackageTarget } from './package-slug-index';
 
 /** A text file decoded from a package revision, keyed by its package-relative path. */
 export interface PackageTextFile {
@@ -12,12 +13,26 @@ export interface PackageFileReference {
   filepath: string;
 }
 
+/** A package reference as authored: either a numeric id or a slug. */
+export interface RawPackageFileReference {
+  target: string;
+  filepath: string;
+}
+
 const TEXT_FILE_EXTENSIONS = new Set(['.tscn', '.tres', '.gd']);
 
 const SCENE_EXTENSION = '.tscn';
 
 /** `res://packages/<id>/<path>` inside any single- or double-quoted literal. */
 const PACKAGE_REFERENCE_RE = /(["'])res:\/\/packages\/(\d+)\/([^"'\r\n]+)\1/g;
+
+/**
+ * `res://packages/<slug>/<path>` inside any single- or double-quoted literal.
+ * Path validation allows numeric legacy slugs (`^[a-z0-9_]+$`, 1-64 chars);
+ * digits are still interpreted as an id when the reference is resolved.
+ */
+const RAW_PACKAGE_REFERENCE_RE =
+  /(["'])res:\/\/packages\/([a-z0-9_]{1,64})\/([^"'\r\n]+)\1/g;
 
 /** Absolute `res://packages/<id>/<path>` written out of a quoted literal. */
 const PACKAGE_PATH_RE = /^res:\/\/packages\/(\d+)\/([^"'\r\n]+)$/;
@@ -107,6 +122,77 @@ export function collectPackageReferences(text: string): PackageFileReference[] {
     return line;
   });
   return refs;
+}
+
+/**
+ * Collects every raw `res://packages/<target>/<path>` reference inside quoted
+ * string literals in real code, keeping the target exactly as authored (a
+ * numeric id or a slug). Whole-line comments are skipped, so a commented-out
+ * reference neither creates a dependency nor blocks publishing. Paths are
+ * normalized and deduplicated by `target:filepath`, keeping first-seen order.
+ *
+ * Resolution against the slug index is a separate step
+ * ({@link resolvePackageReferences}), so an unknown slug is reported rather
+ * than silently dropped.
+ */
+export function collectRawPackageReferences(
+  text: string,
+): RawPackageFileReference[] {
+  const refs: RawPackageFileReference[] = [];
+  const seen = new Set<string>();
+  mapCodeLines(text, (line) => {
+    for (const match of line.matchAll(RAW_PACKAGE_REFERENCE_RE)) {
+      assertSafeRawPath(match[3]);
+      const filepath = normalizeReferencePath(match[3]);
+      if (filepath === null) {
+        continue;
+      }
+      const target = match[2];
+      const key = `${target}:${filepath}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      refs.push({ target, filepath });
+    }
+    return line;
+  });
+  return refs;
+}
+
+/**
+ * Resolves raw references to package ids. Numeric targets are ids, everything
+ * else is looked up by slug; an unresolved slug is returned in `unknown`
+ * (deduplicated, first-seen order) so the caller can raise
+ * `package_dependency_unknown_slug:<slug>`. References that resolve to the same
+ * package file — a package referenced once by id and once by slug — are
+ * deduplicated.
+ */
+export function resolvePackageReferences(
+  refs: RawPackageFileReference[],
+  index: PackageSlugIndex,
+): { resolved: PackageFileReference[]; unknown: string[] } {
+  const resolved: PackageFileReference[] = [];
+  const unknown: string[] = [];
+  const seenResolved = new Set<string>();
+  const seenUnknown = new Set<string>();
+  for (const ref of refs) {
+    const packageId = resolvePackageTarget(ref.target, index);
+    if (packageId === null) {
+      if (!seenUnknown.has(ref.target)) {
+        seenUnknown.add(ref.target);
+        unknown.push(ref.target);
+      }
+      continue;
+    }
+    const key = `${packageId}:${ref.filepath}`;
+    if (seenResolved.has(key)) {
+      continue;
+    }
+    seenResolved.add(key);
+    resolved.push({ packageId, filepath: ref.filepath });
+  }
+  return { resolved, unknown };
 }
 
 /**

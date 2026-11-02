@@ -1,11 +1,18 @@
 import {
   buildSceneDependencies,
   collectPackageReferences,
+  collectRawPackageReferences,
   decodePackageText,
   isTextPackageFile,
+  resolvePackageReferences,
   rewritePackageReferences,
   stripExtResourceUids,
 } from './package-runtime-references';
+
+const slugIndex = {
+  bySlug: new Map([['hero', 9]]),
+  byId: new Map([[9, 'hero']]),
+};
 
 describe('package runtime references', () => {
   it('collects absolute package references', () => {
@@ -46,6 +53,114 @@ describe('package runtime references', () => {
         'preload("res://packages/5/a.gd") + preload("res://packages/5/a.gd")',
       ),
     ).toEqual([{ packageId: 5, filepath: 'a.gd' }]);
+  });
+
+  it('collects a slug reference as a raw target', () => {
+    expect(
+      collectRawPackageReferences('path="res://packages/hero/scene.tscn"'),
+    ).toEqual([{ target: 'hero', filepath: 'scene.tscn' }]);
+  });
+
+  it('collects a legacy numeric reference as a raw target', () => {
+    expect(
+      collectRawPackageReferences('path="res://packages/42/scene.tscn"'),
+    ).toEqual([{ target: '42', filepath: 'scene.tscn' }]);
+  });
+
+  it('rejects uppercase and hyphenated targets', () => {
+    expect(
+      collectRawPackageReferences('path="res://packages/Hero/scene.tscn"'),
+    ).toEqual([]);
+    expect(
+      collectRawPackageReferences('path="res://packages/hero-one/scene.tscn"'),
+    ).toEqual([]);
+  });
+
+  it('rejects raw targets longer than 64 characters', () => {
+    const target = 'a'.repeat(65);
+    expect(
+      collectRawPackageReferences(`path="res://packages/${target}/scene.tscn"`),
+    ).toEqual([]);
+  });
+
+  it('deduplicates raw references by target and filepath', () => {
+    expect(
+      collectRawPackageReferences(
+        'preload("res://packages/hero/a.gd") + ' +
+          'preload("res://packages/hero/a.gd") + ' +
+          'preload("res://packages/42/a.gd")',
+      ),
+    ).toEqual([
+      { target: 'hero', filepath: 'a.gd' },
+      { target: '42', filepath: 'a.gd' },
+    ]);
+  });
+
+  it('ignores raw references on whole-line comments', () => {
+    expect(
+      collectRawPackageReferences(
+        '# preload("res://packages/hero/a.gd")\n' +
+          'const A = preload("res://packages/42/b.gd")',
+      ),
+    ).toEqual([{ target: '42', filepath: 'b.gd' }]);
+  });
+
+  it('rejects unsafe raw reference paths', () => {
+    expect(() =>
+      collectRawPackageReferences('preload("res://packages/hero/../b.gd")'),
+    ).toThrow('package_reference_invalid_path:../b.gd');
+    expect(() =>
+      collectRawPackageReferences('preload("res://packages/hero/a\\b.gd")'),
+    ).toThrow('package_reference_invalid_path:a\\b.gd');
+  });
+
+  it('resolves raw references by numeric id or slug', () => {
+    expect(
+      resolvePackageReferences(
+        [
+          { target: 'hero', filepath: 'scene.tscn' },
+          { target: '42', filepath: 'legacy.tscn' },
+        ],
+        slugIndex,
+      ),
+    ).toEqual({
+      resolved: [
+        { packageId: 9, filepath: 'scene.tscn' },
+        { packageId: 42, filepath: 'legacy.tscn' },
+      ],
+      unknown: [],
+    });
+  });
+
+  it('reports unknown slugs without dropping known references', () => {
+    expect(
+      resolvePackageReferences(
+        [
+          { target: 'hero', filepath: 'a.tscn' },
+          { target: 'missing', filepath: 'b.tscn' },
+          { target: 'missing', filepath: 'c.tscn' },
+        ],
+        slugIndex,
+      ),
+    ).toEqual({
+      resolved: [{ packageId: 9, filepath: 'a.tscn' }],
+      unknown: ['missing'],
+    });
+  });
+
+  it('deduplicates references that resolve to the same package file', () => {
+    expect(
+      resolvePackageReferences(
+        [
+          { target: 'hero', filepath: 'a.tscn' },
+          { target: '9', filepath: 'a.tscn' },
+        ],
+        slugIndex,
+      ),
+    ).toEqual({
+      resolved: [{ packageId: 9, filepath: 'a.tscn' }],
+      unknown: [],
+    });
   });
 
   it('recognizes editor text files case-insensitively', () => {
