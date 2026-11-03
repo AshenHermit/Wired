@@ -580,8 +580,15 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
    *
    * The row is authoritative, so a disk failure is logged instead of turning a
    * completed deletion into an error.
+   *
+   * `tombstone: false` deletes a global row without retiring its slug, which
+   * is only correct for a record a copy flow created and immediately rolled
+   * back — no user ever saw it in the workshop.
    */
-  async remove(id: number): Promise<void> {
+  async remove(
+    id: number,
+    options: { tombstone?: boolean } = {},
+  ): Promise<void> {
     await this.assertNoEnabledDependents(id);
     const pkg = await this.findOne(id);
     const roomId = pkg.room?.id ?? null;
@@ -590,6 +597,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     // backfill ran.
     const slug = pkg.slug ?? String(id);
     const scope = pkg.room ? `room:${pkg.room.id}` : 'global';
+    const tombstone = options.tombstone !== false;
     await this.packagesRepository.manager.transaction(async (manager) => {
       // Serialize with `create()` so a slug cannot be tombstoned while another
       // request is re-creating it.
@@ -602,7 +610,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
         'UPDATE scripting_package SET "parentPackageId" = NULL WHERE "parentPackageId" = $1',
         [id],
       );
-      if (scope === 'global') {
+      if (scope === 'global' && tombstone) {
         await manager.save(RetiredPackageSlug, { slug, packageId: id });
       }
       const result = await manager.delete(ScriptingPackage, id);

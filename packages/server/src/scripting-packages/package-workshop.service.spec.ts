@@ -1,7 +1,21 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  HttpException,
+  Logger,
+} from '@nestjs/common';
 import { Repository } from 'typeorm';
+import { Room } from 'src/database/entities/room.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
+import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
+import { User } from 'src/database/entities/user.entity';
+import { PackageRevisionsService } from './package-revisions.service';
 import { ScriptingPackagesService } from './scripting-packages.service';
-import { PackageWorkshopService } from './package-workshop.service';
+import {
+  PackageWorkshopService,
+  rewriteForkSlug,
+} from './package-workshop.service';
 
 type WorkshopRow = {
   id: number;
@@ -45,7 +59,9 @@ function makeService(repository: { query: jest.Mock }) {
   };
   return new PackageWorkshopService(
     repository as unknown as Repository<ScriptingPackage>,
+    {} as Repository<ScriptingPackageRevision>,
     packagesService as unknown as ScriptingPackagesService,
+    {} as PackageRevisionsService,
   );
 }
 
@@ -242,5 +258,491 @@ describe('PackageWorkshopService', () => {
     expect(sql).toContain('p.slug = $1');
     expect(sql.trimEnd().endsWith('LIMIT 1')).toBe(true);
     expect(paramsOf(query)).toEqual(['hero']);
+  });
+});
+
+describe('PackageWorkshopService copies', () => {
+  const user = { id: 7, name: 'Ann', email: 'a@b.c' } as User;
+
+  type CopyArgs = {
+    sourcePackageId: number;
+    targetPackageId: number;
+    transformFile?: (filepath: string, data: Buffer) => Buffer;
+  };
+
+  function makeFlow() {
+    const packagesService = {
+      normalizeSlug: jest.fn((slug: string) => slug.trim()),
+      findOne: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(() => Promise.resolve(undefined)),
+      createGlobalRecord: jest.fn(),
+      checkSlugAvailability: jest.fn(),
+      remove: jest.fn(),
+    };
+    const revisionsService = {
+      publishCopiedRevision: jest.fn((args: CopyArgs) => Promise.resolve(args)),
+    };
+    const repository = {
+      query: jest.fn(() => Promise.resolve([row])),
+      findOne: jest.fn(),
+    };
+    const revisionsRepository = { findOne: jest.fn() };
+
+    const service = new PackageWorkshopService(
+      repository as unknown as Repository<ScriptingPackage>,
+      revisionsRepository as unknown as Repository<ScriptingPackageRevision>,
+      packagesService as unknown as ScriptingPackagesService,
+      revisionsService as unknown as PackageRevisionsService,
+    );
+    return {
+      service,
+      repository,
+      revisionsRepository,
+      packagesService,
+      revisionsService,
+    };
+  }
+
+  function roomPackage(
+    overrides: Partial<ScriptingPackage> = {},
+  ): ScriptingPackage {
+    return {
+      id: 5,
+      slug: 'hero',
+      name: 'Hero',
+      version: '1.0',
+      description: 'd',
+      tags: ['2d'],
+      author: { id: user.id } as User,
+      room: {
+        id: 5,
+        author: { id: user.id },
+        contributors: [],
+      } as unknown as Room,
+      ...overrides,
+    } as ScriptingPackage;
+  }
+
+  /** The thrown HTTP error of a call that must reject. */
+  async function rejection(promise: Promise<unknown>): Promise<HttpException> {
+    try {
+      await promise;
+    } catch (error) {
+      return error as HttpException;
+    }
+    throw new Error('expected the call to reject');
+  }
+
+  it('creates a global record with the published snapshot', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne
+      .mockResolvedValueOnce(roomPackage())
+      .mockResolvedValueOnce(null);
+    flow.revisionsRepository.findOne.mockResolvedValue({ revision: 2 });
+    flow.packagesService.createGlobalRecord.mockResolvedValue({
+      id: 20,
+      slug: 'hero',
+    });
+    flow.repository.query.mockResolvedValue([{ ...row, id: 20 }]);
+
+    const result = await flow.service.publishToWorkshop(5, user);
+
+    expect(flow.packagesService.createGlobalRecord).toHaveBeenCalledWith({
+      slug: 'hero',
+      name: 'Hero',
+      version: '1.0',
+      description: 'd',
+      tags: ['2d'],
+      author: user,
+    });
+    expect(flow.revisionsService.publishCopiedRevision).toHaveBeenCalledWith({
+      sourcePackageId: 5,
+      targetPackageId: 20,
+    });
+    expect(flow.packagesService.update).not.toHaveBeenCalled();
+    expect(flow.packagesService.remove).not.toHaveBeenCalled();
+    expect(result.mode).toBe('created');
+    expect(result.package).toMatchObject({ id: 20, slug: 'hero', revision: 3 });
+    expect(flow.repository.query).toHaveBeenCalledWith(
+      expect.stringContaining('p.id = $1'),
+      [20],
+    );
+  });
+
+  it('updates the record when the caller is its author, after the copy', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne
+      .mockResolvedValueOnce(roomPackage())
+      .mockResolvedValueOnce({ id: 20, slug: 'hero', author: { id: user.id } });
+    flow.revisionsRepository.findOne.mockResolvedValue({ revision: 2 });
+    flow.repository.query.mockResolvedValue([{ ...row, id: 20 }]);
+
+    const result = await flow.service.publishToWorkshop(5, user, {
+      name: 'Hero 2',
+      tags: [' 3D '],
+    });
+
+    expect(flow.packagesService.createGlobalRecord).not.toHaveBeenCalled();
+    expect(flow.revisionsService.publishCopiedRevision).toHaveBeenCalledWith({
+      sourcePackageId: 5,
+      targetPackageId: 20,
+    });
+    expect(flow.packagesService.update).toHaveBeenCalledWith(20, {
+      name: 'Hero 2',
+      version: '1.0',
+      description: 'd',
+      tags: ['3d'],
+    });
+    expect(
+      flow.revisionsService.publishCopiedRevision.mock.invocationCallOrder[0],
+    ).toBeLessThan(flow.packagesService.update.mock.invocationCallOrder[0]);
+    expect(result.mode).toBe('updated');
+    expect(result.package).toMatchObject({ id: 20 });
+  });
+
+  it('refuses to overwrite another author record', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne
+      .mockResolvedValueOnce(roomPackage())
+      .mockResolvedValueOnce({ id: 20, slug: 'hero', author: { id: 99 } });
+    flow.revisionsRepository.findOne.mockResolvedValue({ revision: 2 });
+    flow.repository.query.mockResolvedValue([{ ...row, id: 20 }]);
+
+    const error = await rejection(flow.service.publishToWorkshop(5, user));
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getStatus()).toBe(409);
+    expect(error.getResponse()).toMatchObject({
+      code: 'workshop_slug_taken',
+      slug: 'hero',
+      workshopPackage: { id: 20, slug: 'hero' },
+    });
+    expect(flow.revisionsService.publishCopiedRevision).not.toHaveBeenCalled();
+    expect(flow.packagesService.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects publishing a package without a published revision', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne.mockResolvedValueOnce(roomPackage());
+    flow.revisionsRepository.findOne.mockResolvedValue(null);
+
+    const error = await rejection(flow.service.publishToWorkshop(5, user));
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getResponse()).toMatchObject({
+      code: 'package_not_published',
+    });
+    expect(flow.packagesService.createGlobalRecord).not.toHaveBeenCalled();
+  });
+
+  it('rejects publishing a workshop record from the workshop', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne.mockResolvedValueOnce(roomPackage({ room: null }));
+
+    const error = await rejection(flow.service.publishToWorkshop(5, user));
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getResponse()).toMatchObject({ code: 'package_not_in_room' });
+    expect(flow.packagesService.createGlobalRecord).not.toHaveBeenCalled();
+  });
+
+  it('rejects publishing by a user outside the package room', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne.mockResolvedValueOnce(
+      roomPackage({
+        author: { id: 99 } as User,
+        room: { id: 5, author: { id: 99 }, contributors: [{ id: 98 }] } as Room,
+      }),
+    );
+
+    const error = await rejection(flow.service.publishToWorkshop(5, user));
+
+    expect(error).toBeInstanceOf(ForbiddenException);
+    expect(flow.packagesService.createGlobalRecord).not.toHaveBeenCalled();
+  });
+
+  it('forks with a new slug and keeps the parent', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne.mockResolvedValueOnce(
+      roomPackage({ parentPackage: { id: 40 } as ScriptingPackage }),
+    );
+    flow.revisionsRepository.findOne.mockResolvedValue({ revision: 2 });
+    flow.packagesService.checkSlugAvailability.mockResolvedValue({
+      slug: 'hero2',
+      available: true,
+      global: { available: true },
+    });
+    flow.packagesService.create.mockResolvedValue({ id: 30, slug: 'hero2' });
+    flow.packagesService.findOne.mockResolvedValue({
+      id: 30,
+      slug: 'hero2',
+      room: { id: 5 },
+    });
+
+    const result = await flow.service.forkToWorkshop(5, user, ' hero2 ');
+
+    expect(flow.packagesService.checkSlugAvailability).toHaveBeenCalledWith(
+      'hero2',
+      5,
+    );
+    expect(flow.packagesService.create).toHaveBeenCalledWith(
+      {
+        slug: 'hero2',
+        name: 'Hero',
+        version: '1.0',
+        description: 'd',
+        tags: ['2d'],
+        authorId: 7,
+        roomId: 5,
+        parentPackageId: 40,
+      },
+      user,
+    );
+    const copy = flow.revisionsService.publishCopiedRevision.mock.calls[0][0];
+    expect(copy.sourcePackageId).toBe(5);
+    expect(copy.targetPackageId).toBe(30);
+    expect(
+      copy.transformFile!(
+        'main.gd',
+        Buffer.from(
+          'res://packages/hero/main.gd res://packages/hero_controller/x.gd',
+        ),
+      ).toString('utf8'),
+    ).toBe('res://packages/hero2/main.gd res://packages/hero_controller/x.gd');
+    expect(flow.packagesService.remove).not.toHaveBeenCalled();
+    expect(result).toEqual({ id: 30, slug: 'hero2', room: { id: 5 } });
+  });
+
+  it('rewrites only whole-slug self references', () => {
+    const data = Buffer.from(
+      'res://packages/hero/main.gd res://packages/hero_controller/x.gd',
+    );
+
+    const out = rewriteForkSlug('main.gd', data, 'hero', 'hero2');
+
+    expect(out.toString('utf8')).toContain('res://packages/hero2/main.gd');
+    expect(out.toString('utf8')).toContain(
+      'res://packages/hero_controller/x.gd',
+    );
+    expect(rewriteForkSlug('main.bin', data, 'hero', 'hero2')).toBe(data);
+  });
+
+  it('rejects a fork slug taken in the room or globally', async () => {
+    const availability = [
+      {
+        slug: 'hero2',
+        available: false,
+        reason: 'taken',
+        global: { available: true },
+      },
+      {
+        slug: 'hero2',
+        available: true,
+        global: { available: false, reason: 'taken' },
+      },
+    ];
+
+    for (const value of availability) {
+      const flow = makeFlow();
+      flow.repository.findOne.mockResolvedValueOnce(roomPackage());
+      flow.revisionsRepository.findOne.mockResolvedValue({ revision: 2 });
+      flow.packagesService.checkSlugAvailability.mockResolvedValue(value);
+
+      const error = await rejection(
+        flow.service.forkToWorkshop(5, user, 'hero2'),
+      );
+
+      expect(error).toBeInstanceOf(ConflictException);
+      expect(error.getResponse()).toMatchObject({
+        code: 'slug_taken',
+        slug: 'hero2',
+      });
+      expect(flow.packagesService.create).not.toHaveBeenCalled();
+    }
+  });
+
+  it('removes the forked package when the copy fails', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne.mockResolvedValueOnce(roomPackage());
+    flow.revisionsRepository.findOne.mockResolvedValue({ revision: 2 });
+    flow.packagesService.checkSlugAvailability.mockResolvedValue({
+      slug: 'hero2',
+      available: true,
+      global: { available: true },
+    });
+    flow.packagesService.create.mockResolvedValue({ id: 30, slug: 'hero2' });
+    const failure = new Error('copy_failed');
+    flow.revisionsService.publishCopiedRevision.mockRejectedValue(failure);
+
+    await expect(flow.service.forkToWorkshop(5, user, 'hero2')).rejects.toBe(
+      failure,
+    );
+
+    expect(flow.packagesService.remove).toHaveBeenCalledTimes(1);
+    const [removedId] = flow.packagesService.remove.mock.calls[0] as [number];
+    expect(removedId).toBe(30);
+  });
+
+  it('adds a workshop record as an independent room copy', async () => {
+    const flow = makeFlow();
+    flow.packagesService.findOne
+      .mockResolvedValueOnce({
+        id: 20,
+        slug: 'hero',
+        name: 'Hero',
+        version: '1.0',
+        description: 'd',
+        tags: ['2d'],
+        room: null,
+      })
+      .mockResolvedValueOnce({ id: 31, slug: 'hero', room: { id: 9 } });
+    flow.revisionsRepository.findOne.mockResolvedValue({ revision: 3 });
+    flow.packagesService.create.mockResolvedValue({ id: 31, slug: 'hero' });
+
+    const result = await flow.service.addToRoom(20, 9, user);
+
+    expect(flow.packagesService.create).toHaveBeenCalledWith(
+      {
+        slug: 'hero',
+        name: 'Hero',
+        version: '1.0',
+        description: 'd',
+        tags: ['2d'],
+        authorId: 7,
+        roomId: 9,
+        parentPackageId: 20,
+      },
+      user,
+    );
+    expect(flow.revisionsService.publishCopiedRevision).toHaveBeenCalledWith({
+      sourcePackageId: 20,
+      targetPackageId: 31,
+    });
+    expect(result).toEqual({ id: 31, slug: 'hero', room: { id: 9 } });
+  });
+
+  it('rejects adding a room package to another room', async () => {
+    const flow = makeFlow();
+    flow.packagesService.findOne.mockResolvedValueOnce(roomPackage());
+
+    const error = await rejection(flow.service.addToRoom(5, 9, user));
+
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect(error.getResponse()).toMatchObject({
+      code: 'package_not_in_workshop',
+    });
+    expect(flow.packagesService.create).not.toHaveBeenCalled();
+  });
+
+  it('deletes a fresh record without retiring its slug when the copy fails', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne
+      .mockResolvedValueOnce(roomPackage())
+      .mockResolvedValueOnce(null);
+    flow.revisionsRepository.findOne.mockResolvedValue({ revision: 2 });
+    flow.packagesService.createGlobalRecord.mockResolvedValue({
+      id: 20,
+      slug: 'hero',
+    });
+    const failure = new Error('copy_failed');
+    flow.revisionsService.publishCopiedRevision.mockRejectedValue(failure);
+
+    await expect(flow.service.publishToWorkshop(5, user)).rejects.toBe(failure);
+
+    expect(flow.packagesService.remove.mock.calls[0]).toEqual([
+      20,
+      { tombstone: false },
+    ]);
+  });
+
+  it('maps a duplicate revision on publish to a publish conflict', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne
+      .mockResolvedValueOnce(roomPackage())
+      .mockResolvedValueOnce(null);
+    flow.revisionsRepository.findOne.mockResolvedValue({ revision: 2 });
+    flow.packagesService.createGlobalRecord.mockResolvedValue({
+      id: 20,
+      slug: 'hero',
+    });
+    flow.revisionsService.publishCopiedRevision.mockRejectedValue({
+      code: '23505',
+    });
+
+    const error = await rejection(flow.service.publishToWorkshop(5, user));
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getResponse()).toMatchObject({ code: 'publish_conflict' });
+    expect(flow.packagesService.remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps a duplicate revision on fork to a publish conflict', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne.mockResolvedValueOnce(roomPackage());
+    flow.revisionsRepository.findOne.mockResolvedValue({ revision: 2 });
+    flow.packagesService.checkSlugAvailability.mockResolvedValue({
+      slug: 'hero2',
+      available: true,
+      global: { available: true },
+    });
+    flow.packagesService.create.mockResolvedValue({ id: 30, slug: 'hero2' });
+    flow.revisionsService.publishCopiedRevision.mockRejectedValue({
+      code: '23505',
+    });
+
+    const error = await rejection(
+      flow.service.forkToWorkshop(5, user, 'hero2'),
+    );
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getResponse()).toMatchObject({ code: 'publish_conflict' });
+    expect(flow.packagesService.remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps a duplicate revision when adding to a room to a publish conflict', async () => {
+    const flow = makeFlow();
+    flow.packagesService.findOne
+      .mockResolvedValueOnce({ id: 20, slug: 'hero', room: null })
+      .mockResolvedValueOnce({ id: 31, slug: 'hero' });
+    flow.revisionsRepository.findOne.mockResolvedValue({ revision: 3 });
+    flow.packagesService.create.mockResolvedValue({ id: 31, slug: 'hero' });
+    flow.revisionsService.publishCopiedRevision.mockRejectedValue({
+      code: '23505',
+    });
+
+    const error = await rejection(flow.service.addToRoom(20, 9, user));
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getResponse()).toMatchObject({ code: 'publish_conflict' });
+    expect(flow.packagesService.remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the publication error when the rollback fails', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne
+      .mockResolvedValueOnce(roomPackage())
+      .mockResolvedValueOnce(null);
+    flow.revisionsRepository.findOne.mockResolvedValue({ revision: 2 });
+    flow.packagesService.createGlobalRecord.mockResolvedValue({
+      id: 20,
+      slug: 'hero',
+    });
+    const failure = new Error('copy_failed');
+    flow.revisionsService.publishCopiedRevision.mockRejectedValue(failure);
+    flow.packagesService.remove.mockRejectedValue(new Error('rollback_failed'));
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+
+    try {
+      await expect(flow.service.publishToWorkshop(5, user)).rejects.toBe(
+        failure,
+      );
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('copy rollback failed'),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

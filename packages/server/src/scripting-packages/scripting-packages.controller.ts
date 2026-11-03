@@ -38,6 +38,11 @@ import { PackageReadUrlService } from './package-read-url.service';
 import { PackageWorkshopService } from './package-workshop.service';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
+import {
+  RoomCopyDto,
+  WorkshopForkDto,
+  WorkshopPublishDto,
+} from './dto/workshop.dto';
 import { UseAuthGuard, UseSilentAuthGuard } from 'src/auth/jwt-auth.guard';
 import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 import { MAX_PACKAGE_FILE_SIZE } from './package-manifest';
@@ -106,6 +111,43 @@ export class ScriptingPackagesController {
   @Get('workshop/lookup')
   workshopLookup(@Query('slug') slug: string) {
     return this.workshopService.lookup(slug);
+  }
+
+  // --- Workshop copies -----------------------------------------------------
+  // All three copy a published revision server-side; the source package is
+  // never modified.
+
+  @UseAuthGuard()
+  @ApiOkResponse({ description: 'Published or updated workshop record' })
+  @Post(':id/workshop')
+  publishToWorkshop(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: WorkshopPublishDto,
+  ) {
+    return this.workshopService.publishToWorkshop(id, req.user, dto);
+  }
+
+  @UseAuthGuard()
+  @ApiOkResponse({ type: ScriptingPackage })
+  @Post(':id/workshop-fork')
+  forkToWorkshop(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: WorkshopForkDto,
+  ) {
+    return this.workshopService.forkToWorkshop(id, req.user, dto.slug);
+  }
+
+  @UseAuthGuard()
+  @ApiOkResponse({ type: ScriptingPackage })
+  @Post(':id/room-copy')
+  copyToRoom(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: RoomCopyDto,
+  ) {
+    return this.workshopService.addToRoom(id, dto.roomId, req.user);
   }
 
   @ApiOkResponse({ type: ScriptingPackage })
