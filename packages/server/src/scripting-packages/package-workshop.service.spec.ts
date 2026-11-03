@@ -814,4 +814,57 @@ describe('PackageWorkshopService copies', () => {
       warn.mockRestore();
     }
   });
+
+  it('normalizes the tag query and clamps pagination', async () => {
+    const query = jest.fn(() => Promise.resolve([]));
+    const service = makeService({ query });
+
+    await service.tags({ q: '  HERO  ', limit: 500, offset: -3 });
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('jsonb_array_elements_text'),
+      ['%hero%', 200, 0],
+    );
+  });
+
+  it('uses an empty tag pattern and the tag pagination defaults', async () => {
+    const query = jest.fn(() => Promise.resolve([]));
+    const service = makeService({ query });
+
+    await expect(service.tags({})).resolves.toEqual({ items: [], total: 0 });
+
+    expect(query).toHaveBeenCalledWith(expect.anything(), ['', 100, 0]);
+  });
+
+  it('maps tag counts and total from Postgres strings to numbers', async () => {
+    const query = jest.fn(() =>
+      Promise.resolve([{ tag: '2d', count: '3', total: '2' }]),
+    );
+    const service = makeService({ query });
+
+    await expect(service.tags({})).resolves.toEqual({
+      items: [{ tag: '2d', count: 3 }],
+      total: 2,
+    });
+  });
+
+  it('falls back to tag defaults for non-finite and fractional paging', async () => {
+    const query = jest.fn(() => Promise.resolve([]));
+    const service = makeService({ query });
+
+    await service.tags({ limit: Number.NaN, offset: Number.NaN });
+    expect(paramsOf(query)).toEqual(['', 100, 0]);
+
+    await service.tags({ limit: 2.5, offset: 1.5 });
+    expect(paramsOf(query, 1)).toEqual(['', 2, 1]);
+  });
+
+  it('treats a non-string tag query as absent', async () => {
+    const query = jest.fn(() => Promise.resolve([]));
+    const service = makeService({ query });
+
+    await service.tags({ q: ['a', 'b'] as never });
+
+    expect(paramsOf(query)).toEqual(['', 100, 0]);
+  });
 });

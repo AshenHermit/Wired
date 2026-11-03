@@ -115,6 +115,20 @@ export class ScriptingPackagesController {
     return this.workshopService.lookup(slug);
   }
 
+  @ApiOkResponse({ description: 'Workshop tag usage' })
+  @Get('workshop/tags')
+  workshopTags(
+    @Query('q') q?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.workshopService.tags({
+      q,
+      limit: parseOptionalNumber(limit),
+      offset: parseOptionalNumber(offset),
+    });
+  }
+
   // --- Workshop copies -----------------------------------------------------
   // All three copy a published revision server-side; the source package is
   // never modified.

@@ -623,6 +623,7 @@ describe('ScriptingPackagesController slug route ordering', () => {
   let checkSlugAvailability: jest.Mock;
   let listWorkshop: jest.Mock;
   let lookupWorkshop: jest.Mock;
+  let tagsWorkshop: jest.Mock;
 
   beforeAll(async () => {
     findOne = jest.fn((id: number) => Promise.resolve({ id, slug: 'hero' }));
@@ -632,6 +633,7 @@ describe('ScriptingPackagesController slug route ordering', () => {
     );
     listWorkshop = jest.fn(() => Promise.resolve({ items: [], total: 0 }));
     lookupWorkshop = jest.fn(() => Promise.resolve({ package: null }));
+    tagsWorkshop = jest.fn(() => Promise.resolve({ items: [], total: 0 }));
 
     const moduleRef = await Test.createTestingModule({
       controllers: [ScriptingPackagesController],
@@ -653,7 +655,7 @@ describe('ScriptingPackagesController slug route ordering', () => {
         },
         {
           provide: PackageWorkshopService,
-          useValue: { list: listWorkshop, lookup: lookupWorkshop },
+          useValue: { list: listWorkshop, lookup: lookupWorkshop, tags: tagsWorkshop },
         },
         { provide: getRepositoryToken(Room), useValue: { findOne: jest.fn() } },
         {
@@ -733,6 +735,19 @@ describe('ScriptingPackagesController slug route ordering', () => {
       .expect(200);
 
     expect(lookupWorkshop).toHaveBeenCalledWith('hero');
+    expect(findOne).not.toHaveBeenCalled();
+  });
+
+  it('serves workshop tags instead of falling through to :id', async () => {
+    await request(app.getHttpServer())
+      .get('/scripting-packages/workshop/tags?q=hero&limit=5')
+      .expect(200);
+
+    expect(tagsWorkshop).toHaveBeenCalledWith({
+      q: 'hero',
+      limit: 5,
+      offset: undefined,
+    });
     expect(findOne).not.toHaveBeenCalled();
   });
 

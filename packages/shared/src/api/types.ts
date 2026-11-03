@@ -177,6 +177,13 @@ export type WorkshopPackageSummary = {
 
 export type WorkshopListing = { items: WorkshopPackageSummary[]; total: number };
 
+export type WorkshopTagCount = { tag: string; count: number };
+
+export type WorkshopTagListing = {
+  items: WorkshopTagCount[];
+  total: number;
+};
+
 export type WorkshopPackageMetadata = {
   name?: string;
   version?: string;

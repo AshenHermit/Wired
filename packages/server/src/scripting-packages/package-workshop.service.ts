@@ -13,6 +13,7 @@ import {
   WorkshopPackageMetadata,
   WorkshopPackageSummary,
   WorkshopPublishResult,
+  WorkshopTagListing,
 } from '@wired-io/shared';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
@@ -46,6 +47,21 @@ LIMIT $2 OFFSET $3`;
 const LOOKUP_SQL = `${WORKSHOP_SELECT}
 WHERE p."roomId" IS NULL AND p.slug = $1
 LIMIT 1`;
+
+const TAGS_SQL = `SELECT t.tag, COUNT(*)::int AS count, COUNT(*) OVER() AS total
+FROM scripting_package p
+JOIN LATERAL (
+  SELECT 1 FROM scripting_package_revision
+  WHERE "packageId" = p.id AND status = 'published'
+    AND "publishedAt" IS NOT NULL
+  LIMIT 1
+) r ON TRUE
+CROSS JOIN LATERAL jsonb_array_elements_text(p.tags) AS t(tag)
+WHERE p."roomId" IS NULL
+  AND ($1 = '' OR t.tag ILIKE $1)
+GROUP BY t.tag
+ORDER BY COUNT(*) DESC, t.tag ASC
+LIMIT $2 OFFSET $3`;
 
 const SUMMARY_SQL = `${WORKSHOP_SELECT}
 WHERE p.id = $1
@@ -101,6 +117,12 @@ type WorkshopRow = {
   total: string;
 };
 
+type WorkshopTagRow = {
+  tag: string;
+  count: string;
+  total: string;
+};
+
 @Injectable()
 export class PackageWorkshopService {
   private readonly logger = new Logger(PackageWorkshopService.name);
@@ -114,11 +136,10 @@ export class PackageWorkshopService {
     private readonly revisionsService: PackageRevisionsService,
   ) {}
 
-  async list(query: {
-    q?: string;
-    limit?: number;
-    offset?: number;
-  }): Promise<WorkshopListing> {
+  private normalizePaging(
+    query: { q?: string; limit?: number; offset?: number },
+    options: { limit: number; maxLimit: number },
+  ): { pattern: string; limit: number; offset: number } {
     // Query-string input is unvalidated: `?q=a&q=b` arrives as an array and
     // `?limit=abc` as `NaN`. A non-finite `LIMIT`/`OFFSET` is a Postgres error,
     // and a fractional one (`?limit=2.5`) is rejected as `22P02`, so both are
@@ -127,22 +148,53 @@ export class PackageWorkshopService {
       .trim()
       .toLowerCase()
       .slice(0, 64);
-    const pattern = q ? `%${q}%` : '';
-    const limit = Number.isFinite(query.limit)
-      ? Math.min(100, Math.max(1, Math.trunc(query.limit as number)))
-      : 50;
-    const offset = Number.isFinite(query.offset)
-      ? Math.max(0, Math.trunc(query.offset as number))
-      : 0;
+    return {
+      pattern: q ? `%${q}%` : '',
+      limit: Number.isFinite(query.limit)
+        ? Math.min(
+            options.maxLimit,
+            Math.max(1, Math.trunc(query.limit as number)),
+          )
+        : options.limit,
+      offset: Number.isFinite(query.offset)
+        ? Math.max(0, Math.trunc(query.offset as number))
+        : 0,
+    };
+  }
+
+  async list(query: {
+    q?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<WorkshopListing> {
+    const paging = this.normalizePaging(query, { limit: 50, maxLimit: 100 });
 
     const rows: WorkshopRow[] = await this.packagesRepository.query(LIST_SQL, [
-      pattern,
-      limit,
-      offset,
+      paging.pattern,
+      paging.limit,
+      paging.offset,
     ]);
 
     return {
       items: rows.map((row) => this.toSummary(row)),
+      total: rows[0] ? Number(rows[0].total) : 0,
+    };
+  }
+
+  async tags(query: {
+    q?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<WorkshopTagListing> {
+    const paging = this.normalizePaging(query, { limit: 100, maxLimit: 200 });
+
+    const rows: WorkshopTagRow[] = await this.packagesRepository.query(
+      TAGS_SQL,
+      [paging.pattern, paging.limit, paging.offset],
+    );
+
+    return {
+      items: rows.map((row) => ({ tag: row.tag, count: Number(row.count) })),
       total: rows[0] ? Number(rows[0].total) : 0,
     };
   }
