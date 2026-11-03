@@ -303,9 +303,20 @@ export class PackageRevisionsService {
         await this.releasePublishLock(lock, targetPackageId);
       }
     } catch (error) {
-      // The bytes are rolled back by the store, but the row is not: leaving a
-      // draft behind would shift every later revision number of the target.
-      await this.revisionsRepository.delete(saved.id);
+      // The store rolls its own bytes back, but neither the row nor the draft
+      // directory is: a leftover draft would make a retry that declares a
+      // different file set unpublishable. Cleanup must never replace the
+      // original publication error, so a failure there is only logged.
+      try {
+        await this.revisionsRepository.delete(saved.id);
+      } catch (cleanupError) {
+        this.warnCopyCleanupFailure(targetPackageId, revision, cleanupError);
+      }
+      try {
+        await this.storage.discardDraft(targetPackageId, revision);
+      } catch (cleanupError) {
+        this.warnCopyCleanupFailure(targetPackageId, revision, cleanupError);
+      }
       throw error;
     }
 
@@ -634,6 +645,18 @@ export class PackageRevisionsService {
     } finally {
       await runner.release().catch(() => undefined);
     }
+  }
+
+  private warnCopyCleanupFailure(
+    packageId: number,
+    revision: number,
+    error: unknown,
+  ): void {
+    this.logger.warn(
+      `Package ${packageId} revision ${revision} copy cleanup failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
 
   private warnLockFailure(packageId: number, error: unknown): void {

@@ -914,6 +914,42 @@ describe('PackageRevisionsService', () => {
         }),
       ).rejects.toThrow('disk full');
       expect(repository.delete).toHaveBeenCalledWith(1);
+      expect(storage.discardDraft).toHaveBeenCalledWith(12, 1);
+    });
+
+    it('keeps the original error when cleaning up the failed copy also fails', async () => {
+      const data = Buffer.from('extends Node\n');
+
+      repository.findOne.mockResolvedValue(
+        publishedRow(2, [entry('a.gd', data)]),
+      );
+      storage.readPublishedFile.mockResolvedValue(data);
+      packagesService.findOne.mockResolvedValue({
+        id: 12,
+        slug: 'hero-copy',
+        room: { id: 3 },
+      });
+      storage.publishRevision.mockRejectedValue(new Error('disk full'));
+      repository.delete.mockRejectedValue(new Error('database gone'));
+      storage.discardDraft.mockRejectedValue(new Error('disk busy'));
+      const warn = jest
+        .spyOn(
+          (service as unknown as { logger: { warn: jest.Mock } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+
+      await expect(
+        service.publishCopiedRevision({
+          sourcePackageId: 5,
+          targetPackageId: 12,
+        }),
+      ).rejects.toThrow('disk full');
+
+      expect(repository.delete).toHaveBeenCalledWith(1);
+      expect(storage.discardDraft).toHaveBeenCalledWith(12, 1);
+      expect(warn).toHaveBeenCalledTimes(2);
+      warn.mockRestore();
     });
   });
 });
