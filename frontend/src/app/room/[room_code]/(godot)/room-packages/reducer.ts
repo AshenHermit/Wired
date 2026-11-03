@@ -19,7 +19,7 @@ type RoomPackagesState = {
   remoteIds: Set<number>;
 };
 
-type RoomPackagesAction =
+export type RoomPackagesAction =
   | { type: "reset"; packages: ScriptingPackage[] }
   | { type: "merged"; packages: ScriptingPackage[] }
   | { type: "created"; package: ScriptingPackage }

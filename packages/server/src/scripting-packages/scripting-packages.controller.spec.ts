@@ -456,6 +456,10 @@ describe('ScriptingPackagesController runtime endpoint authorization', () => {
         },
         { provide: getRepositoryToken(Room), useValue: rooms },
         { provide: getRepositoryToken(ScriptingPackage), useValue: packages },
+        {
+          provide: ArtifactBuildRateLimiter,
+          useValue: { assertAllowed: jest.fn() },
+        },
       ],
     })
       .overrideGuard(RuntimeAuthGuard)
@@ -566,6 +570,7 @@ describe('ScriptingPackagesController lifecycle routes', () => {
       {} as never,
       {} as never,
       {} as never,
+      { assertAllowed: jest.fn() } as never,
     );
   });
 
@@ -663,6 +668,10 @@ describe('ScriptingPackagesController slug route ordering', () => {
         {
           provide: getRepositoryToken(ScriptingPackage),
           useValue: { findOne: jest.fn() },
+        },
+        {
+          provide: ArtifactBuildRateLimiter,
+          useValue: { assertAllowed: jest.fn() },
         },
         {
           // The app authenticates through APP_GUARD; this module test only

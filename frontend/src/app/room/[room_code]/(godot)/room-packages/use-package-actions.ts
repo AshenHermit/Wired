@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import type {
+  PackageSlugAvailability,
   PackageSyncStatus,
   ScriptingPackage,
   UpdateScriptingPackagePayload,

@@ -61,7 +61,7 @@ export class PackageRevisionsService {
     private readonly packagesService: ScriptingPackagesService,
     private readonly storage: PackageStorageService,
     @Optional()
-    private readonly locks: PackagePublishLockService = new PackagePublishLockService(),
+    private readonly locks?: PackagePublishLockService,
     @Optional()
     @Inject(PACKAGE_REVISION_DISPATCHER)
     private readonly dispatcher?: PackageRevisionDispatcher,
@@ -69,6 +69,18 @@ export class PackageRevisionsService {
     @InjectRepository(ScriptingPackage)
     private readonly packagesRepository?: Repository<ScriptingPackage>,
   ) {}
+
+  /**
+   * The publication guard is provided by `ScriptingPackagesModule`; it stays
+   * optional only so specs can build the service without a database. Missing
+   * it is a configuration error, not a reason to fall back to a private set.
+   */
+  private get publishLocks(): PackagePublishLockService {
+    if (!this.locks) {
+      throw new Error('package_publish_lock_missing');
+    }
+    return this.locks;
+  }
 
   /**
    * Starts a new draft revision. Any unfinished draft of the same package is
@@ -79,7 +91,7 @@ export class PackageRevisionsService {
     packageId: number,
     payload: CreatePackageRevisionPayload,
   ): Promise<PackageRevision> {
-    await this.locks.assertNotPublishing(packageId);
+    await this.publishLocks.assertNotPublishing(packageId);
 
     const pkg = await this.packagesService.findOne(packageId);
     const files = validatePackageRevisionFiles(payload?.files);
@@ -119,7 +131,7 @@ export class PackageRevisionsService {
     filepath: string,
     data: Buffer,
   ): Promise<SavedDraftFile> {
-    await this.locks.assertNotPublishing(packageId);
+    await this.publishLocks.assertNotPublishing(packageId);
 
     const row = await this.findRevision(packageId, revision);
 
@@ -169,7 +181,7 @@ export class PackageRevisionsService {
     const pkg = await this.packagesService.findOne(packageId);
 
     // Reject uploads for this package while its bytes are verified and moved.
-    await this.locks.runWithPublishLocks([packageId], async () => {
+    await this.publishLocks.runWithPublishLocks([packageId], async () => {
       await this.storage.publishRevision(
         packageId,
         revision,
@@ -279,7 +291,7 @@ export class PackageRevisionsService {
       }
 
       // Reject uploads for the target while its bytes are verified and moved.
-      await this.locks.runWithPublishLocks([targetPackageId], async () => {
+      await this.publishLocks.runWithPublishLocks([targetPackageId], async () => {
         await this.storage.publishRevision(
           targetPackageId,
           revision,

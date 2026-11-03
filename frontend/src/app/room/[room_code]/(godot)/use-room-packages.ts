@@ -18,7 +18,10 @@ import {
   packageFromStatus,
   packageProjectRoot,
 } from "./room-packages/model";
-import type { PackageActionState } from "./room-packages/model";
+import type {
+  PackageActionState,
+  RoomPackagesController,
+} from "./room-packages/model";
 import { roomPackagesReducer } from "./room-packages/reducer";
 import { useEditorBridge } from "./use-editor-bridge";
 import { usePackageActions } from "./room-packages/use-package-actions";

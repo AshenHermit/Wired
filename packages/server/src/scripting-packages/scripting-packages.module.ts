@@ -9,6 +9,7 @@ import { ScriptingPackagesController } from './scripting-packages.controller';
 import { PackageRevisionsService } from './package-revisions.service';
 import { PackageWorkshopService } from './package-workshop.service';
 import { PackagePublishLockService } from './package-publish-lock.service';
+import { ArtifactBuildRateLimiter } from './artifact-build.rate-limiter';
 import { PackageDeliveryModule } from './package-delivery.module';
 import { AppConfigModule } from 'src/config/config.module';
 import { GodotGameModule } from 'src/godot-game/godot-game.module';
@@ -30,6 +31,9 @@ import { GodotGameModule } from 'src/godot-game/godot-game.module';
     PackageRevisionsService,
     PackageWorkshopService,
     PackagePublishLockService,
+    // Shared by the controller so artifact builds are limited process-wide
+    // instead of per hand-built instance.
+    ArtifactBuildRateLimiter,
   ],
   controllers: [ScriptingPackagesController],
   exports: [

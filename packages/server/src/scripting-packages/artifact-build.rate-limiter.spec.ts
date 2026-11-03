@@ -1,26 +1,20 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
+import { AppConfigService } from 'src/config/config.service';
 import { ArtifactBuildRateLimiter } from './artifact-build.rate-limiter';
 
+/** Builds a limiter pinned to a budget, without touching the environment. */
+function limiterWith(limit: number, windowMs = 60_000) {
+  return new ArtifactBuildRateLimiter({
+    packages: {
+      artifactBuildRateLimit: limit,
+      artifactBuildRateWindowMs: windowMs,
+    },
+  } as unknown as AppConfigService);
+}
+
 describe('ArtifactBuildRateLimiter', () => {
-  const limitKey = 'WIRED_ARTIFACT_BUILD_RATE_LIMIT';
-  const windowKey = 'WIRED_ARTIFACT_BUILD_RATE_WINDOW_MS';
-  const savedLimit = process.env[limitKey];
-  const savedWindow = process.env[windowKey];
-
-  beforeEach(() => {
-    delete process.env[limitKey];
-    delete process.env[windowKey];
-  });
-
-  afterAll(() => {
-    if (savedLimit === undefined) delete process.env[limitKey];
-    else process.env[limitKey] = savedLimit;
-    if (savedWindow === undefined) delete process.env[windowKey];
-    else process.env[windowKey] = savedWindow;
-  });
-
-  it('allows the default budget of ten builds per key', () => {
-    const limiter = new ArtifactBuildRateLimiter();
+  it('allows the configured budget per key', () => {
+    const limiter = limiterWith(10);
 
     for (let attempt = 0; attempt < 10; attempt += 1) {
       expect(() => limiter.assertAllowed(5, 3, 7, 1_000)).not.toThrow();
@@ -28,7 +22,7 @@ describe('ArtifactBuildRateLimiter', () => {
   });
 
   it('rejects the eleventh build of the same key with HTTP 429', () => {
-    const limiter = new ArtifactBuildRateLimiter();
+    const limiter = limiterWith(10);
 
     for (let attempt = 0; attempt < 10; attempt += 1) {
       limiter.assertAllowed(5, 3, 7, 1_000);
@@ -48,7 +42,7 @@ describe('ArtifactBuildRateLimiter', () => {
   });
 
   it('keeps the budget of independent keys separate', () => {
-    const limiter = new ArtifactBuildRateLimiter(2, 60_000);
+    const limiter = limiterWith(2);
 
     limiter.assertAllowed(5, 3, 7, 1_000);
     limiter.assertAllowed(5, 3, 7, 1_000);
@@ -59,32 +53,20 @@ describe('ArtifactBuildRateLimiter', () => {
   });
 
   it('reopens the budget after the window expires', () => {
-    const limiter = new ArtifactBuildRateLimiter(1, 60_000);
+    const limiter = limiterWith(1, 60_000);
 
     limiter.assertAllowed(5, 3, 7, 1_000);
     expect(() => limiter.assertAllowed(5, 3, 7, 1_001)).toThrow(HttpException);
     expect(() => limiter.assertAllowed(5, 3, 7, 61_001)).not.toThrow();
   });
 
-  it('reads the limit and window from the environment', () => {
-    process.env[limitKey] = '2';
-    process.env[windowKey] = '500';
-    const limiter = new ArtifactBuildRateLimiter();
+  it('drops expired windows instead of growing without bound', () => {
+    const limiter = limiterWith(1, 500);
 
-    limiter.assertAllowed(5, 3, 7, 1_000);
-    limiter.assertAllowed(5, 3, 7, 1_000);
-    expect(() => limiter.assertAllowed(5, 3, 7, 1_000)).toThrow(HttpException);
-    expect(() => limiter.assertAllowed(5, 3, 7, 1_500)).not.toThrow();
-  });
-
-  it('falls back to the defaults for malformed environment values', () => {
-    process.env[limitKey] = 'not-a-number';
-    process.env[windowKey] = '0';
-    const limiter = new ArtifactBuildRateLimiter();
-
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      expect(() => limiter.assertAllowed(5, 3, 7, 1_000)).not.toThrow();
+    for (let roomId = 0; roomId < 30; roomId += 1) {
+      limiter.assertAllowed(1, 1, roomId, 1_000);
     }
-    expect(() => limiter.assertAllowed(5, 3, 7, 1_000)).toThrow(HttpException);
+
+    expect(() => limiter.assertAllowed(2, 1, 1, 2_000)).not.toThrow();
   });
 });

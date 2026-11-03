@@ -1,14 +1,5 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
-
-const DEFAULT_LIMIT = 10;
-const DEFAULT_WINDOW_MS = 60_000;
-
-function positiveInt(value: string | undefined, fallback: number): number {
-  if (value === undefined) return fallback;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) return fallback;
-  return parsed;
-}
+import { AppConfigService } from 'src/config/config.service';
 
 /**
  * Per-process, in-memory guard against artifact-build amplification.
@@ -23,24 +14,21 @@ function positiveInt(value: string | undefined, fallback: number): number {
  */
 @Injectable()
 export class ArtifactBuildRateLimiter {
-  private readonly limit: number;
-  private readonly windowMs: number;
   /** key -> { count, resetAt } for the current window. */
   private readonly windows = new Map<
     string,
     { count: number; resetAt: number }
   >();
 
-  constructor(limit?: number, windowMs?: number) {
-    this.limit =
-      limit ??
-      positiveInt(process.env.WIRED_ARTIFACT_BUILD_RATE_LIMIT, DEFAULT_LIMIT);
-    this.windowMs =
-      windowMs ??
-      positiveInt(
-        process.env.WIRED_ARTIFACT_BUILD_RATE_WINDOW_MS,
-        DEFAULT_WINDOW_MS,
-      );
+  constructor(private readonly config: AppConfigService) {}
+
+  /** Builds allowed per `(package, revision, room)` per window. */
+  private get limit(): number {
+    return this.config.packages.artifactBuildRateLimit;
+  }
+
+  private get windowMs(): number {
+    return this.config.packages.artifactBuildRateWindowMs;
   }
 
   /**

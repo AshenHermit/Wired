@@ -30,8 +30,16 @@ const downloadedRuntime = (): string => {
 // still override every path through the environment.
 const storageDir = () => resolve(process.env.STORAGE_DIR ?? './storage');
 
+/**
+ * The HTTP port, also used to build the loopback API URL the runtime calls.
+ */
+const serverPort = () => intFromEnv('PORT', 3000);
+
+const siteHost = () => process.env.SITE_HOST?.trim() || null;
+
 const config: () => AppConfig = () => ({
   nodeEnv: process.env.NODE_ENV === 'production' ? 'production' : 'development',
+  port: serverPort(),
   db: {
     host: process.env.DB_HOST ?? 'db',
     port: parseInt(process.env.DB_PORT ?? '5432'),
@@ -44,9 +52,15 @@ const config: () => AppConfig = () => ({
   site: {
     commonDomain: process.env.COMMON_DOMAIN ?? 'localhost',
     apiDomain: 'api.' + (process.env.COMMON_DOMAIN ?? 'localhost'),
-    host: process.env.SITE_HOST ?? 'http://localhost:3001',
+    host: siteHost() ?? 'http://localhost:3001',
+    corsOrigin: siteHost(),
     authSecret: process.env.AUTH_SECRET ?? 'secret',
     authCookieName: process.env.AUTH_COOKIE_NAME ?? 'access_token',
+  },
+  auth: {
+    googleClientId: process.env.GOOGLE_AUTH_CLIENT_ID ?? 'clientId',
+    googleClientSecret: process.env.GOOGLE_AUTH_CLIENT_SECRET ?? 'secret',
+    googleCallbackUrl: process.env.GOOGLE_AUTH_CALLBACK,
   },
   storage: {
     dir: storageDir(),
@@ -82,8 +96,7 @@ const config: () => AppConfig = () => ({
     // GODOT_ROOM_API_URL is required when the backend port differs from PORT
     // (for example behind a proxy) or when it listens on another interface.
     apiUrl:
-      process.env.GODOT_ROOM_API_URL ??
-      `http://127.0.0.1:${intFromEnv('PORT', 3000)}`,
+      process.env.GODOT_ROOM_API_URL ?? `http://127.0.0.1:${serverPort()}`,
     stateDir: resolve(
       process.env.GODOT_ROOM_STATE_DIR ?? './storage/godot_rooms',
     ),
@@ -105,6 +118,11 @@ const config: () => AppConfig = () => ({
       process.env.WIRED_GAME_TICKET_SECRET ??
       '',
     readTtlSec: intFromEnv('WIRED_PACKAGE_READ_TTL_SEC', 900),
+    artifactBuildRateLimit: intFromEnv('WIRED_ARTIFACT_BUILD_RATE_LIMIT', 10),
+    artifactBuildRateWindowMs: intFromEnv(
+      'WIRED_ARTIFACT_BUILD_RATE_WINDOW_MS',
+      60_000,
+    ),
   },
 });
 export default config;

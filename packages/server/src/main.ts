@@ -2,9 +2,11 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { createValidationPipe } from './common/validation';
+import { AppConfigService } from './config/config.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const appConfig = app.get(AppConfigService);
 
   app.useGlobalPipes(createValidationPipe());
 
@@ -12,7 +14,7 @@ async function bootstrap() {
   // (SIGINT/SIGTERM); RoomRuntimeService also terminates them gracefully.
   app.enableShutdownHooks();
 
-  const siteHost = process.env.SITE_HOST;
+  const corsOrigin = appConfig.site.corsOrigin;
   app.enableCors({
     allowedHeaders: [
       'Content-Type',
@@ -26,9 +28,9 @@ async function bootstrap() {
     ],
     // Browsers reject `*` together with credentials. Only send credentials
     // when the allowed origin is actually configured.
-    origin: siteHost ?? '*',
+    origin: corsOrigin ?? '*',
     crossOriginIsolated: true,
-    credentials: Boolean(siteHost),
+    credentials: corsOrigin !== null,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     exposedHeaders: ['Content-Type', 'Content-Length'],
   });
@@ -42,7 +44,7 @@ async function bootstrap() {
   const documentFactory = () => SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, documentFactory);
 
-  await app.listen(process.env.PORT ?? 3000);
+  await app.listen(appConfig.port);
 }
 
 bootstrap().catch((error: unknown) => {

@@ -80,10 +80,9 @@ export class ScriptingPackagesController {
     private readonly delivery: PackageDeliveryService,
     private readonly readUrls: PackageReadUrlService,
     private readonly workshopService: PackageWorkshopService,
-    // Optional so the controller keeps working in modules that do not register
-    // the limiter; the default instance reads its config from the environment.
-    @Optional()
-    private readonly buildLimiter: ArtifactBuildRateLimiter = new ArtifactBuildRateLimiter(),
+    // Registered by ScriptingPackagesModule; a missing provider must fail at
+    // boot rather than silently fall back to a second, unconfigured limiter.
+    private readonly buildLimiter: ArtifactBuildRateLimiter,
   ) {}
 
   // Declared before `:id` so `slug-availability` is not parsed as an id.

@@ -688,13 +688,16 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     const roomsRepository = {
       findOne: jest.fn(async () => options.room ?? null),
     };
+    // The slug lifecycle only needs the packages repository; the collaborators
+    // are present because the service refuses to boot without them.
     return new ScriptingPackagesService(
       packagesRepository as never,
       roomsRepository as never,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+      {} as never,
+      {} as never,
+      { findDependentRoomPackages: jest.fn(async () => []) } as never,
+      {} as never,
+      new PackagePublishLockService(),
     );
   }
 

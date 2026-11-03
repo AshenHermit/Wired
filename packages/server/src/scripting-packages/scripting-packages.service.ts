@@ -67,8 +67,20 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     @InjectRepository(ScriptingPackageRevision)
     private readonly revisionsRepository?: Repository<ScriptingPackageRevision>,
     @Optional()
-    private readonly locks: PackagePublishLockService = new PackagePublishLockService(),
+    private readonly locks?: PackagePublishLockService,
   ) {}
+
+  /**
+   * The publication guard is provided by `ScriptingPackagesModule`; it stays
+   * optional only so specs can build the service without a database. Missing
+   * it is a configuration error, not a reason to fall back to a private set.
+   */
+  private get publishLocks(): PackagePublishLockService {
+    if (!this.locks) {
+      throw new Error('package_publish_lock_missing');
+    }
+    return this.locks;
+  }
 
   /**
    * Packages created before slugs existed get their numeric id as a slug.
@@ -76,6 +88,26 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
    * covers a rolling deploy where an old build writes NULL slugs.
    */
   async onApplicationBootstrap(): Promise<void> {
+    // The optional collaborators are a test seam. In the application they are
+    // all registered, and silently running without one would mean deleting
+    // package files, reconciling the runtime or reading revisions does nothing.
+    const unregistered = (
+      [
+        ['storage', this.storage],
+        ['dispatcher', this.dispatcher],
+        ['delivery', this.delivery],
+        ['revisions', this.revisionsRepository],
+        ['publishLock', this.locks],
+      ] as const
+    )
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (unregistered.length > 0) {
+      throw new Error(
+        `package_dependencies_missing:${unregistered.join(',')}`,
+      );
+    }
+
     const updated = await this.packagesRepository.query(
       `UPDATE scripting_package
        SET slug = id::text
@@ -573,7 +605,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
           });
         }
 
-        await this.locks.runWithPublishLocks(
+        await this.publishLocks.runWithPublishLocks(
           [pkg.id, ...dependents.map((row) => row.packageId)],
           async () => {
             const revisions = manager.getRepository(ScriptingPackageRevision);

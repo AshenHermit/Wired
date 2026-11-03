@@ -14,6 +14,19 @@ import { PackageStorageService } from './package-storage.service';
 import { ScriptingPackagesService } from './scripting-packages.service';
 import type { PackageRevisionDispatcher } from 'src/common/runtime-contracts';
 
+/**
+ * A publish lock that never blocks. The service refuses to run without one, so
+ * every construction in this file has to pass something even when the test is
+ * not about locking.
+ */
+const stubPublishLocks = () =>
+  ({
+    assertNotPublishing: jest.fn(async () => undefined),
+    runWithPublishLocks: jest.fn(
+      async (_packageIds: number[], run: () => Promise<unknown>) => run(),
+    ),
+  }) as unknown as PackagePublishLockService;
+
 const pkg = {
   id: 7,
   name: 'Heroes',
@@ -114,7 +127,7 @@ describe('PackageRevisionsService', () => {
       repository as never,
       packagesService as unknown as ScriptingPackagesService,
       storage as unknown as PackageStorageService,
-      undefined,
+      new PackagePublishLockService(),
       dispatcher as unknown as PackageRevisionDispatcher,
       packagesRepository as never,
     );

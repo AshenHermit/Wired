@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnApplicationBootstrap,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { errorMessage } from 'src/common/errors';
 import { AppConfigService } from 'src/config/config.service';
 import { GameTicketService } from './game-ticket.service';
@@ -28,7 +33,9 @@ import {
  * restarted room distinguishable from its previous process.
  */
 @Injectable()
-export class RoomRuntimeService implements OnModuleDestroy {
+export class RoomRuntimeService
+  implements OnModuleDestroy, OnApplicationBootstrap
+{
   private readonly logger = new Logger(RoomRuntimeService.name);
   private readonly registry = new RoomRuntimeRegistry();
   private readonly runtimeConfiguration: RoomRuntimeConfiguration;
@@ -40,6 +47,18 @@ export class RoomRuntimeService implements OnModuleDestroy {
     private readonly tickets: GameTicketService,
   ) {
     this.runtimeConfiguration = new RoomRuntimeConfiguration(configService);
+  }
+
+  /**
+   * The observer slot exists because `PackageSyncService` and this service
+   * depend on each other, so it cannot be a constructor injection. Provider
+   * init runs before this hook, which makes a boot without a registered sink a
+   * wiring bug rather than a runtime surprise.
+   */
+  onApplicationBootstrap(): void {
+    if (!this.observer) {
+      throw new Error('runtime_event_sink_missing');
+    }
   }
 
   /**
@@ -212,6 +231,11 @@ export class RoomRuntimeService implements OnModuleDestroy {
   private handleSessionEvent(roomId: string, event: RuntimeLineEvent): void {
     const observer = this.observer;
     if (!observer) {
+      // Losing a protocol event silently would leave a started room unknown to
+      // the package sync layer, so make the missing sink visible instead.
+      this.logger.warn(
+        `No runtime event sink registered; dropping ${event.kind} from room ${roomId}`,
+      );
       return;
     }
     try {
