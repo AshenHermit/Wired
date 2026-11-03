@@ -68,8 +68,11 @@ export class ScriptingPackagesController {
   @UseAuthGuard()
   @ApiOkResponse({ description: 'Package slug availability' })
   @Get('slug-availability')
-  slugAvailability(@Query('slug') slug: string) {
-    return this.packagesService.checkSlugAvailability(slug);
+  slugAvailability(
+    @Query('slug') slug: string,
+    @Query('roomId', new ParseIntPipe({ optional: true })) roomId?: number,
+  ) {
+    return this.packagesService.checkSlugAvailability(slug, roomId);
   }
 
   @ApiOkResponse({ type: ScriptingPackage })

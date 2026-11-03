@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { IsNull } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { RetiredPackageSlug } from 'src/database/entities/retired-package-slug.entity';
 import { ScriptingPackagesService } from './scripting-packages.service';
@@ -215,6 +216,51 @@ describe('ScriptingPackagesService', () => {
         expect.objectContaining({ author: user }),
       );
     });
+
+    it('normalizes tags on creation', async () => {
+      const { service, packagesRepository } = makeService({
+        id: 5,
+        author: user,
+        contributors: [],
+      });
+
+      await service.create(
+        {
+          name: 'pkg',
+          version: '0.1.0',
+          slug: 'pkg',
+          roomId: 5,
+          tags: [' Hero ', '2D', 'hero'],
+        } as never,
+        user as never,
+      );
+
+      expect(packagesRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ tags: ['hero', '2d'] }),
+      );
+    });
+
+    it('rejects invalid tags on creation', async () => {
+      const { service, packagesRepository } = makeService({
+        id: 5,
+        author: user,
+        contributors: [],
+      });
+
+      await expect(
+        service.create(
+          {
+            name: 'pkg',
+            version: '0.1.0',
+            slug: 'pkg',
+            roomId: 5,
+            tags: ['плохой'],
+          } as never,
+          user as never,
+        ),
+      ).rejects.toMatchObject({ response: { code: 'invalid_tags' } });
+      expect(packagesRepository.save).not.toHaveBeenCalled();
+    });
   });
 
   describe('update', () => {
@@ -246,6 +292,57 @@ describe('ScriptingPackagesService', () => {
         expect.objectContaining({ author, room, name: 'renamed' }),
       );
       expect(roomsRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    function makeTagService(pkg: { id: number; tags: string[] }) {
+      const packagesRepository = {
+        findOne: jest.fn(async () => pkg),
+        save: jest.fn(async (value: unknown) => value),
+      };
+      const service = new ScriptingPackagesService(
+        packagesRepository as never,
+        {} as never,
+        { findOne: jest.fn(async () => null) } as never,
+      );
+      return { service, packagesRepository };
+    }
+
+    it('normalizes tags on update', async () => {
+      const { service, packagesRepository } = makeTagService({
+        id: 10,
+        tags: [],
+      });
+
+      await service.update(10, { tags: [' Hero ', '2D', 'hero'] });
+
+      expect(packagesRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ tags: ['hero', '2d'] }),
+      );
+    });
+
+    it('rejects invalid tags on update before saving', async () => {
+      const { service, packagesRepository } = makeTagService({
+        id: 10,
+        tags: ['old'],
+      });
+
+      await expect(
+        service.update(10, { tags: ['плохой'] }),
+      ).rejects.toMatchObject({ response: { code: 'invalid_tags' } });
+      expect(packagesRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('keeps tags untouched when the update does not carry them', async () => {
+      const { service, packagesRepository } = makeTagService({
+        id: 10,
+        tags: ['old'],
+      });
+
+      await service.update(10, { name: 'renamed' });
+
+      expect(packagesRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ tags: ['old'] }),
+      );
     });
   });
 
@@ -474,18 +571,17 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     options: {
       query?: jest.Mock;
       findOne?: jest.Mock;
-      liveFindOne?: jest.Mock;
       retiredFindOne?: jest.Mock;
       save?: jest.Mock;
       manager?: FakeManager;
       pkg?: unknown;
+      room?: unknown;
     } = {},
   ) {
     const retiredFindOne = options.retiredFindOne ?? jest.fn(async () => null);
     const manager =
       options.manager ??
       makeTransactionManager({
-        liveFindOne: options.liveFindOne,
         retiredFindOne,
         save: options.save,
       });
@@ -496,7 +592,9 @@ describe('ScriptingPackagesService slug lifecycle', () => {
         jest.fn(async () => options.pkg ?? { id: 7, slug: 'hero' }),
       manager,
     };
-    const roomsRepository = { findOne: jest.fn(async () => null) };
+    const roomsRepository = {
+      findOne: jest.fn(async () => options.room ?? null),
+    };
     const retiredRepository = { findOne: retiredFindOne };
     return new ScriptingPackagesService(
       packagesRepository as never,
@@ -540,7 +638,7 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     errorSpy.mockRestore();
   });
 
-  it('reports a live slug as taken', async () => {
+  it('reports a live global slug as taken', async () => {
     const service = makeSlugService({
       findOne: jest.fn(async () => ({ id: 7, slug: 'hero' })),
     });
@@ -548,10 +646,11 @@ describe('ScriptingPackagesService slug lifecycle', () => {
       slug: 'hero',
       available: false,
       reason: 'taken',
+      global: { available: false, reason: 'taken' },
     });
   });
 
-  it('reports a retired slug as retired', async () => {
+  it('reports a retired global slug as retired', async () => {
     const service = makeSlugService({
       findOne: jest.fn(async () => null),
       retiredFindOne: jest.fn(async () => ({ slug: 'hero', packageId: 7 })),
@@ -560,6 +659,7 @@ describe('ScriptingPackagesService slug lifecycle', () => {
       slug: 'hero',
       available: false,
       reason: 'retired',
+      global: { available: false, reason: 'retired' },
     });
   });
 
@@ -568,6 +668,28 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     await expect(service.checkSlugAvailability('  hero_2  ')).resolves.toEqual({
       slug: 'hero_2',
       available: true,
+      global: { available: true },
+    });
+  });
+
+  it('checks availability in the requested room and reports the global scope', async () => {
+    const findOne = jest.fn(
+      async (options: { where: { room?: { id?: number } } }) =>
+        options.where.room?.id === 5 ? { id: 7, slug: 'hero' } : null,
+    );
+    const service = makeSlugService({ findOne });
+
+    await expect(service.checkSlugAvailability('hero', 5)).resolves.toEqual({
+      slug: 'hero',
+      available: false,
+      reason: 'taken',
+      global: { available: true },
+    });
+    expect(findOne).toHaveBeenCalledWith({
+      where: { slug: 'hero', room: { id: 5 } },
+    });
+    expect(findOne).toHaveBeenCalledWith({
+      where: { slug: 'hero', room: IsNull() },
     });
   });
 
@@ -582,15 +704,171 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     });
   });
 
-  it('rejects creation with a retired slug and an actionable message', async () => {
+  const user = { id: 1 } as never;
+  const ownRoom = { id: 5, author: { id: 1 }, contributors: [] };
+
+  it('rejects a duplicate slug inside the same room', async () => {
+    const manager = makeTransactionManager({
+      liveFindOne: jest.fn(
+        async (options: { where: { room?: { id: number } } }) =>
+          options.where.room?.id === 5 ? { id: 7, slug: 'hero' } : null,
+      ),
+    });
+    const service = makeSlugService({ manager, room: ownRoom });
+
+    const error = await service
+      .create(
+        {
+          name: 'Hero',
+          version: '0.1.0',
+          slug: 'hero',
+          roomId: 5,
+          authorId: 1,
+        },
+        user,
+      )
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toEqual({
+      code: 'slug_taken',
+      slug: 'hero',
+      message: 'Slug уже занят',
+    });
+  });
+
+  it('allows the same slug in two different rooms', async () => {
+    const liveFindOne = jest.fn(
+      async (options: { where: { room?: { id: number } } }) =>
+        options.where.room?.id === 5 ? { id: 7, slug: 'hero' } : null,
+    );
+    const save = jest.fn(async (value: unknown) => ({
+      ...(value as object),
+      id: 10,
+    }));
+    const manager = makeTransactionManager({ liveFindOne, save });
+    const service = makeSlugService({
+      manager,
+      room: { id: 6, author: { id: 1 }, contributors: [] },
+    });
+
+    await expect(
+      service.create(
+        {
+          name: 'Hero',
+          version: '0.1.0',
+          slug: 'hero',
+          roomId: 6,
+          authorId: 1,
+        },
+        user,
+      ),
+    ).resolves.toBeDefined();
+
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slug: 'hero',
+        room: expect.objectContaining({ id: 6 }),
+      }),
+    );
+    expect(manager.query).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+      ['package_slug:room:6:hero'],
+    );
+  });
+
+  it('rejects public creation without a room', async () => {
+    const manager = makeTransactionManager();
+    const service = makeSlugService({ manager });
+
+    await expect(
+      service.create(
+        { name: 'Hero', version: '1', slug: 'hero' } as never,
+        user,
+      ),
+    ).rejects.toMatchObject({
+      response: { code: 'package_room_required' },
+    });
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('does not apply a global tombstone to a room slug', async () => {
+    const service = makeSlugService({
+      room: ownRoom,
+      retiredFindOne: jest.fn(async () => ({ slug: 'hero', packageId: 7 })),
+      save: jest.fn(async (value: unknown) => ({
+        ...(value as object),
+        id: 10,
+      })),
+    });
+
+    await expect(
+      service.create(
+        {
+          name: 'Hero',
+          version: '0.1.0',
+          slug: 'hero',
+          roomId: 5,
+          authorId: 1,
+        },
+        user,
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it('creates a global record outside any room with normalized tags', async () => {
+    const save = jest.fn(async (value: unknown) => ({
+      ...(value as object),
+      id: 10,
+    }));
+    const manager = makeTransactionManager({ save });
+    const service = makeSlugService({ manager });
+
+    await service.createGlobalRecord({
+      slug: ' hero ',
+      name: 'Hero',
+      version: '0.1.0',
+      description: 'desc',
+      tags: [' Hero ', '2D', 'hero'],
+      author: { id: 1 } as never,
+    });
+
+    expect(manager.query).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+      ['package_slug:global:hero'],
+    );
+    const saved = save.mock.calls[0][0] as {
+      slug: string;
+      room?: unknown;
+      tags: string[];
+      name: string;
+    };
+    expect(saved).toMatchObject({
+      slug: 'hero',
+      tags: ['hero', '2d'],
+      name: 'Hero',
+      version: '0.1.0',
+      description: 'desc',
+    });
+    expect(saved.room).toBeUndefined();
+  });
+
+  it('rejects a global record with a retired slug and an actionable message', async () => {
     const service = makeSlugService({
       retiredFindOne: jest.fn(async () => ({ slug: 'hero', packageId: 7 })),
     });
+
     const error = await service
-      .create({ name: 'Hero', version: '0.1.0', slug: 'hero', authorId: 1 }, {
-        id: 1,
-      } as never)
+      .createGlobalRecord({
+        slug: 'hero',
+        name: 'Hero',
+        version: '0.1.0',
+        description: '',
+        tags: [],
+        author: { id: 1 } as never,
+      })
       .catch((caught: unknown) => caught);
+
     expect(error).toBeInstanceOf(ConflictException);
     expect((error as ConflictException).getResponse()).toEqual({
       code: 'slug_retired',
@@ -599,33 +877,24 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     });
   });
 
-  it('rejects creation with a live slug and an actionable message', async () => {
-    const service = makeSlugService({
-      liveFindOne: jest.fn(async () => ({ id: 7, slug: 'hero' })),
-    });
-    const error = await service
-      .create({ name: 'Hero', version: '0.1.0', slug: 'hero', authorId: 1 }, {
-        id: 1,
-      } as never)
-      .catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(ConflictException);
-    expect((error as ConflictException).getResponse()).toEqual({
-      code: 'slug_taken',
-      slug: 'hero',
-      message: 'Slug уже занят',
-    });
-  });
-
   it('maps a unique violation to slug_taken with an actionable message', async () => {
     const service = makeSlugService({
+      room: ownRoom,
       save: jest.fn(async () => {
         throw Object.assign(new Error('duplicate slug'), { code: '23505' });
       }),
     });
     const error = await service
-      .create({ name: 'Hero', version: '0.1.0', slug: 'hero', authorId: 1 }, {
-        id: 1,
-      } as never)
+      .create(
+        {
+          name: 'Hero',
+          version: '0.1.0',
+          slug: 'hero',
+          roomId: 5,
+          authorId: 1,
+        },
+        user,
+      )
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ConflictException);
     expect((error as ConflictException).getResponse()).toEqual({
@@ -635,24 +904,74 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     });
   });
 
-  it('tombstones the slug before deleting the package', async () => {
+  it('tombstones a deleted global package', async () => {
     const manager = makeTransactionManager();
-    const service = makeSlugService({ manager });
-    await service.remove(7);
-    expect(manager.save).toHaveBeenCalledWith(
-      RetiredPackageSlug,
-      expect.objectContaining({ slug: 'hero', packageId: 7 }),
-    );
-    expect(manager.delete).toHaveBeenCalledWith(ScriptingPackage, 7);
+    const service = makeSlugService({
+      manager,
+      pkg: { id: 10, slug: 'hero', room: null },
+    });
+
+    await service.remove(10);
+
+    expect(manager.save).toHaveBeenCalledWith(RetiredPackageSlug, {
+      slug: 'hero',
+      packageId: 10,
+    });
+    expect(manager.delete).toHaveBeenCalledWith(ScriptingPackage, 10);
   });
 
-  it('locks the slug before tombstoning it', async () => {
+  it('does not tombstone a deleted room package', async () => {
     const manager = makeTransactionManager();
-    const service = makeSlugService({ manager });
-    await service.remove(7);
+    const service = makeSlugService({
+      manager,
+      pkg: { id: 10, slug: 'hero', room: { id: 5 } },
+    });
+
+    await service.remove(10);
+
+    expect(manager.save).not.toHaveBeenCalled();
     expect(manager.query).toHaveBeenCalledWith(
       'SELECT pg_advisory_xact_lock(hashtext($1))',
-      ['package_slug:hero'],
+      ['package_slug:room:5:hero'],
+    );
+    expect(manager.delete).toHaveBeenCalledWith(ScriptingPackage, 10);
+  });
+
+  it('clears parentPackageId of children before deleting', async () => {
+    const manager = makeTransactionManager();
+    const service = makeSlugService({
+      manager,
+      pkg: { id: 10, slug: 'hero', room: { id: 5 } },
+    });
+
+    await service.remove(10);
+
+    expect(manager.query).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'UPDATE scripting_package SET "parentPackageId" = NULL',
+      ),
+      [10],
+    );
+    const updateIndex = manager.query.mock.calls.findIndex(
+      (call) =>
+        typeof call[0] === 'string' &&
+        call[0].includes('UPDATE scripting_package'),
+    );
+    expect(manager.query.mock.invocationCallOrder[updateIndex]).toBeLessThan(
+      manager.delete.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('locks the global slug scope before tombstoning it', async () => {
+    const manager = makeTransactionManager();
+    const service = makeSlugService({
+      manager,
+      pkg: { id: 10, slug: 'hero', room: null },
+    });
+    await service.remove(10);
+    expect(manager.query).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+      ['package_slug:global:hero'],
     );
   });
 

@@ -10,7 +10,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { RetiredPackageSlug } from 'src/database/entities/retired-package-slug.entity';
@@ -21,6 +21,7 @@ import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
 import { canEditRoom } from 'src/rooms/room-access';
 import { PackageStorageService } from './package-storage.service';
 import { PackageDeliveryService } from './package-delivery.service';
+import { normalizeTags } from './package-tags';
 import {
   PACKAGE_REVISION_DISPATCHER,
   PackageRevisionDispatcher,
@@ -29,6 +30,14 @@ import {
 /** Same rule as `CreateScriptingPackageDto`: lowercase, digits, `_`, 1-64. */
 const SLUG_PATTERN = /^(?=.*[a-z])[a-z0-9_]+$/;
 const SLUG_MAX_LENGTH = 64;
+
+/** Availability of a slug in the requested scope plus the global scope. */
+export type PackageSlugAvailability = {
+  slug: string;
+  available: boolean;
+  reason?: 'taken' | 'retired';
+  global: { available: boolean; reason?: 'taken' | 'retired' };
+};
 
 function isUniqueViolation(error: unknown): boolean {
   return (
@@ -95,7 +104,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     }
   }
 
-  private normalizeSlug(slug: string): string {
+  normalizeSlug(slug: string): string {
     const normalized = typeof slug === 'string' ? slug.trim() : '';
     if (
       normalized.length === 0 ||
@@ -111,25 +120,45 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     return normalized;
   }
 
-  async checkSlugAvailability(slug: string): Promise<{
-    slug: string;
-    available: boolean;
-    reason?: 'taken' | 'retired';
-  }> {
+  /**
+   * Reports whether a slug is free in the requested scope. Without `roomId`
+   * the requested scope is the global workshop, so `available` mirrors
+   * `global`. The global scope is always reported: a room package may reuse a
+   * workshop slug, but the create dialog still needs to know about a clash.
+   */
+  async checkSlugAvailability(
+    slug: string,
+    roomId?: number,
+  ): Promise<PackageSlugAvailability> {
     const normalized = this.normalizeSlug(slug);
+
+    const globalLive = await this.packagesRepository.findOne({
+      where: { slug: normalized, room: IsNull() },
+    });
+    const retired = globalLive
+      ? null
+      : await this.retiredSlugsRepository.findOne({
+          where: { slug: normalized },
+        });
+    let scope: PackageSlugAvailability['global'];
+    if (globalLive) {
+      scope = { available: false, reason: 'taken' };
+    } else if (retired) {
+      scope = { available: false, reason: 'retired' };
+    } else {
+      scope = { available: true };
+    }
+
+    if (roomId === undefined) {
+      return { slug: normalized, ...scope, global: scope };
+    }
+
     const live = await this.packagesRepository.findOne({
-      where: { slug: normalized },
+      where: { slug: normalized, room: { id: roomId } },
     });
-    if (live) {
-      return { slug: normalized, available: false, reason: 'taken' };
-    }
-    const retired = await this.retiredSlugsRepository.findOne({
-      where: { slug: normalized },
-    });
-    if (retired) {
-      return { slug: normalized, available: false, reason: 'retired' };
-    }
-    return { slug: normalized, available: true };
+    return live
+      ? { slug: normalized, available: false, reason: 'taken', global: scope }
+      : { slug: normalized, available: true, global: scope };
   }
 
   assertPackageCreation(user: User, dto: CreateScriptingPackageDto): void {
@@ -195,7 +224,18 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     user: User,
   ): Promise<ScriptingPackage> {
     const { authorId, roomId, parentPackageId, ...data } = dto;
+
+    // Public creation always belongs to a room; the global workshop scope is
+    // written only through `createGlobalRecord`.
+    if (!roomId) {
+      throw new BadRequestException({
+        code: 'package_room_required',
+        message: 'Пакет можно создать только в комнате',
+      });
+    }
+
     const slug = this.normalizeSlug(dto.slug);
+    data.tags = normalizeTags(dto.tags ?? []);
 
     if (authorId !== undefined && authorId !== user.id) {
       throw new ForbiddenException(
@@ -203,26 +243,20 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       );
     }
 
-    let room: Room | undefined;
-    if (roomId) {
-      const foundRoom = await this.roomsRepository.findOne({
-        where: { id: roomId },
-        relations: ['author', 'contributors'],
-      });
-      if (!foundRoom) {
-        throw new NotFoundException(`Room with id=${roomId} not found`);
-      }
-      const canEditRoom =
-        foundRoom.author?.id === user.id ||
-        foundRoom.contributors?.some(
-          (contributor) => contributor.id === user.id,
-        );
-      if (!canEditRoom) {
-        throw new ForbiddenException(
-          'You are not allowed to attach a package to this room',
-        );
-      }
-      room = foundRoom;
+    const foundRoom = await this.roomsRepository.findOne({
+      where: { id: roomId },
+      relations: ['author', 'contributors'],
+    });
+    if (!foundRoom) {
+      throw new NotFoundException(`Room with id=${roomId} not found`);
+    }
+    const canEdit =
+      foundRoom.author?.id === user.id ||
+      foundRoom.contributors?.some((contributor) => contributor.id === user.id);
+    if (!canEdit) {
+      throw new ForbiddenException(
+        'You are not allowed to attach a package to this room',
+      );
     }
 
     let parentPackage: ScriptingPackage | undefined;
@@ -238,16 +272,72 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       parentPackage = parent;
     }
 
+    return this.insertPackage({
+      slug,
+      data,
+      author: user,
+      room: foundRoom,
+      parentPackage,
+      scope: { roomId },
+    });
+  }
+
+  /**
+   * The workshop's own write path: no room, no authorship from a DTO, and the
+   * same slug/tombstone checks as a room create but in the global scope.
+   */
+  async createGlobalRecord(input: {
+    slug: string;
+    name: string;
+    version: string;
+    description: string;
+    tags: string[];
+    author: User;
+  }): Promise<ScriptingPackage> {
+    return this.insertPackage({
+      slug: this.normalizeSlug(input.slug),
+      data: {
+        name: input.name,
+        version: input.version,
+        description: input.description,
+        tags: normalizeTags(input.tags),
+      },
+      author: input.author,
+      scope: 'global',
+    });
+  }
+
+  /**
+   * Inserts one package row under a slug scoped either to a room or to the
+   * global workshop. Slugs are unique per scope only, so the advisory lock and
+   * the live check use the same scope; only global slugs are tombstoned.
+   */
+  private async insertPackage(params: {
+    slug: string;
+    data: Partial<ScriptingPackage>;
+    author: User;
+    room?: Room;
+    parentPackage?: ScriptingPackage;
+    scope: { roomId: number } | 'global';
+  }): Promise<ScriptingPackage> {
+    const { slug, data, author, room, parentPackage, scope } = params;
+    const scopeKey = scope === 'global' ? 'global' : `room:${scope.roomId}`;
+
     const savedId = await this.packagesRepository.manager.transaction(
       async (manager) => {
         // Creates for the same slug are serialized across processes, so the
         // unique violation below only fires for a race with another writer.
         await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
-          `package_slug:${slug}`,
+          `package_slug:${scopeKey}:${slug}`,
         ]);
 
         const packages = manager.getRepository(ScriptingPackage);
-        const live = await packages.findOne({ where: { slug } });
+        const live = await packages.findOne({
+          where:
+            scope === 'global'
+              ? { slug, room: IsNull() }
+              : { slug, room: { id: scope.roomId } },
+        });
         if (live) {
           throw new ConflictException({
             code: 'slug_taken',
@@ -255,21 +345,23 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
             message: 'Slug уже занят',
           });
         }
-        const retired = await manager
-          .getRepository(RetiredPackageSlug)
-          .findOne({ where: { slug } });
-        if (retired) {
-          throw new ConflictException({
-            code: 'slug_retired',
-            slug,
-            message: 'Этот slug был удалён и не может быть использован снова',
-          });
+        if (scope === 'global') {
+          const retired = await manager
+            .getRepository(RetiredPackageSlug)
+            .findOne({ where: { slug } });
+          if (retired) {
+            throw new ConflictException({
+              code: 'slug_retired',
+              slug,
+              message: 'Этот slug был удалён и не может быть использован снова',
+            });
+          }
         }
 
         const pkg = packages.create({
           ...data,
           slug,
-          author: user,
+          author,
           room,
           parentPackage,
         });
@@ -317,6 +409,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     if (dto.version !== undefined) pkg.version = dto.version;
     if (dto.description !== undefined) pkg.description = dto.description;
     if (dto.dependencies !== undefined) pkg.dependencies = dto.dependencies;
+    if (dto.tags !== undefined) pkg.tags = normalizeTags(dto.tags);
     if (dto.scripts !== undefined) pkg.scripts = dto.scripts;
     if (dto.physicalFiles !== undefined) pkg.physicalFiles = dto.physicalFiles;
 
@@ -445,16 +538,26 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     await this.assertNoEnabledDependents(id);
     const pkg = await this.findOne(id);
     const roomId = pkg.room?.id ?? null;
-    // The tombstone must exist before the row disappears; the fallback only
-    // covers a row created before the startup backfill ran.
+    // Room slugs are local and stay reusable; a workshop slug is reserved
+    // forever. The fallback only covers a row created before the startup
+    // backfill ran.
     const slug = pkg.slug ?? String(id);
+    const scope = pkg.room ? `room:${pkg.room.id}` : 'global';
     await this.packagesRepository.manager.transaction(async (manager) => {
       // Serialize with `create()` so a slug cannot be tombstoned while another
       // request is re-creating it.
       await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
-        `package_slug:${slug}`,
+        `package_slug:${scope}:${slug}`,
       ]);
-      await manager.save(RetiredPackageSlug, { slug, packageId: id });
+      // Children become standalone packages instead of blocking the delete on
+      // their foreign key.
+      await manager.query(
+        'UPDATE scripting_package SET "parentPackageId" = NULL WHERE "parentPackageId" = $1',
+        [id],
+      );
+      if (scope === 'global') {
+        await manager.save(RetiredPackageSlug, { slug, packageId: id });
+      }
       const result = await manager.delete(ScriptingPackage, id);
       if (!result.affected) {
         // Another request won the race: the row is already gone.

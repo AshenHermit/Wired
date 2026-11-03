@@ -540,7 +540,10 @@ describe('ScriptingPackagesController lifecycle routes', () => {
       slug: 'hero',
       available: true,
     });
-    expect(packagesService.checkSlugAvailability).toHaveBeenCalledWith('hero');
+    expect(packagesService.checkSlugAvailability).toHaveBeenCalledWith(
+      'hero',
+      undefined,
+    );
   });
 
   it('checks editing rights before toggling a package', async () => {
@@ -618,8 +621,16 @@ describe('ScriptingPackagesController slug route ordering', () => {
       .get('/scripting-packages/slug-availability?slug=hero')
       .expect(200);
 
-    expect(checkSlugAvailability).toHaveBeenCalledWith('hero');
+    expect(checkSlugAvailability).toHaveBeenCalledWith('hero', undefined);
     expect(findOne).not.toHaveBeenCalled();
+  });
+
+  it('passes the requested room to the availability check', async () => {
+    await request(app.getHttpServer())
+      .get('/scripting-packages/slug-availability?slug=hero&roomId=5')
+      .expect(200);
+
+    expect(checkSlugAvailability).toHaveBeenCalledWith('hero', 5);
   });
 
   it('still parses numeric ids for the :id route', async () => {
