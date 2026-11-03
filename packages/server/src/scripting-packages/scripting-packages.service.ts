@@ -2,8 +2,10 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
   Inject,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
   OnApplicationBootstrap,
@@ -11,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
+import { PackageFileEntry } from '@wired-io/shared';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { User } from 'src/database/entities/user.entity';
@@ -18,8 +21,13 @@ import { Room } from 'src/database/entities/room.entity';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
 import { canEditRoom } from 'src/rooms/room-access';
-import { PackageStorageService } from './package-storage.service';
+import {
+  PackageStorageService,
+  RevisionKind,
+} from './package-storage.service';
 import { PackageDeliveryService } from './package-delivery.service';
+import { PackagePublishLockService } from './package-publish-lock.service';
+import { rewriteSlugReferences } from './package-slug-rewrite';
 import { normalizeTags } from './package-tags';
 import {
   PACKAGE_REVISION_DISPATCHER,
@@ -65,6 +73,8 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     @Optional()
     @InjectRepository(ScriptingPackageRevision)
     private readonly revisionsRepository?: Repository<ScriptingPackageRevision>,
+    @Optional()
+    private readonly locks: PackagePublishLockService = new PackagePublishLockService(),
   ) {}
 
   /**
@@ -416,7 +426,37 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     dto: UpdateScriptingPackageDto,
   ): Promise<ScriptingPackage> {
     const pkg = await this.findOne(id);
+    if (dto.slug !== undefined) {
+      const next = this.normalizeSlug(dto.slug);
+      if (next !== pkg.slug) {
+        return this.renameSlug(pkg, next, dto);
+      }
+    }
+    return this.applyUpdate(pkg, dto);
+  }
 
+  /** Plain PATCH: everything except the slug, which only a rename sets. */
+  private async applyUpdate(
+    pkg: ScriptingPackage,
+    dto: UpdateScriptingPackageDto,
+  ): Promise<ScriptingPackage> {
+    const enabledChanged = await this.preparePackageUpdate(pkg, dto);
+    const saved = await this.packagesRepository.save(pkg);
+    if (enabledChanged) {
+      await this.notifyEnabledChanged(saved.id);
+    }
+    return this.findOne(saved.id);
+  }
+
+  /**
+   * Applies every editable field except `slug` and reports whether `enabled`
+   * flipped, because that needs its own dispatch. Both PATCH paths share it so
+   * a rename cannot apply metadata differently from a plain update.
+   */
+  private async preparePackageUpdate(
+    pkg: ScriptingPackage,
+    dto: UpdateScriptingPackageDto,
+  ): Promise<boolean> {
     // Authorship and room ownership are immutable through PATCH: otherwise a
     // room author allowed to edit a package could take it over or move it.
     if (dto.parentPackageId) {
@@ -441,23 +481,231 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
 
     const previousEnabled = pkg.enabled !== false;
     if (dto.enabled === true && previousEnabled === false) {
-      await this.assertEnableable(id);
+      await this.assertEnableable(pkg.id);
     }
     if (dto.enabled !== undefined) pkg.enabled = dto.enabled;
 
-    const saved = await this.packagesRepository.save(pkg);
-    if (dto.enabled !== undefined && dto.enabled !== previousEnabled) {
+    return dto.enabled !== undefined && dto.enabled !== previousEnabled;
+  }
+
+  private async notifyEnabledChanged(packageId: number): Promise<void> {
+    try {
+      await this.dispatcher?.packageEnabledChanged(packageId);
+    } catch (error) {
+      this.logger.warn(
+        `Package ${packageId} was saved but its room was not notified: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Renames a room package. The slug is the directory name, so the published
+   * and draft bytes that reference `res://packages/<old>/` are rewritten in the
+   * same transaction that swaps the slug; dependents in the same room are
+   * rewritten too, after an explicit confirmation. Artifacts are built from
+   * these bytes but keyed by `(packageId, revision)`, so they must be dropped.
+   */
+  private async renameSlug(
+    pkg: ScriptingPackage,
+    nextSlug: string,
+    dto: UpdateScriptingPackageDto,
+  ): Promise<ScriptingPackage> {
+    if (!pkg.room) {
+      throw new BadRequestException({
+        code: 'slug_not_editable',
+        message:
+          'Slug пакета workshop нельзя изменить: создайте новую запись',
+      });
+    }
+    const roomId = pkg.room.id;
+    const oldSlug = pkg.slug ?? String(pkg.id);
+    const scope = `room:${roomId}`;
+    const lockKeys = [
+      `package_slug:${scope}:${oldSlug}`,
+      `package_slug:${scope}:${nextSlug}`,
+    ].sort();
+    const prepared: Array<{
+      packageId: number;
+      revision: number;
+      kind: RevisionKind;
+    }> = [];
+    let rewrittenIds: number[] = [];
+    let enabledChanged = false;
+
+    try {
+      await this.packagesRepository.manager.transaction(async (manager) => {
+        for (const key of lockKeys) {
+          await manager.query(
+            'SELECT pg_advisory_xact_lock(hashtext($1))',
+            [key],
+          );
+        }
+        const live = await manager.getRepository(ScriptingPackage).findOne({
+          where: { slug: nextSlug, room: { id: roomId } },
+        });
+        if (live && live.id !== pkg.id) {
+          throw new ConflictException({
+            code: 'slug_taken',
+            slug: nextSlug,
+            message: 'Slug уже занят',
+          });
+        }
+        const dependents =
+          (await this.delivery?.findDependentRoomPackages(pkg.id)) ?? [];
+        if (dependents.length > 0 && dto.confirmSlugRename !== true) {
+          const rows = await manager.getRepository(ScriptingPackage).find({
+            where: { id: In(dependents.map((row) => row.packageId)) },
+          });
+          throw new ConflictException({
+            code: 'slug_in_use_by_dependents',
+            reason: 'dependents',
+            message: 'На пакет ссылаются другие пакеты',
+            dependents: rows
+              .map((row) => ({ packageId: row.id, name: row.name }))
+              .sort((a, b) => a.packageId - b.packageId),
+          });
+        }
+
+        await this.locks.runWithPublishLocks(
+          [pkg.id, ...dependents.map((row) => row.packageId)],
+          async () => {
+            const revisions = manager.getRepository(ScriptingPackageRevision);
+            const targets: Array<{
+              packageId: number;
+              revision: number;
+              kind: RevisionKind;
+            }> = [];
+            for (const row of await revisions.find({
+              where: { package: { id: pkg.id } },
+            })) {
+              if (row.status === 'published' || row.status === 'draft') {
+                targets.push({
+                  packageId: pkg.id,
+                  revision: row.revision,
+                  kind: row.status,
+                });
+              }
+            }
+            for (const dependent of dependents) {
+              for (const row of await revisions.find({
+                where: {
+                  package: { id: dependent.packageId },
+                  status: 'published',
+                },
+              })) {
+                targets.push({
+                  packageId: dependent.packageId,
+                  revision: row.revision,
+                  kind: 'published',
+                });
+              }
+            }
+
+            const transform = (filepath: string, data: Buffer) =>
+              rewriteSlugReferences(filepath, data, oldSlug, nextSlug);
+            const rewritten: Array<{
+              id: number;
+              files: PackageFileEntry[];
+            }> = [];
+            for (const target of targets) {
+              prepared.push(target);
+              const files = await this.storage!.rewriteRevision(
+                target.packageId,
+                target.revision,
+                target.kind,
+                transform,
+              );
+              if (!files) continue;
+              const row = await revisions.findOneOrFail({
+                where: {
+                  package: { id: target.packageId },
+                  revision: target.revision,
+                },
+              });
+              // A draft declares only the files uploaded so far: keep that
+              // set and refresh the hashes of the files that are on disk.
+              const nextFiles =
+                target.kind === 'published'
+                  ? files
+                  : this.mergeRevisionFiles(row.files ?? [], files);
+              rewritten.push({ id: row.id, files: nextFiles });
+            }
+
+            const changedEnabled = await this.preparePackageUpdate(pkg, dto);
+            pkg.slug = nextSlug;
+            await manager.getRepository(ScriptingPackage).save(pkg);
+            for (const row of rewritten) {
+              await manager
+                .getRepository(ScriptingPackageRevision)
+                .update({ id: row.id }, { files: row.files });
+            }
+            rewrittenIds = [
+              ...new Set(targets.map((target) => target.packageId)),
+            ].sort((a, b) => a - b);
+            enabledChanged = changedEnabled;
+          },
+        );
+      });
+    } catch (error) {
+      for (const target of prepared.reverse()) {
+        await this.storage
+          ?.abortRewrite(target.packageId, target.revision, target.kind)
+          .catch((cause) =>
+            this.logger.warn(`rewrite abort failed: ${String(cause)}`),
+          );
+      }
+      if (error instanceof HttpException) throw error;
+      this.logger.error(
+        `Package ${pkg.id} slug rewrite failed: ${String(error)}`,
+      );
+      throw new InternalServerErrorException({
+        code: 'slug_rewrite_failed',
+        message: 'Не удалось переписать ссылки на пакет',
+      });
+    }
+
+    for (const target of prepared) {
+      await this.storage
+        ?.finishRewrite(target.packageId, target.revision, target.kind)
+        .catch((cause) =>
+          this.logger.warn(`rewrite cleanup failed: ${String(cause)}`),
+        );
+    }
+    for (const packageId of rewrittenIds) {
+      await this.delivery
+        ?.invalidatePackage(packageId)
+        .catch((cause) =>
+          this.logger.warn(`artifact invalidation failed: ${String(cause)}`),
+        );
+    }
+    if (rewrittenIds.length > 0) {
       try {
-        await this.dispatcher?.packageEnabledChanged(id);
-      } catch (error) {
+        await this.dispatcher?.packagesChanged(rewrittenIds);
+      } catch (cause) {
         this.logger.warn(
-          `Package ${id} was saved but its room was not notified: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `Package ${pkg.id} was renamed but its room was not notified: ${String(
+            cause,
+          )}`,
         );
       }
     }
-    return this.findOne(saved.id);
+    if (enabledChanged) {
+      await this.notifyEnabledChanged(pkg.id);
+    }
+    return this.findOne(pkg.id);
+  }
+
+  /** Refreshes the declared size and hash of the files that were rewritten. */
+  private mergeRevisionFiles(
+    declared: PackageFileEntry[],
+    rewritten: PackageFileEntry[],
+  ): PackageFileEntry[] {
+    const byPath = new Map(
+      rewritten.map((entry) => [entry.filepath, entry] as const),
+    );
+    return declared.map((entry) => byPath.get(entry.filepath) ?? entry);
   }
 
   /**

@@ -7,6 +7,7 @@ import {
 import { IsNull, Not } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackagesService } from './scripting-packages.service';
+import { PackagePublishLockService } from './package-publish-lock.service';
 
 type FakeManager = {
   query: jest.Mock;
@@ -1047,5 +1048,302 @@ describe('ScriptingPackagesService enable guard', () => {
     expect(packagesRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({ enabled: true }),
     );
+  });
+});
+
+describe('ScriptingPackagesService slug rename', () => {
+  type RevisionRow = {
+    id?: number;
+    revision: number;
+    status: string;
+    files?: unknown[];
+  };
+
+  function makeRenameService(
+    options: {
+      pkg?: Record<string, unknown>;
+      live?: Record<string, unknown> | null;
+      ownRevisions?: RevisionRow[];
+      dependentRevisions?: RevisionRow[];
+      dependents?: Array<{
+        packageId: number;
+        roomId: number;
+        revision: number;
+      }>;
+      dependentRows?: Array<{ id: number; name: string }>;
+      rewrite?: jest.Mock;
+    } = {},
+  ) {
+    const pkg = options.pkg ?? {
+      id: 5,
+      slug: 'hero',
+      name: 'Hero',
+      version: '1.0',
+      tags: [],
+      enabled: true,
+      room: { id: 3 },
+    };
+
+    const manager: {
+      query: jest.Mock;
+      transaction: jest.Mock;
+      getRepository: jest.Mock;
+    } = {
+      query: jest.fn(async () => []),
+      transaction: jest.fn(),
+      getRepository: jest.fn(),
+    };
+
+    const packages = {
+      findOne: jest.fn(async () => options.live ?? null),
+      find: jest.fn(async () => options.dependentRows ?? []),
+      save: jest.fn(async (value: unknown) => value),
+    };
+    const revisions = {
+      find: jest.fn(async (query: { where: { package: { id: number } } }) =>
+        query.where.package.id === pkg.id
+          ? (options.ownRevisions ?? [
+              { id: 11, revision: 1, status: 'published' },
+            ])
+          : (options.dependentRevisions ?? [
+              { id: 21, revision: 1, status: 'published' },
+            ]),
+      ),
+      findOneOrFail: jest.fn(
+        async (query: { where: { revision: number } }) => ({
+          id: 100 + query.where.revision,
+          revision: query.where.revision,
+        }),
+      ),
+      update: jest.fn(async () => undefined),
+    };
+
+    manager.getRepository.mockImplementation((entity: unknown) =>
+      entity === ScriptingPackage ? packages : revisions,
+    );
+    manager.transaction.mockImplementation(
+      async (work: (current: unknown) => Promise<unknown>) => work(manager),
+    );
+
+    const packagesRepository = {
+      findOne: jest.fn(async () => pkg),
+      save: packages.save,
+      manager,
+    };
+    const storage = {
+      rewriteRevision:
+        options.rewrite ??
+        jest.fn(async () => [{ filepath: 'a.gd', size: 1, sha256: 'x' }]),
+      finishRewrite: jest.fn(async () => undefined),
+      abortRewrite: jest.fn(async () => undefined),
+    };
+    const delivery = {
+      findDependentRoomPackages: jest.fn(async () => options.dependents ?? []),
+      invalidatePackage: jest.fn(async () => undefined),
+    };
+    const dispatcher = {
+      packagesChanged: jest.fn(async () => undefined),
+      packageEnabledChanged: jest.fn(async () => undefined),
+      revisionPublished: jest.fn(async () => undefined),
+      packageRemoved: jest.fn(),
+    };
+
+    const service = new ScriptingPackagesService(
+      packagesRepository as never,
+      {} as never,
+      storage as never,
+      dispatcher as never,
+      delivery as never,
+      revisions as never,
+      new PackagePublishLockService(),
+    );
+
+    return {
+      service,
+      pkg,
+      manager,
+      packages,
+      revisions,
+      storage,
+      delivery,
+      dispatcher,
+      packagesRepository,
+    };
+  }
+
+  it('renames a room package and rewrites its published revisions', async () => {
+    const { service, storage, delivery, dispatcher } = makeRenameService();
+
+    const updated = await service.update(5, { slug: 'hero2' });
+
+    expect(updated.slug).toBe('hero2');
+    expect(storage.rewriteRevision).toHaveBeenCalledWith(
+      5,
+      1,
+      'published',
+      expect.any(Function),
+    );
+    expect(delivery.invalidatePackage).toHaveBeenCalledWith(5);
+    expect(dispatcher.packagesChanged).toHaveBeenCalledWith([5]);
+  });
+
+  it('rewrites published revisions of dependents after confirmation', async () => {
+    const { service, storage, dispatcher } = makeRenameService({
+      dependents: [{ packageId: 9, roomId: 3, revision: 2 }],
+      dependentRows: [{ id: 9, name: 'Level' }],
+    });
+
+    await expect(service.update(5, { slug: 'hero2' })).rejects.toMatchObject({
+      response: {
+        code: 'slug_in_use_by_dependents',
+        reason: 'dependents',
+        dependents: [{ packageId: 9, name: 'Level' }],
+      },
+    });
+    expect(storage.rewriteRevision).not.toHaveBeenCalled();
+
+    await service.update(5, {
+      slug: 'hero2',
+      confirmSlugRename: true,
+      name: 'Hero',
+    });
+
+    expect(storage.rewriteRevision).toHaveBeenCalledWith(
+      9,
+      1,
+      'published',
+      expect.any(Function),
+    );
+    expect(dispatcher.packagesChanged).toHaveBeenCalledWith([5, 9]);
+  });
+
+  it('refuses to rename a global package', async () => {
+    const { service } = makeRenameService({
+      pkg: { id: 5, slug: 'hero', room: null },
+    });
+
+    await expect(service.update(5, { slug: 'hero2' })).rejects.toMatchObject({
+      response: { code: 'slug_not_editable' },
+    });
+  });
+
+  it('does not save anything when the target slug is taken', async () => {
+    const { service, packages, storage } = makeRenameService({
+      live: { id: 99, slug: 'taken' },
+    });
+
+    await expect(service.update(5, { slug: 'taken', name: 'New' })).rejects
+      .toMatchObject({ response: { code: 'slug_taken' } });
+
+    expect(packages.save).not.toHaveBeenCalled();
+    expect(storage.rewriteRevision).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the slug did not change', async () => {
+    const { service, packages, storage } = makeRenameService();
+
+    await service.update(5, { slug: 'hero', name: 'New' });
+
+    expect(storage.rewriteRevision).not.toHaveBeenCalled();
+    expect(packages.save).toHaveBeenCalled();
+  });
+
+  it('renames a package whose draft was never uploaded', async () => {
+    const { service, storage } = makeRenameService({
+      ownRevisions: [
+        {
+          id: 11,
+          revision: 2,
+          status: 'draft',
+          files: [{ filepath: 'a.gd', size: 1, sha256: 'x' }],
+        },
+      ],
+      rewrite: jest.fn(async () => null),
+    });
+
+    await expect(service.update(5, { slug: 'hero2' })).resolves.toMatchObject({
+      slug: 'hero2',
+    });
+
+    expect(storage.rewriteRevision).toHaveBeenCalledWith(
+      5,
+      2,
+      'draft',
+      expect.any(Function),
+    );
+    expect(storage.abortRewrite).not.toHaveBeenCalled();
+  });
+
+  it('renames a package without any revisions', async () => {
+    const { service, storage, dispatcher } = makeRenameService({
+      ownRevisions: [],
+    });
+
+    await expect(service.update(5, { slug: 'hero2' })).resolves.toMatchObject({
+      slug: 'hero2',
+    });
+
+    expect(storage.rewriteRevision).not.toHaveBeenCalled();
+    expect(dispatcher.packagesChanged).not.toHaveBeenCalled();
+  });
+
+  it('allows a room slug that is already used by a workshop record', async () => {
+    const { service, manager, packages } = makeRenameService();
+
+    await service.update(5, { slug: 'taken' });
+
+    expect(manager.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('global'),
+      expect.anything(),
+    );
+    expect(packages.save).toHaveBeenCalled();
+  });
+
+  it('takes the two slug locks in lexicographic order', async () => {
+    const { service, manager } = makeRenameService();
+
+    await service.update(5, { slug: 'aaa' });
+
+    expect(
+      manager.query.mock.calls
+        .filter(([, params]) => Array.isArray(params))
+        .map(([, params]) => (params as string[])[0]),
+    ).toEqual(['package_slug:room:3:aaa', 'package_slug:room:3:hero']);
+  });
+
+  it('rolls the bytes back and reports slug_rewrite_failed', async () => {
+    const { service, packages, storage } = makeRenameService({
+      rewrite: jest.fn(async () => {
+        throw new Error('disk');
+      }),
+    });
+
+    await expect(service.update(5, { slug: 'hero2' })).rejects.toMatchObject({
+      response: { code: 'slug_rewrite_failed' },
+    });
+
+    expect(packages.save).not.toHaveBeenCalled();
+    expect(storage.abortRewrite).toHaveBeenCalledWith(5, 1, 'published');
+  });
+
+  it('saves metadata in the same update as a confirmed rename', async () => {
+    const { service, packages } = makeRenameService();
+
+    await service.update(5, {
+      slug: 'hero2',
+      name: 'H',
+      version: '2.0',
+      description: 'd',
+      tags: ['a'],
+    });
+
+    const saved = packages.save.mock.calls[0][0];
+    expect(saved).toMatchObject({
+      slug: 'hero2',
+      name: 'H',
+      version: '2.0',
+      description: 'd',
+      tags: ['a'],
+    });
   });
 });
