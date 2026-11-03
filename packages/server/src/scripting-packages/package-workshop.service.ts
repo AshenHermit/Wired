@@ -8,7 +8,6 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
-import path from 'path';
 import {
   WorkshopListing,
   WorkshopPackageMetadata,
@@ -19,6 +18,7 @@ import { ScriptingPackage } from 'src/database/entities/scripting-package.entity
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { User } from 'src/database/entities/user.entity';
 import { normalizeTags } from './package-tags';
+import { rewriteSlugReferences } from './package-slug-rewrite';
 import { PackageRevisionsService } from './package-revisions.service';
 import { ScriptingPackagesService } from './scripting-packages.service';
 
@@ -51,9 +51,6 @@ const SUMMARY_SQL = `${WORKSHOP_SELECT}
 WHERE p.id = $1
 LIMIT 1`;
 
-/** Files whose text may contain `res://packages/<slug>/` self references. */
-const FORK_TEXT_EXTENSIONS = new Set(['.gd', '.tscn', '.tres', '.import']);
-
 function isUniqueViolation(error: unknown): boolean {
   return (
     typeof error === 'object' &&
@@ -83,15 +80,7 @@ export function rewriteForkSlug(
   oldSlug: string,
   newSlug: string,
 ): Buffer {
-  const ext = path.posix.extname(filepath).toLowerCase();
-  if (!FORK_TEXT_EXTENSIONS.has(ext)) return data;
-  const text = data.toString('utf8');
-  const needle = `res://packages/${oldSlug}/`;
-  if (!text.includes(needle)) return data;
-  return Buffer.from(
-    text.split(needle).join(`res://packages/${newSlug}/`),
-    'utf8',
-  );
+  return rewriteSlugReferences(filepath, data, oldSlug, newSlug);
 }
 
 type WorkshopRow = {

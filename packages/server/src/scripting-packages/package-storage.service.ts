@@ -8,6 +8,7 @@ import { PackageFileEntry } from '@wired-io/shared';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'fs';
 import {
+  copyFile,
   mkdir,
   readdir,
   readFile,
@@ -30,6 +31,9 @@ export type SavedDraftFile = {
   size: number;
   sha256: string;
 };
+
+/** Which revision directory a rewrite works on. */
+export type RevisionKind = 'published' | 'draft';
 
 /**
  * File storage for package revisions.
@@ -371,6 +375,118 @@ export class PackageStorageService {
 
   async discardDraft(packageId: number, revision: number): Promise<void> {
     await this.removeDirectory(this.draftRevisionDir(packageId, revision));
+  }
+
+  /**
+   * Rewrites every file of one revision, phase one of three.
+   *
+   * The rewritten tree is prepared beside the live one and swapped, keeping the
+   * original in `<revisionDir>.old` until `finishRewrite`: the database commit
+   * of the new file manifest has to succeed before the backup goes away, or a
+   * crash would leave bytes on disk that no manifest describes. Returns `null`
+   * when the revision directory does not exist — a draft that was never
+   * uploaded has nothing to rewrite.
+   */
+  async rewriteRevision(
+    packageId: number,
+    revision: number,
+    kind: RevisionKind,
+    transform: (filepath: string, data: Buffer) => Buffer,
+  ): Promise<PackageFileEntry[] | null> {
+    const dir = this.revisionDir(packageId, revision, kind);
+    await this.recoverRewrite(dir);
+    if (!existsSync(dir)) return null;
+
+    const prepared = this.rewriteDir(dir);
+    await this.removeDirectory(prepared);
+    await this.copyDirectory(dir, prepared);
+
+    const files: PackageFileEntry[] = [];
+    for (const filepath of await this.listFilesRecursive(prepared)) {
+      const fullPath = resolvePackagePath(prepared, filepath);
+      const data = transform(filepath, await readFile(fullPath));
+      await writeFile(fullPath, data);
+      files.push({ filepath, size: data.byteLength, sha256: sha256Hex(data) });
+    }
+
+    const backup = this.rewriteBackupDir(dir);
+    await this.removeDirectory(backup);
+    await rename(dir, backup);
+    try {
+      await rename(prepared, dir);
+    } catch (error) {
+      await rename(backup, dir);
+      throw error;
+    }
+    return files;
+  }
+
+  /** Phase two: the database now describes the rewritten bytes. */
+  async finishRewrite(
+    packageId: number,
+    revision: number,
+    kind: RevisionKind,
+  ): Promise<void> {
+    await this.removeDirectory(
+      this.rewriteBackupDir(this.revisionDir(packageId, revision, kind)),
+    );
+  }
+
+  /** Phase three: put the original bytes back after a failed update. */
+  async abortRewrite(
+    packageId: number,
+    revision: number,
+    kind: RevisionKind,
+  ): Promise<void> {
+    const dir = this.revisionDir(packageId, revision, kind);
+    const backup = this.rewriteBackupDir(dir);
+    await this.removeDirectory(this.rewriteDir(dir));
+    if (!existsSync(backup)) return;
+    await this.removeDirectory(dir);
+    await rename(backup, dir);
+  }
+
+  private revisionDir(
+    packageId: number,
+    revision: number,
+    kind: RevisionKind,
+  ): string {
+    return kind === 'published'
+      ? this.publishedRevisionDir(packageId, revision)
+      : this.draftRevisionDir(packageId, revision);
+  }
+
+  private rewriteDir(dir: string): string {
+    return `${dir}.rewrite`;
+  }
+
+  private rewriteBackupDir(dir: string): string {
+    return `${dir}.old`;
+  }
+
+  /**
+   * Repairs what an interrupted rewrite left behind: a leftover prepared tree
+   * is useless, and a backup only has to come back when the live tree is gone
+   * (the swap ran, the commit did not).
+   */
+  private async recoverRewrite(dir: string): Promise<void> {
+    await this.removeDirectory(this.rewriteDir(dir));
+    const backup = this.rewriteBackupDir(dir);
+    if (!existsSync(backup)) return;
+    if (existsSync(dir)) {
+      await this.removeDirectory(backup);
+      return;
+    }
+    await rename(backup, dir);
+  }
+
+  private async copyDirectory(from: string, to: string): Promise<void> {
+    await mkdir(to, { recursive: true });
+    for (const filepath of await this.listFilesRecursive(from)) {
+      const target = resolvePackagePath(to, filepath);
+      await mkdir(path.dirname(target), { recursive: true });
+      await copyFile(resolvePackagePath(from, filepath), target);
+    }
   }
 
   /**

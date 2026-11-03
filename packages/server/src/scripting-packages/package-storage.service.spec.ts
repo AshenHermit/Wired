@@ -8,6 +8,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'fs';
@@ -18,6 +19,7 @@ import { AppConfigService } from 'src/config/config.service';
 import { PackagePathError } from './package-path';
 import { sha256Hex } from './package-hash';
 import { PackageStorageService } from './package-storage.service';
+import { rewriteSlugReferences } from './package-slug-rewrite';
 
 const entry = (filepath: string, data: Buffer): PackageFileEntry => ({
   filepath,
@@ -263,6 +265,75 @@ describe('PackageStorageService', () => {
       await expect(storage.readPublishedFile(7, 1, 'a.txt')).resolves.toEqual(
         data,
       );
+    });
+  });
+
+  describe('rewriteRevision', () => {
+    it('rewrites a published revision and keeps a backup until finished', async () => {
+      const original = Buffer.from('res://packages/old/a.gd');
+      await storage.saveDraftFile(7, 1, 'a.gd', original);
+      await storage.publishRevision(7, 1, [entry('a.gd', original)], commit);
+
+      const files = await storage.rewriteRevision(
+        7,
+        1,
+        'published',
+        (filepath, data) => rewriteSlugReferences(filepath, data, 'old', 'new'),
+      );
+
+      expect(files).toEqual([
+        entry('a.gd', Buffer.from('res://packages/new/a.gd')),
+      ]);
+      await expect(storage.readPublishedFile(7, 1, 'a.gd')).resolves.toEqual(
+        Buffer.from('res://packages/new/a.gd'),
+      );
+      expect(
+        existsSync(path.join(storage.packageRootDir(7), 'revisions', '1.old')),
+      ).toBe(true);
+
+      await storage.finishRewrite(7, 1, 'published');
+
+      expect(
+        existsSync(path.join(storage.packageRootDir(7), 'revisions', '1.old')),
+      ).toBe(false);
+    });
+
+    it('returns null for a draft directory that was never uploaded', async () => {
+      await expect(
+        storage.rewriteRevision(7, 2, 'draft', (filepath, data) => data),
+      ).resolves.toBeNull();
+    });
+
+    it('restores the original bytes when the rewrite is aborted', async () => {
+      const original = Buffer.from('res://packages/old/a.gd');
+      await storage.saveDraftFile(7, 3, 'a.gd', original);
+
+      await storage.rewriteRevision(7, 3, 'draft', (filepath, data) =>
+        rewriteSlugReferences(filepath, data, 'old', 'new'),
+      );
+      await storage.abortRewrite(7, 3, 'draft');
+
+      await expect(storage.readDraftFile(7, 3, 'a.gd')).resolves.toBe(
+        'res://packages/old/a.gd',
+      );
+    });
+
+    it('restores a backup left behind by a crash before the commit', async () => {
+      const original = Buffer.from('res://packages/old/a.gd');
+      await storage.saveDraftFile(7, 4, 'a.gd', original);
+      const dir = storage.draftRevisionDir(7, 4);
+      renameSync(dir, `${dir}.old`);
+
+      const files = await storage.rewriteRevision(
+        7,
+        4,
+        'draft',
+        (filepath, data) => rewriteSlugReferences(filepath, data, 'old', 'new'),
+      );
+
+      expect(files).toEqual([
+        entry('a.gd', Buffer.from('res://packages/new/a.gd')),
+      ]);
     });
   });
 
