@@ -71,15 +71,38 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
   ) {}
 
   /**
-   * The publication guard is provided by `ScriptingPackagesModule`; it stays
-   * optional only so specs can build the service without a database. Missing
-   * it is a configuration error, not a reason to fall back to a private set.
+   * Collaborators the module always registers.
+   *
+   * They stay optional only so a unit test can build the service with two
+   * repositories, which means every use has to go through one of the accessors
+   * below: a missing collaborator is a wiring error, and silently running
+   * without one would delete files or reconcile nothing.
    */
+  private get packageStorage(): PackageStorageService {
+    return this.require('storage', this.storage);
+  }
+
+  private get packageDispatcher(): PackageRevisionDispatcher {
+    return this.require('dispatcher', this.dispatcher);
+  }
+
+  private get packageDelivery(): PackageDeliveryService {
+    return this.require('delivery', this.delivery);
+  }
+
+  private get revisions(): Repository<ScriptingPackageRevision> {
+    return this.require('revisions', this.revisionsRepository);
+  }
+
   private get publishLocks(): PackagePublishLockService {
-    if (!this.locks) {
-      throw new Error('package_publish_lock_missing');
+    return this.require('publishLock', this.locks);
+  }
+
+  private require<T>(name: string, value: T | undefined): T {
+    if (!value) {
+      throw new Error(`package_dependency_missing:${name}`);
     }
-    return this.locks;
+    return value;
   }
 
   /**
@@ -88,25 +111,13 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
    * covers a rolling deploy where an old build writes NULL slugs.
    */
   async onApplicationBootstrap(): Promise<void> {
-    // The optional collaborators are a test seam. In the application they are
-    // all registered, and silently running without one would mean deleting
-    // package files, reconciling the runtime or reading revisions does nothing.
-    const unregistered = (
-      [
-        ['storage', this.storage],
-        ['dispatcher', this.dispatcher],
-        ['delivery', this.delivery],
-        ['revisions', this.revisionsRepository],
-        ['publishLock', this.locks],
-      ] as const
-    )
-      .filter(([, value]) => !value)
-      .map(([name]) => name);
-    if (unregistered.length > 0) {
-      throw new Error(
-        `package_dependencies_missing:${unregistered.join(',')}`,
-      );
-    }
+    // Probe every collaborator once so a misconfigured module fails at boot
+    // rather than the first time someone deletes or publishes a package.
+    this.packageStorage;
+    this.packageDispatcher;
+    this.packageDelivery;
+    this.revisions;
+    this.publishLocks;
 
     const updated = await this.packagesRepository.query(
       `UPDATE scripting_package
@@ -510,7 +521,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
 
   private async notifyEnabledChanged(packageId: number): Promise<void> {
     try {
-      await this.dispatcher?.packageEnabledChanged(packageId);
+      await this.packageDispatcher.packageEnabledChanged(packageId);
     } catch (error) {
       this.logger.warn(
         `Package ${packageId} was saved but its room was not notified: ${
@@ -590,7 +601,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
           });
         }
         const dependents =
-          (await this.delivery?.findDependentRoomPackages(pkg.id)) ?? [];
+          (await this.packageDelivery.findDependentRoomPackages(pkg.id)) ?? [];
         if (dependents.length > 0 && dto.confirmSlugRename !== true) {
           const rows = await manager.getRepository(ScriptingPackage).find({
             where: { id: In(dependents.map((row) => row.packageId)) },
@@ -648,7 +659,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
             }> = [];
             for (const target of targets) {
               prepared.push(target);
-              const files = await this.storage!.rewriteRevision(
+              const files = await this.packageStorage.rewriteRevision(
                 target.packageId,
                 target.revision,
                 target.kind,
@@ -687,8 +698,8 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       });
     } catch (error) {
       for (const target of prepared.reverse()) {
-        await this.storage
-          ?.abortRewrite(target.packageId, target.revision, target.kind)
+        await this.packageStorage
+          .abortRewrite(target.packageId, target.revision, target.kind)
           .catch((cause) =>
             this.logger.warn(`rewrite abort failed: ${String(cause)}`),
           );
@@ -704,22 +715,22 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     }
 
     for (const target of prepared) {
-      await this.storage
-        ?.finishRewrite(target.packageId, target.revision, target.kind)
+      await this.packageStorage
+        .finishRewrite(target.packageId, target.revision, target.kind)
         .catch((cause) =>
           this.logger.warn(`rewrite cleanup failed: ${String(cause)}`),
         );
     }
     for (const packageId of rewrittenIds) {
-      await this.delivery
-        ?.invalidatePackage(packageId)
+      await this.packageDelivery
+        .invalidatePackage(packageId)
         .catch((cause) =>
           this.logger.warn(`artifact invalidation failed: ${String(cause)}`),
         );
     }
     if (rewrittenIds.length > 0) {
       try {
-        await this.dispatcher?.packagesChanged(rewrittenIds);
+        await this.packageDispatcher.packagesChanged(rewrittenIds);
       } catch (cause) {
         this.logger.warn(
           `Package ${pkg.id} was renamed but its room was not notified: ${String(
@@ -756,7 +767,6 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       relations: { room: true },
     });
     if (!pkg?.room) return;
-    if (!this.revisionsRepository || !this.storage) return;
     const roomId = pkg.room.id;
     const visited = new Set<number>();
     const queue: number[] = [packageId];
@@ -764,13 +774,13 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       const currentId = queue.pop() as number;
       if (visited.has(currentId)) continue;
       visited.add(currentId);
-      const latest = await this.revisionsRepository.findOne({
+      const latest = await this.revisions.findOne({
         where: { package: { id: currentId }, status: 'published' },
         relations: { package: true },
         order: { revision: 'DESC' },
       });
       if (!latest) continue;
-      const pins = await this.storage.readPinnedDependencies(
+      const pins = await this.packageStorage.readPinnedDependencies(
         currentId,
         latest.revision,
       );
@@ -811,10 +821,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
    * dependent on its next reload, so the delete is refused while one exists.
    */
   private async assertNoEnabledDependents(packageId: number): Promise<void> {
-    if (!this.delivery) {
-      return;
-    }
-    const dependents = await this.delivery.findDependentRoomPackages(packageId);
+    const dependents = await this.packageDelivery.findDependentRoomPackages(packageId);
     if (dependents.length === 0) {
       return;
     }
@@ -873,7 +880,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       }
     });
     try {
-      await this.storage?.removePackage(id);
+      await this.packageStorage.removePackage(id);
     } catch (error) {
       this.logger.warn(
         `ScriptingPackage ${id} was deleted but its files were not removed: ${
@@ -883,7 +890,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     }
     if (roomId !== null) {
       try {
-        this.dispatcher?.packageRemoved(id, roomId);
+        this.packageDispatcher.packageRemoved(id, roomId);
       } catch (error) {
         this.logger.warn(
           `Package ${id} was deleted but its room was not notified: ${

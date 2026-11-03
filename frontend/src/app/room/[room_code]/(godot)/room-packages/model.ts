@@ -40,7 +40,7 @@ export type RoomPackageEntry = {
   publishedAt: string | null;
   localChanges: string[];
   backendState: PackageRevisionSyncState | null;
-  runtimeState: "pending" | "applied" | "failed" | null;
+  runtimeState: PackageRevisionSyncState | null;
   runtimeError: string | null;
   clientsReady: number;
   clientsTotal: number;

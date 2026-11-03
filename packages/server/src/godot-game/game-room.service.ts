@@ -5,7 +5,6 @@ import {
   HttpStatus,
   Injectable,
   Logger,
-  UnauthorizedException,
 } from '@nestjs/common';
 import {
   GameConnectionErrorCode,
@@ -80,7 +79,7 @@ export class GameRoomService {
    * checked against the database room, never against the id sent by a client.
    */
   async connect(
-    user: User | undefined,
+    user: User,
     roomId: number,
   ): Promise<GameRoomConnection> {
     const { room, user: player } = await this.assertCanPlay(user, roomId);
@@ -121,7 +120,7 @@ export class GameRoomService {
 
   /** Reads the runtime state; this path never starts Godot. */
   async getStatus(
-    user: User | undefined,
+    user: User,
     roomId: number,
   ): Promise<GameRoomRuntimeStatus> {
     const { room } = await this.assertCanPlay(user, roomId);
@@ -141,7 +140,7 @@ export class GameRoomService {
    * Never starts the runtime.
    */
   async getPackages(
-    user: User | undefined,
+    user: User,
     roomId: number,
   ): Promise<RoomPackagesStatus> {
     const { room } = await this.assertCanPlay(user, roomId);
@@ -179,13 +178,9 @@ export class GameRoomService {
   }
 
   private async assertCanPlay(
-    user: User | undefined,
+    user: User,
     roomId: number,
   ): Promise<{ room: Room; user: User }> {
-    if (!user || typeof user.id !== 'number') {
-      throw new UnauthorizedException('Sign in to join a game room');
-    }
-
     const room = await this.rooms.findOne(roomId);
 
     if (room.type !== 'godot') {

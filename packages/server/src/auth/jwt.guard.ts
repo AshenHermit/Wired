@@ -13,13 +13,18 @@ export class JwtAuthGuard extends AuthGuard('jwt') {}
 
 @Injectable()
 export class JwtSilentAuthGuard extends AuthGuard('jwt-silent') {
+  /**
+   * Passport answers a rejected token with `false`, not `null`, and
+   * `false ?? null` would stay `false` — so the silent guard has to normalise
+   * the result to match what `SilentAuthRequest.user` promises.
+   */
   handleRequest<TUser = User | null>(
-    err: any,
-    user: TUser,
-    info: any,
+    err: unknown,
+    user: unknown,
+    info: unknown,
     context: ExecutionContext,
-    status?: any,
+    status?: unknown,
   ): TUser {
-    return user ?? (null as TUser);
+    return (user ? user : null) as TUser;
   }
 }

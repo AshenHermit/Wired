@@ -1,3 +1,8 @@
+import type {
+  PackageClientSyncState,
+  PackageRuntimeSyncState,
+} from '@wired-io/shared';
+
 /**
  * In-memory bookkeeping for dispatched package revisions.
  *
@@ -7,8 +12,8 @@
  * a backend restart loses only timing information, and the state shape stays
  * in one place instead of being spread over the service.
  */
-export type RuntimeState = 'pending' | 'applied' | 'failed';
-export type ClientState = 'pending' | 'ready' | 'failed';
+export type RuntimeState = PackageRuntimeSyncState;
+export type ClientState = PackageClientSyncState;
 
 export interface ClientSyncRecord {
   state: ClientState;

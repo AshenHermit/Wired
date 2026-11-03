@@ -1,3 +1,4 @@
+import type { GameRoomRuntimeState } from '@wired-io/shared';
 import type { AppConfig } from 'src/config/config.interface';
 
 /**
@@ -6,9 +7,11 @@ import type { AppConfig } from 'src/config/config.interface';
  * The registry key is `roomId + port`, not `roomId` alone: a room may be
  * restarted on the same port after its previous process exited, and two
  * rooms must never share a runtime.
+ *
+ * `idle` is dropped because a process that exists is never idle — the runtime
+ * service only tracks rooms it has started.
  */
-export type RoomRuntimeState =
-  'starting' | 'running' | 'stopping' | 'stopped' | 'failed';
+export type RoomRuntimeState = Exclude<GameRoomRuntimeState, 'idle'>;
 
 /**
  * The runtime's configuration, owned by `AppConfig`.

@@ -7,8 +7,10 @@ import { AuthGuard } from '@nestjs/passport';
 import { Request } from 'express';
 import { AppConfigService } from 'src/config/config.service';
 import { verifyRuntimeServiceToken } from 'src/common/runtime-contracts';
+import type { RequestPrincipal } from 'src/auth/jwt.strategy';
+import type { User } from 'src/database/entities/user.entity';
 import { readPositiveInt } from './request-ids';
-import { createRuntimeServiceUser } from './runtime-service-user';
+import { createRuntimeServiceUser } from 'src/auth/runtime-service-user';
 
 /**
  * Authentication for the room-scoped package runtime routes.
@@ -27,10 +29,14 @@ export class RuntimeAuthGuard extends AuthGuard('jwt') {
     super();
   }
 
-  handleRequest<TUser = unknown>(
-    err: any,
-    user: any,
-    _info: any,
+  /**
+   * The generic exists only because `IAuthGuard` declares one; passport never
+   * passes a type argument, so `TUser` is always `RequestPrincipal` here.
+   */
+  handleRequest<TUser = RequestPrincipal>(
+    err: unknown,
+    user: unknown,
+    _info: unknown,
     context: ExecutionContext,
   ): TUser {
     if (user) {

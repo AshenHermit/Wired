@@ -9,10 +9,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Room } from 'src/database/entities/room.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
-import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
+import { RuntimeAuthRequest } from 'src/auth/jwt.strategy';
 import { isRoomMember } from 'src/rooms/room-access';
 import { readPositiveInt } from './request-ids';
-import { isRuntimeServiceUser } from './runtime-service-user';
+import { isRuntimeServiceUser } from 'src/auth/runtime-service-user';
 
 /**
  * Authoritative access check for room-scoped package runtime delivery.
@@ -38,7 +38,7 @@ export class RoomMembershipGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    const request = context.switchToHttp().getRequest<RuntimeAuthRequest>();
     const user = request?.user;
     if (!user) {
       throw new UnauthorizedException('authentication_required');

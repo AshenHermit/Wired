@@ -9,6 +9,34 @@ import { ScriptingPackage } from 'src/database/entities/scripting-package.entity
 import { ScriptingPackagesService } from './scripting-packages.service';
 import { PackagePublishLockService } from './package-publish-lock.service';
 
+/**
+ * Collaborators the service refuses to run without.
+ *
+ * Specs that only care about one of them still have to pass the rest, because
+ * the service treats an unregistered collaborator as a wiring error rather than
+ * silently skipping the work it would have done.
+ */
+function collaborators(
+  overrides: {
+    storage?: unknown;
+    dispatcher?: unknown;
+    delivery?: unknown;
+    revisions?: unknown;
+    locks?: unknown;
+  } = {},
+): [never, never, never, never, never] {
+  return [
+    (overrides.storage ?? {}) as never,
+    (overrides.dispatcher ?? {}) as never,
+    (overrides.delivery ?? {
+      findDependentRoomPackages: jest.fn(async () => []),
+      invalidatePackage: jest.fn(async () => undefined),
+    }) as never,
+    (overrides.revisions ?? {}) as never,
+    (overrides.locks ?? new PackagePublishLockService()) as never,
+  ];
+}
+
 type FakeManager = {
   query: jest.Mock;
   findOne: jest.Mock;
@@ -78,6 +106,7 @@ describe('ScriptingPackagesService', () => {
       return new ScriptingPackagesService(
         packagesRepository as never,
         {} as never,
+        ...collaborators(),
       );
     }
 
@@ -143,6 +172,7 @@ describe('ScriptingPackagesService', () => {
       return new ScriptingPackagesService(
         packagesRepository as never,
         {} as never,
+        ...collaborators(),
       );
     }
 
@@ -232,6 +262,7 @@ describe('ScriptingPackagesService', () => {
       return new ScriptingPackagesService(
         packagesRepository as never,
         {} as never,
+        ...collaborators(),
       );
     }
 
@@ -281,6 +312,7 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           roomsRepository as never,
+          ...collaborators(),
         ),
       };
     }
@@ -380,6 +412,7 @@ describe('ScriptingPackagesService', () => {
       const service = new ScriptingPackagesService(
         packagesRepository as never,
         roomsRepository as never,
+        ...collaborators(),
       );
 
       await service.update(10, {
@@ -402,6 +435,7 @@ describe('ScriptingPackagesService', () => {
       const service = new ScriptingPackagesService(
         packagesRepository as never,
         {} as never,
+        ...collaborators(),
       );
       return { service, packagesRepository };
     }
@@ -467,7 +501,7 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           {} as never,
-          storage as never,
+          ...collaborators({ storage }),
         ),
       };
     }
@@ -536,8 +570,7 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           {} as never,
-          undefined,
-          dispatcher as never,
+          ...collaborators({ dispatcher }),
         ),
       };
     }

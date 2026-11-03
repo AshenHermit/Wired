@@ -14,10 +14,9 @@
     "jsx": "react-jsx",
     "incremental": true,
     "skipLibCheck": true,
-    "strictNullChecks": true,
+    "strict": true,
+    "strictPropertyInitialization": false,
     "forceConsistentCasingInFileNames": true,
-    "noImplicitAny": true,
-    "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false,
     "lib": [
       "es6",

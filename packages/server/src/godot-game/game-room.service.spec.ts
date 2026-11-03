@@ -3,7 +3,6 @@ import {
   ForbiddenException,
   HttpException,
   NotFoundException,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { PackageSyncStatus } from '@wired-io/shared';
 import { AppConfigService } from 'src/config/config.service';
@@ -167,13 +166,6 @@ describe('GameRoomService', () => {
     });
     await expect(statusOf(service.connect(user(3), 42))).resolves.toBe(403);
     expect(runtime.getConnection).toHaveBeenCalledTimes(2);
-  });
-
-  it('never issues a ticket to an anonymous caller', async () => {
-    await expect(
-      statusOf(service.connect(undefined as unknown as User, 42)),
-    ).resolves.toBe(401);
-    expect(runtime.getConnection).not.toHaveBeenCalled();
   });
 
   it('rejects rooms that are not Godot rooms before touching the runtime', async () => {
@@ -402,10 +394,7 @@ describe('GameRoomService', () => {
     );
   });
 
-  it('uses the same unauthorized and forbidden exception types as the API', async () => {
-    await expect(
-      service.getStatus(undefined as unknown as User, 42),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
+  it('rejects a non-member with the same forbidden exception type as the API', async () => {
     rooms.findOne.mockResolvedValue(room({ isPublic: false, author: user(1) }));
     await expect(service.getStatus(user(2), 42)).rejects.toBeInstanceOf(
       ForbiddenException,
