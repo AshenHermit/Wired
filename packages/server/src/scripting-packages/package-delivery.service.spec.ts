@@ -355,6 +355,46 @@ describe('PackageDeliveryService', () => {
     expect(artifact.dir).toContain(path.join('runtime', 'v2'));
   });
 
+  it('rejects a shadowed slug before serving a cached artifact', async () => {
+    definePackage(5, 'Heroes', 7, 'hero');
+    definePackage(3, 'GlobalHero', null, 'hero');
+    await writePublished(3, 2, { 'lib.gd': 'extends Node' });
+    await writePublished(5, 3, {
+      'main.gd': 'preload("res://packages/3/lib.gd")',
+    });
+
+    const internals = service as unknown as {
+      readManifest: (dir: string) => Promise<unknown>;
+    };
+    const readManifest = jest
+      .spyOn(internals, 'readManifest')
+      .mockResolvedValue({
+        packageId: 5,
+        slug: 'hero',
+        name: 'Heroes',
+        revision: 3,
+        roomId: 7,
+        publishedAt: '2026-10-30T00:00:00.000Z',
+        artifactKey: 'a'.repeat(64),
+        files: [],
+        totalSize: 0,
+        dependencies: [],
+        sceneDependencies: {},
+        dir: 'cached-artifact',
+      });
+
+    await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toThrow(
+      'package_slug_shadowed:hero',
+    );
+    expect(readManifest).not.toHaveBeenCalled();
+    await expect(artifactDirs(5, 3, 7)).rejects.toThrow();
+
+    readManifest.mockRestore();
+  });
+
   it('does not serve a v1 cached manifest without slug', async () => {
     definePackage(7, 'Heroes', 3, 'hero');
     await writePublished(7, 1, { 'hero.gd': 'extends Node' });

@@ -277,6 +277,14 @@ export class PackageDeliveryService {
     }
     const dir = this.artifactDir(packageId, revision, roomId, artifactKey);
 
+    // Validate before the cache decision: an artifact written by an older
+    // build may already contain a shadowed slug and must not be served.
+    try {
+      assertUniquePackageSlugs(resolved.slugByPackage);
+    } catch (error) {
+      throw new BadRequestException((error as Error).message);
+    }
+
     const cached = await this.readManifest(dir);
     const artifact = cached ?? (await this.writeArtifact(dir, resolved, slug));
     await this.pruneArtifacts(packageId, revision, roomId, artifactKey);
@@ -385,12 +393,6 @@ export class PackageDeliveryService {
     resolved: ResolvedClosure,
     slug: string,
   ): Promise<RuntimeArtifact> {
-    try {
-      assertUniquePackageSlugs(resolved.slugByPackage);
-    } catch (error) {
-      throw new BadRequestException((error as Error).message);
-    }
-
     const staging = `${dir}.staging-${process.pid}-${randomBytes(4).toString('hex')}`;
     try {
       await mkdir(staging, { recursive: true });
