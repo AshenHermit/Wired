@@ -61,7 +61,7 @@ export class GodotEditorInstance {
     this.editor = new window.Engine(editorConfig);
     if (!window.Engine.isWebGLAvailable()) {
       this.events.emit("onFailure", "WebGL not available");
-      throw new Error("WebGL недоступен в этом браузере.");
+      throw new Error("webgl_unavailable");
     }
     this.events.emit("onProgressStatusChange", "indeterminate");
     await this.editor.init(`${GODOT_EDITOR_URL}/godot.editor`);
@@ -87,7 +87,7 @@ export class GodotEditorInstance {
         const response = await fetch(`${project.baseUrl}${filepath}`);
         if (!response.ok) {
           throw new Error(
-            `Не удалось загрузить файл проекта ${filepath} (${response.status}).`
+            `project_file_failed:${filepath}:${response.status}`
           );
         }
         const arrayBuffer = await response.arrayBuffer();

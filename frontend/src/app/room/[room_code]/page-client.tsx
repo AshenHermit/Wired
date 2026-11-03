@@ -1,15 +1,19 @@
 "use client";
 import React from "react";
+import { useTranslations } from "next-intl";
 import { GodotRoomPageClient } from "./(godot)/RoomPageClient";
 import { Room } from "@wired-io/shared";
 import { getRoom } from "@/api/services/rooms";
 import { decodeId } from "@/utils/hash-utils";
 import { Spinner } from "@/components/ui/spinner";
 import { LocaleSwitcher } from "@/components/i18n/LocaleSwitcher";
+import { useAppMessage, type AppMessage } from "@/i18n/message";
 
 export function RoomPageClient({ roomCode }: { roomCode: string }) {
+  const t = useTranslations("Room");
+  const format = useAppMessage();
   const [room, setRoom] = React.useState<Room | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<AppMessage | null>(null);
 
   const loadRoom = React.useCallback(async () => {
     setError(null);
@@ -19,8 +23,9 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
         throw new Error("Invalid room code");
       }
       setRoom(await getRoom(roomId));
-    } catch {
-      setError("Не удалось загрузить комнату. Проверьте ссылку и попробуйте ещё раз.");
+    } catch (cause) {
+      console.error(cause);
+      setError({ key: "Room.loadFailed" });
     }
   }, [roomCode]);
 
@@ -33,8 +38,8 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
       <div className="w-screen h-screen flex items-center justify-center p-8 text-center">
         <LocaleSwitcher className="fixed right-4 top-4 z-20" />
         <div className="max-w-md space-y-2">
-          <h1 className="text-xl font-semibold">Комната недоступна</h1>
-          <p className="text-muted-foreground">{error}</p>
+          <h1 className="text-xl font-semibold">{t("unavailable")}</h1>
+          <p className="text-muted-foreground">{format(error)}</p>
         </div>
       </div>
     );
@@ -51,13 +56,8 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
       <div className="w-screen h-screen flex items-center justify-center p-8 text-center">
         <LocaleSwitcher className="fixed right-4 top-4 z-20" />
         <div className="max-w-md space-y-2">
-          <h1 className="text-xl font-semibold">
-            Комнаты Phaser больше не поддерживаются
-          </h1>
-          <p className="text-muted-foreground">
-            Эта комната использует устаревший режим ts-game. Создайте новую
-            комнату Godot, чтобы продолжить.
-          </p>
+          <h1 className="text-xl font-semibold">{t("legacyTitle")}</h1>
+          <p className="text-muted-foreground">{t("legacyDescription")}</p>
         </div>
       </div>
     );

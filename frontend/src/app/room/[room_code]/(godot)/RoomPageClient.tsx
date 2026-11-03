@@ -18,6 +18,7 @@ import {
   WrenchIcon,
 } from "lucide-react";
 import React from "react";
+import { useTranslations } from "next-intl";
 import { GameTab } from "./GameTab";
 import { useUserStore } from "@/store/user-store";
 import { LocaleSwitcher } from "@/components/i18n/LocaleSwitcher";
@@ -27,6 +28,7 @@ import {
 } from "./use-draggable-panel";
 
 export function GodotRoomPageClient({ room }: { room: Room }) {
+  const t = useTranslations("Room");
   const [activeTab, setActiveTab] = React.useState("editor");
   const [gameMounted, setGameMounted] = React.useState(false);
   const roomPackages = React.useMemo(
@@ -67,8 +69,8 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
         >
           <button
             type="button"
-            aria-label="Перетащить панель"
-            title="Перетащить панель"
+            aria-label={t("dragPanel")}
+            title={t("dragPanel")}
             {...gripProps}
             className={`inline-flex h-9 w-7 items-center justify-center rounded-md bg-muted text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
           >
@@ -76,14 +78,14 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
           </button>
           <TabsList>
             <TabsTrigger value="editor">
-              <WrenchIcon /> Editor
+              <WrenchIcon /> {t("tabs.editor")}
             </TabsTrigger>
             <TabsTrigger value="packages">
-              <PackageIcon /> Packages
+              <PackageIcon /> {t("tabs.packages")}
             </TabsTrigger>
             <TabsTrigger value="game">
               <GamepadIcon />
-              Game
+              {t("tabs.game")}
             </TabsTrigger>
           </TabsList>
           <LocaleSwitcher className="ml-auto" />

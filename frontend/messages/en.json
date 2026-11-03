@@ -6,6 +6,27 @@
     "cancel": "Cancel",
     "delete": "Delete"
   },
+  "Room": {
+    "unavailable": "Room unavailable",
+    "loadFailed": "Couldn't load the room. Check the link and try again.",
+    "legacyTitle": "Phaser rooms are no longer supported",
+    "legacyDescription": "This room uses the legacy ts-game mode. Create a new Godot room to continue.",
+    "dragPanel": "Drag panel",
+    "tabs": {
+      "editor": "Editor",
+      "packages": "Packages",
+      "game": "Game"
+    }
+  },
+  "Editor": {
+    "error": "Editor error",
+    "startFailed": "Couldn't start the editor.",
+    "status": {
+      "loading": "Loading editor…",
+      "downloadingProject": "Downloading project…",
+      "starting": "Starting editor…"
+    }
+  },
   "Home": {
     "tabs": {
       "rooms": "Rooms",

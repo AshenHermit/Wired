@@ -3,6 +3,8 @@
 import { GODOT_EDITOR_URL } from "@/utils/variables";
 import Script from "next/script";
 import React from "react";
+import { useTranslations } from "next-intl";
+import { useAppMessage, type AppMessage } from "@/i18n/message";
 import {
   EditorLoadStatus,
   EditorProgressStatus,
@@ -15,6 +17,8 @@ import {
   prepareGodotEditorStorage,
 } from "./godot-editor-storage";
 
+type EditorMessage = AppMessage | { raw: string };
+
 export function GodotEditor({
   roomId,
   afterStart,
@@ -26,6 +30,8 @@ export function GodotEditor({
    */
   afterStart?: (editor: GodotEditorInstance) => void;
 }) {
+  const t = useTranslations("Editor");
+  const format = useAppMessage();
   const editorInstanceRef = React.useRef<GodotEditorInstance | null>(null);
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   // The engine script is fetched once per document. `next/script` keeps that in
@@ -42,7 +48,8 @@ export function GodotEditor({
   // files").
   const [scriptsLoaded, setScriptsLoaded] = React.useState(false);
   const [status, setStatus] = React.useState<EditorLoadStatus>("loading");
-  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  const [errorMessage, setErrorMessage] =
+    React.useState<EditorMessage | null>(null);
   const [progressStatus, setProgressStatus] =
     React.useState<EditorProgressStatus>("hidden");
   const [progressValue, setProgressValue] = React.useState<number>(0);
@@ -75,16 +82,15 @@ export function GodotEditor({
           console.error("Godot editor afterStart callback failed", error);
         }
       } catch (error) {
-        setErrorMessage(
-          error instanceof Error ? error.message : "Не удалось запустить редактор."
-        );
+        console.error(error);
+        setErrorMessage({ key: "Editor.startFailed" });
         setStatus("error");
       }
     },
     [afterStart, roomId]
   );
   const handleFailure = React.useCallback((message: string) => {
-    setErrorMessage(message);
+    setErrorMessage({ raw: message });
     setStatus("error");
   }, []);
 
@@ -100,7 +106,6 @@ export function GodotEditor({
       setScriptsLoaded(true);
     }
   }, []);
-
   React.useEffect(() => {
     if (!scriptsLoaded || !canvasRef.current) {
       return;
@@ -126,6 +131,21 @@ export function GodotEditor({
     };
   }, [scriptsLoaded]);
 
+  const statusLabel =
+    status === "error"
+      ? t("error")
+      : status === "loading"
+        ? t("status.loading")
+        : status === "downloading project"
+          ? t("status.downloadingProject")
+          : t("status.starting");
+  const messageText =
+    errorMessage == null
+      ? null
+      : "raw" in errorMessage
+        ? errorMessage.raw
+        : format(errorMessage);
+
   return (
     <>
       <Script
@@ -142,12 +162,10 @@ export function GodotEditor({
       </div>
       {status != "ready" && (
         <div className="absolute top-0 left-0 w-full h-full flex flex-col items-center justify-center">
-          <div className="text-white text-2xl font-bold">
-            {status === "error" ? "Ошибка редактора" : status}
-          </div>
-          {status === "error" && errorMessage && (
+          <div className="text-white text-2xl font-bold">{statusLabel}</div>
+          {status === "error" && messageText && (
             <div className="text-white/80 text-sm max-w-lg text-center mt-2">
-              {errorMessage}
+              {messageText}
             </div>
           )}
           {progressStatus == "progress" && (

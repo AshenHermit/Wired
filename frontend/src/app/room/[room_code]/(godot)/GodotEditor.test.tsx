@@ -1,7 +1,8 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getGodotProjectInfo } from "@/api/services/godot-game";
+import { renderWithIntl } from "@/test/render-with-intl";
 import { GodotEditor } from "./GodotEditor";
 import { GodotEditorInstance } from "./GodotEditorInstance";
 
@@ -72,12 +73,18 @@ describe("GodotEditor script readiness", () => {
     delete (window as unknown as { Engine?: unknown }).Engine;
   });
 
+  it("shows translated editor statuses", () => {
+    renderWithIntl(<GodotEditor roomId={7} />, { locale: "en" });
+
+    expect(screen.getByText("Loading editor…")).toBeTruthy();
+  });
+
   it("starts the editor on a remount where next/script only reports onReady", async () => {
     // Navigating back into the room re-mounts the component while the script
     // is already in the page: window.Engine exists, onLoad never fires again.
     const instances = installEngine();
 
-    render(<GodotEditor roomId={7} />);
+    renderWithIntl(<GodotEditor roomId={7} />);
 
     await waitFor(() => expect(instances).toHaveLength(1));
     await waitFor(() => expect(instances[0].start).toHaveBeenCalled());
@@ -85,7 +92,7 @@ describe("GodotEditor script readiness", () => {
   });
 
   it("starts the editor once next/script reports the script is ready", async () => {
-    render(<GodotEditor roomId={7} />);
+    renderWithIntl(<GodotEditor roomId={7} />);
     expect(scriptProps.current?.onReady).toBeTypeOf("function");
 
     const instances = installEngine();
@@ -100,7 +107,7 @@ describe("GodotEditor script readiness", () => {
     // engine of its own and fails on the first copyToFS.
     const instances = installEngine();
 
-    render(
+    renderWithIntl(
       <StrictMode>
         <GodotEditor roomId={7} />
       </StrictMode>,
@@ -116,7 +123,7 @@ describe("GodotEditor script readiness", () => {
   it("keeps the React-owned canvas mounted across engine exits", async () => {
     const instances = installEngine();
 
-    render(<GodotEditor roomId={7} />);
+    renderWithIntl(<GodotEditor roomId={7} />);
     await waitFor(() => expect(instances).toHaveLength(1));
 
     const canvas = document.getElementById("editor-canvas") as HTMLCanvasElement;
