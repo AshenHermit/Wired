@@ -6,12 +6,14 @@ import {
   type RoomPackagesStatus,
 } from "@wired-io/shared";
 import React from "react";
+import { useTranslations } from "next-intl";
 import {
   createGameConnection,
   getGameRoomStatus,
   getRoomPackages,
 } from "@/api/services/godot-game";
 import { Spinner } from "@/components/ui/spinner";
+import { useAppMessage, type AppMessage } from "@/i18n/message";
 import { API_PREFIX } from "@/utils/variables";
 import { readAccessToken } from "@/utils/auth-cookie";
 import {
@@ -62,7 +64,7 @@ type GameState = {
   attempt: number;
   exportReady: boolean;
   phase: GamePhase;
-  message: string;
+  message: GameMessage;
   players: number;
   events: string[];
   autoRetries: number;
@@ -74,11 +76,13 @@ type GameState = {
   acknowledged: boolean;
 };
 
+export type GameMessage = AppMessage | { raw: string };
+
 const INITIAL_STATE: GameState = {
   attempt: 0,
   exportReady: false,
   phase: "checking",
-  message: "Проверяем сборку игры…",
+  message: { key: "Game.checkingExport" },
   players: 0,
   events: [],
   autoRetries: 0,
@@ -89,17 +93,17 @@ const INITIAL_STATE: GameState = {
 
 type GameAction =
   | { type: "export-ready" }
-  | { type: "export-failed"; message: string }
+  | { type: "export-failed"; message: AppMessage }
   | { type: "booted" }
   | { type: "frame-ready" }
   | { type: "configured-sent"; attempt: number }
   | { type: "configured" }
-  | { type: "connection-wait"; attempt: number; message: string }
+  | { type: "connection-wait"; attempt: number; message: AppMessage }
   | { type: "status"; stage: GameStatusStage; detail?: string }
-  | { type: "game-error"; message: string }
+  | { type: "game-error"; message: GameMessage }
   | { type: "event"; name: string; players?: number }
   | { type: "players"; count: number }
-  | { type: "ticket-failed"; message: string }
+  | { type: "ticket-failed"; message: GameMessage }
   | { type: "handshake-timeout"; attempt: number }
   | { type: "load-timeout"; attempt: number }
   | { type: "transport-lost" }
@@ -107,7 +111,7 @@ type GameAction =
   | { type: "retry" };
 
 /** Stops the tab on a message and invalidates any in-flight ticket. */
-function fail(state: GameState, message: string): GameState {
+function fail(state: GameState, message: GameMessage): GameState {
   return {
     ...state,
     phase: "error",
@@ -129,16 +133,16 @@ function startReconnect(state: GameState): GameState {
     return state;
   }
   if (state.autoRetries >= MAX_AUTO_RETRIES) {
-    return fail(
-      state,
-      "Соединение потеряно. Нажмите «Повторить», чтобы получить новый тикет.",
-    );
+    return fail(state, { key: "Game.connectionLost" });
   }
   const delay = Math.min(1_000 * 2 ** state.autoRetries, 8_000);
   return {
     ...state,
     phase: "reconnecting",
-    message: `Соединение потеряно. Переподключение через ${Math.round(delay / 1_000)} с…`,
+    message: {
+      key: "Game.reconnecting",
+      values: { seconds: Math.round(delay / 1_000) },
+    },
     autoRetries: state.autoRetries + 1,
     ticketRequest: null,
     sentAttempt: null,
@@ -152,7 +156,7 @@ function replaceFrame(state: GameState, attempt: number): GameState {
     attempt,
     exportReady: false,
     phase: "checking",
-    message: "Проверяем сборку игры…",
+    message: { key: "Game.checkingExport" },
     sentAttempt: null,
     ticketRequest: null,
     acknowledged: false,
@@ -166,7 +170,7 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         ...state,
         exportReady: true,
         phase: "loading",
-        message: "Загружаем движок Godot…",
+        message: { key: "Game.loadingEngine" },
       };
     case "export-failed":
       return { ...fail(state, action.message), exportReady: false };
@@ -176,7 +180,7 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         : {
             ...state,
             phase: "loading",
-            message: "Движок Godot загружается…",
+            message: { key: "Game.engineLoading" },
           };
     case "frame-ready":
       // A frame that already errored (for example, its config wait elapsed)
@@ -190,7 +194,7 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         sentAttempt: state.attempt,
         ticketRequest: state.attempt,
         phase: "requesting",
-        message: "Запрашиваем подключение к комнате…",
+        message: { key: "Game.requestingConnection" },
       };
     case "configured-sent":
       if (state.ticketRequest !== action.attempt || state.phase === "error") {
@@ -199,7 +203,7 @@ function gameReducer(state: GameState, action: GameAction): GameState {
       return {
         ...state,
         phase: "handshake",
-        message: "Передаём тикет игре…",
+        message: { key: "Game.sendingTicket" },
         acknowledged: false,
       };
     case "configured":
@@ -209,7 +213,7 @@ function gameReducer(state: GameState, action: GameAction): GameState {
       return {
         ...state,
         phase: "handshake",
-        message: "Тикет принят игрой…",
+        message: { key: "Game.ticketAccepted" },
         acknowledged: true,
       };
     case "connection-wait":
@@ -238,13 +242,13 @@ function gameReducer(state: GameState, action: GameAction): GameState {
           return {
             ...state,
             phase: "handshake",
-            message: "Подключаемся к серверу игры…",
+            message: { key: "Game.connectingServer" },
           };
         case "authenticated":
           return {
             ...state,
             phase: "handshake",
-            message: "Авторизация в комнате…",
+            message: { key: "Game.authenticating" },
             acknowledged: true,
           };
         case "ready":
@@ -254,14 +258,17 @@ function gameReducer(state: GameState, action: GameAction): GameState {
           return {
             ...state,
             phase: "ready",
-            message: "Игра готова",
+            message: { key: "Game.ready" },
             autoRetries: 0,
           };
         case "connection_failed":
         case "disconnected":
           return startReconnect(state);
         case "error":
-          return fail(state, action.detail || "Ошибка игры");
+          return fail(
+            state,
+            action.detail ? { raw: action.detail } : { key: "Game.error" },
+          );
         default:
           return state;
       }
@@ -270,7 +277,7 @@ function gameReducer(state: GameState, action: GameAction): GameState {
       // Keep the first, actionable error: a frame that times out waiting for a
       // ticket must not overwrite the host's own startup error a minute later.
       if (state.phase === "error") return state;
-      return fail(state, action.message || "Ошибка игры");
+      return fail(state, action.message);
     case "event":
       return {
         ...state,
@@ -289,18 +296,12 @@ function gameReducer(state: GameState, action: GameAction): GameState {
       ) {
         return state;
       }
-      return fail(
-        state,
-        "Игра не подтвердила подключение. Нажмите «Повторить», чтобы получить новый тикет.",
-      );
+      return fail(state, { key: "Game.handshakeTimeout" });
     case "load-timeout":
       if (state.phase === "error" || state.sentAttempt === state.attempt) {
         return state;
       }
-      return fail(
-        state,
-        "Игра не загрузилась за 2 минуты. Проверьте консоль и нажмите «Повторить».",
-      );
+      return fail(state, { key: "Game.loadTimeout" });
     case "transport-lost":
       return startReconnect(state);
     case "auto-retry":
@@ -329,24 +330,23 @@ const RETRYABLE_CONNECTION_CODES = new Set([
   "handshake_window_expired",
 ]);
 
-const CONNECTION_MESSAGE_BY_CODE: Record<string, string> = {
-  packages_pending: "Применяем пакеты комнаты…",
-  room_stopping: "Сервер игры перезапускается…",
-  room_not_running: "Запускаем сервер игры…",
-  handshake_window_expired: "Сервер игры перезапускается…",
+const CONNECTION_MESSAGE_BY_CODE: Record<string, AppMessage> = {
+  packages_pending: { key: "Game.applyingPackages" },
+  room_stopping: { key: "Game.serverRestarting" },
+  room_not_running: { key: "Game.serverStarting" },
+  handshake_window_expired: { key: "Game.serverRestarting" },
 };
 
-const FATAL_CONNECTION_MESSAGE_BY_CODE: Record<string, string> = {
-  packages_failed: "Не удалось применить пакеты комнаты. Нажмите «Повторить».",
-  start_failed:
-    "Сервер игры не смог запуститься. Проверьте логи backend и нажмите «Повторить».",
-  config: "Сервер игры не настроен на этом backend.",
-  ticket_secret_missing: "Сервер игры не настроен на этом backend.",
+const FATAL_CONNECTION_MESSAGE_BY_CODE: Record<string, AppMessage> = {
+  packages_failed: { key: "Game.packagesFailed" },
+  start_failed: { key: "Game.startFailed" },
+  config: { key: "Game.notConfigured" },
+  ticket_secret_missing: { key: "Game.notConfigured" },
 };
 
 type ConnectionFailure = {
   retryable: boolean;
-  message: string;
+  message: AppMessage;
   retryAfterMs: number;
 };
 
@@ -362,8 +362,6 @@ function describeConnectionFailure(error: unknown): ConnectionFailure {
   ).response;
   const data = response?.data;
   const code = typeof data?.code === "string" ? data.code : "";
-  const fallback =
-    error instanceof Error ? error.message : "Не удалось подключиться к игре";
 
   if (response?.status === 429) {
     const retryAfterSeconds = Number(data?.retryAfterSeconds);
@@ -373,20 +371,25 @@ function describeConnectionFailure(error: unknown): ConnectionFailure {
         : 5;
     return {
       retryable: true,
-      message: `Слишком много попыток. Повторяем через ${seconds} с…`,
+      message: { key: "Game.rateLimited", values: { seconds } },
       retryAfterMs: seconds * 1_000,
     };
   }
   if (RETRYABLE_CONNECTION_CODES.has(code)) {
     return {
       retryable: true,
-      message: CONNECTION_MESSAGE_BY_CODE[code] ?? "Сервер игры ещё запускается…",
+      message: CONNECTION_MESSAGE_BY_CODE[code] ?? {
+        key: "Game.serverStillStarting",
+      },
       retryAfterMs: CONNECTION_RETRY_MS,
     };
   }
+  console.error(error);
   return {
     retryable: false,
-    message: FATAL_CONNECTION_MESSAGE_BY_CODE[code] ?? fallback,
+    message: FATAL_CONNECTION_MESSAGE_BY_CODE[code] ?? {
+      key: "Game.connectFailed",
+    },
     retryAfterMs: 0,
   };
 }
@@ -397,25 +400,34 @@ function runtimeMessage(
   packagesApplied: boolean,
   appliedPackages: number,
   totalPackages: number,
-): string {
+): AppMessage {
   switch (status.state) {
     case "starting":
-      return "Сервер игры запускается…";
+      return { key: "Game.runtimeStarting" };
     case "stopping":
-      return "Сервер игры перезапускается…";
+      return { key: "Game.runtimeRestarting" };
     case "running":
-      if (packagesApplied) return "Сервер игры готов. Запрашиваем подключение…";
+      if (packagesApplied) return { key: "Game.runtimeReady" };
       return totalPackages > 0
-        ? `Применяем пакеты комнаты (${appliedPackages}/${totalPackages})…`
-        : "Готовим мир комнаты…";
+        ? {
+            key: "Game.runtimeApplying",
+            values: { applied: appliedPackages, total: totalPackages },
+          }
+        : { key: "Game.runtimePreparing" };
     case "failed":
-      return "Сервер игры перезапускается…";
+      return { key: "Game.runtimeRestarting" };
     default:
-      return "Запускаем сервер игры…";
+      return { key: "Game.runtimeDefault" };
   }
 }
 
 export type ActivePackage = { packageId: number; revision: number };
+
+class GameTabError extends Error {
+  constructor(readonly appMessage: AppMessage) {
+    super(appMessage.key);
+  }
+}
 
 /**
  * Packages that take part in the running game: an unpublished package has no
@@ -460,6 +472,10 @@ export function GameTab({ room }: { room: Room }) {
   const [state, dispatch] = React.useReducer(gameReducer, INITIAL_STATE);
   const { attempt, exportReady, phase, message, players, events, autoRetries } =
     state;
+  const format = useAppMessage();
+  const t = useTranslations("Game");
+  const common = useTranslations("Common");
+  const messageText = "raw" in message ? message.raw : format(message);
 
   const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
   const lastFrameMessageAtRef = React.useRef(0);
@@ -480,18 +496,21 @@ export function GameTab({ room }: { room: Room }) {
             type: "export-failed",
             message:
               response.status === 404
-                ? "Сборка игры не найдена. Выполните pnpm export:game и нажмите «Повторить»."
-                : `Не удалось загрузить игру (HTTP ${response.status}).`,
+                ? { key: "Game.buildMissing" }
+                : {
+                    key: "Game.loadFailed",
+                    values: { status: response.status },
+                  },
           });
           return;
         }
         dispatch({ type: "export-ready" });
-      } catch {
+      } catch (error) {
         if (!cancelled) {
+          console.error(error);
           dispatch({
             type: "export-failed",
-            message:
-              "Нет связи с сервером игры. Проверьте, что backend запущен.",
+            message: { key: "Game.backendUnreachable" },
           });
         }
       }
@@ -515,7 +534,7 @@ export function GameTab({ room }: { room: Room }) {
     const sleep = (ms: number) =>
       new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
-    const waitMessage = (message: string) => {
+    const waitMessage = (message: AppMessage) => {
       if (!cancelled) {
         dispatch({ type: "connection-wait", attempt: request, message });
       }
@@ -555,9 +574,7 @@ export function GameTab({ room }: { room: Room }) {
         describeRuntime(status, packages);
         if (cancelled) return;
         if (packagesFailed(packages)) {
-          throw new Error(
-            "Не удалось применить пакеты комнаты. Нажмите «Повторить».",
-          );
+          throw new GameTabError({ key: "Game.packagesFailed" });
         }
         if (status.state === "running" && packagesAreApplied(packages)) return;
         // Idle, stopped and crashed runtimes are all restarted by the POST
@@ -571,9 +588,7 @@ export function GameTab({ room }: { room: Room }) {
           return;
         }
         if (Date.now() >= deadline) {
-          throw new Error(
-            "Сервер игры не запустился за 90 секунд. Нажмите «Повторить».",
-          );
+          throw new GameTabError({ key: "Game.waitTimeout" });
         }
         await sleep(RUNTIME_POLL_MS);
         if (cancelled) return;
@@ -608,7 +623,7 @@ export function GameTab({ room }: { room: Room }) {
             if (!frame?.contentWindow) {
               dispatch({
                 type: "ticket-failed",
-                message: "Фрейм игры не готов. Нажмите «Повторить».",
+                message: { key: "Game.frameMissing" },
               });
               return;
             }
@@ -633,7 +648,7 @@ export function GameTab({ room }: { room: Room }) {
               dispatch({
                 type: "ticket-failed",
                 message: failure.retryable
-                  ? "Сервер игры не запустился за 90 секунд. Нажмите «Повторить»."
+                  ? { key: "Game.waitTimeout" }
                   : failure.message,
               });
               return;
@@ -651,12 +666,13 @@ export function GameTab({ room }: { room: Room }) {
         if (cancelled) {
           return;
         }
+        console.error(error);
         dispatch({
           type: "ticket-failed",
           message:
-            error instanceof Error
-              ? error.message
-              : "Не удалось получить доступ к игре",
+            error instanceof GameTabError
+              ? error.appMessage
+              : { key: "Game.ticketFailed" },
         });
       }
     })();
@@ -739,7 +755,9 @@ export function GameTab({ room }: { room: Room }) {
         case "wired:game-error":
           dispatch({
             type: "game-error",
-            message: data.payload.message || "Ошибка игры",
+            message: data.payload.message
+              ? { raw: data.payload.message }
+              : { key: "Game.error" },
           });
           break;
         case "wired:game-event": {
@@ -840,23 +858,26 @@ export function GameTab({ room }: { room: Room }) {
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-black/80 px-6 text-center">
           {phase === "error" ? (
             <>
-              <h2 className="text-xl font-semibold">Игра недоступна</h2>
-              <p className="max-w-md text-sm text-white/70">{message}</p>
+              <h2 className="text-xl font-semibold">{t("unavailable")}</h2>
+              <p className="max-w-md text-sm text-white/70">{messageText}</p>
               <button
                 type="button"
                 onClick={retryNow}
                 className="cursor-pointer rounded-md bg-white px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-80"
               >
-                Повторить
+                {common("retry")}
               </button>
             </>
           ) : (
             <>
               <Spinner />
-              <p className="max-w-md text-sm text-white/70">{message}</p>
+              <p className="max-w-md text-sm text-white/70">{messageText}</p>
               {phase === "reconnecting" && (
                 <p className="text-xs text-white/50">
-                  Автоматическая попытка {autoRetries} из {MAX_AUTO_RETRIES}
+                  {t("autoAttempt", {
+                    current: autoRetries,
+                    total: MAX_AUTO_RETRIES,
+                  })}
                 </p>
               )}
             </>
@@ -866,7 +887,7 @@ export function GameTab({ room }: { room: Room }) {
 
       {phase === "ready" && (
         <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-md bg-black/60 px-3 py-1 text-xs">
-          Игроков: {players}
+          {t("players", { count: players })}
           {events.length > 0 && (
             <span className="ml-2 opacity-70">· {events.at(-1)}</span>
           )}

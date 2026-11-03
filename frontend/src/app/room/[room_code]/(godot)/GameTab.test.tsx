@@ -2,6 +2,10 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import type { Room, RoomPackagesStatus } from "@wired-io/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  IntlProvider,
+  renderWithIntl,
+} from "@/test/render-with-intl";
+import {
   createGameConnection,
   getGameRoomStatus,
   getRoomPackages,
@@ -74,7 +78,7 @@ function send(iframe: HTMLIFrameElement, data: unknown) {
 }
 
 async function mountGame() {
-  const view = render(<GameTab room={room} />);
+  const view = renderWithIntl(<GameTab room={room} />);
   const iframe = await waitFor(() => {
     const element = view.container.querySelector("iframe");
     if (!element) {
@@ -97,7 +101,7 @@ const connection = {
  * Drives the host through the whole handshake with fake timers. Mirrors what
  * the exported build sends, so the heartbeat can be observed from `ready`.
  */
-async function reachReady(view: ReturnType<typeof render>) {
+async function reachReady(view: ReturnType<typeof renderWithIntl>) {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
@@ -206,6 +210,58 @@ describe("GameTab bridge", () => {
     expect(container.querySelector("iframe")).not.toBeNull();
   });
 
+  it("retranslates the current status without replacing the frame", async () => {
+    const view = render(
+      <IntlProvider locale="ru">
+        <GameTab room={room} />
+      </IntlProvider>,
+    );
+    await waitFor(() => {
+      expect(view.container.querySelector("iframe")).not.toBeNull();
+    });
+
+    expect(view.getByText("Загружаем движок Godot…")).toBeTruthy();
+    const frame = view.container.querySelector("iframe");
+
+    view.rerender(
+      <IntlProvider locale="en">
+        <GameTab room={room} />
+      </IntlProvider>,
+    );
+
+    expect(view.getByText("Loading the Godot engine…")).toBeTruthy();
+    expect(view.container.querySelector("iframe")).toBe(frame);
+  });
+
+  it("falls back to a translated error when the payload has no message", async () => {
+    const { iframe } = await mountGame();
+
+    act(() => {
+      send(iframe, {
+        source: "wired-game",
+        type: "wired:game-error",
+        payload: { message: "" },
+      });
+    });
+
+    expect(await screen.findByText("Игра недоступна")).toBeTruthy();
+    expect(screen.getByText("Ошибка игры")).toBeTruthy();
+  });
+
+  it("renders markup from a game payload as text", async () => {
+    const { iframe } = await mountGame();
+
+    act(() => {
+      send(iframe, {
+        source: "wired-game",
+        type: "wired:game-error",
+        payload: { message: "<b>boom</b>" },
+      });
+    });
+
+    expect(await screen.findByText("<b>boom</b>")).toBeTruthy();
+  });
+
   it("does not treat a booted engine as a joined game", async () => {
     vi.mocked(createGameConnection).mockReturnValue(
       new Promise<typeof connection>(() => undefined),
@@ -253,7 +309,7 @@ describe("GameTab bridge", () => {
   it("reloads a ready frame whose engine stopped answering", async () => {
     vi.useFakeTimers();
     try {
-      const view = render(<GameTab room={room} />);
+      const view = renderWithIntl(<GameTab room={room} />);
       const iframe = await reachReady(view);
       expect(view.container.textContent).toContain("Игроков: 1");
 
@@ -278,7 +334,7 @@ describe("GameTab bridge", () => {
   it("gives up after three automatic reconnects", async () => {
     vi.useFakeTimers();
     try {
-      const view = render(<GameTab room={room} />);
+      const view = renderWithIntl(<GameTab room={room} />);
       let iframe = await reachReady(view);
 
       for (let autoRetry = 1; autoRetry <= 3; autoRetry += 1) {
@@ -329,7 +385,7 @@ describe("GameTab bridge", () => {
         activePlayers: 0,
         error: null,
       });
-      const view = render(<GameTab room={room} />);
+      const view = renderWithIntl(<GameTab room={room} />);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
@@ -369,7 +425,7 @@ describe("GameTab bridge", () => {
       vi.mocked(createGameConnection)
         .mockRejectedValueOnce(apiError(409, "packages_pending"))
         .mockResolvedValue(connection);
-      const view = render(<GameTab room={room} />);
+      const view = renderWithIntl(<GameTab room={room} />);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
@@ -401,7 +457,7 @@ describe("GameTab bridge", () => {
   it("pings a live ready frame and keeps it mounted", async () => {
     vi.useFakeTimers();
     try {
-      const view = render(<GameTab room={room} />);
+      const view = renderWithIntl(<GameTab room={room} />);
       const iframe = await reachReady(view);
       const postMessage = vi.spyOn(iframe.contentWindow!, "postMessage");
 
