@@ -220,7 +220,8 @@ export class SlugRenameDependentsError extends Error {
 /**
  * The backend renamed the package, but the editor directory still has the old
  * name. Nothing is rolled back: the dialog offers `renamePackageDir` as an
- * idempotent retry.
+ * idempotent retry. The bridge failure is kept as `cause` so the retry can be
+ * diagnosed instead of only reporting the slug that failed.
  */
 export class PackageDirectoryRenameError extends Error {
   constructor(
@@ -229,7 +230,7 @@ export class PackageDirectoryRenameError extends Error {
     public readonly toSlug: string,
     cause: unknown,
   ) {
-    super(`package_directory_rename_failed:${fromSlug}`);
+    super(`package_directory_rename_failed:${fromSlug}`, { cause });
     this.name = "PackageDirectoryRenameError";
   }
 }

@@ -21,14 +21,14 @@ export async function getGodotProjectInfo() {
  * Starts or reuses the room runtime and returns a fresh single-use ticket.
  * Call this for every connection attempt: tickets cannot be reused.
  */
-export async function createGameConnection(roomId: number) {
+export function createGameConnection(roomId: number) {
   return apiClient.post<GameRoomConnection>(
     `rooms/${roomId}/game/connection`
   );
 }
 
 /** Runtime status; the backend never starts Godot for this call. */
-export async function getGameRoomStatus(roomId: number) {
+export function getGameRoomStatus(roomId: number) {
   return apiClient.get<GameRoomRuntimeStatus>(
     `rooms/${roomId}/game/status`
   );
@@ -38,7 +38,7 @@ export async function getGameRoomStatus(roomId: number) {
  * Published package revisions of the room and how far the runtime and its
  * clients have applied them. Used by the editor to catch up after Emit.
  */
-export async function getRoomPackages(roomId: number) {
+export function getRoomPackages(roomId: number) {
   return apiClient.get<RoomPackagesStatus>(
     `rooms/${roomId}/game/packages`
   );

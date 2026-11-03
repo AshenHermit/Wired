@@ -183,21 +183,12 @@ importers:
       execa:
         specifier: 5.1.1
         version: 5.1.1
-      glob:
-        specifier: ^13.0.0
-        version: 13.0.0
-      hashids:
-        specifier: ^2.3.0
-        version: 2.3.0
       passport-google-oauth20:
         specifier: ^2.0.0
         version: 2.0.0
       passport-jwt:
         specifier: ^4.0.1
         version: 4.0.1
-      pathe:
-        specifier: ^2.0.3
-        version: 2.0.3
       pg:
         specifier: ^8.16.3
         version: 8.16.3
@@ -210,9 +201,6 @@ importers:
       typeorm:
         specifier: ^0.3.28
         version: 0.3.28(pg@8.16.3)(ts-node@10.9.2(@swc/core@1.15.4)(@types/node@22.19.3)(typescript@5.9.3))
-      uuid:
-        specifier: ^13.0.0
-        version: 13.0.0
       ws:
         specifier: ^8.22.1
         version: 8.22.1
@@ -5488,9 +5476,6 @@ packages:
     resolution: {integrity: sha512-gDKb8aZMDeD/tZWs9P6+q0J9Mwkdl6xMV8TjnGP3qJVJ06bdMgkbBlLU8IdfOsIsFz2BW1rNVT3XuNEl8zPAvw==}
     engines: {node: '>=8'}
 
-  pathe@2.0.3:
-    resolution: {integrity: sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w==}
-
   pause@0.0.1:
     resolution: {integrity: sha512-KG8UEiEVkR3wGEb4m5yZkVCzigAD+cVEJck2CzYZO37ZGJfctvVptVO192MwrtPhzONn6go8ylnOdMhKqi4nfg==}
 
@@ -6532,10 +6517,6 @@ packages:
 
   uuid@11.1.0:
     resolution: {integrity: sha512-0/A9rDy9P7cJ+8w1c9WD9V//9Wj15Ce2MPz8Ri6032usz+NfePxx5AcN3bN+r6ZL6jEo066/yNYB3tn4pQEx+A==}
-    hasBin: true
-
-  uuid@13.0.0:
-    resolution: {integrity: sha512-XQegIaBTVUjSHliKqcnFqYypAd4S+WCYt5NIeRs6w/UAry7z8Y9j5ZwRRL4kzq9U3sD6v+85er9FvkEaBpji2w==}
     hasBin: true
 
   v8-compile-cache-lib@3.0.1:
@@ -12450,8 +12431,6 @@ snapshots:
 
   path-type@4.0.0: {}
 
-  pathe@2.0.3: {}
-
   pause@0.0.1: {}
 
   pend@1.2.0: {}
@@ -13639,8 +13618,6 @@ snapshots:
   utils-merge@1.0.1: {}
 
   uuid@11.1.0: {}
-
-  uuid@13.0.0: {}
 
   v8-compile-cache-lib@3.0.1: {}
 

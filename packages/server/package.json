@@ -42,16 +42,12 @@
     "class-validator": "^0.14.3",
     "content-type-to-ext": "^1.0.0",
     "execa": "5.1.1",
-    "glob": "^13.0.0",
-    "hashids": "^2.3.0",
     "passport-google-oauth20": "^2.0.0",
     "passport-jwt": "^4.0.1",
-    "pathe": "^2.0.3",
     "pg": "^8.16.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "typeorm": "^0.3.28",
-    "uuid": "^13.0.0",
     "ws": "^8.22.1"
   },
   "devDependencies": {

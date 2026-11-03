@@ -18,7 +18,7 @@ import {
 import { apiClient } from "../api-client/client-api";
 import { uint8ArrayToFile } from "@/utils/file-utils";
 
-export async function createScriptingPackage(
+export function createScriptingPackage(
   data: CreateScriptingPackagePayload
 ) {
   return apiClient.post<ScriptingPackage>(
@@ -31,11 +31,11 @@ export async function createScriptingPackage(
  * Reads one package by id, including its description and tags. The publish
  * dialog uses it to prefill a new workshop record from the room package.
  */
-export async function getScriptingPackage(id: number) {
+export function getScriptingPackage(id: number) {
   return apiClient.get<ScriptingPackage>(`scripting-packages/${id}`);
 }
 
-export async function updateScriptingPackage(
+export function updateScriptingPackage(
   id: number,
   data: UpdateScriptingPackagePayload
 ) {
@@ -45,8 +45,8 @@ export async function updateScriptingPackage(
   );
 }
 
-export async function deleteScriptingPackage(id: number) {
-  await apiClient.delete<void>(`scripting-packages/${id}`);
+export function deleteScriptingPackage(id: number) {
+  return apiClient.delete<void>(`scripting-packages/${id}`);
 }
 
 /**
@@ -55,7 +55,7 @@ export async function deleteScriptingPackage(id: number) {
  * reported separately and always checked by the caller.
  * `excludeId` keeps a renamed package from reporting its own slug as taken.
  */
-export async function checkPackageSlugAvailability(
+export function checkPackageSlugAvailability(
   slug: string,
   roomId?: number,
   excludeId?: number
@@ -71,7 +71,7 @@ export async function checkPackageSlugAvailability(
 // The workshop is the public catalogue of packages published from rooms. Copies
 // (fork, add to room) run on the server and never mutate the source package.
 
-export async function listWorkshopPackages(params: {
+export function listWorkshopPackages(params: {
   q?: string;
   limit?: number;
   offset?: number;
@@ -79,7 +79,7 @@ export async function listWorkshopPackages(params: {
   return apiClient.get<WorkshopListing>("scripting-packages/workshop", params);
 }
 
-export async function listWorkshopTags(params: {
+export function listWorkshopTags(params: {
   q?: string;
   limit?: number;
   offset?: number;
@@ -94,7 +94,7 @@ export async function lookupWorkshopPackage(
   return result.package;
 }
 
-export async function publishPackageToWorkshop(
+export function publishPackageToWorkshop(
   id: number,
   metadata: WorkshopPackageMetadata
 ): Promise<WorkshopPublishResult> {
@@ -104,7 +104,7 @@ export async function publishPackageToWorkshop(
   );
 }
 
-export async function forkPackageToWorkshop(
+export function forkPackageToWorkshop(
   id: number,
   slug: string
 ): Promise<ScriptingPackage> {
@@ -114,7 +114,7 @@ export async function forkPackageToWorkshop(
   );
 }
 
-export async function copyWorkshopPackageToRoom(
+export function copyWorkshopPackageToRoom(
   id: number,
   roomId: number
 ): Promise<ScriptingPackage> {
@@ -128,7 +128,7 @@ export async function copyWorkshopPackageToRoom(
 // A revision is a set of files that is uploaded file by file and then
 // published as an immutable snapshot served to the Godot server and clients.
 
-export async function createPackageRevision(
+export function createPackageRevision(
   packageId: number,
   data: CreatePackageRevisionPayload
 ) {
@@ -138,7 +138,7 @@ export async function createPackageRevision(
   );
 }
 
-export async function uploadRevisionFile(
+export function uploadRevisionFile(
   packageId: number,
   revision: number,
   filepath: string,
@@ -152,7 +152,7 @@ export async function uploadRevisionFile(
   );
 }
 
-export async function uploadRevisionFileAsUint8Array(
+export function uploadRevisionFileAsUint8Array(
   packageId: number,
   revision: number,
   entry: PackageFileEntry,
@@ -166,7 +166,7 @@ export async function uploadRevisionFileAsUint8Array(
   );
 }
 
-export async function publishPackageRevision(
+export function publishPackageRevision(
   packageId: number,
   revision: number
 ) {
@@ -175,13 +175,13 @@ export async function publishPackageRevision(
   );
 }
 
-export async function getPackageManifest(packageId: number) {
+export function getPackageManifest(packageId: number) {
   return apiClient.get<PackageManifest>(
     `scripting-packages/${packageId}/manifest`
   );
 }
 
-export async function getRevisionFile(
+export function getRevisionFile(
   packageId: number,
   revision: number,
   filepath: string

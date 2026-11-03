@@ -44,4 +44,11 @@ async function bootstrap() {
 
   await app.listen(process.env.PORT ?? 3000);
 }
-bootstrap();
+
+bootstrap().catch((error: unknown) => {
+  // Nest logs module-level failures itself, but a rejected bootstrap (missing
+  // config, unreachable database) would otherwise exit with an unhandled
+  // rejection and no non-zero status.
+  console.error('Failed to start the Wired API', error);
+  process.exit(1);
+});

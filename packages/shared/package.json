@@ -5,8 +5,7 @@
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
     "scripts": {
-        "build": "tsc -p tsconfig.build.json",
-        "build:types": "tsc -p tsconfig.types.json"
+        "build": "tsc -p tsconfig.build.json"
     },
     "devDependencies": {
         "typescript": "^5.9.3"
