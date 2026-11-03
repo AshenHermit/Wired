@@ -7,14 +7,14 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
-import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
 import {
   CreatePackageRevisionPayload,
   PackageFileEntry,
   PackageManifest,
   PackageRevision,
 } from '@wired-io/shared';
-import { DataSource, In, QueryRunner, Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import {
@@ -23,6 +23,7 @@ import {
 } from './package-storage.service';
 import { sha256Hex } from './package-hash';
 import { validatePackageRevisionFiles } from './package-manifest';
+import { PackagePublishLockService } from './package-publish-lock.service';
 import {
   collectRawPackageReferences,
   decodePackageText,
@@ -47,13 +48,6 @@ import {
 @Injectable()
 export class PackageRevisionsService {
   private readonly logger = new Logger(PackageRevisionsService.name);
-  /**
-   * Packages whose bytes are being verified and moved by *this* process. The
-   * authoritative guard is the Postgres advisory lock below: this set is only
-   * the cheap in-process fast path (and the whole guard when no DataSource is
-   * available, e.g. in unit tests).
-   */
-  private readonly publishing = new Set<number>();
 
   constructor(
     @InjectRepository(ScriptingPackageRevision)
@@ -61,11 +55,10 @@ export class PackageRevisionsService {
     private readonly packagesService: ScriptingPackagesService,
     private readonly storage: PackageStorageService,
     @Optional()
+    private readonly locks: PackagePublishLockService = new PackagePublishLockService(),
+    @Optional()
     @Inject(PACKAGE_REVISION_DISPATCHER)
     private readonly dispatcher?: PackageRevisionDispatcher,
-    @Optional()
-    @InjectDataSource()
-    private readonly dataSource?: DataSource,
     @Optional()
     @InjectRepository(ScriptingPackage)
     private readonly packagesRepository?: Repository<ScriptingPackage>,
@@ -80,7 +73,7 @@ export class PackageRevisionsService {
     packageId: number,
     payload: CreatePackageRevisionPayload,
   ): Promise<PackageRevision> {
-    await this.assertNotPublishing(packageId);
+    await this.locks.assertNotPublishing(packageId);
 
     const pkg = await this.packagesService.findOne(packageId);
     const files = validatePackageRevisionFiles(payload?.files);
@@ -120,7 +113,7 @@ export class PackageRevisionsService {
     filepath: string,
     data: Buffer,
   ): Promise<SavedDraftFile> {
-    await this.assertNotPublishing(packageId);
+    await this.locks.assertNotPublishing(packageId);
 
     const row = await this.findRevision(packageId, revision);
 
@@ -170,9 +163,7 @@ export class PackageRevisionsService {
     const pkg = await this.packagesService.findOne(packageId);
 
     // Reject uploads for this package while its bytes are verified and moved.
-    const lock = await this.acquirePublishLock(packageId);
-    this.publishing.add(packageId);
-    try {
+    await this.locks.runWithPublishLocks([packageId], async () => {
       await this.storage.publishRevision(
         packageId,
         revision,
@@ -183,10 +174,7 @@ export class PackageRevisionsService {
           await this.revisionsRepository.save(row);
         },
       );
-    } finally {
-      this.publishing.delete(packageId);
-      await this.releasePublishLock(lock, packageId);
-    }
+    });
 
     await this.recordPinnedDependencies(
       packageId,
@@ -285,9 +273,7 @@ export class PackageRevisionsService {
       }
 
       // Reject uploads for the target while its bytes are verified and moved.
-      const lock = await this.acquirePublishLock(targetPackageId);
-      this.publishing.add(targetPackageId);
-      try {
+      await this.locks.runWithPublishLocks([targetPackageId], async () => {
         await this.storage.publishRevision(
           targetPackageId,
           revision,
@@ -298,10 +284,7 @@ export class PackageRevisionsService {
             await this.revisionsRepository.save(saved);
           },
         );
-      } finally {
-        this.publishing.delete(targetPackageId);
-        await this.releasePublishLock(lock, targetPackageId);
-      }
+      });
     } catch (error) {
       // The store rolls its own bytes back, but neither the row nor the draft
       // directory is: a leftover draft would make a retry that declares a
@@ -489,11 +472,6 @@ export class PackageRevisionsService {
     });
   }
 
-  /** Advisory lock key; `hashtext` maps it to the lock's bigint id. */
-  private publishLockKey(packageId: number): string {
-    return `wired.package-publish:${packageId}`;
-  }
-
   /**
    * Loads a fresh `slug <-> id` index for one publish operation. Without the
    * repository (unit tests) only numeric references can be resolved, which is
@@ -534,119 +512,6 @@ export class PackageRevisionsService {
     return resolved;
   }
 
-  /**
-   * Namespace-scoped Postgres advisory locks let every instance agree on which
-   * package is being published without a new column (`DB_SYNC` would mutate
-   * the shared schema) and without a second source of truth.
-   */
-  private async assertNotPublishing(packageId: number): Promise<void> {
-    const publishing =
-      this.publishing.has(packageId) ||
-      (await this.isPublishLockedElsewhere(packageId));
-    if (publishing) {
-      throw new ConflictException(
-        `Package ${packageId} is being published, try again in a moment`,
-      );
-    }
-  }
-
-  /**
-   * Probes the advisory lock by taking and immediately releasing it: the lock
-   * is held exactly while another instance verifies and moves the bytes.
-   * A database error must not block uploads, so it counts as "not publishing".
-   */
-  private async isPublishLockedElsewhere(packageId: number): Promise<boolean> {
-    if (!this.dataSource) {
-      return false;
-    }
-    let runner: QueryRunner;
-    try {
-      runner = this.dataSource.createQueryRunner();
-      await runner.connect();
-    } catch (error) {
-      this.warnLockFailure(packageId, error);
-      return false;
-    }
-    try {
-      const rows = (await runner.query(
-        'SELECT pg_try_advisory_lock(hashtext($1)) AS locked',
-        [this.publishLockKey(packageId)],
-      )) as Array<{ locked?: boolean }>;
-      const acquired = rows[0]?.locked === true;
-      if (acquired) {
-        await runner.query('SELECT pg_advisory_unlock(hashtext($1))', [
-          this.publishLockKey(packageId),
-        ]);
-      }
-      return !acquired;
-    } catch (error) {
-      this.warnLockFailure(packageId, error);
-      return false;
-    } finally {
-      await runner.release().catch(() => undefined);
-    }
-  }
-
-  /**
-   * Takes the cross-instance publication lock. Returns `null` when the lock
-   * was taken locally only (no DataSource, or the database is unreachable):
-   * publication keeps working, but only the in-process guard is active.
-   * Throws when another instance holds the lock.
-   */
-  private async acquirePublishLock(
-    packageId: number,
-  ): Promise<QueryRunner | null> {
-    if (!this.dataSource) {
-      return null;
-    }
-    let runner: QueryRunner;
-    try {
-      runner = this.dataSource.createQueryRunner();
-      await runner.connect();
-    } catch (error) {
-      this.warnLockFailure(packageId, error);
-      return null;
-    }
-    try {
-      const rows = (await runner.query(
-        'SELECT pg_try_advisory_lock(hashtext($1)) AS locked',
-        [this.publishLockKey(packageId)],
-      )) as Array<{ locked?: boolean }>;
-      if (rows[0]?.locked !== true) {
-        await runner.release().catch(() => undefined);
-        throw new ConflictException(
-          `Package ${packageId} is being published, try again in a moment`,
-        );
-      }
-      return runner;
-    } catch (error) {
-      if (error instanceof ConflictException) {
-        throw error;
-      }
-      await runner.release().catch(() => undefined);
-      this.warnLockFailure(packageId, error);
-      return null;
-    }
-  }
-
-  private async releasePublishLock(
-    runner: QueryRunner | null,
-    packageId: number,
-  ): Promise<void> {
-    if (!runner) {
-      return;
-    }
-    try {
-      await runner.query('SELECT pg_advisory_unlock(hashtext($1))', [
-        this.publishLockKey(packageId),
-      ]);
-    } catch (error) {
-      this.warnLockFailure(packageId, error);
-    } finally {
-      await runner.release().catch(() => undefined);
-    }
-  }
-
   private warnCopyCleanupFailure(
     packageId: number,
     revision: number,
@@ -654,14 +519,6 @@ export class PackageRevisionsService {
   ): void {
     this.logger.warn(
       `Package ${packageId} revision ${revision} copy cleanup failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
-
-  private warnLockFailure(packageId: number, error: unknown): void {
-    this.logger.warn(
-      `Package ${packageId} publication lock is only process-local: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );

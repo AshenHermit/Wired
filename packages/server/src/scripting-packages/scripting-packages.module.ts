@@ -8,6 +8,7 @@ import { ScriptingPackagesService } from './scripting-packages.service';
 import { ScriptingPackagesController } from './scripting-packages.controller';
 import { PackageRevisionsService } from './package-revisions.service';
 import { PackageWorkshopService } from './package-workshop.service';
+import { PackagePublishLockService } from './package-publish-lock.service';
 import { PackageDeliveryModule } from './package-delivery.module';
 import { AppConfigModule } from 'src/config/config.module';
 import { GodotGameModule } from 'src/godot-game/godot-game.module';
@@ -28,8 +29,13 @@ import { GodotGameModule } from 'src/godot-game/godot-game.module';
     ScriptingPackagesService,
     PackageRevisionsService,
     PackageWorkshopService,
+    PackagePublishLockService,
   ],
   controllers: [ScriptingPackagesController],
-  exports: [ScriptingPackagesService, PackageRevisionsService],
+  exports: [
+    ScriptingPackagesService,
+    PackageRevisionsService,
+    PackagePublishLockService,
+  ],
 })
 export class ScriptingPackagesModule {}

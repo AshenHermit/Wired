@@ -9,6 +9,7 @@ import { ScriptingPackage } from 'src/database/entities/scripting-package.entity
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { sha256Hex } from './package-hash';
 import { PackageRevisionsService } from './package-revisions.service';
+import { PackagePublishLockService } from './package-publish-lock.service';
 import { PackageStorageService } from './package-storage.service';
 import { ScriptingPackagesService } from './scripting-packages.service';
 import type { PackageRevisionDispatcher } from 'src/godot-game/package-sync.types';
@@ -113,8 +114,8 @@ describe('PackageRevisionsService', () => {
       repository as never,
       packagesService as unknown as ScriptingPackagesService,
       storage as unknown as PackageStorageService,
-      dispatcher as unknown as PackageRevisionDispatcher,
       undefined,
+      dispatcher as unknown as PackageRevisionDispatcher,
       packagesRepository as never,
     );
   });
@@ -637,8 +638,8 @@ describe('PackageRevisionsService', () => {
         repository as never,
         packagesService as unknown as ScriptingPackagesService,
         storage as unknown as PackageStorageService,
+        new PackagePublishLockService(dataSource as unknown as DataSource),
         dispatcher as unknown as PackageRevisionDispatcher,
-        dataSource as unknown as DataSource,
       );
     }
 
