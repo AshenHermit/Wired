@@ -76,6 +76,32 @@ describe('PackageWorkshopService', () => {
     ]);
   });
 
+  it('falls back to defaults when pagination is not a finite number', async () => {
+    const query = jest.fn(() => Promise.resolve([]));
+    const service = makeService({ query });
+
+    await service.list({ limit: Number.NaN, offset: Number.NaN });
+
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('ILIKE'), [
+      '',
+      50,
+      0,
+    ]);
+  });
+
+  it('clamps out-of-range pagination', async () => {
+    const query = jest.fn(() => Promise.resolve([]));
+    const service = makeService({ query });
+
+    await service.list({ limit: 0, offset: -5 });
+
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('ILIKE'), [
+      '',
+      1,
+      0,
+    ]);
+  });
+
   it('maps a row into a workshop summary with a full author', async () => {
     const query = jest.fn(() => Promise.resolve([row]));
 

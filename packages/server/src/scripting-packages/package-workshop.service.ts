@@ -62,8 +62,14 @@ export class PackageWorkshopService {
   }): Promise<WorkshopListing> {
     const q = (query.q ?? '').trim().toLowerCase().slice(0, 64);
     const pattern = q ? `%${q}%` : '';
-    const limit = Math.min(100, Math.max(1, query.limit ?? 50));
-    const offset = Math.max(0, query.offset ?? 0);
+    // Query-string numbers arrive unvalidated, so `?limit=abc` is `NaN` here.
+    // A non-finite value would otherwise be sent to Postgres as `LIMIT NaN`.
+    const limit = Number.isFinite(query.limit)
+      ? Math.min(100, Math.max(1, query.limit as number))
+      : 50;
+    const offset = Number.isFinite(query.offset)
+      ? Math.max(0, query.offset as number)
+      : 0;
 
     const rows: WorkshopRow[] = await this.packagesRepository.query(LIST_SQL, [
       pattern,
