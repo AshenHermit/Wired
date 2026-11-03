@@ -58,17 +58,20 @@ export type PackageSlugAvailability = {
  * workshop.
  * Room slugs are only unique inside their room, so the global workshop scope is
  * reported separately and always checked by the caller.
+ * `excludeId` keeps a renamed package from reporting its own slug as taken.
  */
 export async function checkPackageSlugAvailability(
   slug: string,
-  roomId?: number
+  roomId?: number,
+  excludeId?: number
 ): Promise<PackageSlugAvailability> {
   return apiClient.get<
     PackageSlugAvailability,
-    { slug: string; roomId?: number }
+    { slug: string; roomId?: number; excludeId?: number }
   >("scripting-packages/slug-availability", {
     slug,
     ...(roomId === undefined ? {} : { roomId }),
+    ...(excludeId === undefined ? {} : { excludeId }),
   });
 }
 

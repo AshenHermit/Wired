@@ -156,6 +156,10 @@ export type CreateScriptingPackagePayload = {
 export type UpdateScriptingPackagePayload =
   Partial<Omit<CreateScriptingPackagePayload, "slug">> & {
     enabled?: boolean;
+    /** Renames the package; a no-op when it equals the current slug. */
+    slug?: string;
+    /** Optional confirmation for a rename that published dependents point to. */
+    confirmSlugRename?: boolean;
   };
 
 export type WorkshopPackageSummary = {

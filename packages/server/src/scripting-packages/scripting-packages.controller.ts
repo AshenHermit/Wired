@@ -89,8 +89,10 @@ export class ScriptingPackagesController {
   slugAvailability(
     @Query('slug') slug: string,
     @Query('roomId', new ParseIntPipe({ optional: true })) roomId?: number,
+    @Query('excludeId', new ParseIntPipe({ optional: true }))
+    excludeId?: number,
   ) {
-    return this.packagesService.checkSlugAvailability(slug, roomId);
+    return this.packagesService.checkSlugAvailability(slug, roomId, excludeId);
   }
 
   @ApiOkResponse({ description: 'Workshop packages' })

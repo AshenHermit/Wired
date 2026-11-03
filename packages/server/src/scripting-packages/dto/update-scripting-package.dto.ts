@@ -78,4 +78,20 @@ export class UpdateScriptingPackageDto {
   @IsOptional()
   @IsBoolean()
   enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: 'hero_2',
+    description: 'New slug; the service rewrites package references',
+  })
+  @IsOptional()
+  @IsString()
+  slug?: string;
+
+  @ApiPropertyOptional({
+    example: true,
+    description: 'Confirms a rename that published dependents point to',
+  })
+  @IsOptional()
+  @IsBoolean()
+  confirmSlugRename?: boolean;
 }

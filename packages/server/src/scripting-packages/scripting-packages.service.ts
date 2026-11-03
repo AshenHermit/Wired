@@ -10,7 +10,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { User } from 'src/database/entities/user.entity';
@@ -122,15 +122,19 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
    * the requested scope is the global workshop, so `available` mirrors
    * `global`. The global scope is always reported: a room package may reuse a
    * workshop slug, but the create dialog still needs to know about a clash.
+   * `excludeId` drops one package from both scopes, so a rename does not
+   * report its own current slug as taken.
    */
   async checkSlugAvailability(
     slug: string,
     roomId?: number,
+    excludeId?: number,
   ): Promise<PackageSlugAvailability> {
     const normalized = this.normalizeSlug(slug);
+    const notSelf = excludeId === undefined ? {} : { id: Not(excludeId) };
 
     const globalLive = await this.packagesRepository.findOne({
-      where: { slug: normalized, room: IsNull() },
+      where: { slug: normalized, room: IsNull(), ...notSelf },
     });
     const scope: PackageSlugAvailability['global'] = globalLive
       ? { available: false, reason: 'taken' }
@@ -141,7 +145,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     }
 
     const live = await this.packagesRepository.findOne({
-      where: { slug: normalized, room: { id: roomId } },
+      where: { slug: normalized, room: { id: roomId }, ...notSelf },
     });
     return live
       ? { slug: normalized, available: false, reason: 'taken', global: scope }

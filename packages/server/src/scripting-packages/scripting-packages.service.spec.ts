@@ -4,7 +4,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { IsNull } from 'typeorm';
+import { IsNull, Not } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackagesService } from './scripting-packages.service';
 
@@ -717,6 +717,26 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     });
     expect(findOne).toHaveBeenCalledWith({
       where: { slug: 'hero', room: IsNull() },
+    });
+  });
+
+  it('does not count the excluded package as the owner of its own slug', async () => {
+    const findOne = jest
+      .fn()
+      .mockResolvedValueOnce({ id: 7, slug: 'hero' })
+      .mockResolvedValueOnce(null);
+    const service = makeSlugService({ findOne });
+
+    await expect(service.checkSlugAvailability('hero', 3, 5)).resolves.toEqual({
+      slug: 'hero',
+      available: true,
+      global: { available: false, reason: 'taken' },
+    });
+    expect(findOne).toHaveBeenCalledWith({
+      where: { slug: 'hero', room: { id: 3 }, id: Not(5) },
+    });
+    expect(findOne).toHaveBeenCalledWith({
+      where: { slug: 'hero', room: IsNull(), id: Not(5) },
     });
   });
 

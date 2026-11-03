@@ -577,7 +577,28 @@ describe('ScriptingPackagesController lifecycle routes', () => {
     expect(packagesService.checkSlugAvailability).toHaveBeenCalledWith(
       'hero',
       undefined,
+      undefined,
     );
+  });
+
+  it('passes excludeId from the query', async () => {
+    await controller.slugAvailability('hero', 3, 5);
+    expect(packagesService.checkSlugAvailability).toHaveBeenCalledWith(
+      'hero',
+      3,
+      5,
+    );
+  });
+
+  it('passes slug and confirmSlugRename to the service', async () => {
+    await controller.update(request, 5, {
+      slug: 'hero2',
+      confirmSlugRename: true,
+    });
+    expect(packagesService.update).toHaveBeenCalledWith(5, {
+      slug: 'hero2',
+      confirmSlugRename: true,
+    });
   });
 
   it('checks editing rights before toggling a package', async () => {
@@ -663,7 +684,11 @@ describe('ScriptingPackagesController slug route ordering', () => {
       .get('/scripting-packages/slug-availability?slug=hero')
       .expect(200);
 
-    expect(checkSlugAvailability).toHaveBeenCalledWith('hero', undefined);
+    expect(checkSlugAvailability).toHaveBeenCalledWith(
+      'hero',
+      undefined,
+      undefined,
+    );
     expect(findOne).not.toHaveBeenCalled();
   });
 
@@ -672,7 +697,15 @@ describe('ScriptingPackagesController slug route ordering', () => {
       .get('/scripting-packages/slug-availability?slug=hero&roomId=5')
       .expect(200);
 
-    expect(checkSlugAvailability).toHaveBeenCalledWith('hero', 5);
+    expect(checkSlugAvailability).toHaveBeenCalledWith('hero', 5, undefined);
+  });
+
+  it('passes the excluded package to the availability check', async () => {
+    await request(app.getHttpServer())
+      .get('/scripting-packages/slug-availability?slug=hero&roomId=5&excludeId=7')
+      .expect(200);
+
+    expect(checkSlugAvailability).toHaveBeenCalledWith('hero', 5, 7);
   });
 
   it('still parses numeric ids for the :id route', async () => {
@@ -715,10 +748,23 @@ describe('ScriptingPackagesController slug route ordering', () => {
     });
   });
 
-  it('rejects a slug field in PATCH through the global validation pipe', async () => {
+  it('accepts a slug field in PATCH', async () => {
     await request(app.getHttpServer())
       .patch('/scripting-packages/7')
-      .send({ slug: 'other', name: 'Renamed' })
+      .send({ slug: 'other', confirmSlugRename: true, name: 'Renamed' })
+      .expect(200);
+
+    expect(update).toHaveBeenCalledWith(7, {
+      slug: 'other',
+      confirmSlugRename: true,
+      name: 'Renamed',
+    });
+  });
+
+  it('rejects a non-string slug in PATCH', async () => {
+    await request(app.getHttpServer())
+      .patch('/scripting-packages/7')
+      .send({ slug: 5 })
       .expect(400);
 
     expect(update).not.toHaveBeenCalled();
