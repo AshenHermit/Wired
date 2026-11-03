@@ -464,6 +464,84 @@ export function packagesFailed(packages: RoomPackagesStatus): boolean {
   );
 }
 
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+/** Reads the runtime state and the packages the room expects to see applied. */
+async function readRuntimeState(roomId: number) {
+  const [status, packages] = await Promise.all([
+    getGameRoomStatus(roomId),
+    getRoomPackages(roomId),
+  ]);
+  return { status, packages };
+}
+
+/** Reports how far the runtime is from applying the room's active packages. */
+function reportRuntimeProgress(
+  status: GameRoomRuntimeStatus,
+  packages: RoomPackagesStatus,
+  onProgress: (message: AppMessage) => void,
+): void {
+  const active = activePackages(packages);
+  const applied = active.filter(({ packageId, revision }) => {
+    const entry = packages.packages.find((pkg) => pkg.packageId === packageId);
+    return (
+      entry?.runtime.state === "applied" && entry.runtime.revision >= revision
+    );
+  }).length;
+  onProgress(
+    runtimeMessage(status, packagesAreApplied(packages), applied, active.length),
+  );
+}
+
+interface RuntimeWaitOptions {
+  /** Set when the effect that started the wait was torn down. */
+  signal: AbortSignal;
+  onProgress: (message: AppMessage) => void;
+}
+
+/**
+ * Waits until the runtime runs the room's active packages.
+ *
+ * Returns as soon as the runtime is either ready or in a state the connection
+ * POST has to restart (idle, stopped, crashed). `starting` and `stopping` are
+ * the only states worth waiting out, because the POST is what starts a stopped
+ * runtime.
+ */
+async function waitForRuntimeUntil(
+  roomId: number,
+  deadline: number,
+  { signal, onProgress }: RuntimeWaitOptions,
+): Promise<void> {
+  for (;;) {
+    const { status, packages } = await readRuntimeState(roomId);
+    reportRuntimeProgress(status, packages, onProgress);
+    if (signal.aborted) {
+      return;
+    }
+    if (packagesFailed(packages)) {
+      throw new GameTabError({ key: "Game.packagesFailed" });
+    }
+    if (status.state === "running" && packagesAreApplied(packages)) {
+      return;
+    }
+    if (
+      status.state === "idle" ||
+      status.state === "stopped" ||
+      status.state === "failed"
+    ) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new GameTabError({ key: "Game.waitTimeout" });
+    }
+    await sleep(RUNTIME_POLL_MS);
+    if (signal.aborted) {
+      return;
+    }
+  }
+}
+
 /**
  * The Godot Web build runs in a same-origin iframe. The host waits for the
  * engine to boot, requests a fresh single-use ticket, and hands it over with
@@ -533,8 +611,7 @@ export function GameTab({ room }: { room: Room }) {
       return;
     }
     let cancelled = false;
-    const sleep = (ms: number) =>
-      new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+    const abort = new AbortController();
 
     const waitMessage = (message: AppMessage) => {
       if (!cancelled) {
@@ -542,60 +619,16 @@ export function GameTab({ room }: { room: Room }) {
       }
     };
 
-    const readRuntime = async () => {
-      const [status, packages] = await Promise.all([
-        getGameRoomStatus(room.id),
-        getRoomPackages(room.id),
-      ]);
-      return { status, packages };
-    };
-
     const describeRuntime = (
       status: GameRoomRuntimeStatus,
       packages: RoomPackagesStatus,
-    ) => {
-      const active = activePackages(packages);
-      const total = active.length;
-      const applied = active.filter(({ packageId, revision }) => {
-        const entry = packages.packages.find(
-          (pkg) => pkg.packageId === packageId,
-        );
-        return (
-          entry?.runtime.state === "applied" &&
-          entry.runtime.revision >= revision
-        );
-      }).length;
-      waitMessage(
-        runtimeMessage(status, packagesAreApplied(packages), applied, total),
-      );
-    };
+    ) => reportRuntimeProgress(status, packages, waitMessage);
 
-    const waitForRuntime = async (deadline: number) => {
-      for (;;) {
-        const { status, packages } = await readRuntime();
-        describeRuntime(status, packages);
-        if (cancelled) return;
-        if (packagesFailed(packages)) {
-          throw new GameTabError({ key: "Game.packagesFailed" });
-        }
-        if (status.state === "running" && packagesAreApplied(packages)) return;
-        // Idle, stopped and crashed runtimes are all restarted by the POST
-        // below. Only `starting`/`stopping` and package application are states
-        // this loop has to wait out.
-        if (
-          status.state === "idle" ||
-          status.state === "stopped" ||
-          status.state === "failed"
-        ) {
-          return;
-        }
-        if (Date.now() >= deadline) {
-          throw new GameTabError({ key: "Game.waitTimeout" });
-        }
-        await sleep(RUNTIME_POLL_MS);
-        if (cancelled) return;
-      }
-    };
+    const waitForRuntime = (deadline: number) =>
+      waitForRuntimeUntil(room.id, deadline, {
+        signal: abort.signal,
+        onProgress: waitMessage,
+      });
 
     void (async () => {
       const deadline = Date.now() + CONNECTION_WAIT_MS;
@@ -607,8 +640,10 @@ export function GameTab({ room }: { room: Room }) {
           // The POST is what starts a stopped runtime and waits for its first
           // package pass. Keep the overlay informative while it is in flight.
           const poller = window.setInterval(() => {
-            void readRuntime()
-              .then(({ status, packages }) => describeRuntime(status, packages))
+            void readRuntimeState(room.id)
+              .then(({ status, packages }) =>
+                describeRuntime(status, packages),
+              )
               .catch(() => {
                 // The request itself owns the real error.
               });
@@ -681,6 +716,7 @@ export function GameTab({ room }: { room: Room }) {
 
     return () => {
       cancelled = true;
+      abort.abort();
     };
   }, [room.id, state.ticketRequest]);
 

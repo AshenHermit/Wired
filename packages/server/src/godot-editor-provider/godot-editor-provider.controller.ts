@@ -3,36 +3,22 @@ import {
   Get,
   NotFoundException,
   Param,
+  Req,
   Res,
   StreamableFile,
 } from '@nestjs/common';
 import { ProjectInfo } from '@wired-io/shared';
-import { Response } from 'express';
-import { createReadStream } from 'fs';
-import { glob, stat } from 'fs/promises';
-import path, { resolve } from 'path';
+import { Request, Response } from 'express';
+import { glob, stat } from 'node:fs/promises';
+import path, { resolve } from 'node:path';
 import { AppConfigService } from 'src/config/config.service';
-import { contentTypeFor } from 'src/common/content-types';
-import { resolveWithin } from 'src/common/paths';
+import { serveStaticAsset, wildcardPath } from 'src/common/static-assets';
 import { Public } from 'src/auth/auth-policy';
 
 const EXCLUDED_PROJECT_DIRS = new Set(['build', 'storage', '.godot']);
 
-/**
- * Express gives wildcard params either as a string or as an array of segments
- * depending on the router version, so both forms are normalized here.
- */
-function toRelativePath(value: string | string[] | undefined): string {
-  return (Array.isArray(value) ? value : [value ?? '']).join('/');
-}
-
-async function assertFile(fullPath: string): Promise<string> {
-  const info = await stat(fullPath).catch(() => null);
-  if (!info?.isFile()) {
-    throw new NotFoundException('File not found');
-  }
-  return fullPath;
-}
+/** Shared by the file route, the manifest and the baseUrl the editor fetches. */
+const GODOT_PROJECT_ROUTE = 'godot-project/wired';
 
 /**
  * Serves the WASM editor's own assets and the shared base project.
@@ -46,25 +32,20 @@ export class GodotEditorProviderController {
   constructor(private readonly configService: AppConfigService) {}
 
   @Get('godot-editor/*path')
-  async getFiles(
+  getEditorFile(
     @Param('path') requestedPath: string | string[],
-    @Res({ passthrough: true }) res?: Response,
-  ): Promise<StreamableFile> {
-    const relativeFilepath = toRelativePath(requestedPath);
-    const file = await assertFile(
-      resolveWithin(
-        resolve(this.configService.godot.editorPath),
-        relativeFilepath,
-      ),
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile | undefined> {
+    return serveStaticAsset(
+      resolve(this.configService.godot.editorPath),
+      wildcardPath(requestedPath),
+      req,
+      res,
     );
-    res?.set({
-      'Content-Type': contentTypeFor(relativeFilepath),
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-      'Cross-Origin-Opener-Policy': 'same-origin',
-    });
-    return new StreamableFile(createReadStream(file));
   }
-  @Get('godot-project-info/wired')
+
+  @Get(GODOT_PROJECT_ROUTE)
   async getGodotProjectInfo(): Promise<ProjectInfo> {
     const projectDir = path.join(
       resolve(this.configService.godot.projectPath),
@@ -95,26 +76,30 @@ export class GodotEditorProviderController {
     }
     const projectInfo: ProjectInfo = {
       name: 'Wired',
-      baseUrl: '/godot-project/wired/',
+      baseUrl: `/${GODOT_PROJECT_ROUTE}/`,
       filepaths: filepaths,
     };
     return projectInfo;
   }
-  @Get('godot-project/wired/*filepath')
-  async getGodotProjectFile(
+
+  @Get(`${GODOT_PROJECT_ROUTE}/*filepath`)
+  getGodotProjectFile(
     @Param('filepath') filepath: string | string[],
-    @Res({ passthrough: true }) res?: Response,
-  ): Promise<StreamableFile> {
-    const projectDir = path.join(
-      resolve(this.configService.godot.projectPath),
-      '_wired',
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile | undefined> {
+    return serveStaticAsset(
+      path.join(resolve(this.configService.godot.projectPath), '_wired'),
+      wildcardPath(filepath),
+      req,
+      res,
+      {
+        // The editor writes these into its own file system, so the browser
+        // never has to interpret them.
+        contentType: () => 'application/octet-stream',
+        // Not document responses: isolation headers would only add noise.
+        crossOriginIsolation: false,
+      },
     );
-    const file = await assertFile(
-      resolveWithin(projectDir, toRelativePath(filepath)),
-    );
-    res?.set({
-      'Content-Type': 'application/octet-stream',
-    });
-    return new StreamableFile(createReadStream(file));
   }
 }

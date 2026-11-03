@@ -124,12 +124,14 @@ describe('GameExportController', () => {
   });
 
   it('refuses to escape the export directory', async () => {
+    // Path traversal is rejected before touching the file system, so it is a
+    // malformed request rather than a missing file.
     await request(app.getHttpServer())
       .get('/game-export/%2e%2e%2fsecret.txt')
-      .expect(404);
+      .expect(400);
     await request(app.getHttpServer())
       .get('/game-export/..%5csecret.txt')
-      .expect(404);
+      .expect(400);
   });
 
   it('reports a missing file and a missing build explicitly', async () => {

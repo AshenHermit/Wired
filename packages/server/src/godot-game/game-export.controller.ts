@@ -10,14 +10,15 @@ import {
   StreamableFile,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { createReadStream, existsSync, statSync } from 'node:fs';
-import { extname, resolve, sep } from 'node:path';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { AppConfigService } from 'src/config/config.service';
-import { contentTypeFor } from 'src/common/content-types';
+import { serveStaticAsset } from 'src/common/static-assets';
 import { Public } from 'src/auth/auth-policy';
 
-const EXPORT_PREFIX = '/game-export/';
-const DEFAULT_FILE = 'index.html';
+/** Route prefix, shared by the decorator and the path slice below. */
+export const GAME_EXPORT_ROUTE = 'game-export';
+const EXPORT_PREFIX = `/${GAME_EXPORT_ROUTE}`;
 
 /**
  * Serves the generated Godot Web export from the backend so the iframe stays
@@ -29,7 +30,7 @@ const DEFAULT_FILE = 'index.html';
  * same for every room.
  */
 @Public()
-@Controller('game-export')
+@Controller(GAME_EXPORT_ROUTE)
 export class GameExportController implements OnModuleInit {
   private readonly logger = new Logger(GameExportController.name);
   private readonly root: string;
@@ -46,7 +47,7 @@ export class GameExportController implements OnModuleInit {
       // lack it. Fail loudly at startup instead of only when a player opens
       // the Game tab.
       this.logger.warn(
-        `Godot Web export is missing at ${this.root}; /game-export will return 404 until it is built`,
+        `Godot Web export is missing at ${this.root}; /${GAME_EXPORT_ROUTE} will return 404 until it is built`,
       );
     }
   }
@@ -55,7 +56,7 @@ export class GameExportController implements OnModuleInit {
   serveRoot(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
-  ): StreamableFile | undefined {
+  ): Promise<StreamableFile | undefined> {
     return this.servePath(req.path, req, res);
   }
 
@@ -63,7 +64,7 @@ export class GameExportController implements OnModuleInit {
   serve(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
-  ): StreamableFile | undefined {
+  ): Promise<StreamableFile | undefined> {
     return this.servePath(req.path, req, res);
   }
 
@@ -71,7 +72,7 @@ export class GameExportController implements OnModuleInit {
     urlPath: string,
     req: Request,
     res: Response,
-  ): StreamableFile | undefined {
+  ): Promise<StreamableFile | undefined> {
     if (!existsSync(this.root)) {
       throw new NotFoundException(
         this.isProduction
@@ -80,73 +81,24 @@ export class GameExportController implements OnModuleInit {
       );
     }
 
+    // Only the bare route and paths under it can address an export file. A
+    // route rename would otherwise silently serve index.html for every asset.
+    if (urlPath !== EXPORT_PREFIX && !urlPath.startsWith(`${EXPORT_PREFIX}/`)) {
+      throw new NotFoundException('Game export file not found');
+    }
+
     let relative: string;
     try {
       relative = decodeURIComponent(
-        urlPath.startsWith(EXPORT_PREFIX)
-          ? urlPath.slice(EXPORT_PREFIX.length)
-          : '',
+        urlPath.slice(EXPORT_PREFIX.length).replace(/^\//, ''),
       );
     } catch {
       throw new BadRequestException('Malformed game export path');
     }
-    if (relative.includes('\0')) {
-      throw new BadRequestException('Malformed game export path');
-    }
-    if (!relative || relative.endsWith('/')) {
-      relative += DEFAULT_FILE;
-    }
 
-    const target = resolve(this.root, relative);
-    if (target !== this.root && !target.startsWith(this.root + sep)) {
-      throw new NotFoundException('Game export file not found');
-    }
-
-    let stat;
-    try {
-      stat = statSync(target);
-    } catch {
-      throw new NotFoundException('Game export file not found');
-    }
-    if (!stat.isFile()) {
-      throw new NotFoundException('Game export file not found');
-    }
-
-    const extension = extname(target).toLowerCase();
-    // Revalidate export assets instead of re-downloading the ~36 MB engine on
-    // every reconnect. The shell itself stays uncached so a new export is
-    // picked up immediately.
-    const isShell = extension === '.html' || extension === '.htm';
-    const etag = `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
-    res.set({
-      'Content-Type': contentTypeFor(target),
-      'Cache-Control': isShell ? 'no-store' : 'no-cache',
-      ETag: etag,
-      'X-Content-Type-Options': 'nosniff',
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-      // The iframe and the app share an origin, but keep the export isolated
-      // from embedding elsewhere.
-      'Cross-Origin-Resource-Policy': 'same-origin',
+    return serveStaticAsset(this.root, relative, req, res, {
+      revalidate: true,
+      noStoreShell: true,
     });
-
-    if (this.matchesEtag(req.headers['if-none-match'], etag)) {
-      res.status(304);
-      return undefined;
-    }
-
-    return new StreamableFile(createReadStream(target), {
-      length: stat.size,
-    });
-  }
-
-  private matchesEtag(header: string | undefined, etag: string): boolean {
-    if (!header) {
-      return false;
-    }
-    return header
-      .split(',')
-      .map((value) => value.trim().replace(/^W\//, ''))
-      .some((value) => value === etag);
   }
 }

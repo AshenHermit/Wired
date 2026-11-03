@@ -1,11 +1,22 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { Request, Response } from 'express';
 import { mkdtemp, mkdir, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
 import request from 'supertest';
 import { AppConfigService } from 'src/config/config.service';
 import { GodotEditorProviderController } from './godot-editor-provider.controller';
+
+function fakeRequest(): Request {
+  return { path: '/', headers: {} } as unknown as Request;
+}
+
+function fakeResponse(): Response {
+  const res = { set: jest.fn(), status: jest.fn() };
+  res.status.mockReturnValue(res);
+  return res as unknown as Response;
+}
 
 describe('GodotEditorProviderController', () => {
   let workspace: string;
@@ -42,31 +53,31 @@ describe('GodotEditorProviderController', () => {
   });
 
   it('serves a file inside the editor directory', async () => {
-    const file = await controller.getFiles('engine.js');
+    const file = await controller.getEditorFile('engine.js', fakeRequest(), fakeResponse());
     expect(file).toBeDefined();
   });
 
   it.each(['../../secret.txt', '..%2F..%2Fsecret.txt', '/etc/passwd', ''])(
     'rejects an unsafe editor path: %p',
     async (unsafePath) => {
-      await expect(controller.getFiles(unsafePath)).rejects.toThrow();
+      await expect(controller.getEditorFile(unsafePath, fakeRequest(), fakeResponse())).rejects.toThrow();
     },
   );
 
   it('serves a file inside the base project', async () => {
-    const file = await controller.getGodotProjectFile('project.godot');
+    const file = await controller.getGodotProjectFile('project.godot', fakeRequest(), fakeResponse());
     expect(file).toBeDefined();
   });
 
   it('rejects traversal outside the base project', async () => {
     await expect(
-      controller.getGodotProjectFile('../../secret.txt'),
+      controller.getGodotProjectFile('../../secret.txt', fakeRequest(), fakeResponse()),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('returns 404 for a missing project file', async () => {
     await expect(
-      controller.getGodotProjectFile('missing.godot'),
+      controller.getGodotProjectFile('missing.godot', fakeRequest(), fakeResponse()),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
