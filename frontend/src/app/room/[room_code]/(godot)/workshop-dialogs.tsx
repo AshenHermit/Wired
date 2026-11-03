@@ -27,15 +27,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useAppMessage, type AppMessage } from "@/i18n/message";
 import {
   WorkshopSlugTakenError,
   type RoomPackageEntry,
   type RoomPackagesController,
 } from "./use-room-packages";
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /**
  * The public workshop inside the package panel. Adding a record is a server
@@ -52,8 +49,10 @@ export function WorkshopBrowserDialog({
   onOpenChange: (open: boolean) => void;
   packages: RoomPackagesController;
 }) {
+  const t = useTranslations("Workshop");
+  const format = useAppMessage();
   const [pendingId, setPendingId] = React.useState<number | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<AppMessage | null>(null);
 
   React.useEffect(() => {
     if (!open) return;
@@ -67,7 +66,8 @@ export function WorkshopBrowserDialog({
     try {
       await packages.addFromWorkshop(workshopPackage.id);
     } catch (cause) {
-      setError(messageOf(cause));
+      console.error(cause);
+      setError({ key: "Packages.errors.addFromWorkshopFailed" });
     } finally {
       setPendingId(null);
     }
@@ -77,10 +77,8 @@ export function WorkshopBrowserDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Workshop</DialogTitle>
-          <DialogDescription>
-            Пакеты сообщества. Добавление создаст копию в этой комнате.
-          </DialogDescription>
+          <DialogTitle>{t("browserTitle")}</DialogTitle>
+          <DialogDescription>{t("browserDescription")}</DialogDescription>
         </DialogHeader>
         <div className="max-h-[60vh] overflow-y-auto pr-1">
           <WorkshopBrowser
@@ -90,7 +88,7 @@ export function WorkshopBrowserDialog({
         </div>
         {error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive">
-            {error}
+            {format(error)}
           </div>
         )}
       </DialogContent>
@@ -131,6 +129,8 @@ export function WorkshopPublishDialog({
   authorId: number | null;
   onFork: () => void;
 }) {
+  const t = useTranslations("Workshop");
+  const format = useAppMessage();
   const [lookup, setLookup] = React.useState<LookupState>("loading");
   const [existing, setExisting] =
     React.useState<WorkshopPackageSummary | null>(null);
@@ -142,7 +142,7 @@ export function WorkshopPublishDialog({
     tags: [],
   });
   const [submitting, setSubmitting] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<AppMessage | null>(null);
 
   const packageId = entry?.packageId ?? null;
   const slug = entry?.slug ?? "";
@@ -196,8 +196,9 @@ export function WorkshopPublishDialog({
         if (cancelled) return;
         // Neither creation nor update can be offered safely: without the
         // lookup the dialog cannot tell whether a record already exists.
+        console.error(cause);
         setLookup("error");
-        setError(`Не удалось проверить запись в workshop: ${messageOf(cause)}`);
+        setError({ key: "Packages.errors.workshopLookupFailed" });
       });
     return () => {
       cancelled = true;
@@ -222,7 +223,8 @@ export function WorkshopPublishDialog({
         setExisting(cause.workshopPackage);
         setLookup("taken");
       } else {
-        setError(messageOf(cause));
+        console.error(cause);
+        setError({ key: "Packages.errors.publishFailed" });
       }
     } finally {
       setSubmitting(false);
@@ -237,18 +239,20 @@ export function WorkshopPublishDialog({
       <DialogContent className="sm:max-w-lg">
         <form onSubmit={submit} className="space-y-4">
           <DialogHeader>
-            <DialogTitle>Опубликовать в workshop</DialogTitle>
+            <DialogTitle>{t("publishTitle")}</DialogTitle>
             <DialogDescription>
-              Пакет{" "}
-              <span className="font-mono text-foreground">#{slug}</span>{" "}
-              публикуется как запись workshop с последней опубликованной
-              ревизией. Пакет комнаты и его файлы не изменятся.
+              {t.rich("publishDescription", {
+                slug,
+                code: (chunks) => (
+                  <span className="font-mono text-foreground">{chunks}</span>
+                ),
+              })}
             </DialogDescription>
           </DialogHeader>
 
           <dl className="space-y-3 text-sm">
             <div className="space-y-1">
-              <dt className="text-muted-foreground">Название</dt>
+              <dt className="text-muted-foreground">{t("name")}</dt>
               <dd className="font-medium">{details.name}</dd>
             </div>
             <div className="space-y-1">
@@ -256,44 +260,44 @@ export function WorkshopPublishDialog({
               <dd className="font-mono">#{slug}</dd>
             </div>
             <div className="space-y-1">
-              <dt className="text-muted-foreground">Версия</dt>
+              <dt className="text-muted-foreground">{t("version")}</dt>
               <dd>{details.version}</dd>
             </div>
             <div className="space-y-1">
-              <dt className="text-muted-foreground">Описание</dt>
+              <dt className="text-muted-foreground">{t("description")}</dt>
               <dd className="whitespace-pre-wrap">
-                {details.description.trim() || "Без описания"}
+                {details.description.trim() || t("noDescription")}
               </dd>
             </div>
             <div className="space-y-1">
-              <dt className="text-muted-foreground">Теги</dt>
+              <dt className="text-muted-foreground">{t("tags")}</dt>
               <dd>
-                {details.tags.length > 0 ? details.tags.join(", ") : "Без тегов"}
+                {details.tags.length > 0
+                  ? details.tags.join(", ")
+                  : t("noTags")}
               </dd>
             </div>
           </dl>
 
           <p className="text-xs text-muted-foreground">
-            Метаданные меняются в диалоге «Редактировать пакет».
+            {t("metadataHint")}
           </p>
 
           <div className="text-xs">
             {lookup === "loading" && (
-              <p className="text-muted-foreground">
-                Проверяем запись в workshop…
-              </p>
+              <p className="text-muted-foreground">{t("checking")}</p>
             )}
             {lookup === "free" && (
-              <p className="text-muted-foreground">
-                Будет создана новая запись в workshop
-              </p>
+              <p className="text-muted-foreground">{t("willCreate")}</p>
             )}
             {lookup === "mine" && (
-              <p className="text-muted-foreground">Публикация обновится</p>
+              <p className="text-muted-foreground">{t("willUpdate")}</p>
             )}
             {taken && (
               <p className="text-destructive">
-                Slug занят: {existing?.author?.name ?? "другой автор"}
+                {t("taken", {
+                  author: existing?.author?.name ?? t("takenFallbackAuthor"),
+                })}
               </p>
             )}
             {lookup === "error" && (
@@ -304,14 +308,14 @@ export function WorkshopPublishDialog({
                 className="h-auto px-0 text-xs"
                 onClick={() => setLookupAttempt((attempt) => attempt + 1)}
               >
-                Проверить снова
+                {t("checkAgain")}
               </Button>
             )}
           </div>
 
           {error && (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive">
-              {error}
+              {format(error)}
             </div>
           )}
 
@@ -322,12 +326,12 @@ export function WorkshopPublishDialog({
               onClick={() => onOpenChange(false)}
               disabled={submitting}
             >
-              Отмена
+              {t("cancel")}
             </Button>
             {taken ? (
               <Button type="button" onClick={onFork} disabled={submitting}>
                 <StoreIcon className="size-4" />
-                Создать fork
+                {t("createFork")}
               </Button>
             ) : (
               <Button type="submit" disabled={!canSubmit}>
@@ -336,7 +340,7 @@ export function WorkshopPublishDialog({
                 ) : (
                   <StoreIcon className="size-4" />
                 )}
-                Опубликовать
+                {t("publish")}
               </Button>
             )}
           </DialogFooter>
@@ -365,11 +369,14 @@ export function WorkshopForkDialog({
   packages: RoomPackagesController;
 }) {
   const [slug, setSlug] = React.useState("");
-  const t = useTranslations();
+  const t = useTranslations("Workshop");
+  const slugT = useTranslations();
+  const common = useTranslations("Common");
+  const format = useAppMessage();
   const [slugState, setSlugState] = React.useState<SlugCheckState>("idle");
   const [slugCheckAttempt, setSlugCheckAttempt] = React.useState(0);
   const [submitting, setSubmitting] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<AppMessage | null>(null);
 
   const checkSlugAvailability = packages.checkSlugAvailability;
 
@@ -429,7 +436,8 @@ export function WorkshopForkDialog({
       await packages.forkWorkshopPackage(entry.packageId, slug.trim());
       onOpenChange(false);
     } catch (cause) {
-      setError(messageOf(cause));
+      console.error(cause);
+      setError({ key: "Packages.errors.forkFailed" });
     } finally {
       setSubmitting(false);
     }
@@ -440,18 +448,19 @@ export function WorkshopForkDialog({
       <DialogContent>
         <form onSubmit={submit} className="space-y-4">
           <DialogHeader>
-            <DialogTitle>Создать fork</DialogTitle>
+            <DialogTitle>{t("forkTitle")}</DialogTitle>
             <DialogDescription>
-              Создастся копия пакета{" "}
-              <span className="font-mono text-foreground">
-                #{entry?.slug ?? ""}
-              </span>{" "}
-              с новым slug в этой комнате; исходный пакет останется.
+              {t.rich("forkDescription", {
+                slug: entry?.slug ?? "",
+                code: (chunks) => (
+                  <span className="font-mono text-foreground">{chunks}</span>
+                ),
+              })}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-1.5">
-            <Label htmlFor="workshop-fork-slug">Новый slug</Label>
+            <Label htmlFor="workshop-fork-slug">{t("newSlug")}</Label>
             <Input
               id="workshop-fork-slug"
               value={slug}
@@ -467,7 +476,7 @@ export function WorkshopForkDialog({
                       : "invalid",
                 );
               }}
-              placeholder="hero_controller_v2"
+              placeholder={t("newSlugPlaceholder")}
               autoComplete="off"
               spellCheck={false}
               autoCapitalize="none"
@@ -476,7 +485,7 @@ export function WorkshopForkDialog({
             />
             {slugHintKey(slugState) && (
               <p className={`text-xs ${slugHintClass(slugState)}`}>
-                {t(slugHintKey(slugState)!)}
+                {slugT(slugHintKey(slugState)!)}
               </p>
             )}
             {slugState === "error" && (
@@ -487,14 +496,14 @@ export function WorkshopForkDialog({
                 className="h-auto px-0 text-xs"
                 onClick={() => setSlugCheckAttempt((attempt) => attempt + 1)}
               >
-                Проверить снова
+                {t("checkAgain")}
               </Button>
             )}
           </div>
 
           {error && (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive">
-              {error}
+              {format(error)}
             </div>
           )}
 
@@ -505,7 +514,7 @@ export function WorkshopForkDialog({
               onClick={() => onOpenChange(false)}
               disabled={submitting}
             >
-              Отмена
+              {common("cancel")}
             </Button>
             <Button
               type="submit"
@@ -516,7 +525,7 @@ export function WorkshopForkDialog({
               ) : (
                 <StoreIcon className="size-4" />
               )}
-              Создать fork
+              {t("createFork")}
             </Button>
           </DialogFooter>
         </form>

@@ -226,6 +226,56 @@ describe("PackagesTab", () => {
     );
   });
 
+  it("shows the backend runtime error verbatim", () => {
+    render(
+      <PackagesTab
+        roomId={1}
+        authorId={42}
+        packages={controller({
+          entries: [
+            entry({
+              runtimeError: "Godot: script error at res://main.gd:12",
+            }),
+          ],
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByText(/Godot: script error at res:\/\/main.gd:12/),
+    ).toBeTruthy();
+  });
+
+  it("renders package statuses in English", () => {
+    render(
+      <PackagesTab
+        roomId={1}
+        authorId={42}
+        packages={controller({
+          entries: [
+            entry({
+              packageId: 6,
+              name: "Other",
+              status: "not-loaded",
+              loaded: false,
+              inEditor: false,
+              publishedRevision: null,
+              loadedRevision: null,
+              backendState: null,
+              runtimeState: null,
+              clientsReady: 0,
+              clientsTotal: 0,
+            }),
+          ],
+        })}
+      />,
+      { locale: "en" },
+    );
+
+    expect(screen.getByText("Room packages")).toBeTruthy();
+    expect(screen.getByText("not loaded")).toBeTruthy();
+  });
+
   it("explains that Godot needs a project reload to see written files", () => {
     render(<PackagesTab roomId={1}authorId={42} packages={controller()} />);
 

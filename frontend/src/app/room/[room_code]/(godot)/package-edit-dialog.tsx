@@ -3,6 +3,7 @@
 import { Loader2Icon } from "lucide-react";
 import { useTranslations } from "next-intl";
 import * as React from "react";
+import { useAppMessage, type AppMessage } from "@/i18n/message";
 import { getScriptingPackage } from "@/api/services/scripting-packages";
 import {
   Dialog,
@@ -31,10 +32,6 @@ import {
   type RoomPackagesController,
 } from "./use-room-packages";
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 type DetailsState = "loading" | "ready" | "error";
 
 /**
@@ -59,7 +56,10 @@ export function PackageEditDialog({
   packages: RoomPackagesController;
 }) {
   const [name, setName] = React.useState("");
-  const t = useTranslations();
+  const t = useTranslations("Packages");
+  const common = useTranslations("Common");
+  const slugT = useTranslations();
+  const format = useAppMessage();
   const [version, setVersion] = React.useState("");
   const [slug, setSlug] = React.useState("");
   const [description, setDescription] = React.useState("");
@@ -76,7 +76,7 @@ export function PackageEditDialog({
   >(null);
   const [dirError, setDirError] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<AppMessage | null>(null);
 
   const checkSlugAvailability = packages.checkSlugAvailability;
 
@@ -200,7 +200,8 @@ export function PackageEditDialog({
       } else if (failure instanceof PackageDirectoryRenameError) {
         setDirError(true);
       } else {
-        setError(messageOf(failure));
+        console.error(failure);
+        setError({ key: "Packages.errors.saveFailed" });
       }
     } finally {
       setSubmitting(false);
@@ -216,7 +217,8 @@ export function PackageEditDialog({
       setDirError(false);
       onOpenChange(false);
     } catch (failure) {
-      setError(messageOf(failure));
+      console.error(failure);
+      setError({ key: "Packages.errors.directoryRenameFailed" });
     } finally {
       setSubmitting(false);
     }
@@ -234,36 +236,41 @@ export function PackageEditDialog({
           className="space-y-4"
         >
           <DialogHeader>
-            <DialogTitle>Редактировать пакет</DialogTitle>
+            <DialogTitle>{t("editDialog.title")}</DialogTitle>
             <DialogDescription>
-              Имя, версия, slug, описание и теги. Slug задаёт каталог{" "}
-              <span className="font-mono text-foreground">
-                packages/&lt;slug&gt;
-              </span>{" "}
-              в редакторе; при изменении папка переименовывается.
+              {t.rich("editDialog.description", {
+                path: "packages/<slug>",
+                code: (chunks) => (
+                  <span className="font-mono text-foreground">{chunks}</span>
+                ),
+              })}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <Label htmlFor="package-edit-name">Имя пакета</Label>
+              <Label htmlFor="package-edit-name">
+                {t("editDialog.name")}
+              </Label>
               <Input
                 id="package-edit-name"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 disabled={submitting}
-                placeholder="Например, Hero Controller"
+                placeholder={t("editDialog.namePlaceholder")}
                 autoFocus
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="package-edit-version">Версия</Label>
+              <Label htmlFor="package-edit-version">
+                {t("editDialog.version")}
+              </Label>
               <Input
                 id="package-edit-version"
                 value={version}
                 onChange={(event) => setVersion(event.target.value)}
                 disabled={submitting}
-                placeholder="0.1.0"
+                placeholder={t("editDialog.versionPlaceholder")}
               />
             </div>
             <div className="space-y-1.5">
@@ -273,14 +280,14 @@ export function PackageEditDialog({
                 value={slug}
                 onChange={handleSlugChange}
                 disabled={submitting}
-                placeholder="hero_controller"
+                placeholder={t("editDialog.slugPlaceholder")}
                 autoComplete="off"
                 spellCheck={false}
                 autoCapitalize="none"
               />
               {slugHintKey(slugState) && (
                 <p className={`text-xs ${slugHintClass(slugState)}`}>
-                  {t(slugHintKey(slugState)!)}
+                  {slugT(slugHintKey(slugState)!)}
                 </p>
               )}
               {slugState === "error" && (
@@ -291,22 +298,26 @@ export function PackageEditDialog({
                   className="h-auto px-0 text-xs"
                   onClick={retrySlugCheck}
                 >
-                  Проверить снова
+                  {t("editDialog.checkAgain")}
                 </Button>
               )}
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="package-edit-description">Описание</Label>
+              <Label htmlFor="package-edit-description">
+                {t("editDialog.descriptionLabel")}
+              </Label>
               <Textarea
                 id="package-edit-description"
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
                 disabled={submitting || detailsState !== "ready"}
-                placeholder="Что делает пакет"
+                placeholder={t("editDialog.descriptionPlaceholder")}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="package-edit-tags">Теги</Label>
+              <Label htmlFor="package-edit-tags">
+                {t("editDialog.tags")}
+              </Label>
               <TagInput
                 id="package-edit-tags"
                 value={tags}
@@ -316,21 +327,20 @@ export function PackageEditDialog({
                   setTagsInvalid(invalid);
                 }}
                 disabled={submitting || detailsState !== "ready"}
-                placeholder="gameplay, hero"
               />
               <p className="text-xs text-muted-foreground">
-                Enter, запятая или пробел — добавить тег. До 10 тегов.
+                {t("editDialog.tagsHint")}
               </p>
             </div>
             {detailsState === "loading" && (
               <p className="text-xs text-muted-foreground">
-                Загружаем описание и теги пакета…
+                {t("editDialog.detailsLoading")}
               </p>
             )}
             {detailsState === "error" && (
               <div className="space-y-1">
                 <p className="text-xs text-destructive">
-                  Не удалось загрузить описание и теги пакета.
+                  {t("editDialog.detailsFailed")}
                 </p>
                 <Button
                   type="button"
@@ -339,7 +349,7 @@ export function PackageEditDialog({
                   className="h-auto px-0 text-xs"
                   onClick={() => setDetailsAttempt((attempt) => attempt + 1)}
                 >
-                  Повторить
+                  {common("retry")}
                 </Button>
               </div>
             )}
@@ -347,16 +357,14 @@ export function PackageEditDialog({
 
           {dependents && (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-foreground">
-              <p>На slug ссылаются пакеты:</p>
+              <p>{t("editDialog.dependentsTitle")}</p>
               <ul className="mt-1 list-disc pl-5">
                 {dependents.map((dependent) => (
                   <li key={dependent.packageId}>{dependent.name}</li>
                 ))}
               </ul>
               <p className="mt-2 text-xs text-muted-foreground">
-                Их опубликованные файлы будут переписаны на новый slug. В
-                редакторах участников ссылки обновятся после повторного
-                скачивания пакетов.
+                {t("editDialog.dependentsDescription")}
               </p>
               <Button
                 type="button"
@@ -365,17 +373,14 @@ export function PackageEditDialog({
                 disabled={submitting}
                 onClick={() => void save(true)}
               >
-                Переименовать и обновить ссылки
+                {t("editDialog.renameDependents")}
               </Button>
             </div>
           )}
 
           {dirError && (
             <div className="space-y-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-              <p>
-                Сервер уже переименован, папка в редакторе — нет. Файлы не
-                потеряны: повторите перенос папки.
-              </p>
+              <p>{t("editDialog.dirError")}</p>
               <Button
                 type="button"
                 size="sm"
@@ -383,20 +388,19 @@ export function PackageEditDialog({
                 disabled={submitting}
                 onClick={() => void retryDirectory()}
               >
-                Повторить переименование папки
+                {t("editDialog.retryDirectory")}
               </Button>
             </div>
           )}
 
           {error && (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive">
-              {error}
+              {format(error)}
             </div>
           )}
 
           <p className="text-xs text-muted-foreground">
-            Публикация под новым slug создаст новую запись в workshop; старая
-            останется, пока её не удалят.
+            {t("editDialog.publishNote")}
           </p>
 
           <DialogFooter>
@@ -406,13 +410,13 @@ export function PackageEditDialog({
               onClick={() => onOpenChange(false)}
               disabled={submitting}
             >
-              Отмена
+              {common("cancel")}
             </Button>
             <Button type="submit" disabled={!canSubmit}>
               {submitting ? (
                 <Loader2Icon className="size-4 animate-spin" />
               ) : null}
-              Сохранить
+              {t("editDialog.save")}
             </Button>
           </DialogFooter>
         </form>

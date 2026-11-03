@@ -19,7 +19,7 @@ import {
   UploadIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useAppMessage, type AppMessage } from "@/i18n/message";
+import { useAppMessage, type AppMessage, type MessageKey } from "@/i18n/message";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -59,12 +59,12 @@ import {
 } from "./workshop-dialogs";
 import { PackageEditDialog } from "./package-edit-dialog";
 
-const STATUS_LABEL: Record<RoomPackageStatus, string> = {
-  "not-loaded": "не загружен",
-  loaded: "загружен",
-  "new-revision": "есть новая ревизия",
-  "local-changes": "локальные изменения",
-  disabled: "отключён",
+const STATUS_LABEL_KEYS: Record<RoomPackageStatus, MessageKey> = {
+  "not-loaded": "Packages.status.notLoaded",
+  loaded: "Packages.status.loaded",
+  "new-revision": "Packages.status.newRevision",
+  "local-changes": "Packages.status.localChanges",
+  disabled: "Packages.status.disabled",
 };
 
 const STATUS_CLASS: Record<RoomPackageStatus, string> = {
@@ -75,41 +75,33 @@ const STATUS_CLASS: Record<RoomPackageStatus, string> = {
   disabled: "border-border/60 bg-transparent text-muted-foreground",
 };
 
-const BACKEND_LABEL: Record<string, string> = {
-  published: "опубликован",
-  pending: "ожидает применения",
-  applied: "применён в runtime",
-  ready: "готов у всех клиентов",
-  failed: "ошибка применения",
-  stale: "устарел",
+const BACKEND_LABEL_KEYS: Record<string, MessageKey> = {
+  published: "Packages.backend.published",
+  pending: "Packages.backend.pending",
+  applied: "Packages.backend.applied",
+  ready: "Packages.backend.ready",
+  failed: "Packages.backend.failed",
+  stale: "Packages.backend.stale",
 };
 
-const RUNTIME_LABEL: Record<string, string> = {
-  pending: "runtime ещё применяет ревизию",
-  applied: "runtime применил ревизию",
-  failed: "runtime не смог применить ревизию",
+const RUNTIME_LABEL_KEYS: Record<string, MessageKey> = {
+  pending: "Packages.runtime.pending",
+  applied: "Packages.runtime.applied",
+  failed: "Packages.runtime.failed",
 };
 
-function confirmation(pkg: RoomPackageEntry, changes: string[], verb: string) {
-  const files = changes.slice(0, 5).join(", ");
-  const rest = changes.length > 5 ? ` и ещё ${changes.length - 5}` : "";
-  return `В пакете «${pkg.name}» есть локальные изменения: ${files}${rest}.\n\n${verb}?`;
-}
-
-function newerRevisionConfirmation(
+function confirmation(
   pkg: RoomPackageEntry,
-  error: NewerRevisionError,
-): string {
-  return (
-    `В пакете «${pkg.name}» уже опубликована ревизия ${error.publishedRevision}, ` +
-    `а в редакторе ${
-      error.loadedRevision === null || error.loadedRevision === 0
-        ? "ревизия не загружена"
-        : `ревизия ${error.loadedRevision}`
-    }.\n\n` +
-    `Emit опубликует файлы из редактора как новую ревизию и заменит ` +
-    `опубликованную ревизию ${error.publishedRevision}. Продолжить?`
-  );
+  changes: string[],
+  verb: string,
+  moreLabel: string,
+): AppMessage {
+  const files = changes.slice(0, 5).join(", ");
+  const rest = changes.length > 5 ? ` ${moreLabel}` : "";
+  return {
+    key: "Packages.confirm.localChanges",
+    values: { packageName: pkg.name, files, more: rest, verb },
+  };
 }
 
 type ConfirmRequest = {
@@ -127,6 +119,7 @@ type Confirm = (next: Omit<ConfirmRequest, "resolve">) => Promise<boolean>;
  * panel never falls back to the browser's blocking `window.confirm`.
  */
 function useConfirmDialog(): { confirm: Confirm; dialog: React.ReactNode } {
+  const t = useTranslations("Common");
   const [request, setRequest] = React.useState<ConfirmRequest | null>(null);
   const requestRef = React.useRef<ConfirmRequest | null>(null);
 
@@ -161,7 +154,7 @@ function useConfirmDialog(): { confirm: Confirm; dialog: React.ReactNode } {
         </DialogHeader>
         <DialogFooter className="flex !justify-between">
           <Button type="button" variant="outline" onClick={() => close(false)}>
-            Отмена
+            {t("cancel")}
           </Button>
           <Button
             type="button"
@@ -193,13 +186,15 @@ function useConfirmedAction(
 ): (
   entry: RoomPackageEntry,
   action: ForceableAction,
-  describeConflict: (error: unknown) => string | null,
+  describeConflict: (error: unknown) => AppMessage | null,
 ) => Promise<void> {
+  const t = useTranslations("Packages");
+  const format = useAppMessage();
   return React.useCallback(
     async (
       entry: RoomPackageEntry,
       action: ForceableAction,
-      describeConflict: (error: unknown) => string | null,
+      describeConflict: (error: unknown) => AppMessage | null,
     ): Promise<void> => {
       try {
         await action(entry.packageId);
@@ -207,9 +202,9 @@ function useConfirmedAction(
         const question = describeConflict(error);
         if (question === null) return;
         const accepted = await confirm({
-          title: "Продолжить?",
-          description: question,
-          confirmLabel: "Продолжить",
+          title: t("confirm.title"),
+          description: format(question),
+          confirmLabel: t("confirm.continue"),
         });
         if (!accepted) return;
         try {
@@ -219,7 +214,7 @@ function useConfirmedAction(
         }
       }
     },
-    [confirm],
+    [confirm, format, t],
   );
 }
 
@@ -250,6 +245,8 @@ function PackageCard({
 }) {
   const action = packages.actionFor(entry.packageId);
   const format = useAppMessage();
+  const t = useTranslations("Packages");
+  const rootT = useTranslations();
   const disabled = !packages.fsReady || action.busy;
 
   return (
@@ -263,32 +260,37 @@ function PackageCard({
             </span>
             <span
               className="font-mono text-xs text-muted-foreground"
-              title="Slug пакета"
+              title={t("card.slugTitle")}
             >
               #{entry.slug}
             </span>
             <span
               className={`rounded-full border px-2 py-0.5 text-xs ${STATUS_CLASS[entry.status]}`}
             >
-              {STATUS_LABEL[entry.status]}
+              {rootT(STATUS_LABEL_KEYS[entry.status])}
             </span>
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
             <span>
-              {entry.version ? `версия ${entry.version}` : "версия не указана"}
+              {entry.version
+                ? t("card.version", { version: entry.version })
+                : t("card.versionMissing")}
             </span>
             <span>
               {entry.publishedRevision !== null
-                ? `· опубликована ревизия ${entry.publishedRevision}`
-                : "· опубликованных ревизий нет"}
+                ? t("card.published", {
+                    revision: entry.publishedRevision,
+                  })
+                : t("card.publishedMissing")}
             </span>
             {entry.loaded && entry.loadedRevision !== null && (
               <span>
-                {`· в редакторе ревизия ${
+                {t(
                   entry.loadedRevision === 0
-                    ? "не опубликована"
-                    : entry.loadedRevision
-                }`}
+                    ? "card.loadedUnpublished"
+                    : "card.loaded",
+                  { revision: entry.loadedRevision },
+                )}
               </span>
             )}
           </div>
@@ -314,10 +316,10 @@ function PackageCard({
                 variant="secondary"
                 disabled={disabled}
                 onClick={() => onAdopt(entry)}
-                title="Оставить существующие файлы и разрешить их публикацию через Emit"
+                title={t("card.adoptTitle")}
               >
                 <FolderOpenIcon className="size-4" />
-                Использовать каталог
+                {t("card.adopt")}
               </Button>
             )}
           {entry.enabled && (
@@ -328,8 +330,8 @@ function PackageCard({
               onClick={() => onEmit(entry)}
               title={
                 entry.loaded
-                  ? "Опубликовать файлы каталога пакета"
-                  : "Сначала скачайте пакет в редактор"
+                  ? t("card.emitTitle")
+                  : t("card.emitMissingTitle")
               }
             >
               {action.busy ? (
@@ -346,8 +348,8 @@ function PackageCard({
                 type="button"
                 size="icon"
                 variant="ghost"
-                aria-label="Действия с пакетом"
-                title="Действия с пакетом"
+                aria-label={t("card.actions")}
+                title={t("card.actions")}
               >
                 <MoreHorizontalIcon className="size-4" />
               </Button>
@@ -358,7 +360,7 @@ function PackageCard({
                 onSelect={() => onDownload(entry)}
               >
                 <DownloadIcon className="size-4" />
-                Скачать в редактор
+                {t("card.download")}
               </DropdownMenuItem>
               {entry.inEditor && (
                 <DropdownMenuItem
@@ -366,7 +368,7 @@ function PackageCard({
                   onSelect={() => onRemove(entry)}
                 >
                   <Trash2Icon className="size-4" />
-                  Убрать из редактора
+                  {t("card.remove")}
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem
@@ -374,14 +376,14 @@ function PackageCard({
                 onSelect={() => onToggle(entry)}
               >
                 <PowerIcon className="size-4" />
-                {entry.enabled ? "Отключить" : "Включить"}
+                {entry.enabled ? t("card.disable") : t("card.enable")}
               </DropdownMenuItem>
               <DropdownMenuItem
                 disabled={disabled}
                 onSelect={() => onEdit(entry)}
               >
                 <PencilIcon className="size-4" />
-                Редактировать пакет
+                {t("card.edit")}
               </DropdownMenuItem>
               <DropdownMenuItem
                 disabled={
@@ -390,12 +392,12 @@ function PackageCard({
                 onSelect={() => onPublishToWorkshop(entry)}
                 title={
                   entry.publishedRevision === null
-                    ? "Сначала опубликуйте пакет через Emit"
+                    ? t("card.publishUnavailable")
                     : undefined
                 }
               >
                 <StoreIcon className="size-4" />
-                Опубликовать в workshop
+                {t("card.publish")}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -404,7 +406,7 @@ function PackageCard({
                 onSelect={() => onDelete(entry)}
               >
                 <Trash2Icon className="size-4" />
-                Удалить из комнаты
+                {t("card.delete")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -413,27 +415,33 @@ function PackageCard({
 
       {!entry.enabled && (
         <div className="mt-3 text-xs text-muted-foreground">
-          Пакет отключён в комнате и не участвует в игре. Файлы и ревизии
-          сохранены — пакет можно включить обратно.
+          {t("card.disabled")}
         </div>
       )}
 
       {entry.enabled && entry.backendState && (
         <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
           <span>
-            Сервер:{" "}
+            {t("card.server")}{" "}
             <span className="text-foreground">
-              {BACKEND_LABEL[entry.backendState] ?? entry.backendState}
+              {BACKEND_LABEL_KEYS[entry.backendState]
+                ? rootT(BACKEND_LABEL_KEYS[entry.backendState])
+                : entry.backendState}
             </span>
           </span>
           {entry.runtimeState && (
             <span>
-              {RUNTIME_LABEL[entry.runtimeState] ?? entry.runtimeState}
+              {RUNTIME_LABEL_KEYS[entry.runtimeState]
+                ? rootT(RUNTIME_LABEL_KEYS[entry.runtimeState])
+                : entry.runtimeState}
             </span>
           )}
           {entry.clientsTotal > 0 && (
             <span>
-              клиенты: {entry.clientsReady}/{entry.clientsTotal} готовы
+              {t("card.clients", {
+                ready: entry.clientsReady,
+                total: entry.clientsTotal,
+              })}
             </span>
           )}
         </div>
@@ -441,7 +449,7 @@ function PackageCard({
 
       {entry.runtimeError && (
         <div className="mt-2 text-xs text-destructive">
-          Ошибка runtime: {entry.runtimeError}
+          {t("card.runtimeError", { error: entry.runtimeError })}
         </div>
       )}
 
@@ -450,8 +458,8 @@ function PackageCard({
           <div className="flex items-center gap-1.5 font-medium">
             <TriangleAlertIcon className="size-3.5" />
             {entry.loaded
-              ? "Локальные изменения не опубликованы"
-              : "В редакторе остались файлы прошлой сессии"}
+              ? t("card.localChanges")
+              : t("card.leftoverFiles")}
           </div>
           <ul className="mt-1 space-y-0.5 font-mono text-muted-foreground">
             {entry.localChanges.slice(0, 5).map((filepath) => (
@@ -460,7 +468,11 @@ function PackageCard({
               </li>
             ))}
             {entry.localChanges.length > 5 && (
-              <li>и ещё {entry.localChanges.length - 5}…</li>
+              <li>
+                {t("card.moreFiles", {
+                  count: entry.localChanges.length - 5,
+                })}
+              </li>
             )}
           </ul>
         </div>
@@ -469,7 +481,10 @@ function PackageCard({
       {action.progress && (
         <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2Icon className="size-3.5 animate-spin" />
-          Файлы: {action.progress.current}/{action.progress.total}
+          {t("card.progress", {
+            current: action.progress.current,
+            total: action.progress.total,
+          })}
         </div>
       )}
       {action.notice && (
@@ -517,7 +532,9 @@ export function PackagesTab({
   const [slugCheckAttempt, setSlugCheckAttempt] = React.useState(0);
   const [slugTakenInWorkshop, setSlugTakenInWorkshop] =
     React.useState(false);
-  const t = useTranslations();
+  const t = useTranslations("Packages");
+  const common = useTranslations("Common");
+  const slugT = useTranslations();
   const format = useAppMessage();
   const [creating, setCreating] = React.useState(false);
   const [createError, setCreateError] = React.useState<AppMessage | null>(null);
@@ -624,7 +641,8 @@ export function PackagesTab({
           ? confirmation(
               entry,
               error.files,
-              "Заменить локальные файлы опубликованной ревизией",
+              t("confirm.replaceLocalFiles"),
+              t("confirm.moreFiles", { count: error.files.length - 5 }),
             )
           : null,
     );
@@ -639,7 +657,8 @@ export function PackagesTab({
           ? confirmation(
               entry,
               error.files,
-              "Удалить каталог пакета из редактора вместе с локальными файлами",
+              t("confirm.removePackageDir"),
+              t("confirm.moreFiles", { count: error.files.length - 5 }),
             )
           : null,
     );
@@ -649,10 +668,21 @@ export function PackagesTab({
     void runConfirmed(
       entry,
       packages.emitPackage,
-      (error) =>
-        error instanceof NewerRevisionError
-          ? newerRevisionConfirmation(entry, error)
-          : null,
+      (error) => {
+        if (!(error instanceof NewerRevisionError)) return null;
+        const loaded =
+          error.loadedRevision === null || error.loadedRevision === 0
+            ? t("card.revisionNotLoaded")
+            : t("card.loaded", { revision: error.loadedRevision });
+        return {
+          key: "Packages.confirm.newerRevision",
+          values: {
+            name: entry.name,
+            published: error.publishedRevision,
+            loaded,
+          },
+        };
+      },
     );
   };
 
@@ -666,15 +696,14 @@ export function PackagesTab({
 
   const handleDelete = async (entry: RoomPackageEntry) => {
     const accepted = await confirm({
-      title: "Удалить пакет из комнаты?",
-      description: (
-        <>
-          Пакет <strong>{entry.name}</strong>{" "}
-          <span className="font-mono">#{entry.slug}</span> будет удалён вместе с
-          ревизиями и артефактами. Отменить это нельзя.
-        </>
-      ),
-      confirmLabel: "Удалить навсегда",
+      title: t("deleteDialog.title"),
+      description: t.rich("deleteDialog.description", {
+        name: entry.name,
+        slug: entry.slug,
+        strong: (chunks) => <strong>{chunks}</strong>,
+        code: (chunks) => <span className="font-mono">{chunks}</span>,
+      }),
+      confirmLabel: t("deleteDialog.confirm"),
       destructive: true,
     });
     if (!accepted) return;
@@ -719,14 +748,14 @@ export function PackagesTab({
       <div className="mx-auto w-full max-w-4xl space-y-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h1 className="text-xl font-semibold">Пакеты комнаты</h1>
+            <h1 className="text-xl font-semibold">{t("title")}</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Пакеты не загружаются в редактор автоматически. Скачайте нужный
-              пакет, отредактируйте его каталог{" "}
-              <span className="font-mono text-foreground">
-                packages/&lt;slug&gt;
-              </span>{" "}
-              и нажмите Emit, чтобы опубликовать ревизию для игры.
+              {t.rich("description", {
+                path: "packages/<slug>",
+                code: (chunks) => (
+                  <span className="font-mono text-foreground">{chunks}</span>
+                ),
+              })}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -741,33 +770,28 @@ export function PackagesTab({
             </Button>
             <Button type="button" size="sm" onClick={openCreate}>
               <PlusIcon className="size-4" />
-              Создать пакет
+              {t("create")}
             </Button>
             <Button
               type="button"
               size="sm"
               variant="outline"
               onClick={() => void packages.refresh()}
-              title="Проверить опубликованные ревизии и локальные изменения"
+              title={t("refreshTitle")}
             >
               <RefreshCwIcon className="size-4" />
-              Обновить
+              {t("refresh")}
             </Button>
           </div>
         </div>
 
         {!packages.fsReady && !packages.error && (
           <div className="rounded-md border border-border bg-muted/50 p-3 text-sm text-muted-foreground">
-            Редактор ещё загружается. Список пакетов доступен, а действия с
-            файлами станут доступны после запуска проекта Godot.
+            {t("fsLoading")}
           </div>
         )}
         <div className="rounded-md border border-border bg-muted/50 p-3 text-sm text-foreground">
-          После создания, скачивания и удаления пакета панель автоматически
-          просит Godot пересканировать файловую систему. Если каталог всё равно
-          не появился во вкладке FileSystem, сохраните сцены и переоткройте
-          проект: Project → Reload Current Project. После перезагрузки страницы
-          набор загруженных пакетов сбрасывается.
+          {t("rescan")}
         </div>
         {packages.error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
@@ -785,37 +809,41 @@ export function PackagesTab({
           <DialogContent showCloseButton={!creating}>
             <form onSubmit={handleCreate} className="space-y-4">
               <DialogHeader>
-                <DialogTitle>Новый пакет</DialogTitle>
+                <DialogTitle>{t("createDialog.title")}</DialogTitle>
                 <DialogDescription>
-                  Slug задаёт каталог{" "}
-                  <span className="font-mono text-foreground">
-                    packages/&lt;slug&gt;
-                  </span>{" "}
-                  в редакторе. Позже его можно изменить в меню пакета — папка и
-                  ссылки в пакетах комнаты обновятся. Новый пакет сразу
-                  появится в редакторе пустым каталогом, остальные пакеты
-                  комнаты при этом не загружаются.
+                  {t.rich("createDialog.description", {
+                    path: "packages/<slug>",
+                    code: (chunks) => (
+                      <span className="font-mono text-foreground">
+                        {chunks}
+                      </span>
+                    ),
+                  })}
                 </DialogDescription>
               </DialogHeader>
 
               <div className="space-y-3">
                 <div className="space-y-1.5">
-                  <Label htmlFor="package-create-name">Имя пакета</Label>
+                  <Label htmlFor="package-create-name">
+                    {t("createDialog.name")}
+                  </Label>
                   <Input
                     id="package-create-name"
                     value={name}
                     onChange={(event) => setName(event.target.value)}
-                    placeholder="Например, Hero Controller"
+                    placeholder={t("createDialog.namePlaceholder")}
                     autoFocus
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="package-create-version">Версия</Label>
+                  <Label htmlFor="package-create-version">
+                    {t("createDialog.version")}
+                  </Label>
                   <Input
                     id="package-create-version"
                     value={version}
                     onChange={(event) => setVersion(event.target.value)}
-                    placeholder="0.1.0"
+                    placeholder={t("createDialog.versionPlaceholder")}
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -824,20 +852,19 @@ export function PackagesTab({
                     id="package-create-slug"
                     value={slug}
                     onChange={handleSlugChange}
-                    placeholder="hero_controller"
+                    placeholder={t("createDialog.slugPlaceholder")}
                     autoComplete="off"
                     spellCheck={false}
                     autoCapitalize="none"
                   />
                   {slugHintKey(slugState) && (
                     <p className={`text-xs ${slugHintClass(slugState)}`}>
-                      {t(slugHintKey(slugState)!)}
+                      {slugT(slugHintKey(slugState)!)}
                     </p>
                   )}
                   {slugState === "available" && slugTakenInWorkshop && (
                     <p className="text-xs text-muted-foreground">
-                      Этот slug занят в workshop — при публикации будет
-                      предложен fork.
+                      {t("createDialog.slugTakenInWorkshop")}
                     </p>
                   )}
                   {slugState === "error" && (
@@ -848,7 +875,7 @@ export function PackagesTab({
                       className="h-auto px-0 text-xs"
                       onClick={retrySlugCheck}
                     >
-                      Проверить снова
+                      {t("createDialog.checkAgain")}
                     </Button>
                   )}
                 </div>
@@ -867,7 +894,7 @@ export function PackagesTab({
                   onClick={closeCreate}
                   disabled={creating}
                 >
-                  Отмена
+                  {common("cancel")}
                 </Button>
                 <Button type="submit" disabled={!canCreate}>
                   {creating ? (
@@ -875,7 +902,7 @@ export function PackagesTab({
                   ) : (
                     <PlusIcon className="size-4" />
                   )}
-                  Создать
+                  {t("createDialog.create")}
                 </Button>
               </DialogFooter>
             </form>
@@ -886,14 +913,14 @@ export function PackagesTab({
           <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
             {packages.statusLoaded ? (
               <div className="flex flex-col items-center gap-3">
-                <p>В комнате пока нет пакетов. Создайте первый пакет.</p>
+                <p>{t("empty")}</p>
                 <Button type="button" size="sm" onClick={openCreate}>
                   <PlusIcon className="size-4" />
-                  Создать первый пакет
+                  {t("emptyCreate")}
                 </Button>
               </div>
             ) : (
-              "Загружаем список пакетов комнаты…"
+              t("loadingList")
             )}
           </div>
         ) : (
