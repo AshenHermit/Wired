@@ -10,6 +10,7 @@ import {
   WorkshopPackageMetadata,
   WorkshopPackageSummary,
   WorkshopPublishResult,
+  WorkshopTagListing,
 } from "@wired-io/shared";
 import { apiClient } from "../api-client/client-api";
 import { uint8ArrayToFile } from "@/utils/file-utils";
@@ -88,6 +89,17 @@ export async function listWorkshopPackages(params: {
     WorkshopListing,
     { q?: string; limit?: number; offset?: number }
   >("scripting-packages/workshop", params);
+}
+
+export async function listWorkshopTags(params: {
+  q?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<WorkshopTagListing> {
+  return apiClient.get<
+    WorkshopTagListing,
+    { q?: string; limit?: number; offset?: number }
+  >("scripting-packages/workshop/tags", params);
 }
 
 export async function lookupWorkshopPackage(
