@@ -493,12 +493,21 @@ describe("PackagesTab", () => {
     await waitFor(() => expect(resolvers.has("hero")).toBe(true));
 
     await act(async () => {
-      resolvers.get("hero")?.({ slug: "hero", available: true });
+      resolvers.get("hero")?.({
+        slug: "hero",
+        available: true,
+        global: { available: true },
+      });
     });
     expect(screen.getByText("Slug свободен")).toBeTruthy();
 
     await act(async () => {
-      resolvers.get("aaa")?.({ slug: "aaa", available: false, reason: "taken" });
+      resolvers.get("aaa")?.({
+        slug: "aaa",
+        available: false,
+        reason: "taken",
+        global: { available: false, reason: "taken" },
+      });
     });
     expect(screen.queryByText("Slug уже занят")).toBeNull();
     expect(screen.getByText("Slug свободен")).toBeTruthy();

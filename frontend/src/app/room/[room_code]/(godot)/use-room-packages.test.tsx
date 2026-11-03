@@ -288,6 +288,7 @@ describe("useRoomPackages", () => {
     vi.mocked(packagesApi.checkPackageSlugAvailability).mockResolvedValue({
       slug: "new",
       available: true,
+      global: { available: true },
     });
     vi.mocked(packagesApi.createPackageRevision).mockResolvedValue(
       revision(5, 3, "draft"),
@@ -820,11 +821,17 @@ describe("useRoomPackages", () => {
       slug: "hero",
       available: false,
       reason: "taken",
+      global: { available: false, reason: "taken" },
     });
     const { result, unmount } = await startHook();
 
     await expect(result.current.checkSlugAvailability("hero")).resolves.toEqual(
-      { slug: "hero", available: false, reason: "taken" },
+      {
+        slug: "hero",
+        available: false,
+        reason: "taken",
+        global: { available: false, reason: "taken" },
+      },
     );
     expect(packagesApi.checkPackageSlugAvailability).toHaveBeenCalledWith(
       "hero",

@@ -22,6 +22,7 @@ import {
 } from "@/components/animate-ui/components/animate/tabs";
 import { RoomsList } from "../_components/rooms";
 import { CurrentUserEditingButton } from "../_components/user";
+import { WorkshopBrowser } from "@/components/packages/workshop-browser";
 
 export function HomepageClient() {
   const user = useUserStore((state) => state);
@@ -66,12 +67,14 @@ export function HomepageClient() {
               className="flex flex-col gap-6 w-full"
             >
               <CardHeader>
-                <CardTitle>Пакеты</CardTitle>
+                <CardTitle>Workshop</CardTitle>
                 <CardDescription>
-                  Здесь будут храниться пакеты скриптов
+                  Пакеты сообщества. Ищите по названию, slug или тегу
                 </CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-6"></CardContent>
+              <CardContent className="grid gap-6">
+                <WorkshopBrowser />
+              </CardContent>
             </TabsContent>
             <TabsContent value="docs" className="flex flex-col gap-6 w-full">
               <CardHeader>
