@@ -196,6 +196,7 @@ function roomPackage(
     name,
     version: "0.1.0",
     description: "",
+    tags: [],
     enabled: true,
     dependencies: [],
     scripts: [],

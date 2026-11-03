@@ -44,7 +44,7 @@ export class ScriptingPackage {
     example: 'hero_controller',
     description: 'Stable package slug',
   })
-  @Column({ type: 'varchar', length: 64, unique: true, nullable: true })
+  @Column({ type: 'varchar', length: 64, nullable: true })
   slug: string;
 
   @ApiProperty({ example: 'Untitled', description: 'package title' })
@@ -58,6 +58,10 @@ export class ScriptingPackage {
   @ApiProperty({ description: 'package description' })
   @Column({ default: '' })
   description: string;
+
+  @ApiProperty({ description: 'Workshop tags', isArray: true })
+  @Column({ type: 'jsonb', default: [] })
+  tags: string[];
 
   @ApiProperty({ description: 'package dependencies' })
   @Column({ type: 'jsonb', default: [] })

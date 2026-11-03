@@ -76,6 +76,16 @@ export class CreateScriptingPackageDto {
   dependencies?: string[];
 
   @ApiProperty({
+    description: 'Workshop tags',
+    required: false,
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  tags?: string[];
+
+  @ApiProperty({
     description: 'Package scripts',
     required: false,
     type: [ScriptFileDto],

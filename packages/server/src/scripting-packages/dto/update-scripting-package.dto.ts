@@ -40,6 +40,12 @@ export class UpdateScriptingPackageDto {
   @IsString({ each: true })
   dependencies?: string[];
 
+  @ApiPropertyOptional({ description: 'Workshop tags', type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  tags?: string[];
+
   @ApiPropertyOptional({
     description: 'Package scripts',
     type: [ScriptFileDto],

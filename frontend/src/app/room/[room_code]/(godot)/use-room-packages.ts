@@ -240,6 +240,7 @@ function packageFromStatus(status: PackageSyncStatus): ScriptingPackage {
     name: status.name,
     version: "",
     description: "",
+    tags: [],
     enabled: status.enabled,
     dependencies: [],
     scripts: [],

@@ -115,6 +115,7 @@ export type ScriptingPackage = {
   name: string;
   version: string;
   description: string;
+  tags: string[];
   enabled: boolean;
   dependencies: string[];
   scripts: ScriptFile[];
@@ -144,6 +145,7 @@ export type CreateScriptingPackagePayload = {
   name: string;
   version: string;
   description?: string;
+  tags?: string[];
   dependencies?: string[];
   scripts?: ScriptFile[];
   authorId?: number;
@@ -155,6 +157,36 @@ export type UpdateScriptingPackagePayload =
   Partial<Omit<CreateScriptingPackagePayload, "slug">> & {
     enabled?: boolean;
   };
+
+export type WorkshopPackageSummary = {
+  id: number;
+  slug: string;
+  name: string;
+  version: string;
+  description: string;
+  tags: string[];
+  author?: User;
+  revision: number;
+  publishedAt: string;
+  updatedAt: string;
+};
+
+export type WorkshopListing = { items: WorkshopPackageSummary[]; total: number };
+
+export type WorkshopPackageMetadata = {
+  name?: string;
+  version?: string;
+  description?: string;
+  tags?: string[];
+};
+
+export type WorkshopPublishResult = {
+  mode: "created" | "updated";
+  package: WorkshopPackageSummary;
+};
+
+export type WorkshopForkPayload = { slug: string };
+export type RoomCopyPayload = { roomId: number };
 
 export type CreateUserPayload = {
   email: string;
