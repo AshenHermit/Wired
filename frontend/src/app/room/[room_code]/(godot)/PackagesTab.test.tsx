@@ -411,12 +411,11 @@ describe("PackagesTab", () => {
     fireEvent.click(submit);
 
     await waitFor(() =>
-      expect(createPackage).toHaveBeenCalledWith(
-        "New",
-        42,
-        "0.1.0",
-        "new",
-      ),
+      expect(createPackage).toHaveBeenCalledWith({
+        name: "New",
+        version: "0.1.0",
+        slug: "new",
+      }),
     );
   });
 

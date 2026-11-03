@@ -179,7 +179,8 @@ export class ScriptingPackagesController {
     @Body() dto: CreateScriptingPackageDto,
     @Req() req: AuthenticatedRequest,
   ) {
-    this.packagesService.assertPackageCreation(req.user, dto);
+    // The author is always the authenticated user; creating a package for
+    // someone else is not expressible.
     return await this.packagesService.create(dto, req.user);
   }
 

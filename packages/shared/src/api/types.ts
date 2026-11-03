@@ -1,8 +1,3 @@
-export type TypeFile = {
-  filepath: string;
-  content: string;
-};
-
 export type User = {
   id: number;
   email: string;
@@ -131,14 +126,25 @@ export type ScriptingPackage = {
 // DTOs / payloads
 export type CreateRoomPayload = {
   name: string;
-  type: GameRoomsType;
+  /** Only the types a client may create; legacy `ts-game` rows stay readable. */
+  type: CreatableRoomType;
   isPublic?: boolean;
   description?: string;
-  authorId?: number;
   parentRoomId?: number;
 };
 
-export type UpdateRoomPayload = Partial<CreateRoomPayload>;
+/**
+ * The mutable room fields. `authorId` and `type` are deliberately absent: the
+ * author always comes from the authenticated request and the type is fixed at
+ * creation, so accepting them here would only advertise fields the server
+ * silently drops.
+ */
+export type UpdateRoomPayload = {
+  name?: string;
+  isPublic?: boolean;
+  description?: string;
+  parentRoomId?: number;
+};
 
 export type CreateScriptingPackagePayload = {
   slug: string;
@@ -148,7 +154,7 @@ export type CreateScriptingPackagePayload = {
   tags?: string[];
   dependencies?: string[];
   scripts?: ScriptFile[];
-  authorId?: number;
+  /** The author is always the authenticated caller, never a payload field. */
   roomId?: number;
   parentPackageId?: number;
 };
@@ -227,20 +233,25 @@ export type WorkshopPublishResult = {
 export type WorkshopForkPayload = { slug: string };
 export type RoomCopyPayload = { roomId: number };
 
-export type CreateUserPayload = {
-  email: string;
-  password: string;
-  name: string;
+/**
+ * Update body for the current user. Declared explicitly instead of derived
+ * from a create payload, because the email and the password are not editable
+ * through the same route that creates an account.
+ */
+export type UpdateUserPayload = {
+  password?: string;
+  name?: string;
   picture?: string;
 };
-
-export type UpdateUserPayload = Partial<Omit<CreateUserPayload, "email">>;
 
 export type GameRoomsType = "godot" | "ts-game";
 export const GAME_ROOMS_TYPES: GameRoomsType[] = ["godot", "ts-game"];
 
 // ts-game оставлен только для чтения старых комнат.
 export const AVAILABLE_GAME_ROOMS_TYPES = ["godot"] as const;
+
+/** The room types a client may actually create. */
+export type CreatableRoomType = (typeof AVAILABLE_GAME_ROOMS_TYPES)[number];
 
 export type ProjectInfo = {
   name: string;

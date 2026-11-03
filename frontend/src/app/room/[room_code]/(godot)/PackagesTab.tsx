@@ -46,6 +46,7 @@ import {
   LocalChangesError,
   NewerRevisionError,
   PackagesActionError,
+  type PackageActionState,
   type RoomPackageEntry,
   type RoomPackageStatus,
   type RoomPackagesController,
@@ -218,7 +219,8 @@ function useConfirmedAction(
 
 function PackageCard({
   entry,
-  packages,
+  action,
+  fsReady,
   authorId,
   onDownload,
   onRemove,
@@ -230,7 +232,10 @@ function PackageCard({
   onEdit,
 }: {
   entry: RoomPackageEntry;
-  packages: RoomPackagesController;
+  /** Progress, notice and error for this one package. */
+  action: PackageActionState;
+  /** Whether the editor bridge can move files at all. */
+  fsReady: boolean;
   authorId: number | null;
   onDownload: (entry: RoomPackageEntry) => void;
   onRemove: (entry: RoomPackageEntry) => void;
@@ -241,11 +246,10 @@ function PackageCard({
   onPublishToWorkshop: (entry: RoomPackageEntry) => void;
   onEdit: (entry: RoomPackageEntry) => void;
 }) {
-  const action = packages.actionFor(entry.packageId);
   const format = useAppMessage();
   const t = useTranslations("Packages");
   const rootT = useTranslations();
-  const disabled = !packages.fsReady || action.busy;
+  const disabled = !fsReady || action.busy;
 
   return (
     <li className="rounded-lg border border-border bg-card p-4 text-sm text-foreground">
@@ -672,12 +676,11 @@ export function PackagesTab({
     setCreating(true);
     setCreateError(null);
     try {
-      await packages.createPackage(
-        name.trim(),
-        authorId,
-        version.trim() || "0.1.0",
-        slug.trim(),
-      );
+      await packages.createPackage({
+        name: name.trim(),
+        version: version.trim() || "0.1.0",
+        slug: slug.trim(),
+      });
       closeCreate();
     } catch (error) {
       if (!(error instanceof PackagesActionError)) console.error(error);
@@ -877,7 +880,8 @@ export function PackagesTab({
               <PackageCard
                 key={entry.packageId}
                 entry={entry}
-                packages={packages}
+                action={packages.actionFor(entry.packageId)}
+                fsReady={packages.fsReady}
                 authorId={authorId}
                 onDownload={handleDownload}
                 onRemove={handleRemove}

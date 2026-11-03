@@ -857,14 +857,13 @@ describe("useRoomPackages", () => {
     const { result, unmount } = await startHook();
 
     await act(async () => {
-      await result.current.createPackage("New", 42, "0.1.0", "new");
+      await result.current.createPackage({ name: "New", version: "0.1.0", slug: "new" });
     });
 
     expect(packagesApi.createScriptingPackage).toHaveBeenCalledWith({
       slug: "new",
       name: "New",
       version: "0.1.0",
-      authorId: 42,
       roomId: 1,
     });
     expect(fs.createPackageDir).toHaveBeenCalledWith("new");
@@ -1254,7 +1253,7 @@ describe("useRoomPackages", () => {
     const { result, unmount } = await startHook({ rescan });
 
     await act(async () => {
-      await result.current.createPackage("New", 42, "0.1.0", "new");
+      await result.current.createPackage({ name: "New", version: "0.1.0", slug: "new" });
     });
     expect(rescan).toHaveBeenCalledTimes(1);
 
@@ -1321,7 +1320,7 @@ describe("useRoomPackages", () => {
     const { result, unmount } = await startHook({ packages: [] });
 
     await act(async () => {
-      await result.current.createPackage("Hero", 42, "0.1.0", "hero");
+      await result.current.createPackage({ name: "Hero", version: "0.1.0", slug: "hero" });
     });
     await act(async () => {
       await result.current.updatePackageMetadata(7, { name: "Renamed" });

@@ -771,7 +771,6 @@ describe('ScriptingPackagesService slug lifecycle', () => {
           version: '0.1.0',
           slug: 'hero',
           roomId: 5,
-          authorId: 1,
         },
         user,
       )
@@ -807,7 +806,6 @@ describe('ScriptingPackagesService slug lifecycle', () => {
           version: '0.1.0',
           slug: 'hero',
           roomId: 6,
-          authorId: 1,
         },
         user,
       ),
@@ -891,7 +889,6 @@ describe('ScriptingPackagesService slug lifecycle', () => {
           version: '0.1.0',
           slug: 'hero',
           roomId: 5,
-          authorId: 1,
         },
         user,
       )

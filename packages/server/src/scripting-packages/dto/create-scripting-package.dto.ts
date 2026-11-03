@@ -106,15 +106,6 @@ export class CreateScriptingPackageDto {
 
   @ApiProperty({
     example: 1,
-    description: 'Author user id',
-    required: false,
-  })
-  @IsOptional()
-  @IsInt()
-  authorId?: number;
-
-  @ApiProperty({
-    example: 1,
     description: 'Room id for package',
     required: false,
   })

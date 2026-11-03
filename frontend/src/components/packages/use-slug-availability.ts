@@ -71,8 +71,10 @@ export function useSlugAvailability<T>({
   // on the input only instead of restarting the debounce on every render.
   const checkRef = React.useRef(check);
   const verdictRef = React.useRef(verdict);
-  checkRef.current = check;
-  verdictRef.current = verdict;
+  React.useEffect(() => {
+    checkRef.current = check;
+    verdictRef.current = verdict;
+  });
 
   React.useEffect(() => {
     if (base !== "checking") return;

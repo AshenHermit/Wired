@@ -20,9 +20,6 @@ export class RoomsService {
   ) {}
 
   async assertRoomCreation(user: User, room: CreateRoomDto): Promise<void> {
-    if (room.authorId !== user.id) {
-      throw new ForbiddenException('You are not allowed to create this room');
-    }
     if (room.parentRoomId) {
       // TODO: rules later
       await this.assertRoomEditing(user, room.parentRoomId);

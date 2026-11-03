@@ -150,13 +150,6 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       : { slug: normalized, available: true, global: scope };
   }
 
-  assertPackageCreation(user: User, dto: CreateScriptingPackageDto): void {
-    if (dto.authorId !== user.id) {
-      throw new ForbiddenException(
-        'You are not allowed to create this package',
-      );
-    }
-  }
   async assertPackageEditing(user: User, packageId: number): Promise<void> {
     const pkg = await this.packagesRepository.findOne({
       where: { id: packageId },
@@ -259,7 +252,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     dto: CreateScriptingPackageDto,
     user: User,
   ): Promise<ScriptingPackage> {
-    const { authorId, roomId, parentPackageId, ...data } = dto;
+    const { roomId, parentPackageId, ...data } = dto;
 
     // Public creation always belongs to a room; the global workshop scope is
     // written only through `createGlobalRecord`.
@@ -272,12 +265,6 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
 
     const slug = this.normalizeSlug(dto.slug);
     data.tags = normalizeTags(dto.tags ?? []);
-
-    if (authorId !== undefined && authorId !== user.id) {
-      throw new ForbiddenException(
-        'You are not allowed to create a package for another author',
-      );
-    }
 
     const foundRoom = await this.roomsRepository.findOne({
       where: { id: roomId },

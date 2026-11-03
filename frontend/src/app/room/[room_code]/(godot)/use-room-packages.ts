@@ -6,6 +6,7 @@ import type {
   PackageSlugAvailability,
   PackageSyncStatus,
   ScriptingPackage,
+  UpdateScriptingPackagePayload,
   WorkshopPackageMetadata,
   WorkshopPackageSummary,
   WorkshopPublishResult,
@@ -104,12 +105,11 @@ export type RoomPackagesController = {
    */
   afterEditorStart: (editor: GodotEditorInstance) => void;
   refresh: () => Promise<void>;
-  createPackage: (
-    name: string,
-    authorId: number,
-    version: string,
-    slug: string,
-  ) => Promise<ScriptingPackage>;
+  createPackage: (draft: {
+    name: string;
+    version: string;
+    slug: string;
+  }) => Promise<ScriptingPackage>;
   /** Asks the backend whether a new package may use this slug. */
   checkSlugAvailability: (
     slug: string,
@@ -962,12 +962,15 @@ export function useRoomPackages(
   }, [transport.fsReady, load, refresh]);
 
   const createPackage = React.useCallback(
-    (
-      name: string,
-      authorId: number,
-      version: string,
-      slug: string,
-    ): Promise<ScriptingPackage> =>
+    ({
+      name,
+      version,
+      slug,
+    }: {
+      name: string;
+      version: string;
+      slug: string;
+    }): Promise<ScriptingPackage> =>
       guarded(async () => {
         const trimmed = name.trim();
         if (!trimmed) {
@@ -992,7 +995,6 @@ export function useRoomPackages(
             slug: trimmedSlug,
             name: trimmed,
             version,
-            authorId,
             roomId,
           });
         } catch (cause) {
@@ -1047,23 +1049,9 @@ export function useRoomPackages(
   const updatePackageMetadata = React.useCallback(
     async (
       packageId: number,
-      patch: {
-        name?: string;
-        version?: string;
-        slug?: string;
-        description?: string;
-        tags?: string[];
-        confirmSlugRename?: boolean;
-      },
+      patch: UpdateScriptingPackagePayload,
     ): Promise<ScriptingPackage> => {
-      const payload: {
-        name?: string;
-        version?: string;
-        slug?: string;
-        description?: string;
-        tags?: string[];
-        confirmSlugRename?: boolean;
-      } = {};
+      const payload: UpdateScriptingPackagePayload = {};
       if (patch.name !== undefined) {
         const name = patch.name.trim();
         if (!name) throw new Error("package_metadata_empty");

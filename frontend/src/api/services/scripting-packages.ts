@@ -5,8 +5,10 @@ import {
   PackageManifest,
   PackageRevision,
   PackageSlugAvailability,
+  RoomCopyPayload,
   ScriptingPackage,
   UpdateScriptingPackagePayload,
+  WorkshopForkPayload,
   WorkshopListing,
   WorkshopPackageMetadata,
   WorkshopPackageSummary,
@@ -118,7 +120,7 @@ export async function forkPackageToWorkshop(
   id: number,
   slug: string
 ): Promise<ScriptingPackage> {
-  return apiClient.post<ScriptingPackage, { slug: string }>(
+  return apiClient.post<ScriptingPackage, WorkshopForkPayload>(
     `scripting-packages/${id}/workshop-fork`,
     { slug }
   );
@@ -128,7 +130,7 @@ export async function copyWorkshopPackageToRoom(
   id: number,
   roomId: number
 ): Promise<ScriptingPackage> {
-  return apiClient.post<ScriptingPackage, { roomId: number }>(
+  return apiClient.post<ScriptingPackage, RoomCopyPayload>(
     `scripting-packages/${id}/room-copy`,
     { roomId }
   );

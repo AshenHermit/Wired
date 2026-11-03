@@ -21,7 +21,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/animate-ui/components/animate/tabs";
-import { RoomsList } from "../_components/rooms";
+import { RoomsList } from "../_components/rooms/rooms-list";
 import { CurrentUserEditingButton } from "../_components/user";
 import { WorkshopBrowser } from "@/components/packages/workshop-browser";
 
