@@ -8,6 +8,7 @@ import { RetiredPackageSlug } from 'src/database/entities/retired-package-slug.e
 import { ScriptingPackagesService } from './scripting-packages.service';
 import { ScriptingPackagesController } from './scripting-packages.controller';
 import { PackageRevisionsService } from './package-revisions.service';
+import { PackageWorkshopService } from './package-workshop.service';
 import { PackageDeliveryModule } from './package-delivery.module';
 import { AppConfigModule } from 'src/config/config.module';
 import { GodotGameModule } from 'src/godot-game/godot-game.module';
@@ -25,7 +26,11 @@ import { GodotGameModule } from 'src/godot-game/godot-game.module';
       Room,
     ]),
   ],
-  providers: [ScriptingPackagesService, PackageRevisionsService],
+  providers: [
+    ScriptingPackagesService,
+    PackageRevisionsService,
+    PackageWorkshopService,
+  ],
   controllers: [ScriptingPackagesController],
   exports: [ScriptingPackagesService, PackageRevisionsService],
 })

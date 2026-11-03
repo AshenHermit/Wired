@@ -32,6 +32,7 @@ import { ArtifactBuildRateLimiter } from './artifact-build.rate-limiter';
 import { PackageDeliveryService } from './package-delivery.service';
 import { PackageReadUrlService } from './package-read-url.service';
 import { PackageRevisionsService } from './package-revisions.service';
+import { PackageWorkshopService } from './package-workshop.service';
 import { ScriptingPackagesService } from './scripting-packages.service';
 
 describe('ScriptingPackagesController revisions API', () => {
@@ -58,6 +59,7 @@ describe('ScriptingPackagesController revisions API', () => {
   let revisionsService: Record<string, jest.Mock>;
   let delivery: Record<string, jest.Mock>;
   let readUrls: { verifyToken: jest.Mock };
+  let workshop: { list: jest.Mock; lookup: jest.Mock };
   let buildLimiter: { assertAllowed: jest.Mock };
   let response: Response & { set: jest.Mock };
   let controller: ScriptingPackagesController;
@@ -87,6 +89,10 @@ describe('ScriptingPackagesController revisions API', () => {
       ),
     };
     readUrls = { verifyToken: jest.fn(() => true) };
+    workshop = {
+      list: jest.fn(() => Promise.resolve({ items: [], total: 0 })),
+      lookup: jest.fn(() => Promise.resolve({ package: null })),
+    };
     buildLimiter = { assertAllowed: jest.fn() };
     response = Object.assign(new PassThrough(), {
       set: jest.fn(),
@@ -96,6 +102,7 @@ describe('ScriptingPackagesController revisions API', () => {
       revisionsService as unknown as PackageRevisionsService,
       delivery as unknown as PackageDeliveryService,
       readUrls as unknown as PackageReadUrlService,
+      workshop as unknown as PackageWorkshopService,
       buildLimiter as unknown as ArtifactBuildRateLimiter,
     );
   });
@@ -443,6 +450,10 @@ describe('ScriptingPackagesController runtime endpoint authorization', () => {
           provide: PackageReadUrlService,
           useValue: { verifyToken: () => true },
         },
+        {
+          provide: PackageWorkshopService,
+          useValue: { list: jest.fn(), lookup: jest.fn() },
+        },
         { provide: getRepositoryToken(Room), useValue: rooms },
         { provide: getRepositoryToken(ScriptingPackage), useValue: packages },
       ],
@@ -554,6 +565,7 @@ describe('ScriptingPackagesController lifecycle routes', () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
   });
 
@@ -588,6 +600,8 @@ describe('ScriptingPackagesController slug route ordering', () => {
   let findOne: jest.Mock;
   let update: jest.Mock;
   let checkSlugAvailability: jest.Mock;
+  let listWorkshop: jest.Mock;
+  let lookupWorkshop: jest.Mock;
 
   beforeAll(async () => {
     findOne = jest.fn((id: number) => Promise.resolve({ id, slug: 'hero' }));
@@ -595,6 +609,8 @@ describe('ScriptingPackagesController slug route ordering', () => {
     checkSlugAvailability = jest.fn((slug: string) =>
       Promise.resolve({ slug, available: true }),
     );
+    listWorkshop = jest.fn(() => Promise.resolve({ items: [], total: 0 }));
+    lookupWorkshop = jest.fn(() => Promise.resolve({ package: null }));
 
     const moduleRef = await Test.createTestingModule({
       controllers: [ScriptingPackagesController],
@@ -613,6 +629,10 @@ describe('ScriptingPackagesController slug route ordering', () => {
         {
           provide: PackageReadUrlService,
           useValue: { verifyToken: () => true },
+        },
+        {
+          provide: PackageWorkshopService,
+          useValue: { list: listWorkshop, lookup: lookupWorkshop },
         },
         { provide: getRepositoryToken(Room), useValue: { findOne: jest.fn() } },
         {
@@ -659,6 +679,28 @@ describe('ScriptingPackagesController slug route ordering', () => {
     await request(app.getHttpServer()).get('/scripting-packages/7').expect(200);
 
     expect(findOne).toHaveBeenCalledWith(7);
+  });
+
+  it('serves the workshop listing instead of falling through to :id', async () => {
+    await request(app.getHttpServer())
+      .get('/scripting-packages/workshop?q=hero&limit=5&offset=10')
+      .expect(200);
+
+    expect(listWorkshop).toHaveBeenCalledWith({
+      q: 'hero',
+      limit: 5,
+      offset: 10,
+    });
+    expect(findOne).not.toHaveBeenCalled();
+  });
+
+  it('serves the workshop lookup instead of falling through to :id', async () => {
+    await request(app.getHttpServer())
+      .get('/scripting-packages/workshop/lookup?slug=hero')
+      .expect(200);
+
+    expect(lookupWorkshop).toHaveBeenCalledWith('hero');
+    expect(findOne).not.toHaveBeenCalled();
   });
 
   it('rejects a slug field in PATCH through the global validation pipe', async () => {

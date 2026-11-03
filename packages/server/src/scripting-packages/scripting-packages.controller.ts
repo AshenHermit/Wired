@@ -35,6 +35,7 @@ import { ScriptingPackagesService } from './scripting-packages.service';
 import { PackageRevisionsService } from './package-revisions.service';
 import { PackageDeliveryService } from './package-delivery.service';
 import { PackageReadUrlService } from './package-read-url.service';
+import { PackageWorkshopService } from './package-workshop.service';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
 import { UseAuthGuard, UseSilentAuthGuard } from 'src/auth/jwt-auth.guard';
@@ -52,6 +53,7 @@ export class ScriptingPackagesController {
     private readonly revisionsService: PackageRevisionsService,
     private readonly delivery: PackageDeliveryService,
     private readonly readUrls: PackageReadUrlService,
+    private readonly workshopService: PackageWorkshopService,
     // Optional so the controller keeps working in modules that do not register
     // the limiter; the default instance reads its config from the environment.
     @Optional()
@@ -73,6 +75,26 @@ export class ScriptingPackagesController {
     @Query('roomId', new ParseIntPipe({ optional: true })) roomId?: number,
   ) {
     return this.packagesService.checkSlugAvailability(slug, roomId);
+  }
+
+  @ApiOkResponse({ description: 'Workshop packages' })
+  @Get('workshop')
+  workshop(
+    @Query('q') q?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.workshopService.list({
+      q,
+      limit: limit === undefined ? undefined : Number(limit),
+      offset: offset === undefined ? undefined : Number(offset),
+    });
+  }
+
+  @ApiOkResponse({ description: 'Workshop package by slug' })
+  @Get('workshop/lookup')
+  workshopLookup(@Query('slug') slug: string) {
+    return this.workshopService.lookup(slug);
   }
 
   @ApiOkResponse({ type: ScriptingPackage })
