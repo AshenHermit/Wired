@@ -861,6 +861,38 @@ describe("PackagesTab", () => {
     expect(renamePackageDir).toHaveBeenCalledWith(7, "hero", "hero2");
   });
 
+  it("keeps the dialog open when the tag draft is invalid", async () => {
+    vi.mocked(packagesApi.getScriptingPackage).mockResolvedValue(
+      roomPackage({ description: "desc", tags: ["a"] }),
+    );
+    const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
+    render(
+      <PackagesTab
+        roomId={1}
+        authorId={42}
+        packages={controller({
+          entries: [entry({ packageId: 7, slug: "hero", name: "Hero" })],
+          updatePackageMetadata,
+        })}
+      />,
+    );
+
+    const menu = await openPackageActions();
+    fireEvent.click(menu.getByRole("menuitem", { name: "Редактировать пакет" }));
+
+    const tagsInput = await screen.findByLabelText("Теги");
+    await waitFor(() => expect(tagsInput).toHaveProperty("disabled", false));
+    fireEvent.change(tagsInput, { target: { value: "Привет!" } });
+    const save = screen.getByRole("button", { name: "Сохранить" });
+    fireEvent.click(save);
+
+    await waitFor(() => expect(save).toHaveProperty("disabled", true));
+    expect(
+      screen.getByText("Латиница, цифры, _ и -, до 32 символов."),
+    ).toBeTruthy();
+    expect(updatePackageMetadata).not.toHaveBeenCalled();
+  });
+
   it("shows the card metadata read-only", () => {
     render(
       <PackagesTab roomId={1}

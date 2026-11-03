@@ -34,6 +34,7 @@ export function TagInput({
   disabled = false,
   max = MAX_TAGS,
   placeholder = "gameplay, hero",
+  onInvalidChange,
 }: {
   id?: string;
   value: string[];
@@ -41,6 +42,7 @@ export function TagInput({
   disabled?: boolean;
   max?: number;
   placeholder?: string;
+  onInvalidChange?: (invalid: boolean) => void;
 }) {
   const { tags: workshopTags, loading } = useWorkshopTags();
   const [draft, setDraft] = React.useState("");
@@ -79,6 +81,11 @@ export function TagInput({
 
   const showList = open && !disabled && (loading || options.length > 0);
 
+  function updateError(next: "format" | "limit" | null) {
+    setError(next);
+    onInvalidChange?.(next !== null);
+  }
+
   function commit(raw: string) {
     const tag = raw.trim().toLowerCase();
     if (!tag) {
@@ -86,36 +93,36 @@ export function TagInput({
       return;
     }
     if (!TAG_PATTERN.test(tag)) {
-      setError("format");
+      updateError("format");
       return;
     }
     if (value.includes(tag)) {
       setDraft("");
-      setError(null);
+      updateError(null);
       return;
     }
     if (value.length >= max) {
-      setError("limit");
+      updateError("limit");
       return;
     }
     onChange([...value, tag]);
     setDraft("");
-    setError(null);
+    updateError(null);
   }
 
   function select(tag: string) {
     if (value.length >= max) {
-      setError("limit");
+      updateError("limit");
       return;
     }
     if (value.includes(tag)) {
       setDraft("");
-      setError(null);
+      updateError(null);
       return;
     }
     onChange([...value, tag]);
     setDraft("");
-    setError(null);
+    updateError(null);
     inputRef.current?.focus();
   }
 
@@ -204,9 +211,19 @@ export function TagInput({
               aria-activedescendant={activeOptionId}
               className="min-w-24 flex-1 bg-transparent outline-none disabled:cursor-not-allowed"
               onChange={(event) => {
-                setDraft(event.target.value);
-                setError(null);
+                const next = event.target.value;
+                setDraft(next);
                 setOpen(true);
+                const tag = next.trim().toLowerCase();
+                if (!tag) {
+                  updateError(null);
+                } else if (!TAG_PATTERN.test(tag)) {
+                  updateError("format");
+                } else if (value.length >= max) {
+                  updateError("limit");
+                } else {
+                  updateError(null);
+                }
               }}
               onFocus={() => setOpen(true)}
               onBlur={() => {

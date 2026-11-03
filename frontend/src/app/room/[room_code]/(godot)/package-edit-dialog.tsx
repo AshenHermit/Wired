@@ -62,6 +62,8 @@ export function PackageEditDialog({
   const [slug, setSlug] = React.useState("");
   const [description, setDescription] = React.useState("");
   const [tags, setTags] = React.useState<string[]>([]);
+  const [tagsInvalid, setTagsInvalid] = React.useState(false);
+  const tagsInvalidRef = React.useRef(false);
   const [detailsState, setDetailsState] =
     React.useState<DetailsState>("loading");
   const [detailsAttempt, setDetailsAttempt] = React.useState(0);
@@ -83,6 +85,8 @@ export function PackageEditDialog({
     setSlug(entry.slug);
     setDescription(entry.description);
     setTags(entry.tags);
+    setTagsInvalid(false);
+    tagsInvalidRef.current = false;
     setSlugState("available");
     setDependents(null);
     setDirError(false);
@@ -171,10 +175,11 @@ export function PackageEditDialog({
     slugState === "available" &&
     name.trim().length > 0 &&
     version.trim().length > 0 &&
+    !tagsInvalid &&
     !submitting;
 
   const save = async (confirmRename: boolean) => {
-    if (!entry) return;
+    if (!entry || tagsInvalidRef.current) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -304,6 +309,10 @@ export function PackageEditDialog({
                 id="package-edit-tags"
                 value={tags}
                 onChange={setTags}
+                onInvalidChange={(invalid) => {
+                  tagsInvalidRef.current = invalid;
+                  setTagsInvalid(invalid);
+                }}
                 disabled={submitting || detailsState !== "ready"}
                 placeholder="gameplay, hero"
               />
