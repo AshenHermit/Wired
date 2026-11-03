@@ -46,6 +46,27 @@ const rejectStatus = (url: string): Promise<number> =>
     ws.once('error', reject);
   });
 
+/**
+ * Waits until the code reaches a condition on its own.
+ *
+ * Sleeping for a guessed duration passes on a fast machine and fails on a slow
+ * one. Yielding with `setImmediate` keeps the loop out of wall-clock time while
+ * still letting socket events land, and the deadline turns a hang into a
+ * readable failure instead of a Jest timeout.
+ */
+const waitFor = async (
+  condition: () => boolean,
+  description: string,
+): Promise<void> => {
+  const deadline = Date.now() + 5_000;
+  while (!condition()) {
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out waiting for ${description}`);
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+};
+
 describe('GameSocketProxyService', () => {
   let httpServer: Server;
   let httpPort: number;
@@ -64,6 +85,10 @@ describe('GameSocketProxyService', () => {
     clients.push(ws);
     return ws;
   };
+
+  /** How many proxied pairs the service currently holds. */
+  const tracked = (): number =>
+    (proxy as unknown as { totalConnections(): number }).totalConnections();
 
   beforeEach(async () => {
     httpServer = createServer();
@@ -248,7 +273,9 @@ describe('GameSocketProxyService', () => {
     const stuck = connect();
     await open(stuck);
     stuck.close();
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    // The per-room cap is one client, so the retry below only succeeds once
+    // this pair is released — that release is what the test is about.
+    await waitFor(() => tracked() === 0, 'the aborted pair to be untracked');
 
     const retry = connect();
     await expect(open(retry)).resolves.toBeUndefined();
@@ -260,6 +287,14 @@ describe('GameSocketProxyService', () => {
 
   it('does not log an upstream error when the client aborts first', async () => {
     const blackhole = createServer(() => undefined);
+    // The proxy terminates its half-open upstream when the client leaves, so
+    // the server seeing that connection close is the point after which an
+    // upstream error would already have been logged.
+    const upstreamClosed = new Promise<void>((resolve) => {
+      blackhole.once('connection', (socket) =>
+        socket.once('close', () => resolve()),
+      );
+    });
     const blackholePort = await listen(blackhole);
     getRuntime.mockReturnValue({ state: 'running', port: blackholePort });
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
@@ -268,7 +303,7 @@ describe('GameSocketProxyService', () => {
       const client = connect();
       await open(client);
       client.close();
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await upstreamClosed;
 
       expect(warn).not.toHaveBeenCalledWith(
         expect.stringMatching(/upstream failed/i),

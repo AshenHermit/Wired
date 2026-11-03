@@ -89,6 +89,27 @@ const flushAsync = async (): Promise<void> => {
   }
 };
 
+/**
+ * Waits until the code reaches a condition on its own.
+ *
+ * Sleeping for a guessed duration passes on a fast machine and fails on a slow
+ * one. Yielding with `setImmediate` keeps the loop out of wall-clock time while
+ * still letting pending I/O complete, and the deadline turns a hang into a
+ * readable failure instead of a Jest timeout.
+ */
+const waitFor = async (
+  condition: () => boolean,
+  description: string,
+): Promise<void> => {
+  const deadline = Date.now() + 5_000;
+  while (!condition()) {
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out waiting for ${description}`);
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+};
+
 describe('RoomRuntimeService', () => {
   let stateDir: string;
   let factory: FakeRuntimeProcessFactory;
@@ -477,12 +498,19 @@ describe('RoomRuntimeService', () => {
 
   it('writes runtime logs to the per-room file', async () => {
     const { process } = await startRoom('room-1');
+    const logPath = join(stateDir, 'room-1-19100.log');
     process.emitLine('WIRED_LOG persisted line');
     process.exit(0);
-    const logPath = join(stateDir, 'room-1-19100.log');
-    for (let attempt = 0; attempt < 20 && !existsSync(logPath); attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+
+    // The log stream flushes asynchronously after the process exit is handled,
+    // so wait for the line itself rather than for a duration that happens to
+    // be long enough on this machine.
+    await waitFor(
+      () =>
+        existsSync(logPath) &&
+        readFileSync(logPath, 'utf8').includes('persisted line'),
+      'the runtime log file to contain the emitted line',
+    );
 
     expect(readFileSync(logPath, 'utf8')).toContain('persisted line');
   });
