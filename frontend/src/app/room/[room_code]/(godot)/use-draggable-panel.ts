@@ -10,6 +10,11 @@ export type PanelPosition = { x: number; y: number };
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? React.useLayoutEffect : React.useEffect;
 
+/** The transform the panel is placed with, so drag and render cannot disagree. */
+export function panelTransform(position: PanelPosition): string {
+  return `translate3d(${position.x}px, ${position.y}px, 0)`;
+}
+
 export function clampPanelPosition({
   x,
   y,
@@ -86,17 +91,26 @@ export function useDraggablePanel({
   const startPointerRef = React.useRef<PanelPosition>({ x: 0, y: 0 });
   const startPositionRef = React.useRef<PanelPosition>({ x: 0, y: 0 });
 
-  const updatePosition = React.useCallback((next: PanelPosition) => {
-    positionRef.current = next;
-    setPosition(next);
-  }, []);
-
-  const applyDragPosition = React.useCallback((next: PanelPosition) => {
+  /**
+   * Moves the panel without re-rendering.
+   *
+   * A drag produces several pointer moves per frame, so those write the
+   * transform straight to the element; `commitPanel` is what makes React agree.
+   */
+  const placePanel = React.useCallback((next: PanelPosition) => {
     positionRef.current = next;
     if (panelRef.current) {
-      panelRef.current.style.transform = `translate3d(${next.x}px, ${next.y}px, 0)`;
+      panelRef.current.style.transform = panelTransform(next);
     }
   }, []);
+
+  const commitPanel = React.useCallback(
+    (next: PanelPosition) => {
+      placePanel(next);
+      setPosition(next);
+    },
+    [placePanel],
+  );
 
   const getBounds = React.useCallback(() => {
     const rect = panelRef.current?.getBoundingClientRect();
@@ -135,8 +149,8 @@ export function useDraggablePanel({
     const { viewport } = getBounds();
     const stored = readStoredPosition(storageKey);
     const initial = stored ?? initialPositionRef.current(viewport);
-    updatePosition(clampToViewport(initial));
-  }, [clampToViewport, getBounds, storageKey, updatePosition]);
+    commitPanel(clampToViewport(initial));
+  }, [clampToViewport, commitPanel, getBounds, storageKey]);
 
   React.useEffect(() => {
     const handleResize = () => {
@@ -146,13 +160,13 @@ export function useDraggablePanel({
       }
 
       const next = clampToViewport(current);
-      updatePosition(next);
+      commitPanel(next);
       persist(next);
     };
 
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, [clampToViewport, persist, updatePosition]);
+  }, [clampToViewport, commitPanel, persist]);
 
   const handlePointerDown = React.useCallback(
     (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -182,9 +196,9 @@ export function useDraggablePanel({
         x: startPositionRef.current.x + (event.clientX - startPointerRef.current.x),
         y: startPositionRef.current.y + (event.clientY - startPointerRef.current.y),
       });
-      applyDragPosition(next);
+      placePanel(next);
     },
-    [applyDragPosition, clampToViewport],
+    [clampToViewport, placePanel],
   );
 
   const finishDrag = React.useCallback(
@@ -202,11 +216,11 @@ export function useDraggablePanel({
       setIsDragging(false);
 
       if (positionRef.current) {
-        setPosition(positionRef.current);
+        commitPanel(positionRef.current);
         persist(positionRef.current);
       }
     },
-    [persist],
+    [commitPanel, persist],
   );
 
   React.useEffect(() => {
@@ -256,16 +270,14 @@ export function useDraggablePanel({
         x: current.x + delta.x,
         y: current.y + delta.y,
       });
-      updatePosition(next);
+      commitPanel(next);
       persist(next);
     },
-    [clampToViewport, persist, updatePosition],
+    [clampToViewport, commitPanel, persist],
   );
 
   const style: React.CSSProperties = {
-    transform: position
-      ? `translate3d(${position.x}px, ${position.y}px, 0)`
-      : undefined,
+    transform: position ? panelTransform(position) : undefined,
     visibility: position ? "visible" : "hidden",
   };
 
