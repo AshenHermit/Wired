@@ -25,6 +25,7 @@ import {
   PackageStorageService,
   RevisionKind,
 } from './package-storage.service';
+import { PinnedPackage, walkPinnedClosure } from './package-dependency-graph';
 import { PackageDeliveryService } from './package-delivery.service';
 import { PackagePublishLockService } from './package-publish-lock.service';
 import { rewriteSlugReferences } from './package-slug-rewrite';
@@ -717,25 +718,9 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     });
     if (!pkg?.room) return;
     const roomId = pkg.room.id;
-    const visited = new Set<number>();
-    const queue: number[] = [packageId];
-    while (queue.length > 0) {
-      const currentId = queue.pop() as number;
-      if (visited.has(currentId)) continue;
-      visited.add(currentId);
-      const latest = await this.revisionsRepository.findOne({
-        where: { package: { id: currentId }, status: 'published' },
-        relations: { package: true },
-        order: { revision: 'DESC' },
-      });
-      if (!latest) continue;
-      const pins = await this.storage.readPinnedDependencies(
-        currentId,
-        latest.revision,
-      );
-      if (!pins) continue;
-      for (const dependencyId of pins.keys()) {
-        if (visited.has(dependencyId)) continue;
+    await walkPinnedClosure([packageId], {
+      load: (currentId) => this.loadPinnedPackage(currentId),
+      onDiscover: async (dependencyId) => {
         const dependency = await this.packagesRepository.findOne({
           where: { id: dependencyId },
           relations: { room: true },
@@ -757,9 +742,26 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
             name: dependency.name,
           });
         }
-        queue.push(dependencyId);
-      }
+        return true;
+      },
+    });
+  }
+
+  /** The latest published revision of a package and the dependencies it pins. */
+  private async loadPinnedPackage(packageId: number): Promise<PinnedPackage> {
+    const latest = await this.revisionsRepository.findOne({
+      where: { package: { id: packageId }, status: 'published' },
+      relations: { package: true },
+      order: { revision: 'DESC' },
+    });
+    if (!latest) {
+      return { revision: null, pins: null };
     }
+    const pins = await this.storage.readPinnedDependencies(
+      packageId,
+      latest.revision,
+    );
+    return { revision: latest.revision, pins: pins ? [...pins.keys()] : null };
   }
 
   /**

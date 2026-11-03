@@ -22,6 +22,7 @@ import {
   SavedDraftFile,
   PackageStorageService,
 } from './package-storage.service';
+import { PinnedPackage, walkPinnedClosure } from './package-dependency-graph';
 import { sha256Hex } from './package-hash';
 import { validatePackageRevisionFiles } from './package-manifest';
 import { PackagePublishLockService } from './package-publish-lock.service';
@@ -347,26 +348,12 @@ export class PackageRevisionsService {
     }
 
     const index = await this.slugIndex();
-    const referenced = new Set<number>();
-    for (const sourceFile of files) {
-      if (!isTextPackageFile(sourceFile.filepath)) {
-        continue;
-      }
-      let text: string;
-      try {
-        text = await this.storage.readDraftFile(
-          packageId,
-          revision,
-          sourceFile.filepath,
-        );
-      } catch {
-        // A missing upload is reported by publishRevision's own check.
-        continue;
-      }
-      for (const reference of this.resolveReferences(text, index, null)) {
-        referenced.add(reference.packageId);
-      }
-    }
+    const referenced = await this.loadReferencedPackageIds(
+      files,
+      index,
+      null,
+      (filepath) => this.readDraftText(packageId, revision, filepath),
+    );
 
     if (referenced.size === 0) {
       return;
@@ -407,67 +394,24 @@ export class PackageRevisionsService {
     const pkg = await this.packagesService.findOne(packageId);
     const scopeRoomId = pkg.room?.id ?? null;
     const index = await this.slugIndex();
-    const referenced = new Set<number>();
-    for (const entry of files) {
-      if (!isTextPackageFile(entry.filepath)) {
-        continue;
-      }
-      let text: string;
-      try {
-        text = await this.storage.readDraftFile(
-          packageId,
-          revision,
-          entry.filepath,
-        );
-      } catch {
-        // A missing upload is reported by publishRevision's own check.
-        continue;
-      }
-      for (const reference of this.resolveReferences(
-        text,
-        index,
-        scopeRoomId,
-      )) {
-        referenced.add(reference.packageId);
-      }
-    }
+    const referenced = await this.loadReferencedPackageIds(
+      files,
+      index,
+      scopeRoomId,
+      (filepath) => this.readDraftText(packageId, revision, filepath),
+    );
 
     const roomId = pkg.room?.id;
     if (roomId === undefined) {
       return;
     }
 
-    const visited = new Set<number>();
-    const queue: number[] = [];
-    const visit = (id: number): void => {
-      if (id === packageId || visited.has(id)) {
-        return;
-      }
-      visited.add(id);
-      queue.push(id);
-    };
-
-    for (const id of referenced) {
-      visit(id);
-    }
-
-    while (queue.length > 0) {
-      const id = queue.shift()!;
-      const latest = await this.revisionsRepository.findOne({
-        where: { package: { id }, status: 'published' },
-        order: { revision: 'DESC' },
-      });
-      if (!latest) {
-        continue;
-      }
-      const pins = await this.storage.readPinnedDependencies(
-        id,
-        latest.revision,
-      );
-      for (const pinned of pins?.keys() ?? []) {
-        visit(pinned);
-      }
-    }
+    const visited = new Set<number>(
+      await walkPinnedClosure(
+        [...referenced].filter((id) => id !== packageId),
+        { load: (id) => this.loadPinnedPackage(id) },
+      ),
+    );
 
     if (visited.size === 0) {
       return;
@@ -534,6 +478,86 @@ export class PackageRevisionsService {
     return resolved;
   }
 
+  /** The latest published revision of a package and the dependencies it pins. */
+  private async loadPinnedPackage(packageId: number): Promise<PinnedPackage> {
+    const latest = await this.revisionsRepository.findOne({
+      where: { package: { id: packageId }, status: 'published' },
+      order: { revision: 'DESC' },
+    });
+    if (!latest) {
+      return { revision: null, pins: null };
+    }
+    const pins = await this.storage.readPinnedDependencies(
+      packageId,
+      latest.revision,
+    );
+    return { revision: latest.revision, pins: pins ? [...pins.keys()] : null };
+  }
+
+  /**
+   * Package ids referenced by the text files of one revision.
+   *
+   * Its three callers differ only in where the bytes come from and whether a
+   * package may reference itself, so they share the read-skip-resolve loop and
+   * supply that policy themselves. A file that cannot be read or decoded
+   * contributes nothing: the caller reports that failure on its own path.
+   */
+  private async loadReferencedPackageIds(
+    files: PackageFileEntry[],
+    index: PackageSlugIndex,
+    scopeRoomId: number | null,
+    readText: (filepath: string) => Promise<string | null>,
+    skipPackageId?: number,
+  ): Promise<Set<number>> {
+    const referenced = new Set<number>();
+    for (const file of files) {
+      if (!isTextPackageFile(file.filepath)) {
+        continue;
+      }
+      const text = await readText(file.filepath);
+      if (text === null) {
+        continue;
+      }
+      for (const reference of this.resolveReferences(text, index, scopeRoomId)) {
+        if (reference.packageId !== skipPackageId) {
+          referenced.add(reference.packageId);
+        }
+      }
+    }
+    return referenced;
+  }
+
+  /** The draft bytes of one file as text, or null when they cannot be read. */
+  private async readDraftText(
+    packageId: number,
+    revision: number,
+    filepath: string,
+  ): Promise<string | null> {
+    try {
+      return await this.storage.readDraftFile(packageId, revision, filepath);
+    } catch {
+      // A missing upload is reported by publishRevision's own check.
+      return null;
+    }
+  }
+
+  /** The published bytes of one file as text, or null when they are not text. */
+  private async readPublishedText(
+    packageId: number,
+    revision: number,
+    filepath: string,
+  ): Promise<string | null> {
+    try {
+      return decodePackageText(
+        filepath,
+        await this.storage.readPublishedFile(packageId, revision, filepath),
+      );
+    } catch {
+      // An unreadable or undecodable file is reported by the artifact build.
+      return null;
+    }
+  }
+
   private warnCopyCleanupFailure(
     packageId: number,
     revision: number,
@@ -571,29 +595,13 @@ export class PackageRevisionsService {
   ): Promise<void> {
     try {
       const index = await this.slugIndex();
-      const referenced = new Set<number>();
-      for (const entry of files) {
-        if (!isTextPackageFile(entry.filepath)) {
-          continue;
-        }
-        const data = await this.storage.readPublishedFile(
-          packageId,
-          revision,
-          entry.filepath,
-        );
-        let text: string;
-        try {
-          text = decodePackageText(entry.filepath, data);
-        } catch {
-          // An undecodable file is reported by the artifact build instead.
-          continue;
-        }
-        for (const ref of this.resolveReferences(text, index, scopeRoomId)) {
-          if (ref.packageId !== packageId) {
-            referenced.add(ref.packageId);
-          }
-        }
-      }
+      const referenced = await this.loadReferencedPackageIds(
+        files,
+        index,
+        scopeRoomId,
+        (filepath) => this.readPublishedText(packageId, revision, filepath),
+        packageId,
+      );
 
       const pins = new Map<number, number>();
       for (const dependencyId of [...referenced].sort((a, b) => a - b)) {
