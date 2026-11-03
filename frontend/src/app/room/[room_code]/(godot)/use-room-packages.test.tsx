@@ -489,7 +489,7 @@ describe("useRoomPackages", () => {
         await vi.advanceTimersByTimeAsync(120_000);
       });
 
-      expect(result.current.error).toContain("Мост редактора не появился");
+      expect(result.current.error).toEqual({ key: "Errors.bridgeMissing" });
       expect(result.current.fsReady).toBe(false);
       expect(createPackageFileSystem).not.toHaveBeenCalled();
       unmount();
@@ -509,9 +509,9 @@ describe("useRoomPackages", () => {
     });
 
     expect(result.current.fsReady).toBe(false);
-    expect(result.current.error).toContain("Мост редактора недоступен");
+    expect(result.current.error).toEqual({ key: "Errors.bridgeUnavailable" });
     await expect(result.current.removePackage(5)).rejects.toThrow(
-      /Редактор ещё не готов/,
+      /package_fs_not_ready/,
     );
     unmount();
   });
@@ -531,7 +531,7 @@ describe("useRoomPackages", () => {
     // The action's own catch must not bury the transport error that the guard
     // needs in order to drop readiness.
     expect(result.current.fsReady).toBe(false);
-    expect(result.current.error).toContain("Мост редактора недоступен");
+    expect(result.current.error).toEqual({ key: "Errors.bridgeUnavailable" });
     unmount();
   });
 
@@ -557,7 +557,7 @@ describe("useRoomPackages", () => {
         await result.current.refresh();
       });
       expect(result.current.fsReady).toBe(false);
-      expect(result.current.error).toContain("Мост редактора недоступен");
+      expect(result.current.error).toEqual({ key: "Errors.bridgeUnavailable" });
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2_000);
@@ -687,7 +687,7 @@ describe("useRoomPackages", () => {
     // The older load is stale for entry state, but a transport error is still
     // the truth about the bridge and must not be discarded.
     expect(result.current.fsReady).toBe(false);
-    expect(result.current.error).toContain("Мост редактора недоступен");
+    expect(result.current.error).toEqual({ key: "Errors.bridgeUnavailable" });
     unmount();
   });
 
@@ -710,7 +710,7 @@ describe("useRoomPackages", () => {
 
       expect(fs.sync).toHaveBeenCalledTimes(1);
       expect(result.current.fsReady).toBe(false);
-      expect(result.current.error).toContain("Мост редактора недоступен");
+      expect(result.current.error).toEqual({ key: "Errors.bridgeUnavailable" });
       unmount();
     } finally {
       vi.useRealTimers();
@@ -737,8 +737,7 @@ describe("useRoomPackages", () => {
       // A rejected operation is not a transport loss: it is reported as a
       // package problem and readiness stays false…
       expect(result.current.fsReady).toBe(false);
-      expect(result.current.error).toContain("Пакеты недоступны");
-      expect(result.current.error).toContain("sync не выполнен");
+      expect(result.current.error).toEqual({ key: "Errors.packagesUnavailable" });
 
       // …and the initial connect path keeps retrying, like a loop tick does.
       await act(async () => {
@@ -761,16 +760,16 @@ describe("useRoomPackages", () => {
 
     await act(async () => {
       await expect(result.current.removePackage(5)).rejects.toThrow(
-        /staging не найден/,
+        /package_remove_failed/,
       );
     });
 
     // A rejected operation is not a dead bridge: the editor stays usable and
     // no reconnect loop is started.
     expect(result.current.fsReady).toBe(true);
-    expect(result.current.actionFor(5).error).toContain(
-      "Не удалось убрать пакет",
-    );
+    expect(result.current.actionFor(5).error).toEqual({
+      key: "Packages.errors.removeFailed",
+    });
     expect(createPackageFileSystem).toHaveBeenCalledTimes(1);
     unmount();
   });
@@ -794,7 +793,7 @@ describe("useRoomPackages", () => {
     expect(fs.deletePackage).not.toHaveBeenCalled();
 
     await expect(result.current.adoptPackage(5)).rejects.toThrow(
-      /каталог пакета не найден/,
+      /package_directory_missing/,
     );
     unmount();
   });
@@ -1027,7 +1026,7 @@ describe("useRoomPackages", () => {
     });
 
     await expect(result.current.emitPackage(99)).rejects.toThrow(
-      /не загружен/,
+      /package_not_loaded/,
     );
     unmount();
   });
@@ -1163,7 +1162,7 @@ describe("useRoomPackages", () => {
 
     const first = result.current.downloadPackage(5);
     await expect(result.current.downloadPackage(5)).rejects.toThrow(
-      /уже выполняется/,
+      /package_action_in_progress:5/,
     );
 
     await act(async () => {
@@ -1391,12 +1390,12 @@ describe("useRoomPackages", () => {
     await act(async () => {
       await expect(
         result.current.updatePackageMetadata(5, { name: "Renamed" }),
-      ).rejects.toThrow(/Не удалось изменить данные пакета/);
+      ).rejects.toThrow(/package_update_failed/);
     });
 
-    expect(result.current.actionFor(5).error).toContain(
-      "Не удалось изменить данные пакета",
-    );
+    expect(result.current.actionFor(5).error).toEqual({
+      key: "Packages.errors.updateMetadataFailed",
+    });
     expect(result.current.entries[0]).toMatchObject({
       name: "Demo",
       version: "0.1.0",
@@ -1695,7 +1694,9 @@ describe("useRoomPackages", () => {
     expect(
       result.current.entries.find((item) => item.packageId === 9),
     ).toMatchObject({ slug: "shop_demo", name: "Shop Demo", loaded: true });
-    expect(result.current.actionFor(9).notice).toBe("Пакет добавлен в комнату");
+    expect(result.current.actionFor(9).notice).toEqual({
+      key: "Packages.notices.addedToRoom",
+    });
     unmount();
   });
 
@@ -1709,9 +1710,9 @@ describe("useRoomPackages", () => {
     expect(packagesApi.publishPackageToWorkshop).toHaveBeenCalledWith(5, {
       name: "Workshop Demo",
     });
-    expect(result.current.actionFor(5).notice).toBe(
-      "Публикация в workshop обновлена",
-    );
+    expect(result.current.actionFor(5).notice).toEqual({
+      key: "Packages.notices.publishUpdated",
+    });
 
     vi.mocked(packagesApi.publishPackageToWorkshop).mockResolvedValue({
       mode: "created",
@@ -1724,9 +1725,9 @@ describe("useRoomPackages", () => {
       5,
       {},
     );
-    expect(result.current.actionFor(5).notice).toBe(
-      "Пакет опубликован в workshop",
-    );
+    expect(result.current.actionFor(5).notice).toEqual({
+      key: "Packages.notices.published",
+    });
 
     // Publication is metadata only: no editor directory, file or revision moves.
     expect(fs.createPackageDir).not.toHaveBeenCalled();
@@ -1778,7 +1779,9 @@ describe("useRoomPackages", () => {
     expect(failure).toBeInstanceOf(Error);
     expect((failure as Error).message).toContain("#hero");
     expect((failure as Error).message).not.toContain("Request failed");
-    expect(result.current.actionFor(5).error).toBe((failure as Error).message);
+    expect(result.current.actionFor(5).error).toEqual({
+      key: "Packages.errors.publishFailed",
+    });
     unmount();
   });
 
@@ -1837,9 +1840,10 @@ describe("useRoomPackages", () => {
     expect(
       result.current.entries.find((item) => item.packageId === 11),
     ).toMatchObject({ slug: "demo_fork", loaded: true });
-    expect(result.current.actionFor(11).notice).toBe(
-      "Форк создан: demo_fork. Опубликуйте его в workshop отдельно",
-    );
+    expect(result.current.actionFor(11).notice).toEqual({
+      key: "Packages.notices.forked",
+      values: { slug: "demo_fork" },
+    });
     unmount();
   });
 });

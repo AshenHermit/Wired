@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import type { AppMessage } from "@/i18n/message";
 import type { GodotEditorInstance } from "./GodotEditorInstance";
 import {
   EditorBridgeError,
@@ -34,7 +35,7 @@ type EditorBridgeOptions = {
   /** A transport failure: the bridge is gone or silent. */
   onTransportError: (cause: unknown) => void;
   /** A connect failure, or `null` once the connection recovered. */
-  onConnectError: (message: string | null) => void;
+  onConnectError: (message: AppMessage | null) => void;
 };
 
 export type EditorBridgeTransport = {
@@ -160,9 +161,10 @@ export function useEditorBridge(
     } catch (cause) {
       // A package problem must not prevent the editor from opening.
       connectingRef.current = false;
-      optionsRef.current.onConnectError(
-        `Пакеты недоступны: ${errorMessage(cause)}`,
-      );
+      console.error(cause);
+      optionsRef.current.onConnectError({
+        key: "Errors.packagesUnavailable",
+      });
       return false;
     }
 
@@ -175,9 +177,10 @@ export function useEditorBridge(
       } else {
         // Not a transport loss, so no readiness drop and no transport message,
         // but the initial path must not dead-end: the loop re-probes.
-        optionsRef.current.onConnectError(
-          `Пакеты недоступны: ${errorMessage(cause)}`,
-        );
+        console.error(cause);
+        optionsRef.current.onConnectError({
+          key: "Errors.packagesUnavailable",
+        });
         startReconnectLoop();
       }
       return false;
@@ -216,9 +219,9 @@ export function useEditorBridge(
           // missing bridge and must not surface as an error.
           if (cause instanceof EditorBridgeWaitCancelledError) return;
           if (!mountedRef.current) return;
-          optionsRef.current.onConnectError(
-            "Мост редактора не появился: пакеты недоступны",
-          );
+          optionsRef.current.onConnectError({
+            key: "Errors.bridgeMissing",
+          });
           startReconnectLoop();
         }
       })();

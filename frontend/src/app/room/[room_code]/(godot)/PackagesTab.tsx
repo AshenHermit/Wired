@@ -19,6 +19,7 @@ import {
   UploadIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useAppMessage, type AppMessage } from "@/i18n/message";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -46,6 +47,7 @@ import {
 import {
   LocalChangesError,
   NewerRevisionError,
+  PackagesActionError,
   type RoomPackageEntry,
   type RoomPackageStatus,
   type RoomPackagesController,
@@ -87,10 +89,6 @@ const RUNTIME_LABEL: Record<string, string> = {
   applied: "runtime применил ревизию",
   failed: "runtime не смог применить ревизию",
 };
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function confirmation(pkg: RoomPackageEntry, changes: string[], verb: string) {
   const files = changes.slice(0, 5).join(", ");
@@ -251,6 +249,7 @@ function PackageCard({
   onEdit: (entry: RoomPackageEntry) => void;
 }) {
   const action = packages.actionFor(entry.packageId);
+  const format = useAppMessage();
   const disabled = !packages.fsReady || action.busy;
 
   return (
@@ -476,12 +475,12 @@ function PackageCard({
       {action.notice && (
         <div className="mt-3 flex items-center gap-1.5 text-xs text-foreground">
           <CheckIcon className="size-3.5" />
-          {action.notice}
+          {format(action.notice)}
         </div>
       )}
       {action.error && (
         <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
-          {action.error}
+          {format(action.error)}
         </div>
       )}
     </li>
@@ -519,8 +518,9 @@ export function PackagesTab({
   const [slugTakenInWorkshop, setSlugTakenInWorkshop] =
     React.useState(false);
   const t = useTranslations();
+  const format = useAppMessage();
   const [creating, setCreating] = React.useState(false);
-  const [createError, setCreateError] = React.useState<string | null>(null);
+  const [createError, setCreateError] = React.useState<AppMessage | null>(null);
 
   const { confirm, dialog } = useConfirmDialog();
   const runConfirmed = useConfirmedAction(confirm);
@@ -688,7 +688,7 @@ export function PackagesTab({
   const handleCreate = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!authorId) {
-      setCreateError("Войдите в аккаунт, чтобы создавать пакеты.");
+      setCreateError({ key: "Packages.errors.loginRequired" });
       return;
     }
     if (!canCreate) return;
@@ -703,7 +703,12 @@ export function PackagesTab({
       );
       closeCreate();
     } catch (error) {
-      setCreateError(messageOf(error));
+      if (!(error instanceof PackagesActionError)) console.error(error);
+      setCreateError(
+        error instanceof PackagesActionError
+          ? error.appMessage
+          : { key: "Packages.errors.createFailed" },
+      );
     } finally {
       setCreating(false);
     }
@@ -766,7 +771,7 @@ export function PackagesTab({
         </div>
         {packages.error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-            {packages.error}
+            {format(packages.error)}
           </div>
         )}
 
@@ -851,7 +856,7 @@ export function PackagesTab({
 
               {createError && (
                 <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive">
-                  {createError}
+                  {format(createError)}
                 </div>
               )}
 

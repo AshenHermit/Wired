@@ -637,7 +637,9 @@ describe("PackagesTab", () => {
     await waitFor(() => expect(submit).toHaveProperty("disabled", false));
     fireEvent.click(submit);
 
-    await waitFor(() => expect(screen.getByText("boom")).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText("Не удалось создать пакет")).toBeTruthy(),
+    );
     expect(screen.getByLabelText("Slug")).toBeTruthy();
   });
 
@@ -665,7 +667,9 @@ describe("PackagesTab", () => {
     await waitFor(() => expect(submit).toHaveProperty("disabled", false));
     fireEvent.click(submit);
 
-    await waitFor(() => expect(screen.getByText("Slug уже занят")).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText("Не удалось создать пакет")).toBeTruthy(),
+    );
     expect(screen.getByLabelText("Slug")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Создать" })).toBeTruthy();
   });

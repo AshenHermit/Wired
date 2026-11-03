@@ -74,6 +74,49 @@
     "taken": "Slug is already taken",
     "checkFailed": "Failed to check the slug. Try again"
   },
+  "Packages": {
+    "notices": {
+      "created": "Package created. An empty package directory appeared in the editor.",
+      "downloaded": "Downloaded published revision {revision}.",
+      "addedToRoom": "Package added to the room",
+      "published": "Package published to the workshop",
+      "publishUpdated": "Workshop publication updated",
+      "forked": "Fork created: {slug}. Publish it to the workshop separately",
+      "removedFromEditor": "Package removed from the editor. Other packages' files were not changed.",
+      "enabled": "Package enabled",
+      "disabled": "Package disabled",
+      "deleted": "Package deleted from the room",
+      "adopted": "The existing directory is now connected to the package. Emit will publish its files.",
+      "emitPublished": "Published revision {revision}: {uploaded} file(s)."
+    },
+    "errors": {
+      "loginRequired": "Sign in to create packages.",
+      "nameRequired": "Enter a package name",
+      "slugRequired": "Enter a package slug",
+      "dirOccupied": "The editor already has a directory with slug {slug}; rename or delete it",
+      "createFailed": "Failed to create the package",
+      "createDirFailed": "The package was created on the server, but its directory was not created in the editor",
+      "updateMetadataFailed": "Failed to update the package metadata",
+      "downloadFailed": "Failed to download the package",
+      "addFromWorkshopFailed": "Failed to add the package from the workshop",
+      "publishFailed": "Failed to publish the package to the workshop",
+      "forkFailed": "Failed to create the fork",
+      "removeFailed": "Failed to remove the package",
+      "enableFailed": "Failed to enable the package",
+      "disableFailed": "Failed to disable the package",
+      "deleteFailed": "Failed to delete the package",
+      "deleteConflict": "Disable or delete the dependent packages first: {names}",
+      "adoptFailed": "Failed to connect the package directory",
+      "emitFailed": "Failed to publish the package",
+      "notPublished": "Publish the package first (Emit)",
+      "slugTakenWorkshop": "The slug is already taken in the room",
+      "publishConflict": "The package is already being copied, try again",
+      "invalidTag": "Tag “{tag}” is invalid: up to 32 characters, lowercase Latin letters, digits, “-” and “_”",
+      "invalidTags": "Tags are invalid: up to 32 characters, lowercase Latin letters, digits, “-” and “_”",
+      "dependencyNotGlobal": "The package depends on room package #{slug}: it cannot be published to the workshop without forking the dependency",
+      "dependencyUnknownSlug": "Publish dependency #{slug} to the workshop first"
+    }
+  },
   "Game": {
     "checkingExport": "Checking the game build…",
     "loadingEngine": "Loading the Godot engine…",
@@ -120,6 +163,9 @@
     "notFound": "Not found",
     "conflict": "Data conflict. Refresh the page and try again",
     "server": "Server error. Try again later",
-    "unexpected": "Something went wrong. Try again"
+    "unexpected": "Something went wrong. Try again",
+    "bridgeMissing": "The editor bridge did not appear",
+    "bridgeUnavailable": "The editor bridge is unavailable",
+    "packagesUnavailable": "Packages are unavailable"
   }
 }

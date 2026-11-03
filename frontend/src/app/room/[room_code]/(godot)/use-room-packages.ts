@@ -10,6 +10,7 @@ import type {
   WorkshopPublishResult,
 } from "@wired-io/shared";
 import { getRoomPackages } from "@/api/services/godot-game";
+import type { AppMessage } from "@/i18n/message";
 import {
   checkPackageSlugAvailability,
   copyWorkshopPackageToRoom,
@@ -79,8 +80,8 @@ export type RoomPackageEntry = {
 export type PackageActionState = {
   busy: boolean;
   progress: { current: number; total: number } | null;
-  notice: string | null;
-  error: string | null;
+  notice: AppMessage | null;
+  error: AppMessage | null;
 };
 
 const IDLE_ACTION: PackageActionState = {
@@ -94,7 +95,7 @@ export type RoomPackagesController = {
   entries: RoomPackageEntry[];
   fsReady: boolean;
   statusLoaded: boolean;
-  error: string | null;
+  error: AppMessage | null;
   actions: Record<number, PackageActionState>;
   actionFor: (packageId: number) => PackageActionState;
   /**
@@ -179,9 +180,7 @@ export class LocalChangesError extends Error {
     public readonly packageId: number,
     public readonly files: string[],
   ) {
-    super(
-      `В пакете ${packageId} есть локальные изменения (${files.length} файл(ов))`,
-    );
+    super(`local_changes:${packageId}`);
     this.name = "LocalChangesError";
   }
 }
@@ -196,13 +195,7 @@ export class NewerRevisionError extends Error {
     public readonly loadedRevision: number | null,
     public readonly publishedRevision: number,
   ) {
-    super(
-      `В пакете ${packageId} уже опубликована ревизия ${publishedRevision}, а в редакторе ${
-        loadedRevision === null || loadedRevision === 0
-          ? "ревизия не загружена"
-          : `ревизия ${loadedRevision}`
-      }`,
-    );
+    super(`newer_revision:${packageId}`);
     this.name = "NewerRevisionError";
   }
 }
@@ -219,11 +212,7 @@ export class SlugRenameDependentsError extends Error {
   constructor(
     public readonly dependents: { packageId: number; name: string }[],
   ) {
-    super(
-      `На slug ссылаются пакеты: ${dependents
-        .map((dependent) => dependent.name)
-        .join(", ")}`,
-    );
+    super("slug_rename_dependents");
     this.name = "SlugRenameDependentsError";
   }
 }
@@ -240,7 +229,7 @@ export class PackageDirectoryRenameError extends Error {
     public readonly toSlug: string,
     cause: unknown,
   ) {
-    super(`Не удалось переименовать каталог пакета: ${errorMessage(cause)}`);
+    super(`package_directory_rename_failed:${fromSlug}`);
     this.name = "PackageDirectoryRenameError";
   }
 }
@@ -255,8 +244,19 @@ export class WorkshopSlugTakenError extends Error {
     public readonly slug: string,
     public readonly workshopPackage: WorkshopPackageSummary,
   ) {
-    super(`Slug ${slug} уже занят в workshop`);
+    super(`workshop_slug_taken:${slug}`);
     this.name = "WorkshopSlugTakenError";
+  }
+}
+
+/**
+ * A validation failure the user can fix in the create/edit form. The panel
+ * renders `appMessage`; `message` stays a diagnostic code.
+ */
+export class PackagesActionError extends Error {
+  constructor(public readonly appMessage: AppMessage) {
+    super(appMessage.key);
+    this.name = "PackagesActionError";
   }
 }
 
@@ -277,10 +277,10 @@ function workshopErrorData(error: unknown): WorkshopErrorData | null {
 }
 
 /**
- * The workshop actions show a Russian reason for the codes a user can act on;
- * every other failure keeps the backend message.
+ * The workshop actions show a translated reason for the codes a user can act
+ * on; every other failure falls back to the shared unexpected error.
  */
-function workshopErrorMessage(error: unknown): string {
+function workshopErrorMessage(error: unknown): AppMessage {
   const data = workshopErrorData(error);
   const code = data?.code ?? "";
   const backendMessage =
@@ -288,15 +288,15 @@ function workshopErrorMessage(error: unknown): string {
 
   switch (code) {
     case "package_not_published":
-      return "Сначала опубликуйте пакет (Emit)";
+      return { key: "Packages.errors.notPublished" };
     case "slug_taken":
-      return "Slug уже занят в комнате";
+      return { key: "Packages.errors.slugTakenWorkshop" };
     case "publish_conflict":
-      return "Пакет уже копируется, повторите попытку";
+      return { key: "Packages.errors.publishConflict" };
     case "invalid_tags":
       return data?.tag
-        ? `Тег «${data.tag}» недопустим: до 32 символов, строчные латинские буквы, цифры, «-» и «_»`
-        : "Некорректные теги: до 10 тегов, строчные латинские буквы, цифры, «-» и «_»";
+        ? { key: "Packages.errors.invalidTag", values: { tag: data.tag } }
+        : { key: "Packages.errors.invalidTags" };
   }
 
   // Dependency failures are raised as `<code>:<slug>` in a plain message, so
@@ -304,16 +304,41 @@ function workshopErrorMessage(error: unknown): string {
   const raw = code || backendMessage;
   const notGlobal = "package_dependency_not_global:";
   if (raw.startsWith(notGlobal)) {
-    const slug = raw.slice(notGlobal.length);
-    return `Пакет зависит от пакета комнаты #${slug}: его нельзя опубликовать в workshop без форка зависимости`;
+    return {
+      key: "Packages.errors.dependencyNotGlobal",
+      values: { slug: raw.slice(notGlobal.length) },
+    };
   }
   const unknownSlug = "package_dependency_unknown_slug:";
   if (raw.startsWith(unknownSlug)) {
-    const slug = raw.slice(unknownSlug.length);
-    return `Сначала опубликуйте зависимость #${slug} в workshop`;
+    return {
+      key: "Packages.errors.dependencyUnknownSlug",
+      values: { slug: raw.slice(unknownSlug.length) },
+    };
   }
 
-  return backendMessage || errorMessage(error);
+  console.error(error);
+  return { key: "Errors.unexpected" };
+}
+
+/** A short, non-translated reason used for thrown errors and console logs. */
+function workshopErrorDiagnostic(error: unknown): string {
+  const data = workshopErrorData(error);
+  const code = data?.code ?? "";
+  const backendMessage =
+    typeof data?.message === "string" ? data.message : "";
+
+  if (code === "invalid_tags") {
+    return data?.tag ? `invalid_tags:${data.tag}` : "invalid_tags";
+  }
+  if (code) return code;
+  if (backendMessage.startsWith("package_dependency_")) {
+    return backendMessage.replace(
+      /^(package_dependency_(?:not_global|unknown_slug)):(.+)$/,
+      "$1:#$2",
+    );
+  }
+  return "workshop_failed";
 }
 
 /**
@@ -321,7 +346,7 @@ function workshopErrorMessage(error: unknown): string {
  * on. Its 409 payload names them, which is far more useful than the generic
  * "Request failed with status code 409".
  */
-function deleteConflictMessage(error: unknown): string | null {
+function deleteConflictMessage(error: unknown): AppMessage | null {
   const data = (
     error as
       | {
@@ -337,9 +362,14 @@ function deleteConflictMessage(error: unknown): string | null {
   if (data?.code !== "package_has_dependents" || !data.dependents?.length) {
     return null;
   }
-  return `Сначала отключите или удалите зависимые пакеты: ${data.dependents
-    .map((dependent) => dependent.name ?? `#${dependent.packageId}`)
-    .join(", ")}`;
+  return {
+    key: "Packages.errors.deleteConflict",
+    values: {
+      names: data.dependents
+        .map((dependent) => dependent.name ?? `#${dependent.packageId}`)
+        .join(", "),
+    },
+  };
 }
 
 function mergePackages(
@@ -483,7 +513,7 @@ function requireFileSystem(
   files: PackageFileSystem | null,
 ): PackageFileSystem {
   if (!files) {
-    throw new Error("Редактор ещё не готов: дождитесь загрузки проекта Godot");
+    throw new Error("package_fs_not_ready");
   }
   return files;
 }
@@ -665,7 +695,7 @@ export function useRoomPackages(
     remoteIds: new Set<number>(),
   });
   const [statusLoaded, setStatusLoaded] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<AppMessage | null>(null);
 
   const loadedRef = React.useRef<Map<number, PackageBaseline>>(new Map());
   /**
@@ -702,7 +732,7 @@ export function useRoomPackages(
     createFiles: (editor, currentEditor) => {
       const projectRoot = packageProjectRoot(editor);
       if (!projectRoot) {
-        throw new GodotFsError("Проект Godot ещё не загружен в редактор");
+        throw new GodotFsError("godot_project_not_loaded");
       }
       return createPackageFileSystem({
         bridge: createEditorBridgeClient(),
@@ -713,9 +743,7 @@ export function useRoomPackages(
         getEngine: () => {
           const current = currentEditor();
           if (!current?.editor) {
-            throw new GodotFsError(
-              "Файловая система Godot-редактора ещё не готова: дождитесь загрузки проекта",
-            );
+            throw new GodotFsError("godot_fs_not_ready");
           }
           return current.editor;
         },
@@ -726,7 +754,8 @@ export function useRoomPackages(
       void refreshRef.current();
     },
     onTransportError: (cause) => {
-      setError(`Мост редактора недоступен: ${errorMessage(cause)}`);
+      console.error(cause);
+      setError({ key: "Errors.bridgeUnavailable" });
     },
     onConnectError: (message) => {
       setError(message);
@@ -838,9 +867,8 @@ export function useRoomPackages(
           return;
         }
         if (request !== requestRef.current) return;
-        setError(
-          `Не удалось получить пакеты комнаты: ${errorMessage(cause)}`,
-        );
+        console.error(cause);
+        setError({ key: "Errors.packagesUnavailable" });
       }
     },
     [dropTransport, filesRef, roomId],
@@ -929,19 +957,20 @@ export function useRoomPackages(
       guarded(async () => {
         const trimmed = name.trim();
         if (!trimmed) {
-          throw new Error("Укажите имя пакета");
+          throw new PackagesActionError({ key: "Packages.errors.nameRequired" });
         }
         const trimmedSlug = slug.trim();
         if (!trimmedSlug) {
-          throw new Error("Укажите слаг пакета");
+          throw new PackagesActionError({ key: "Packages.errors.slugRequired" });
         }
         const files = requireFileSystem(filesRef.current);
         if (await isPackageDirOccupied(trimmedSlug)) {
           // A leftover folder from a package deleted in another session would
           // silently become this package's content.
-          throw new Error(
-            `В редакторе уже есть папка с slug ${trimmedSlug}; переименуйте или удалите её`,
-          );
+          throw new PackagesActionError({
+            key: "Packages.errors.dirOccupied",
+            values: { slug: trimmedSlug },
+          });
         }
         let created: ScriptingPackage;
         try {
@@ -953,22 +982,26 @@ export function useRoomPackages(
             roomId,
           });
         } catch (cause) {
-          throw new Error(`Не удалось создать пакет: ${errorMessage(cause)}`);
+          console.error(cause);
+          throw new PackagesActionError({
+            key: "Packages.errors.createFailed",
+          });
         }
         try {
           await files.createPackageDir(created.slug);
           requestEditorRescan();
         } catch (cause) {
           if (cause instanceof EditorBridgeError) throw cause;
-          throw new Error(
-            `Пакет создан на сервере, но каталог в редакторе не создан: ${errorMessage(cause)}`,
-          );
+          console.error(cause);
+          throw new PackagesActionError({
+            key: "Packages.errors.createDirFailed",
+          });
         }
 
         loadedRef.current.set(created.id, { revision: 0, files: {} });
         dispatch({ type: "created", package: created });
         setAction(created.id, {
-          notice: "Пакет создан. В редакторе появился пустой каталог пакета.",
+          notice: { key: "Packages.notices.created" },
         });
         await refresh();
         return created;
@@ -1067,9 +1100,11 @@ export function useRoomPackages(
             })),
           );
         }
-        const message = `Не удалось изменить данные пакета: ${errorMessage(cause)}`;
-        setAction(packageId, { error: message });
-        throw new Error(message);
+        console.error(cause);
+        setAction(packageId, {
+          error: { key: "Packages.errors.updateMetadataFailed" },
+        });
+        throw new Error("package_update_failed");
       }
       dispatch({ type: "updated", package: updated });
       // The slug is addressable before the state mirror re-renders.
@@ -1137,7 +1172,7 @@ export function useRoomPackages(
   const beginAction = React.useCallback(
     (packageId: number) => {
       if (inFlightRef.current.has(packageId)) {
-        throw new Error(`Действие с пакетом ${packageId} уже выполняется`);
+        throw new Error(`package_action_in_progress:${packageId}`);
       }
       inFlightRef.current.add(packageId);
       setAction(packageId, {
@@ -1191,9 +1226,7 @@ export function useRoomPackages(
             },
           );
           if (result.status === "conflict") {
-            throw new Error(
-              "опубликованная ревизия не была применена из-за конфликта",
-            );
+            throw new Error("package_revision_conflict");
           }
           requestEditorRescan();
           loadedRef.current.set(packageId, {
@@ -1201,15 +1234,20 @@ export function useRoomPackages(
             files: result.files,
           });
           setAction(packageId, {
-            notice: `Загружена опубликованная ревизия ${result.revision}.`,
+            notice: {
+              key: "Packages.notices.downloaded",
+              values: { revision: result.revision },
+            },
           });
           await refresh();
         } catch (cause) {
           if (cause instanceof LocalChangesError) throw cause;
           if (cause instanceof EditorBridgeError) throw cause;
-          const message = `Не удалось скачать пакет: ${errorMessage(cause)}`;
-          setAction(packageId, { error: message });
-          throw new Error(message);
+          console.error(cause);
+          setAction(packageId, {
+            error: { key: "Packages.errors.downloadFailed" },
+          });
+          throw new Error(`package_download_failed:${errorMessage(cause)}`);
         } finally {
           endAction(packageId);
         }
@@ -1231,7 +1269,7 @@ export function useRoomPackages(
           created = await copyWorkshopPackageToRoom(workshopPackageId, roomId);
         } catch (cause) {
           throw new Error(
-            `Не удалось добавить пакет из workshop: ${workshopErrorMessage(cause)}`,
+            `workshop_add_failed:${workshopErrorDiagnostic(cause)}`,
           );
         }
         dispatch({ type: "created", package: created });
@@ -1240,7 +1278,9 @@ export function useRoomPackages(
         await downloadPackage(created.id).catch(() => undefined);
         // The download writes its own notice, so the reason of the copy is set
         // last to stay visible on the card.
-        setAction(created.id, { notice: "Пакет добавлен в комнату" });
+        setAction(created.id, {
+          notice: { key: "Packages.notices.addedToRoom" },
+        });
         return created;
       }),
     [downloadPackage, guarded, refresh, roomId, setAction],
@@ -1261,10 +1301,12 @@ export function useRoomPackages(
           const result = await publishPackageToWorkshop(packageId, metadata);
           setAction(packageId, {
             error: null,
-            notice:
-              result.mode === "created"
-                ? "Пакет опубликован в workshop"
-                : "Публикация в workshop обновлена",
+            notice: {
+              key:
+                result.mode === "created"
+                  ? "Packages.notices.published"
+                  : "Packages.notices.publishUpdated",
+            },
           });
           return result;
         } catch (cause) {
@@ -1278,11 +1320,13 @@ export function useRoomPackages(
               data.workshopPackage,
             );
           }
-          const message = `Не удалось опубликовать пакет в workshop: ${workshopErrorMessage(
-            cause,
-          )}`;
-          setAction(packageId, { error: message });
-          throw new Error(message);
+          console.error(cause);
+          setAction(packageId, {
+            error: { key: "Packages.errors.publishFailed" },
+          });
+          throw new Error(
+            `workshop_publish_failed:${workshopErrorDiagnostic(cause)}`,
+          );
         }
       }),
     [guarded, setAction, slugOf],
@@ -1301,7 +1345,7 @@ export function useRoomPackages(
           created = await forkPackageToWorkshop(packageId, slug.trim());
         } catch (cause) {
           throw new Error(
-            `Не удалось создать форк: ${workshopErrorMessage(cause)}`,
+            `workshop_fork_failed:${workshopErrorDiagnostic(cause)}`,
           );
         }
         dispatch({ type: "created", package: created });
@@ -1309,7 +1353,10 @@ export function useRoomPackages(
         await refresh();
         await downloadPackage(created.id).catch(() => undefined);
         setAction(created.id, {
-          notice: `Форк создан: ${created.slug}. Опубликуйте его в workshop отдельно`,
+          notice: {
+            key: "Packages.notices.forked",
+            values: { slug: created.slug },
+          },
         });
         return created;
       }),
@@ -1345,16 +1392,17 @@ export function useRoomPackages(
           requestEditorRescan();
           loadedRef.current.delete(packageId);
           setAction(packageId, {
-            notice:
-              "Пакет убран из редактора. Файлы других пакетов не изменены.",
+            notice: { key: "Packages.notices.removedFromEditor" },
           });
           await refresh();
         } catch (cause) {
           if (cause instanceof LocalChangesError) throw cause;
           if (cause instanceof EditorBridgeError) throw cause;
-          const message = `Не удалось убрать пакет: ${errorMessage(cause)}`;
-          setAction(packageId, { error: message });
-          throw new Error(message);
+          console.error(cause);
+          setAction(packageId, {
+            error: { key: "Packages.errors.removeFailed" },
+          });
+          throw new Error(`package_remove_failed:${errorMessage(cause)}`);
         } finally {
           endAction(packageId);
         }
@@ -1369,15 +1417,25 @@ export function useRoomPackages(
         try {
           await updateScriptingPackage(packageId, { enabled });
           setAction(packageId, {
-            notice: enabled ? "Пакет включён" : "Пакет отключён",
+            notice: {
+              key: enabled
+                ? "Packages.notices.enabled"
+                : "Packages.notices.disabled",
+            },
           });
           await refresh();
         } catch (cause) {
-          const message = `Не удалось ${
-            enabled ? "включить" : "отключить"
-          } пакет: ${errorMessage(cause)}`;
-          setAction(packageId, { error: message });
-          throw new Error(message);
+          console.error(cause);
+          setAction(packageId, {
+            error: {
+              key: enabled
+                ? "Packages.errors.enableFailed"
+                : "Packages.errors.disableFailed",
+            },
+          });
+          throw new Error(
+            enabled ? "package_enable_failed" : "package_disable_failed",
+          );
         } finally {
           endAction(packageId);
         }
@@ -1394,11 +1452,13 @@ export function useRoomPackages(
           try {
             await deleteScriptingPackage(packageId);
           } catch (cause) {
-            const message =
-              deleteConflictMessage(cause) ??
-              `Не удалось удалить пакет: ${errorMessage(cause)}`;
-            setAction(packageId, { error: message });
-            throw new Error(message);
+            console.error(cause);
+            setAction(packageId, {
+              error: deleteConflictMessage(cause) ?? {
+                key: "Packages.errors.deleteFailed",
+              },
+            });
+            throw new Error("package_delete_failed");
           }
 
           // The editor directory is local state, not the package itself: a
@@ -1416,7 +1476,9 @@ export function useRoomPackages(
           loadedRef.current.delete(packageId);
           createdSlugsRef.current.delete(packageId);
           dispatch({ type: "removed", ids: [packageId] });
-          setAction(packageId, { notice: "Пакет удалён из комнаты" });
+          setAction(packageId, {
+            notice: { key: "Packages.notices.deleted" },
+          });
           await refresh();
         } finally {
           endAction(packageId);
@@ -1433,20 +1495,21 @@ export function useRoomPackages(
           const files = requireFileSystem(filesRef.current);
           const slug = slugOf(packageId);
           if (!(await files.exists(slug))) {
-            throw new Error("каталог пакета не найден в редакторе");
+            throw new Error("package_directory_missing");
           }
           const snapshot = await files.snapshot(slug);
           loadedRef.current.set(packageId, { revision: 0, files: snapshot });
           setAction(packageId, {
-            notice:
-              "Существующий каталог подключён к пакету. Emit опубликует его файлы.",
+            notice: { key: "Packages.notices.adopted" },
           });
           await refresh();
         } catch (cause) {
           if (cause instanceof EditorBridgeError) throw cause;
-          const message = `Не удалось подключить каталог пакета: ${errorMessage(cause)}`;
-          setAction(packageId, { error: message });
-          throw new Error(message);
+          console.error(cause);
+          setAction(packageId, {
+            error: { key: "Packages.errors.adoptFailed" },
+          });
+          throw new Error(`package_adopt_failed:${errorMessage(cause)}`);
         } finally {
           endAction(packageId);
         }
@@ -1463,9 +1526,7 @@ export function useRoomPackages(
         const files = requireFileSystem(filesRef.current);
         const baseline = loadedRef.current.get(packageId);
         if (!baseline) {
-          throw new Error(
-            "Пакет не загружен в редактор: Emit доступен только для загруженного пакета",
-          );
+          throw new Error("package_not_loaded");
         }
 
         const remote = remoteRef.current.get(packageId);
@@ -1497,15 +1558,23 @@ export function useRoomPackages(
             files: snapshot,
           });
           setAction(packageId, {
-            notice: `Опубликована ревизия ${result.revision.revision}: ${result.uploaded} файл(ов).`,
+            notice: {
+              key: "Packages.notices.emitPublished",
+              values: {
+                revision: result.revision.revision,
+                uploaded: result.uploaded,
+              },
+            },
           });
           await refresh();
         } catch (cause) {
           if (cause instanceof NewerRevisionError) throw cause;
           if (cause instanceof EditorBridgeError) throw cause;
-          const message = `Не удалось опубликовать пакет: ${errorMessage(cause)}`;
-          setAction(packageId, { error: message });
-          throw new Error(message);
+          console.error(cause);
+          setAction(packageId, {
+            error: { key: "Packages.errors.emitFailed" },
+          });
+          throw new Error("package_emit_failed");
         } finally {
           endAction(packageId);
         }
