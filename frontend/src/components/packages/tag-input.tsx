@@ -230,7 +230,14 @@ export function TagInput({
                 }
               }}
               onFocus={() => setOpen(true)}
-              onBlur={() => {
+              onBlur={(event) => {
+                const next = event.relatedTarget;
+                if (
+                  next instanceof Element &&
+                  next.closest('[data-slot="popover-content"]')
+                ) {
+                  return;
+                }
                 setOpen(false);
                 if (draft.trim() !== "") commit(draft);
               }}
@@ -241,6 +248,7 @@ export function TagInput({
             align="start"
             sideOffset={4}
             className="w-(--radix-popover-anchor-width) p-1"
+            onOpenAutoFocus={(event) => event.preventDefault()}
           >
             {loading && (
               <p className="px-2 py-1.5 text-xs text-muted-foreground">

@@ -42,6 +42,23 @@ describe("TagInput", () => {
     expect(onChange).toHaveBeenCalledWith(["hero"]);
   });
 
+  it("keeps focus in the input while the suggestion list opens", () => {
+    const { onChange, input } = renderInput();
+    input.focus();
+    fireEvent.change(input, { target: { value: "g" } });
+    expect(document.activeElement).toBe(input);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("does not commit when focus moves into the suggestion list", () => {
+    const { onChange, input } = renderInput();
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "g" } });
+    const option = screen.getByRole("option", { name: /gameplay/ });
+    fireEvent.blur(input, { relatedTarget: option });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("adds a tag on space", () => {
     const { onChange, input } = renderInput();
     fireEvent.change(input, { target: { value: "hero" } });
