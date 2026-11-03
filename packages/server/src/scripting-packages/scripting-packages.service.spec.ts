@@ -1233,12 +1233,69 @@ describe('ScriptingPackagesService slug rename', () => {
       save: packages.save,
       manager,
     };
+    const rewriteFiles =
+      options.rewrite ??
+      jest.fn(async () => [{ filepath: 'a.gd', size: 1, sha256: 'x' }]);
+    const finishRewrite = jest.fn(
+      async (_packageId: number, _revision: number, _kind: string) => undefined,
+    );
+    const abortRewrite = jest.fn(
+      async (_packageId: number, _revision: number, _kind: string) => undefined,
+    );
+    // Mirrors PackageStorageService.beginRewrite: it prepares every target,
+    // restores what it already moved when one fails, and only exposes commit
+    // and abort to the caller.
+    const beginRewrite = jest.fn(
+      async (
+        targets: Array<{
+          packageId: number;
+          revision: number;
+          kind: 'published' | 'draft';
+        }>,
+        transform: unknown,
+      ) => {
+        const attempted: typeof targets = [];
+        const results: Array<{
+          target: (typeof targets)[number];
+          files: Array<{ filepath: string; size: number; sha256: string }>;
+        }> = [];
+        try {
+          for (const target of targets) {
+            attempted.push(target);
+            const files = await rewriteFiles(
+              target.packageId,
+              target.revision,
+              target.kind,
+              transform,
+            );
+            if (files) results.push({ target, files });
+          }
+        } catch (error) {
+          for (const target of [...attempted].reverse()) {
+            await abortRewrite(target.packageId, target.revision, target.kind);
+          }
+          throw error;
+        }
+        return {
+          results,
+          commit: async () => {
+            for (const target of attempted) {
+              await finishRewrite(target.packageId, target.revision, target.kind);
+            }
+          },
+          abort: async () => {
+            for (const target of [...attempted].reverse()) {
+              await abortRewrite(target.packageId, target.revision, target.kind);
+            }
+          },
+        };
+      },
+    );
     const storage = {
-      rewriteRevision:
-        options.rewrite ??
-        jest.fn(async () => [{ filepath: 'a.gd', size: 1, sha256: 'x' }]),
-      finishRewrite: jest.fn(async () => undefined),
-      abortRewrite: jest.fn(async () => undefined),
+      beginRewrite,
+      rewriteRevision: rewriteFiles,
+      finishRewrite,
+      abortRewrite,
     };
     const delivery = {
       findDependentRoomPackages: jest.fn(async () => options.dependents ?? []),

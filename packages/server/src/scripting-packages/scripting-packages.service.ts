@@ -11,7 +11,7 @@ import {
   OnApplicationBootstrap,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Not, Repository } from 'typeorm';
+import { EntityManager, In, IsNull, Not, Repository } from 'typeorm';
 import { PackageFileEntry } from '@wired-io/shared';
 import { errorMessage } from 'src/common/errors';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
@@ -23,7 +23,8 @@ import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
 import { canEditRoom, canViewRoom, isRoomMember } from 'src/rooms/room-access';
 import {
   PackageStorageService,
-  RevisionKind,
+  RevisionRewrite,
+  RevisionTarget,
 } from './package-storage.service';
 import { PinnedPackage, walkPinnedClosure } from './package-dependency-graph';
 import { PackageDeliveryService } from './package-delivery.service';
@@ -45,6 +46,14 @@ function isUniqueViolation(error: unknown): boolean {
     error !== null &&
     (error as { code?: string }).code === '23505'
   );
+}
+
+/** What a slug rename had to touch, reported once the transaction commits. */
+interface SlugRenameOutcome {
+  /** Present only when a revision directory actually moved. */
+  rewrite: RevisionRewrite | null;
+  rewrittenIds: number[];
+  enabledChanged: boolean;
 }
 
 @Injectable()
@@ -501,159 +510,13 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       });
     }
     const roomId = pkg.room.id;
-    const scope = `room:${roomId}`;
-    const prepared: Array<{
-      packageId: number;
-      revision: number;
-      kind: RevisionKind;
-    }> = [];
-    let rewrittenIds: number[] = [];
-    let enabledChanged = false;
 
+    let outcome: SlugRenameOutcome;
     try {
-      await this.packagesRepository.manager.transaction(async (manager) => {
-        const packages = manager.getRepository(ScriptingPackage);
-        // Another client may have renamed this package between the outer read
-        // and this lock. The row lock keeps the slug stable for the rewrite,
-        // and the rewrite source must be the slug the bytes actually use.
-        const current = await packages.findOne({
-          where: { id: pkg.id },
-          lock: { mode: 'pessimistic_write' },
-        });
-        if (!current) {
-          throw new NotFoundException(`Package ${pkg.id} not found`);
-        }
-        const oldSlug = current.slug ?? String(pkg.id);
-        if (oldSlug === nextSlug) {
-          // The target slug is already in place: only the other fields apply.
-          enabledChanged = await this.preparePackageUpdate(current, dto);
-          await packages.save(current);
-          return;
-        }
-        const lockKeys = [
-          `package_slug:${scope}:${oldSlug}`,
-          `package_slug:${scope}:${nextSlug}`,
-        ].sort();
-        for (const key of lockKeys) {
-          await manager.query(
-            'SELECT pg_advisory_xact_lock(hashtext($1))',
-            [key],
-          );
-        }
-        const live = await packages.findOne({
-          where: { slug: nextSlug, room: { id: roomId } },
-        });
-        if (live && live.id !== pkg.id) {
-          throw new ConflictException({
-            code: 'slug_taken',
-            slug: nextSlug,
-            message: 'Slug уже занят',
-          });
-        }
-        const dependents =
-          (await this.delivery.findDependentRoomPackages(pkg.id)) ?? [];
-        if (dependents.length > 0 && dto.confirmSlugRename !== true) {
-          const rows = await manager.getRepository(ScriptingPackage).find({
-            where: { id: In(dependents.map((row) => row.packageId)) },
-          });
-          throw new ConflictException({
-            code: 'slug_in_use_by_dependents',
-            reason: 'dependents',
-            message: 'На пакет ссылаются другие пакеты',
-            dependents: rows
-              .map((row) => ({ packageId: row.id, name: row.name }))
-              .sort((a, b) => a.packageId - b.packageId),
-          });
-        }
-
-        await this.locks.runWithPublishLocks(
-          [pkg.id, ...dependents.map((row) => row.packageId)],
-          async () => {
-            const revisions = manager.getRepository(ScriptingPackageRevision);
-            const targets: Array<{
-              packageId: number;
-              revision: number;
-              kind: RevisionKind;
-            }> = [];
-            for (const row of await revisions.find({
-              where: { package: { id: pkg.id } },
-            })) {
-              if (row.status === 'published' || row.status === 'draft') {
-                targets.push({
-                  packageId: pkg.id,
-                  revision: row.revision,
-                  kind: row.status,
-                });
-              }
-            }
-            for (const dependent of dependents) {
-              for (const row of await revisions.find({
-                where: {
-                  package: { id: dependent.packageId },
-                  status: 'published',
-                },
-              })) {
-                targets.push({
-                  packageId: dependent.packageId,
-                  revision: row.revision,
-                  kind: 'published',
-                });
-              }
-            }
-
-            const transform = (filepath: string, data: Buffer) =>
-              rewriteSlugReferences(filepath, data, oldSlug, nextSlug);
-            const rewritten: Array<{
-              id: number;
-              files: PackageFileEntry[];
-            }> = [];
-            for (const target of targets) {
-              prepared.push(target);
-              const files = await this.storage.rewriteRevision(
-                target.packageId,
-                target.revision,
-                target.kind,
-                transform,
-              );
-              if (!files) continue;
-              const row = await revisions.findOneOrFail({
-                where: {
-                  package: { id: target.packageId },
-                  revision: target.revision,
-                },
-              });
-              // A draft declares only the files uploaded so far: keep that
-              // set and refresh the hashes of the files that are on disk.
-              const nextFiles =
-                target.kind === 'published'
-                  ? files
-                  : this.mergeRevisionFiles(row.files ?? [], files);
-              rewritten.push({ id: row.id, files: nextFiles });
-            }
-
-            const changedEnabled = await this.preparePackageUpdate(pkg, dto);
-            pkg.slug = nextSlug;
-            await manager.getRepository(ScriptingPackage).save(pkg);
-            for (const row of rewritten) {
-              await manager
-                .getRepository(ScriptingPackageRevision)
-                .update({ id: row.id }, { files: row.files });
-            }
-            rewrittenIds = [
-              ...new Set(targets.map((target) => target.packageId)),
-            ].sort((a, b) => a - b);
-            enabledChanged = changedEnabled;
-          },
-        );
-      });
+      outcome = await this.packagesRepository.manager.transaction((manager) =>
+        this.rewriteRevisionsAndSwapSlug(manager, pkg, nextSlug, dto, roomId),
+      );
     } catch (error) {
-      for (const target of prepared.reverse()) {
-        await this.storage
-          .abortRewrite(target.packageId, target.revision, target.kind)
-          .catch((cause) =>
-            this.logger.warn(`rewrite abort failed: ${String(cause)}`),
-          );
-      }
       if (error instanceof HttpException) throw error;
       this.logger.error(
         `Package ${pkg.id} slug rewrite failed: ${String(error)}`,
@@ -664,23 +527,17 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       });
     }
 
-    for (const target of prepared) {
-      await this.storage
-        .finishRewrite(target.packageId, target.revision, target.kind)
-        .catch((cause) =>
-          this.logger.warn(`rewrite cleanup failed: ${String(cause)}`),
-        );
-    }
-    for (const packageId of rewrittenIds) {
+    await outcome.rewrite?.commit();
+    for (const packageId of outcome.rewrittenIds) {
       await this.delivery
         .invalidatePackage(packageId)
         .catch((cause) =>
           this.logger.warn(`artifact invalidation failed: ${String(cause)}`),
         );
     }
-    if (rewrittenIds.length > 0) {
+    if (outcome.rewrittenIds.length > 0) {
       try {
-        await this.dispatcher.packagesChanged(rewrittenIds);
+        await this.dispatcher.packagesChanged(outcome.rewrittenIds);
       } catch (cause) {
         this.logger.warn(
           `Package ${pkg.id} was renamed but its room was not notified: ${String(
@@ -689,10 +546,152 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
         );
       }
     }
-    if (enabledChanged) {
+    if (outcome.enabledChanged) {
       await this.notifyEnabledChanged(pkg.id);
     }
     return this.findOne(pkg.id);
+  }
+
+  /**
+   * Swaps the slug and rewrites every revision whose bytes reference it.
+   *
+   * Runs inside the caller's transaction: the row lock, the advisory slug locks
+   * and the publish locks all have to be held while the bytes move, or a
+   * concurrent publish could write a revision that still points at the old
+   * directory. The rewrite handle goes back to the caller so the backups are
+   * only dropped once the transaction commits; a failure after the rewrite
+   * restores them here instead of leaving that bookkeeping to the caller.
+   */
+  private async rewriteRevisionsAndSwapSlug(
+    manager: EntityManager,
+    pkg: ScriptingPackage,
+    nextSlug: string,
+    dto: UpdateScriptingPackageDto,
+    roomId: number,
+  ): Promise<SlugRenameOutcome> {
+    const packages = manager.getRepository(ScriptingPackage);
+    // Another client may have renamed this package between the outer read
+    // and this lock. The row lock keeps the slug stable for the rewrite,
+    // and the rewrite source must be the slug the bytes actually use.
+    const current = await packages.findOne({
+      where: { id: pkg.id },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!current) {
+      throw new NotFoundException(`Package ${pkg.id} not found`);
+    }
+    const oldSlug = current.slug ?? String(pkg.id);
+    if (oldSlug === nextSlug) {
+      // The target slug is already in place: only the other fields apply.
+      const enabledChanged = await this.preparePackageUpdate(current, dto);
+      await packages.save(current);
+      return { rewrite: null, rewrittenIds: [], enabledChanged };
+    }
+    const lockKeys = [
+      `package_slug:room:${roomId}:${oldSlug}`,
+      `package_slug:room:${roomId}:${nextSlug}`,
+    ].sort();
+    for (const key of lockKeys) {
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
+    }
+    const live = await packages.findOne({
+      where: { slug: nextSlug, room: { id: roomId } },
+    });
+    if (live && live.id !== pkg.id) {
+      throw new ConflictException({
+        code: 'slug_taken',
+        slug: nextSlug,
+        message: 'Slug уже занят',
+      });
+    }
+    const dependents =
+      (await this.delivery.findDependentRoomPackages(pkg.id)) ?? [];
+    if (dependents.length > 0 && dto.confirmSlugRename !== true) {
+      const rows = await packages.find({
+        where: { id: In(dependents.map((row) => row.packageId)) },
+      });
+      throw new ConflictException({
+        code: 'slug_in_use_by_dependents',
+        reason: 'dependents',
+        message: 'На пакет ссылаются другие пакеты',
+        dependents: rows
+          .map((row) => ({ packageId: row.id, name: row.name }))
+          .sort((a, b) => a.packageId - b.packageId),
+      });
+    }
+
+    return this.locks.runWithPublishLocks(
+      [pkg.id, ...dependents.map((row) => row.packageId)],
+      async () => {
+        const revisions = manager.getRepository(ScriptingPackageRevision);
+        const targets: RevisionTarget[] = [];
+        for (const row of await revisions.find({
+          where: { package: { id: pkg.id } },
+        })) {
+          if (row.status === 'published' || row.status === 'draft') {
+            targets.push({
+              packageId: pkg.id,
+              revision: row.revision,
+              kind: row.status,
+            });
+          }
+        }
+        for (const dependent of dependents) {
+          for (const row of await revisions.find({
+            where: {
+              package: { id: dependent.packageId },
+              status: 'published',
+            },
+          })) {
+            targets.push({
+              packageId: dependent.packageId,
+              revision: row.revision,
+              kind: 'published',
+            });
+          }
+        }
+
+        const rewrite = await this.storage.beginRewrite(targets, (filepath, data) =>
+          rewriteSlugReferences(filepath, data, oldSlug, nextSlug),
+        );
+        try {
+          const rewritten = new Map<number, PackageFileEntry[]>();
+          for (const { target, files } of rewrite.results) {
+            const row = await revisions.findOneOrFail({
+              where: {
+                package: { id: target.packageId },
+                revision: target.revision,
+              },
+            });
+            // A draft declares only the files uploaded so far: keep that
+            // set and refresh the hashes of the files that are on disk.
+            rewritten.set(
+              row.id,
+              target.kind === 'published'
+                ? files
+                : this.mergeRevisionFiles(row.files ?? [], files),
+            );
+          }
+
+          const enabledChanged = await this.preparePackageUpdate(pkg, dto);
+          pkg.slug = nextSlug;
+          await packages.save(pkg);
+          for (const [id, files] of rewritten) {
+            await revisions.update({ id }, { files });
+          }
+          return {
+            rewrite,
+            rewrittenIds: [
+              ...new Set(targets.map((target) => target.packageId)),
+            ].sort((a, b) => a - b),
+            enabledChanged,
+          };
+        } catch (error) {
+          await rewrite.abort();
+          throw error;
+        }
+      },
+    );
   }
 
   /** Refreshes the declared size and hash of the files that were rewritten. */

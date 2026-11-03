@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PackageFileEntry } from '@wired-io/shared';
@@ -35,6 +36,30 @@ export type SavedDraftFile = {
 /** Which revision directory a rewrite works on. */
 export type RevisionKind = 'published' | 'draft';
 
+/** One revision directory that a rewrite touches. */
+export interface RevisionTarget {
+  packageId: number;
+  revision: number;
+  kind: RevisionKind;
+}
+
+/**
+ * A rewrite whose bytes have moved but are not yet permanent.
+ *
+ * The originals stay beside the new tree until `commit` drops them, so `abort`
+ * can put them back when the database update that justified the rewrite fails.
+ * Either call is safe to make once.
+ */
+export interface RevisionRewrite {
+  /** Targets whose directory existed and was rewritten, in target order. */
+  readonly results: Array<{
+    target: RevisionTarget;
+    files: PackageFileEntry[];
+  }>;
+  commit(): Promise<void>;
+  abort(): Promise<void>;
+}
+
 /**
  * File storage for package revisions.
  *
@@ -51,6 +76,8 @@ export type RevisionKind = 'published' | 'draft';
  */
 @Injectable()
 export class PackageStorageService {
+  private readonly logger = new Logger(PackageStorageService.name);
+
   constructor(private readonly configService: AppConfigService) {}
 
   private get rootDir(): string {
@@ -378,6 +405,44 @@ export class PackageStorageService {
   }
 
   /**
+   * Rewrites several revisions as one unit.
+   *
+   * Every target's bytes move before the caller touches the database, and the
+   * originals stay in place until `commit`, so a failure can restore them
+   * instead of leaving a half-rewritten tree behind. A failure while rewriting
+   * aborts whatever had already moved before the error leaves this method.
+   */
+  async beginRewrite(
+    targets: readonly RevisionTarget[],
+    transform: (filepath: string, data: Buffer) => Buffer,
+  ): Promise<RevisionRewrite> {
+    const attempted: RevisionTarget[] = [];
+    const results: RevisionRewrite['results'] = [];
+    try {
+      for (const target of targets) {
+        // Recorded before the rewrite so a target that fails part way through
+        // still gets its backup restored.
+        attempted.push(target);
+        const files = await this.rewriteRevision(
+          target.packageId,
+          target.revision,
+          target.kind,
+          transform,
+        );
+        if (files) results.push({ target, files });
+      }
+    } catch (error) {
+      await this.abortRewrites(attempted);
+      throw error;
+    }
+    return {
+      results,
+      commit: () => this.finishRewrites(attempted),
+      abort: () => this.abortRewrites(attempted),
+    };
+  }
+
+  /**
    * Rewrites every file of one revision, phase one of three.
    *
    * The rewritten tree is prepared beside the live one and swapped, keeping the
@@ -444,6 +509,36 @@ export class PackageStorageService {
     if (!existsSync(backup)) return;
     await this.removeDirectory(dir);
     await rename(backup, dir);
+  }
+
+  /** Drops the backups: the database now describes the rewritten bytes. */
+  private async finishRewrites(
+    targets: readonly RevisionTarget[],
+  ): Promise<void> {
+    for (const target of targets) {
+      await this.finishRewrite(
+        target.packageId,
+        target.revision,
+        target.kind,
+      ).catch((cause) =>
+        this.logger.warn(`rewrite cleanup failed: ${String(cause)}`),
+      );
+    }
+  }
+
+  /** Puts the originals back, newest target first. */
+  private async abortRewrites(
+    targets: readonly RevisionTarget[],
+  ): Promise<void> {
+    for (const target of [...targets].reverse()) {
+      await this.abortRewrite(
+        target.packageId,
+        target.revision,
+        target.kind,
+      ).catch((cause) =>
+        this.logger.warn(`rewrite abort failed: ${String(cause)}`),
+      );
+    }
   }
 
   private revisionDir(
