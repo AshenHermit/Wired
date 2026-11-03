@@ -17,6 +17,7 @@ import {
   WorkshopSlugTakenError,
 } from "./use-room-packages";
 import { PackagesTab } from "./PackagesTab";
+import { resetWorkshopTagsCache } from "@/components/packages/use-workshop-tags";
 
 vi.mock("@/api/services/scripting-packages", async (importActual) => {
   const actual =
@@ -24,6 +25,7 @@ vi.mock("@/api/services/scripting-packages", async (importActual) => {
   return {
     ...actual,
     listWorkshopPackages: vi.fn(),
+    listWorkshopTags: vi.fn(),
     lookupWorkshopPackage: vi.fn(),
     getScriptingPackage: vi.fn(),
   };
@@ -159,6 +161,11 @@ beforeEach(() => {
   });
   vi.mocked(packagesApi.lookupWorkshopPackage).mockResolvedValue(null);
   vi.mocked(packagesApi.getScriptingPackage).mockResolvedValue(roomPackage());
+  vi.mocked(packagesApi.listWorkshopTags).mockResolvedValue({
+    items: [],
+    total: 0,
+  });
+  resetWorkshopTagsCache();
 });
 
 afterEach(() => {
@@ -733,6 +740,48 @@ describe("PackagesTab", () => {
         description: "desc",
         tags: ["a", "b"],
       }),
+    );
+  });
+
+  it("adds a suggested tag to the saved metadata", async () => {
+    vi.mocked(packagesApi.getScriptingPackage).mockResolvedValue(
+      roomPackage({ description: "desc", tags: ["a"] }),
+    );
+    vi.mocked(packagesApi.listWorkshopTags).mockResolvedValue({
+      items: [
+        { tag: "gameplay", count: 4 },
+        { tag: "a", count: 1 },
+      ],
+      total: 2,
+    });
+    const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
+    render(
+      <PackagesTab
+        roomId={1}
+        authorId={42}
+        packages={controller({
+          entries: [entry({ packageId: 7, slug: "hero", name: "Hero" })],
+          updatePackageMetadata,
+        })}
+      />,
+    );
+
+    const menu = await openPackageActions();
+    fireEvent.click(menu.getByRole("menuitem", { name: "Редактировать пакет" }));
+
+    const tagsInput = await screen.findByLabelText("Теги");
+    await waitFor(() => expect(tagsInput).toHaveProperty("disabled", false));
+    fireEvent.focus(tagsInput);
+    fireEvent.click(
+      await screen.findByRole("option", { name: /gameplay/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+    await waitFor(() =>
+      expect(updatePackageMetadata).toHaveBeenCalledWith(
+        7,
+        expect.objectContaining({ tags: ["a", "gameplay"] }),
+      ),
     );
   });
 

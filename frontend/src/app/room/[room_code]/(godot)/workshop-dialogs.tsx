@@ -36,14 +36,6 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Tags are typed as a free-form list and normalized by the backend. */
-export function parseTags(raw: string): string[] {
-  return raw
-    .split(/[,\s]+/)
-    .map((tag) => tag.trim())
-    .filter(Boolean);
-}
-
 /**
  * The public workshop inside the package panel. Adding a record is a server
  * copy: the selected row shows a spinner while the copy is created and

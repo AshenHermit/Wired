@@ -18,6 +18,7 @@ import {
   slugHintClass,
   type SlugCheckState,
 } from "@/components/packages/slug";
+import { TagInput } from "@/components/packages/tag-input";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,7 +29,6 @@ import {
   type RoomPackageEntry,
   type RoomPackagesController,
 } from "./use-room-packages";
-import { parseTags } from "./workshop-dialogs";
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -61,7 +61,7 @@ export function PackageEditDialog({
   const [version, setVersion] = React.useState("");
   const [slug, setSlug] = React.useState("");
   const [description, setDescription] = React.useState("");
-  const [tags, setTags] = React.useState("");
+  const [tags, setTags] = React.useState<string[]>([]);
   const [detailsState, setDetailsState] =
     React.useState<DetailsState>("loading");
   const [detailsAttempt, setDetailsAttempt] = React.useState(0);
@@ -82,7 +82,7 @@ export function PackageEditDialog({
     setVersion(entry.version);
     setSlug(entry.slug);
     setDescription(entry.description);
-    setTags(entry.tags.join(", "));
+    setTags(entry.tags);
     setSlugState("available");
     setDependents(null);
     setDirError(false);
@@ -100,7 +100,7 @@ export function PackageEditDialog({
       .then((pkg) => {
         if (cancelled) return;
         setDescription(pkg.description ?? "");
-        setTags((pkg.tags ?? []).join(", "));
+        setTags(pkg.tags ?? []);
         setDetailsState("ready");
       })
       .catch(() => {
@@ -183,7 +183,7 @@ export function PackageEditDialog({
         version: version.trim(),
         slug: slug.trim(),
         description: description.trim(),
-        tags: parseTags(tags),
+        tags,
         ...(confirmRename ? { confirmSlugRename: true } : {}),
       });
       onOpenChange(false);
@@ -300,16 +300,15 @@ export function PackageEditDialog({
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="package-edit-tags">Теги</Label>
-              <Input
+              <TagInput
                 id="package-edit-tags"
                 value={tags}
-                onChange={(event) => setTags(event.target.value)}
+                onChange={setTags}
                 disabled={submitting || detailsState !== "ready"}
                 placeholder="gameplay, hero"
-                autoComplete="off"
               />
               <p className="text-xs text-muted-foreground">
-                Через запятую или пробел.
+                Enter или запятая — добавить тег. До 10 тегов.
               </p>
             </div>
             {detailsState === "loading" && (
