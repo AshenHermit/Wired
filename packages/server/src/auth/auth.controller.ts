@@ -19,7 +19,7 @@ import { UsersService } from '../users/users.service';
 import { CreateUserDTO } from './create-user.dto';
 import { AuthTokenDTO } from './auth-token.dto';
 import { AuthUserDTO } from './auth-user.dto';
-import { UseAuthGuard } from './jwt-auth.guard';
+import { Public, UseAuthGuard } from './auth-policy';
 
 @Controller('auth')
 export class AuthController {
@@ -29,6 +29,7 @@ export class AuthController {
     private readonly config: AppConfigService,
   ) {}
 
+  @Public()
   @Post('register')
   @ApiOkResponse({ type: AuthTokenDTO })
   async register(@Body() createUserDto: CreateUserDTO) {
@@ -39,6 +40,7 @@ export class AuthController {
     );
   }
 
+  @Public()
   @Post('login')
   @ApiOkResponse({ type: AuthTokenDTO })
   async login(
@@ -56,10 +58,12 @@ export class AuthController {
     this.authService.clearCookie(res);
   }
 
+  @Public()
   @Get('google')
   @UseGuards(GoogleOauthGuard)
   async google() {}
 
+  @Public()
   @Get('callback/google')
   @UseGuards(GoogleOauthGuard)
   async googleCallback(

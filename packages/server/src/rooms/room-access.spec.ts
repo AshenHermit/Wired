@@ -1,4 +1,4 @@
-import { canEditRoom, canViewRoom } from './room-access';
+import { canEditRoom, canViewRoom, isRoomMember } from './room-access';
 
 describe('room access policy', () => {
   const author = { id: 1 };
@@ -33,6 +33,26 @@ describe('room access policy', () => {
     it('hides a private room from anonymous users and strangers', () => {
       expect(canViewRoom(privateRoom, undefined)).toBe(false);
       expect(canViewRoom(privateRoom, stranger.id)).toBe(false);
+    });
+  });
+
+  describe('isRoomMember', () => {
+    it('counts the author and contributors as members', () => {
+      expect(isRoomMember(privateRoom, author.id)).toBe(true);
+      expect(isRoomMember(privateRoom, contributor.id)).toBe(true);
+    });
+
+    it('does not let public visibility create membership', () => {
+      expect(isRoomMember(publicRoom, stranger.id)).toBe(false);
+      expect(isRoomMember(publicRoom, undefined)).toBe(false);
+      expect(isRoomMember(privateRoom, undefined)).toBe(false);
+    });
+
+    it('ignores a missing contributors relation', () => {
+      expect(isRoomMember({ isPublic: false, author }, contributor.id)).toBe(
+        false,
+      );
+      expect(isRoomMember({ isPublic: false, author }, author.id)).toBe(true);
     });
   });
 

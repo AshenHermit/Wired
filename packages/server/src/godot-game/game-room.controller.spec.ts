@@ -1,7 +1,7 @@
 import { INestApplication, UnauthorizedException } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 import { GameRoomController } from './game-room.controller';
 import { GameRoomService } from './game-room.service';
 
@@ -16,24 +16,29 @@ describe('GameRoomController', () => {
   const build = async (authenticated = true) => {
     const moduleRef = await Test.createTestingModule({
       controllers: [GameRoomController],
-      providers: [{ provide: GameRoomService, useValue: service }],
-    })
-      .overrideGuard(JwtAuthGuard)
-      .useValue({
-        canActivate: (context: {
-          switchToHttp: () => { getRequest: () => { user?: unknown } };
-        }) => {
-          if (!authenticated) {
-            throw new UnauthorizedException();
-          }
-          context.switchToHttp().getRequest().user = {
-            id: 7,
-            email: 'player@wired.io',
-          };
-          return true;
+      providers: [
+        { provide: GameRoomService, useValue: service },
+        // The application authenticates every route through APP_GUARD, so the
+        // controller test stubs the same seam instead of a handler guard.
+        {
+          provide: APP_GUARD,
+          useValue: {
+            canActivate: (context: {
+              switchToHttp: () => { getRequest: () => { user?: unknown } };
+            }) => {
+              if (!authenticated) {
+                throw new UnauthorizedException();
+              }
+              context.switchToHttp().getRequest().user = {
+                id: 7,
+                email: 'player@wired.io',
+              };
+              return true;
+            },
+          },
         },
-      })
-      .compile();
+      ],
+    }).compile();
 
     app = moduleRef.createNestApplication();
     await app.init();

@@ -21,7 +21,7 @@ import { User } from 'src/database/entities/user.entity';
 import { Room } from 'src/database/entities/room.entity';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
-import { canEditRoom } from 'src/rooms/room-access';
+import { canEditRoom, canViewRoom, isRoomMember } from 'src/rooms/room-access';
 import {
   PackageStorageService,
   RevisionKind,
@@ -199,15 +199,9 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     const isContributor = pkg.contributors?.some(
       (contributor) => contributor.id === user.id,
     );
-    const isRoomMember =
-      Boolean(pkg.room) &&
-      (pkg.room!.author?.id === user.id ||
-        (pkg.room!.contributors?.some(
-          (contributor) => contributor.id === user.id,
-        ) ??
-          false));
+    const isRoomMemberOfRoom = Boolean(pkg.room) && isRoomMember(pkg.room!, user.id);
 
-    if (!isAuthor && !isContributor && !isRoomMember) {
+    if (!isAuthor && !isContributor && !isRoomMemberOfRoom) {
       throw new ForbiddenException(
         'You are not allowed to publish this package',
       );
@@ -220,30 +214,50 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     }
   }
 
-  findAll(): Promise<ScriptingPackage[]> {
-    return this.packagesRepository.find({
-      relations: [
-        'author',
-        'contributors',
-        'room',
-        'parentPackage',
-        'childrenPackages',
-      ],
-    });
+  findOne(id: number): Promise<ScriptingPackage> {
+    return this.packagesRepository
+      .findOne({
+        where: { id },
+        relations: [
+          'author',
+          'contributors',
+          'room',
+          'parentPackage',
+          'childrenPackages',
+        ],
+      })
+      .then((pkg) => {
+        if (!pkg) {
+          throw new NotFoundException(`ScriptingPackage with id=${id} not found`);
+        }
+        return pkg;
+      });
   }
 
-  async findOne(id: number): Promise<ScriptingPackage> {
+  /**
+   * A package as seen by `viewer`: workshop packages are catalogue entries,
+   * room packages follow the room's own visibility.
+   *
+   * A package in a room the viewer cannot see answers like a missing one, so
+   * probing ids cannot distinguish private packages from nonexistent ones.
+   */
+  async findVisibleOne(
+    id: number,
+    viewer: User | null,
+  ): Promise<ScriptingPackage> {
     const pkg = await this.packagesRepository.findOne({
       where: { id },
       relations: [
         'author',
         'contributors',
         'room',
+        'room.author',
+        'room.contributors',
         'parentPackage',
         'childrenPackages',
       ],
     });
-    if (!pkg) {
+    if (!pkg || (pkg.room && !canViewRoom(pkg.room, viewer?.id))) {
       throw new NotFoundException(`ScriptingPackage with id=${id} not found`);
     }
     return pkg;
@@ -274,9 +288,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     if (!foundRoom) {
       throw new NotFoundException(`Room with id=${roomId} not found`);
     }
-    const canEdit =
-      foundRoom.author?.id === user.id ||
-      foundRoom.contributors?.some((contributor) => contributor.id === user.id);
+    const canEdit = isRoomMember(foundRoom, user.id);
     if (!canEdit) {
       throw new ForbiddenException(
         'You are not allowed to attach a package to this room',

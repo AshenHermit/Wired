@@ -14,6 +14,7 @@ import { glob, stat } from 'fs/promises';
 import path, { resolve } from 'path';
 import { AppConfigService } from 'src/config/config.service';
 import { resolvePackagePath } from 'src/scripting-packages/package-path';
+import { Public } from 'src/auth/auth-policy';
 
 const EXCLUDED_PROJECT_DIRS = new Set(['build', 'storage', '.godot']);
 
@@ -33,6 +34,13 @@ async function assertFile(fullPath: string): Promise<string> {
   return fullPath;
 }
 
+/**
+ * Serves the WASM editor's own assets and the shared base project.
+ *
+ * Public on purpose: the editor bootstraps before it knows who the user is,
+ * and the files are the same for every room.
+ */
+@Public()
 @Controller('')
 export class GodotEditorProviderController {
   constructor(private readonly configService: AppConfigService) {}

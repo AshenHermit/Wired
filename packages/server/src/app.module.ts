@@ -1,5 +1,8 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { AuthModule } from './auth/auth.module';
+import { DefaultAuthGuard } from './auth/default-auth.guard';
+import { JwtAuthGuard, JwtSilentAuthGuard } from './auth/jwt-auth.guard';
 import { AppConfigModule } from './config/config.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppConfigService } from './config/config.service';
@@ -34,6 +37,12 @@ import { GodotEditorProviderModule } from './godot-editor-provider/godot-editor-
     }),
   ],
   controllers: [],
-  providers: [],
+  providers: [
+    JwtAuthGuard,
+    JwtSilentAuthGuard,
+    // Authentication is the default for every route; handlers opt out with
+    // @Public() or soften it with @SilentAuth().
+    { provide: APP_GUARD, useClass: DefaultAuthGuard },
+  ],
 })
 export class AppModule {}

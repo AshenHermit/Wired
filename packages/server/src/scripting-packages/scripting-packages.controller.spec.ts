@@ -21,7 +21,7 @@ import { tmpdir } from 'os';
 import path from 'path';
 import request from 'supertest';
 import { RuntimeAuthGuard } from './guards/runtime-auth.guard';
-import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
+import { APP_GUARD } from '@nestjs/core';
 import { createValidationPipe } from 'src/common/validation';
 import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
 import { Room } from 'src/database/entities/room.entity';
@@ -618,7 +618,7 @@ describe('ScriptingPackagesController lifecycle routes', () => {
 
 describe('ScriptingPackagesController slug route ordering', () => {
   let app: INestApplication;
-  let findOne: jest.Mock;
+  let findVisibleOne: jest.Mock;
   let update: jest.Mock;
   let checkSlugAvailability: jest.Mock;
   let listWorkshop: jest.Mock;
@@ -626,7 +626,9 @@ describe('ScriptingPackagesController slug route ordering', () => {
   let tagsWorkshop: jest.Mock;
 
   beforeAll(async () => {
-    findOne = jest.fn((id: number) => Promise.resolve({ id, slug: 'hero' }));
+    findVisibleOne = jest.fn((id: number) =>
+      Promise.resolve({ id, slug: 'hero' }),
+    );
     update = jest.fn((id: number) => Promise.resolve({ id, slug: 'hero' }));
     checkSlugAvailability = jest.fn((slug: string) =>
       Promise.resolve({ slug, available: true }),
@@ -642,7 +644,7 @@ describe('ScriptingPackagesController slug route ordering', () => {
           provide: ScriptingPackagesService,
           useValue: {
             assertPackageEditing: jest.fn(),
-            findOne,
+            findVisibleOne,
             update,
             checkSlugAvailability,
           },
@@ -662,10 +664,14 @@ describe('ScriptingPackagesController slug route ordering', () => {
           provide: getRepositoryToken(ScriptingPackage),
           useValue: { findOne: jest.fn() },
         },
+        {
+          // The app authenticates through APP_GUARD; this module test only
+          // exercises handler wiring, so the guard is stubbed open.
+          provide: APP_GUARD,
+          useValue: { canActivate: () => true },
+        },
       ],
     })
-      .overrideGuard(JwtAuthGuard)
-      .useValue({ canActivate: () => true })
       .compile();
 
     app = moduleRef.createNestApplication();
@@ -691,7 +697,7 @@ describe('ScriptingPackagesController slug route ordering', () => {
       undefined,
       undefined,
     );
-    expect(findOne).not.toHaveBeenCalled();
+    expect(findVisibleOne).not.toHaveBeenCalled();
   });
 
   it('passes the requested room to the availability check', async () => {
@@ -710,10 +716,14 @@ describe('ScriptingPackagesController slug route ordering', () => {
     expect(checkSlugAvailability).toHaveBeenCalledWith('hero', 5, 7);
   });
 
+  it('no longer serves the unauthenticated package collection', async () => {
+    await request(app.getHttpServer()).get('/scripting-packages').expect(404);
+  });
+
   it('still parses numeric ids for the :id route', async () => {
     await request(app.getHttpServer()).get('/scripting-packages/7').expect(200);
 
-    expect(findOne).toHaveBeenCalledWith(7);
+    expect(findVisibleOne).toHaveBeenCalledWith(7, undefined);
   });
 
   it('serves the workshop listing instead of falling through to :id', async () => {
@@ -726,7 +736,7 @@ describe('ScriptingPackagesController slug route ordering', () => {
       limit: 5,
       offset: 10,
     });
-    expect(findOne).not.toHaveBeenCalled();
+    expect(findVisibleOne).not.toHaveBeenCalled();
   });
 
   it('serves the workshop lookup instead of falling through to :id', async () => {
@@ -735,7 +745,7 @@ describe('ScriptingPackagesController slug route ordering', () => {
       .expect(200);
 
     expect(lookupWorkshop).toHaveBeenCalledWith('hero');
-    expect(findOne).not.toHaveBeenCalled();
+    expect(findVisibleOne).not.toHaveBeenCalled();
   });
 
   it('serves workshop tags instead of falling through to :id', async () => {
@@ -748,7 +758,7 @@ describe('ScriptingPackagesController slug route ordering', () => {
       limit: 5,
       offset: undefined,
     });
-    expect(findOne).not.toHaveBeenCalled();
+    expect(findVisibleOne).not.toHaveBeenCalled();
   });
 
   it('treats blank limit and offset as absent', async () => {

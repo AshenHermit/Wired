@@ -16,7 +16,7 @@ import { Room } from 'src/database/entities/room.entity';
 import { RoomsService } from './rooms.service';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
-import { UseAuthGuard, UseSilentAuthGuard } from 'src/auth/jwt-auth.guard';
+import { UseAuthGuard, SilentAuth } from 'src/auth/auth-policy';
 import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 
 @ApiTags('rooms')
@@ -24,21 +24,21 @@ import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 export class RoomsController {
   constructor(private readonly roomsService: RoomsService) {}
 
-  @UseSilentAuthGuard()
+  @SilentAuth()
   @ApiOkResponse({ type: [Room] })
   @Get()
   findAll(@Req() req: SilentAuthRequest) {
     return this.roomsService.findAll(req.user);
   }
 
-  @UseSilentAuthGuard()
+  @SilentAuth()
   @ApiOkResponse({ type: Room })
-  @Get(':id')
+  @Get(':roomId')
   findOne(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('roomId', ParseIntPipe) roomId: number,
     @Req() req: SilentAuthRequest,
   ) {
-    return this.roomsService.findVisibleOne(id, req.user);
+    return this.roomsService.findVisibleOne(roomId, req.user);
   }
 
   @UseAuthGuard()
@@ -51,24 +51,24 @@ export class RoomsController {
 
   @UseAuthGuard()
   @ApiOkResponse({ type: Room })
-  @Patch(':id')
+  @Patch(':roomId')
   async update(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('roomId', ParseIntPipe) roomId: number,
     @Body() dto: UpdateRoomDto,
     @Req() req: AuthenticatedRequest,
   ) {
-    await this.roomsService.assertRoomEditing(req.user, id);
-    return await this.roomsService.update(id, dto);
+    await this.roomsService.assertRoomEditing(req.user, roomId);
+    return await this.roomsService.update(roomId, dto);
   }
 
   @UseAuthGuard()
   @HttpCode(HttpStatus.NO_CONTENT)
-  @Delete(':id')
+  @Delete(':roomId')
   async remove(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('roomId', ParseIntPipe) roomId: number,
     @Req() req: AuthenticatedRequest,
   ): Promise<void> {
-    await this.roomsService.assertRoomEditing(req.user, id);
-    await this.roomsService.remove(id);
+    await this.roomsService.assertRoomEditing(req.user, roomId);
+    await this.roomsService.remove(roomId);
   }
 }

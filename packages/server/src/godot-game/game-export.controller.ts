@@ -13,6 +13,7 @@ import { Request, Response } from 'express';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { AppConfigService } from 'src/config/config.service';
+import { Public } from 'src/auth/auth-policy';
 
 const EXPORT_PREFIX = '/game-export/';
 const DEFAULT_FILE = 'index.html';
@@ -42,7 +43,11 @@ const CONTENT_TYPES: Record<string, string> = {
  * same-origin with the app (the frontend proxies `/api/*` here). The export is
  * a build artifact: it is never committed and a missing build is an explicit
  * error, not an empty 200.
+ *
+ * Public: the iframe loads it before the game connects, and the files are the
+ * same for every room.
  */
+@Public()
 @Controller('game-export')
 export class GameExportController implements OnModuleInit {
   private readonly logger = new Logger(GameExportController.name);

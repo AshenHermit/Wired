@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 import { UsersService, UpdateUserDTO } from './users.service';
 import { ApiOkResponse, ApiTags, getSchemaPath } from '@nestjs/swagger';
-import { UseAuthGuard, UseSilentAuthGuard } from 'src/auth/jwt-auth.guard';
+import { UseAuthGuard, SilentAuth } from 'src/auth/auth-policy';
 import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 import { User } from 'src/database/entities/user.entity';
 
@@ -27,7 +27,7 @@ export class UsersController {
    * `null` is a real answer here, not a failure: the page loads for visitors
    * who have no session yet, and they must not see an error.
    */
-  @UseSilentAuthGuard()
+  @SilentAuth()
   @ApiOkResponse({
     description: 'The signed-in user, or no body for an anonymous caller.',
     schema: { nullable: true, allOf: [{ $ref: getSchemaPath(User) }] },

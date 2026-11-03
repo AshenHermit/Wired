@@ -68,6 +68,70 @@ function attachTransactionManager(
 }
 
 describe('ScriptingPackagesService', () => {
+  describe('findVisibleOne', () => {
+    const author = { id: 1 };
+    const contributor = { id: 2 };
+    const stranger = { id: 4 };
+
+    function makeService(pkg: unknown) {
+      const packagesRepository = { findOne: jest.fn(async () => pkg) };
+      return new ScriptingPackagesService(
+        packagesRepository as never,
+        {} as never,
+      );
+    }
+
+    it('serves a workshop package to an anonymous viewer', async () => {
+      const service = makeService({ id: 10, room: null });
+
+      await expect(service.findVisibleOne(10, null)).resolves.toEqual({
+        id: 10,
+        room: null,
+      });
+    });
+
+    it('serves a package of a public room to anyone', async () => {
+      const service = makeService({
+        id: 10,
+        room: { id: 5, isPublic: true, author, contributors: [] },
+      });
+
+      await expect(service.findVisibleOne(10, null)).resolves.toMatchObject({
+        id: 10,
+      });
+    });
+
+    it('hides a private-room package from a stranger', async () => {
+      const service = makeService({
+        id: 10,
+        room: { id: 5, isPublic: false, author, contributors: [contributor] },
+      });
+
+      await expect(
+        service.findVisibleOne(10, stranger as never),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('serves a private-room package to a contributor', async () => {
+      const service = makeService({
+        id: 10,
+        room: { id: 5, isPublic: false, author, contributors: [contributor] },
+      });
+
+      await expect(
+        service.findVisibleOne(10, contributor as never),
+      ).resolves.toMatchObject({ id: 10 });
+    });
+
+    it('answers 404 for a missing package', async () => {
+      const service = makeService(null);
+
+      await expect(service.findVisibleOne(10, null)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
   describe('assertPackageEditing', () => {
     const author = { id: 1 };
     const contributor = { id: 2 };

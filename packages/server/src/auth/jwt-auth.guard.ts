@@ -1,13 +1,13 @@
-import {
-  applyDecorators,
-  ExecutionContext,
-  Injectable,
-  UseGuards,
-} from '@nestjs/common';
+import { ExecutionContext, Injectable } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { ApiBearerAuth } from '@nestjs/swagger';
 import { User } from 'src/database/entities/user.entity';
 
+/**
+ * Passport guards used by `DefaultAuthGuard`.
+ *
+ * Routes do not reference these directly: they declare a policy with
+ * `@UseAuthGuard()`, `@SilentAuth()` or `@Public()` from `auth-policy.ts`.
+ */
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {}
 
@@ -22,12 +22,4 @@ export class JwtSilentAuthGuard extends AuthGuard('jwt-silent') {
   ): TUser {
     return user ?? (null as TUser);
   }
-}
-
-export function UseAuthGuard() {
-  return applyDecorators(UseGuards(JwtAuthGuard), ApiBearerAuth());
-}
-
-export function UseSilentAuthGuard() {
-  return applyDecorators(UseGuards(JwtSilentAuthGuard), ApiBearerAuth());
 }

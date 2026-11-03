@@ -10,25 +10,9 @@ import { Repository } from 'typeorm';
 import { Room } from 'src/database/entities/room.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
+import { isRoomMember } from 'src/rooms/room-access';
 import { readPositiveInt } from './request-ids';
 import { isRuntimeServiceUser } from './runtime-service-user';
-
-type RoomMemberSubject = {
-  author?: { id: number } | null;
-  contributors?: { id: number }[] | null;
-};
-
-/** A room member is explicitly listed: its author or one of its contributors. */
-export function isRoomMember(
-  room: RoomMemberSubject,
-  userId?: number | null,
-): boolean {
-  if (userId == null) return false;
-  if (room.author?.id === userId) return true;
-  return (room.contributors ?? []).some(
-    (contributor) => contributor.id === userId,
-  );
-}
 
 /**
  * Authoritative access check for room-scoped package runtime delivery.

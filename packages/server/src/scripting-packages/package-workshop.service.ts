@@ -19,6 +19,7 @@ import { errorMessage } from 'src/common/errors';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { User } from 'src/database/entities/user.entity';
+import { isRoomMember } from 'src/rooms/room-access';
 import { normalizeTags } from './package-tags';
 import { requirePackageSlug } from './package-slug-index';
 import { rewriteSlugReferences } from './package-slug-rewrite';
@@ -440,13 +441,7 @@ export class PackageWorkshopService {
       });
     }
 
-    const isRoomMember =
-      pkg.room.author?.id === user.id ||
-      (pkg.room.contributors?.some(
-        (contributor) => contributor.id === user.id,
-      ) ??
-        false);
-    if (!isRoomMember) {
+    if (!isRoomMember(pkg.room, user.id)) {
       throw new ForbiddenException(
         'You are not allowed to publish this package',
       );

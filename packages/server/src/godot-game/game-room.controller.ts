@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
-import { UseAuthGuard } from 'src/auth/jwt-auth.guard';
+import { UseAuthGuard } from 'src/auth/auth-policy';
 import { GameRoomService } from './game-room.service';
 
 @ApiTags('game')

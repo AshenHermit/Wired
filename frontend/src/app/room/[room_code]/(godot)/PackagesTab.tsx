@@ -221,7 +221,7 @@ function PackageCard({
   entry,
   action,
   fsReady,
-  authorId,
+  canManagePackages,
   onDownload,
   onRemove,
   onAdopt,
@@ -236,7 +236,8 @@ function PackageCard({
   action: PackageActionState;
   /** Whether the editor bridge can move files at all. */
   fsReady: boolean;
-  authorId: number | null;
+  /** The viewer may write to this room, so the API will accept the action. */
+  canManagePackages: boolean;
   onDownload: (entry: RoomPackageEntry) => void;
   onRemove: (entry: RoomPackageEntry) => void;
   onAdopt: (entry: RoomPackageEntry) => void;
@@ -389,7 +390,7 @@ function PackageCard({
               </DropdownMenuItem>
               <DropdownMenuItem
                 disabled={
-                  disabled || !authorId || entry.publishedRevision === null
+                  disabled || !canManagePackages || entry.publishedRevision === null
                 }
                 onSelect={() => onPublishToWorkshop(entry)}
                 title={
@@ -510,11 +511,15 @@ function PackageCard({
  */
 export function PackagesTab({
   packages,
-  authorId,
+  canManagePackages,
+  viewerId,
   roomId,
 }: {
   packages: RoomPackagesController;
-  authorId: number | null;
+  /** The viewer may write to this room, so the API will accept the action. */
+  canManagePackages: boolean;
+  /** The signed-in user, for deciding whether a workshop record is theirs. */
+  viewerId: number | null;
   roomId: number;
 }) {
   const [createOpen, setCreateOpen] = React.useState(false);
@@ -574,7 +579,7 @@ export function PackagesTab({
   };
 
   const canCreate =
-    Boolean(authorId) &&
+    canManagePackages &&
     packages.fsReady &&
     name.trim().length > 0 &&
     slugState === "available" &&
@@ -668,8 +673,13 @@ export function PackagesTab({
 
   const handleCreate = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!authorId) {
-      setCreateError({ key: "Packages.errors.loginRequired" });
+    if (!canManagePackages) {
+      setCreateError({
+        key:
+          viewerId === null
+            ? "Packages.errors.loginRequired"
+            : "Packages.errors.notRoomMember",
+      });
       return;
     }
     if (!canCreate) return;
@@ -882,7 +892,7 @@ export function PackagesTab({
                 entry={entry}
                 action={packages.actionFor(entry.packageId)}
                 fsReady={packages.fsReady}
-                authorId={authorId}
+                canManagePackages={canManagePackages}
                 onDownload={handleDownload}
                 onRemove={handleRemove}
                 onAdopt={(pkg) =>
@@ -920,7 +930,7 @@ export function PackagesTab({
           }}
           entry={publishEntry}
           packages={packages}
-          authorId={authorId}
+          viewerId={viewerId}
           onFork={() => {
             const entry = publishEntry;
             setPublishEntry(null);

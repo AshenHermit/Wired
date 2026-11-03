@@ -37,7 +37,15 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
   );
   const packages = useRoomPackages(room.id, roomPackages);
   const userId = useUserStore((state) => state.id);
-  const authorId = userId > 0 ? userId : null;
+  // The room's own author and contributors may change its packages; the server
+  // enforces the same rule, so the panel must not offer what it would reject.
+  const viewerId = userId > 0 ? userId : null;
+  const canManagePackages =
+    viewerId !== null &&
+    (room.author?.id === viewerId ||
+      (room.contributors ?? []).some(
+        (contributor) => contributor.id === viewerId,
+      ));
   const { panelRef, gripProps, style, isDragging } = useDraggablePanel({
     storageKey: ROOM_TABS_POSITION_KEY,
     initialPosition: (viewport) => ({
@@ -111,7 +119,8 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
           <TabsContent value="packages" className="w-full !h-full">
             <PackagesTab
               packages={packages}
-              authorId={authorId}
+              canManagePackages={canManagePackages}
+              viewerId={viewerId}
               roomId={room.id}
             />
           </TabsContent>

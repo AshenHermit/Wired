@@ -122,14 +122,15 @@ export function WorkshopPublishDialog({
   onOpenChange,
   entry,
   packages,
-  authorId,
+  viewerId,
   onFork,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   entry: RoomPackageEntry | null;
   packages: RoomPackagesController;
-  authorId: number | null;
+  /** The signed-in user, for deciding whether a workshop record is theirs. */
+  viewerId: number | null;
   onFork: () => void;
 }) {
   const t = useTranslations("Workshop");
@@ -179,7 +180,7 @@ export function WorkshopPublishDialog({
         setLookup(
           found === null
             ? "free"
-            : found.author?.id === authorId
+            : found.author?.id === viewerId
               ? "mine"
               : "taken",
         );
@@ -206,7 +207,7 @@ export function WorkshopPublishDialog({
     return () => {
       cancelled = true;
     };
-  }, [authorId, lookupAttempt, open, packageId, slug]);
+  }, [viewerId, lookupAttempt, open, packageId, slug]);
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();

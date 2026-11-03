@@ -45,7 +45,7 @@ import {
   WorkshopForkDto,
   WorkshopPublishDto,
 } from './dto/workshop.dto';
-import { UseAuthGuard, UseSilentAuthGuard } from 'src/auth/jwt-auth.guard';
+import { UseAuthGuard, SilentAuth, Public } from 'src/auth/auth-policy';
 import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 import { MAX_PACKAGE_FILE_SIZE } from './package-manifest';
 import { ArtifactBuildRateLimiter } from './artifact-build.rate-limiter';
@@ -63,6 +63,14 @@ function parseOptionalNumber(value: unknown): number | undefined {
   return Number(value.trim());
 }
 
+/**
+ * Package authoring, revisions, workshop copies and runtime delivery.
+ *
+ * Path parameters: `:id` is always the package, `:roomId` would be a room path
+ * segment (none here). Room scope arrives as `?room=` on the runtime routes and
+ * as `roomId` in request bodies; `?room` is a frozen wire contract read by the
+ * Godot runtime, so it keeps the short name.
+ */
 @ApiTags('scripting-packages')
 @Controller('scripting-packages')
 export class ScriptingPackagesController {
@@ -78,12 +86,6 @@ export class ScriptingPackagesController {
     private readonly buildLimiter: ArtifactBuildRateLimiter = new ArtifactBuildRateLimiter(),
   ) {}
 
-  @ApiOkResponse({ type: [ScriptingPackage] })
-  @Get()
-  findAll() {
-    return this.packagesService.findAll();
-  }
-
   // Declared before `:id` so `slug-availability` is not parsed as an id.
   @UseAuthGuard()
   @ApiOkResponse({ description: 'Package slug availability' })
@@ -97,6 +99,7 @@ export class ScriptingPackagesController {
     return this.packagesService.checkSlugAvailability(slug, roomId, excludeId);
   }
 
+  @Public()
   @ApiOkResponse({ description: 'Workshop packages' })
   @Get('workshop')
   workshop(
@@ -111,12 +114,14 @@ export class ScriptingPackagesController {
     });
   }
 
+  @Public()
   @ApiOkResponse({ description: 'Workshop package by slug' })
   @Get('workshop/lookup')
   workshopLookup(@Query('slug') slug: string) {
     return this.workshopService.lookup(slug);
   }
 
+  @Public()
   @ApiOkResponse({ description: 'Workshop tag usage' })
   @Get('workshop/tags')
   workshopTags(
@@ -168,10 +173,14 @@ export class ScriptingPackagesController {
     return this.workshopService.addToRoom(id, dto.roomId, req.user);
   }
 
+  @SilentAuth()
   @ApiOkResponse({ type: ScriptingPackage })
   @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.packagesService.findOne(id);
+  findOne(
+    @Req() req: SilentAuthRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.packagesService.findVisibleOne(id, req.user);
   }
 
   @UseAuthGuard()
@@ -202,7 +211,7 @@ export class ScriptingPackagesController {
     return await this.revisionsService.createDraft(id, payload);
   }
 
-  @UseSilentAuthGuard()
+  @SilentAuth()
   @ApiOkResponse({ description: 'Package revisions' })
   @Get(':id/revisions')
   async listRevisions(
@@ -260,12 +269,14 @@ export class ScriptingPackagesController {
     return await this.revisionsService.publish(id, revision);
   }
 
+  @Public()
   @ApiOkResponse({ description: 'Latest published manifest' })
   @Get(':id/manifest')
   getManifest(@Param('id', ParseIntPipe) id: number) {
     return this.revisionsService.getManifest(id);
   }
 
+  @Public()
   @ApiOkResponse({ description: 'Manifest of an explicit revision' })
   @Get(':id/revisions/:revision/manifest')
   getRevisionManifest(
@@ -275,6 +286,7 @@ export class ScriptingPackagesController {
     return this.revisionsService.getManifestForRevision(id, revision);
   }
 
+  @Public()
   @ApiOkResponse({
     description: 'Raw contents of a published revision file',
     schema: { type: 'string', format: 'binary' },
@@ -301,6 +313,7 @@ export class ScriptingPackagesController {
     });
   }
 
+  @Public()
   @ApiOkResponse({ description: 'Signed runtime manifest for a room' })
   // `no-transform` keeps the Next.js dev proxy (and production proxies) from
   // gzipping this JSON. Godot's Web HTTPRequest receives an already-decoded
@@ -325,6 +338,7 @@ export class ScriptingPackagesController {
     return this.delivery.getRuntimeManifest(id, revision, room);
   }
 
+  @Public()
   @ApiOkResponse({
     description: 'Raw contents of a runtime artifact file',
     schema: { type: 'string', format: 'binary' },
