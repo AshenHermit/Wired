@@ -1,13 +1,21 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import React from "react";
 import { toast } from "sonner";
+import { toAppMessage } from "@/i18n/api-error";
+import type { AppMessage } from "@/i18n/message";
+
+export type HandleRequestOptions = {
+  errorMessage?: AppMessage;
+};
 
 export function useRequestHandler({
   toastOnError = true,
 }: { toastOnError?: boolean } = {}) {
+  const t = useTranslations();
   const [loading, setLoading] = React.useState<boolean>(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<AppMessage | null>(null);
   const mounted = React.useRef(true);
 
   React.useEffect(() => {
@@ -18,19 +26,21 @@ export function useRequestHandler({
   }, []);
 
   const handleRequest = React.useCallback(
-    async (requestFunc: () => Promise<void>): Promise<boolean> => {
+    async (
+      requestFunc: () => Promise<void>,
+      options?: HandleRequestOptions
+    ): Promise<boolean> => {
       setLoading(true);
       setError(null);
       try {
         await requestFunc();
         return true;
-      } catch (e) {
-        const message =
-          e instanceof Error ? e.message : "Не удалось выполнить запрос";
+      } catch (cause) {
+        const message = options?.errorMessage ?? toAppMessage(cause);
         if (mounted.current) {
           setError(message);
           if (toastOnError) {
-            toast.error(message);
+            toast.error(t(message.key, message.values));
           }
         }
         return false;
@@ -40,7 +50,7 @@ export function useRequestHandler({
         }
       }
     },
-    [toastOnError]
+    [t, toastOnError]
   );
   return { loading, error, handleRequest };
 }

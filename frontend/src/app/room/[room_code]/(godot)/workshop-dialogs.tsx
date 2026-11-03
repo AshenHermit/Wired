@@ -2,6 +2,7 @@
 
 import type { WorkshopPackageSummary } from "@wired-io/shared";
 import { Loader2Icon, StoreIcon } from "lucide-react";
+import { useTranslations } from "next-intl";
 import * as React from "react";
 import {
   getScriptingPackage,
@@ -18,9 +19,9 @@ import {
 import { WorkshopBrowser } from "@/components/packages/workshop-browser";
 import {
   SLUG_CHECK_DEBOUNCE_MS,
-  SLUG_HINT,
   isSlugValid,
   slugHintClass,
+  slugHintKey,
   type SlugCheckState,
 } from "@/components/packages/slug";
 import { Button } from "@/components/ui/button";
@@ -364,6 +365,7 @@ export function WorkshopForkDialog({
   packages: RoomPackagesController;
 }) {
   const [slug, setSlug] = React.useState("");
+  const t = useTranslations();
   const [slugState, setSlugState] = React.useState<SlugCheckState>("idle");
   const [slugCheckAttempt, setSlugCheckAttempt] = React.useState(0);
   const [submitting, setSubmitting] = React.useState(false);
@@ -472,9 +474,9 @@ export function WorkshopForkDialog({
               disabled={submitting}
               autoFocus
             />
-            {SLUG_HINT[slugState] && (
+            {slugHintKey(slugState) && (
               <p className={`text-xs ${slugHintClass(slugState)}`}>
-                {SLUG_HINT[slugState]}
+                {t(slugHintKey(slugState)!)}
               </p>
             )}
             {slugState === "error" && (

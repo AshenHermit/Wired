@@ -12,13 +12,19 @@ export type SlugCheckState =
   | "taken"
   | "error";
 
-export const SLUG_HINT: Partial<Record<SlugCheckState, string>> = {
-  invalid: "Строчные латинские буквы, цифры и _, минимум одна буква",
-  checking: "Проверяем slug…",
-  available: "Slug свободен",
-  taken: "Slug уже занят",
-  error: "Не удалось проверить slug. Попробуйте ещё раз",
+import type { MessageKey } from "@/i18n/message";
+
+export const SLUG_HINT_KEYS: Partial<Record<SlugCheckState, MessageKey>> = {
+  invalid: "Slug.invalid",
+  checking: "Slug.checking",
+  available: "Slug.available",
+  taken: "Slug.taken",
+  error: "Slug.checkFailed",
 };
+
+export function slugHintKey(state: SlugCheckState): MessageKey | undefined {
+  return SLUG_HINT_KEYS[state];
+}
 
 export function isSlugValid(slug: string): boolean {
   return (

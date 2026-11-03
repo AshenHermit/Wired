@@ -19,6 +19,7 @@ import { useRequestHandler } from "@/hooks/use-request-handler";
 import { useUserStore } from "@/store/user-store";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { PencilIcon } from "lucide-react";
+import { useTranslations } from "next-intl";
 import React from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -43,6 +44,7 @@ export const UserEditingPanel = React.forwardRef<
 >(({ onChange }, ref) => {
   const [user, setUser] = React.useState<User | null>(null);
   const [open, setOpen] = React.useState(false);
+  const t = useTranslations("Profile");
   const { formState, register, handleSubmit, control, reset } =
     useForm<UserEditingFieldsInfer>({
       resolver: zodResolver(UserEditingFields),
@@ -69,7 +71,7 @@ export const UserEditingPanel = React.forwardRef<
       if (user) {
         handleRequest(async () => {
           await updateUser(user.id, { ...data });
-          toast.success("Profile updated successfully");
+          toast.success(t("updated"));
           setOpen(false);
           onChange?.();
         });
@@ -81,19 +83,19 @@ export const UserEditingPanel = React.forwardRef<
     <Dialog defaultOpen={open} onOpenChange={setOpen} open={open}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Edit Profile</DialogTitle>
+          <DialogTitle>{t("title")}</DialogTitle>
         </DialogHeader>
 
         <FieldGroup>
           <FieldSet>
             <Field>
-              <FieldLabel>Name</FieldLabel>
-              <Input {...register("name")} placeholder="Name" />
+              <FieldLabel>{t("name")}</FieldLabel>
+              <Input {...register("name")} placeholder={t("name")} />
             </Field>
           </FieldSet>
         </FieldGroup>
         <DialogFooter className="flex">
-          <Button onClick={handleSubmit(updateUserCb)}>Update</Button>
+          <Button onClick={handleSubmit(updateUserCb)}>{t("update")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

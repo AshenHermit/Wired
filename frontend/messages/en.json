@@ -3,5 +3,83 @@
     "close": "Close",
     "language": "Language",
     "retry": "Retry"
+  },
+  "Home": {
+    "tabs": {
+      "rooms": "Rooms",
+      "controls": "Controls",
+      "packages": "Packages",
+      "docs": "Documentation"
+    },
+    "rooms": {
+      "title": "Rooms",
+      "description": "Join in!"
+    },
+    "controls": {
+      "title": "Controls",
+      "description": "Create and manage rooms here"
+    },
+    "packages": {
+      "title": "Workshop",
+      "description": "Community packages. Search by name, slug, or tag"
+    },
+    "docs": {
+      "title": "Documentation",
+      "description": "The core wired-io API for writing scripts will be collected here, so you don't have to dig through the sources"
+    },
+    "greeting": "> Hi, {name}!",
+    "intro": "wired io isn't as cool as it could be yet, but the author is trying",
+    "small": "hopefully the parallax won't make you dizzy",
+    "warning": "Warning: For the author at least: there may be problems with the <code>Wired()</code> context if there is more than one room,"
+  },
+  "Login": {
+    "title": "let me join",
+    "google": "Login with Google"
+  },
+  "Profile": {
+    "title": "Edit Profile",
+    "name": "Name",
+    "update": "Update",
+    "updated": "Profile updated successfully"
+  },
+  "Rooms": {
+    "createTitle": "Create Room",
+    "createDescription": "Create a new room",
+    "editTitle": "Edit Room",
+    "editDescription": "Edit the room",
+    "name": "Name",
+    "description": "Description",
+    "namePlaceholder": "Room Name",
+    "descriptionPlaceholder": "Room Description",
+    "create": "Create",
+    "update": "Update",
+    "delete": "Delete",
+    "created": "Room created",
+    "updated": "Room updated",
+    "deleted": "Room deleted",
+    "emptyOwn": "You have no rooms yet",
+    "emptyAll": "No rooms found",
+    "addOne": "ADD ONE",
+    "errors": {
+      "load": "Failed to load the room list.",
+      "create": "Failed to create the room",
+      "update": "Failed to update the room",
+      "delete": "Failed to delete the room"
+    }
+  },
+  "Slug": {
+    "invalid": "Lowercase Latin letters, digits and _, at least one letter",
+    "checking": "Checking slug…",
+    "available": "Slug is available",
+    "taken": "Slug is already taken",
+    "checkFailed": "Failed to check the slug. Try again"
+  },
+  "Errors": {
+    "unauthorized": "Please sign in",
+    "forbidden": "You don't have permission",
+    "notFound": "Not found",
+    "conflict": "Data conflict. Refresh the page and try again",
+    "server": "Server error. Try again later",
+    "unexpected": "Something went wrong. Try again"
   }
 }

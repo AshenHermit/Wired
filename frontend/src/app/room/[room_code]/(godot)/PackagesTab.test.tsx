@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderWithIntl as render } from "@/test/render-with-intl";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ScriptingPackage,

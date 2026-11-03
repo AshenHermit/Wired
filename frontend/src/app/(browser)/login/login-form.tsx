@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/animate-ui/components/buttons/button";
+import { useTranslations } from "next-intl";
 import { useServiceAuthorization } from "./hooks";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,12 +11,13 @@ export function LoginForm({
   ...props
 }: React.ComponentPropsWithoutRef<"div">) {
   const googleAuth = useServiceAuthorization("google");
+  const t = useTranslations("Login");
 
   return (
     <div className={cn("flex flex-col gap-6 w-full", className)} {...props}>
       <Card className="w-full">
         <CardHeader className="text-center">
-          <CardTitle className="text-xl">предлагаю присоединица</CardTitle>
+          <CardTitle className="text-xl">{t("title")}</CardTitle>
           {/* <CardDescription></CardDescription> */}
         </CardHeader>
         <CardContent>
@@ -34,7 +36,7 @@ export function LoginForm({
                       fill="currentColor"
                     />
                   </svg>
-                  Login with Google
+                  {t("google")}
                 </Button>
               </div>
             </div>

@@ -39,7 +39,9 @@ import { useRequestHandler } from "@/hooks/use-request-handler";
 import { Button } from "@/components/animate-ui/components/buttons/button";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { encodeId } from "@/utils/hash-utils";
+import { useAppMessage, type AppMessage } from "@/i18n/message";
 
 export function RoomCard({
   room,
@@ -100,6 +102,7 @@ export const RoomEditingPanel = React.forwardRef<
 >(({ onChange }, ref) => {
   const [room, setRoom] = React.useState<Room | null>(null);
   const userId = useUserStore((state) => state.id);
+  const t = useTranslations("Rooms");
   const [open, setOpen] = React.useState(false);
   const [operation, setOperation] = React.useState<"create" | "update">(
     "create"
@@ -138,12 +141,12 @@ export const RoomEditingPanel = React.forwardRef<
     async (data: RoomEditingFieldsInfer) => {
       handleRequest(async () => {
         await createRoom({ ...data, type: "godot", authorId: userId });
-        toast.success("Комната создана");
+        toast.success(t("created"));
         setOpen(false);
         onChange?.();
-      });
+      }, { errorMessage: { key: "Rooms.errors.create" } });
     },
-    [handleRequest, onChange, userId]
+    [handleRequest, onChange, t, userId]
   );
 
   const updateRoomCb = React.useCallback(
@@ -151,49 +154,54 @@ export const RoomEditingPanel = React.forwardRef<
       if (room) {
         handleRequest(async () => {
           await updateRoom(room.id, { ...data });
-          toast.success("Комната обновлена");
+          toast.success(t("updated"));
           setOpen(false);
           onChange?.();
-        });
+        }, { errorMessage: { key: "Rooms.errors.update" } });
       }
     },
-    [handleRequest, onChange, room]
+    [handleRequest, onChange, room, t]
   );
 
   const deleteRoomCb = React.useCallback(async () => {
     if (room) {
       handleRequest(async () => {
         await deleteRoom(room.id);
-        toast.success("Комната удалена");
+        toast.success(t("deleted"));
         setOpen(false);
         onChange?.();
-      });
+      }, { errorMessage: { key: "Rooms.errors.delete" } });
     }
-  }, [handleRequest, onChange, room]);
+  }, [handleRequest, onChange, room, t]);
 
   return (
     <Dialog defaultOpen={open} onOpenChange={setOpen} open={open}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            {operation === "create" ? "Create Room" : "Edit Room"}
+            {operation === "create" ? t("createTitle") : t("editTitle")}
           </DialogTitle>
           <DialogDescription>
-            {operation === "create" ? "Create a new room" : "Edit the room"}
+            {operation === "create"
+              ? t("createDescription")
+              : t("editDescription")}
           </DialogDescription>
         </DialogHeader>
 
         <FieldGroup>
           <FieldSet>
             <Field>
-              <FieldLabel>Name</FieldLabel>
-              <Input {...register("name")} placeholder="Room Name" />
+              <FieldLabel>{t("name")}</FieldLabel>
+              <Input
+                {...register("name")}
+                placeholder={t("namePlaceholder")}
+              />
             </Field>
             <Field>
-              <FieldLabel>Description</FieldLabel>
+              <FieldLabel>{t("description")}</FieldLabel>
               <Textarea
                 {...register("description")}
-                placeholder="Room Description"
+                placeholder={t("descriptionPlaceholder")}
               />
             </Field>
           </FieldSet>
@@ -201,14 +209,18 @@ export const RoomEditingPanel = React.forwardRef<
         <DialogFooter className="flex !justify-between">
           {operation === "create" ? (
             <>
-              <Button onClick={handleSubmit(createRoomCb)}>Create</Button>
+              <Button onClick={handleSubmit(createRoomCb)}>
+                {t("create")}
+              </Button>
             </>
           ) : (
             <>
               <Button onClick={deleteRoomCb} variant={"destructive"}>
-                Delete
+                {t("delete")}
               </Button>
-              <Button onClick={handleSubmit(updateRoomCb)}>Update</Button>
+              <Button onClick={handleSubmit(updateRoomCb)}>
+                {t("update")}
+              </Button>
             </>
           )}
         </DialogFooter>
@@ -221,13 +233,14 @@ export function RoomEditing() {}
 
 export function useRooms(ofUserId?: number) {
   const [rooms, setRooms] = React.useState<Room[]>([]);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<AppMessage | null>(null);
   const loadRooms = React.useCallback(async () => {
     try {
       setError(null);
       setRooms(await listRooms());
-    } catch {
-      setError("Не удалось загрузить список комнат.");
+    } catch (cause) {
+      console.error(cause);
+      setError({ key: "Rooms.errors.load" });
     }
   }, []);
   let filtered = rooms;
@@ -246,6 +259,8 @@ export function RoomsList({
   const authorized = useUserStore((state) => state.authorized);
   const { items, load, error } = useRooms(forCurrentUser ? userId : undefined);
   const editingApi = React.useRef<RoomEditingPanelAPI>(null);
+  const t = useTranslations("Rooms");
+  const format = useAppMessage();
 
   React.useEffect(() => {
     load();
@@ -262,12 +277,12 @@ export function RoomsList({
       ) : null}
       {error ? (
         <div className="text-center text-sm text-destructive w-full">
-          {error}
+          {format(error)}
         </div>
       ) : null}
       {items.length === 0 && !error ? (
         <div className="text-center text-sm text-muted-foreground w-full">
-          {forCurrentUser ? "У вас пока нет комнат" : "Комнаты не найдены"}
+          {forCurrentUser ? t("emptyOwn") : t("emptyAll")}
         </div>
       ) : null}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
@@ -284,7 +299,7 @@ export function RoomsList({
             onClick={() => editingApi.current?.create()}
           >
             <PlusIcon />
-            ADD ONE
+            {t("addOne")}
             <PlusIcon />
             <RippleButtonRipples />
           </RippleButton>

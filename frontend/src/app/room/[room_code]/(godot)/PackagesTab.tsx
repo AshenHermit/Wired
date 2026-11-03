@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useTranslations } from "next-intl";
 import {
   CheckIcon,
   DownloadIcon,
@@ -37,9 +38,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   SLUG_CHECK_DEBOUNCE_MS,
-  SLUG_HINT,
   isSlugValid,
   slugHintClass,
+  slugHintKey,
   type SlugCheckState,
 } from "@/components/packages/slug";
 import {
@@ -517,6 +518,7 @@ export function PackagesTab({
   const [slugCheckAttempt, setSlugCheckAttempt] = React.useState(0);
   const [slugTakenInWorkshop, setSlugTakenInWorkshop] =
     React.useState(false);
+  const t = useTranslations();
   const [creating, setCreating] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
 
@@ -822,9 +824,9 @@ export function PackagesTab({
                     spellCheck={false}
                     autoCapitalize="none"
                   />
-                  {SLUG_HINT[slugState] && (
+                  {slugHintKey(slugState) && (
                     <p className={`text-xs ${slugHintClass(slugState)}`}>
-                      {SLUG_HINT[slugState]}
+                      {t(slugHintKey(slugState)!)}
                     </p>
                   )}
                   {slugState === "available" && slugTakenInWorkshop && (

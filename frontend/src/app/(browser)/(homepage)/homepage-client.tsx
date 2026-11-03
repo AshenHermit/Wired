@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button";
 import Image from "next/image";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { LoginForm } from "../login/login-form";
 import { useUserStore } from "@/store/user-store";
 import {
@@ -26,23 +27,24 @@ import { WorkshopBrowser } from "@/components/packages/workshop-browser";
 
 export function HomepageClient() {
   const user = useUserStore((state) => state);
+  const t = useTranslations("Home");
 
   return (
     <div className="flex flex-col gap-6 items-center w-full">
       {user.authorized ? <ClientPanel /> : <LoginForm />}
       <Tabs defaultValue="rooms" className="w-full">
         <TabsList>
-          <TabsTrigger value="rooms">Комнаты</TabsTrigger>
-          <TabsTrigger value="controls">Управление</TabsTrigger>
-          <TabsTrigger value="packages">Пакеты</TabsTrigger>
-          <TabsTrigger value="docs">Документация</TabsTrigger>
+          <TabsTrigger value="rooms">{t("tabs.rooms")}</TabsTrigger>
+          <TabsTrigger value="controls">{t("tabs.controls")}</TabsTrigger>
+          <TabsTrigger value="packages">{t("tabs.packages")}</TabsTrigger>
+          <TabsTrigger value="docs">{t("tabs.docs")}</TabsTrigger>
         </TabsList>
         <Card className="shadow-none py-0 w-full">
           <TabsContents className="py-6 w-full">
             <TabsContent value="rooms" className="flex flex-col gap-6 w-full">
               <CardHeader>
-                <CardTitle>Комнаты</CardTitle>
-                <CardDescription>Присоединяйтесь!</CardDescription>
+                <CardTitle>{t("rooms.title")}</CardTitle>
+                <CardDescription>{t("rooms.description")}</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-6">
                 <RoomsList forCurrentUser={false} />
@@ -53,10 +55,8 @@ export function HomepageClient() {
               className="flex flex-col gap-6 w-full"
             >
               <CardHeader>
-                <CardTitle>Управление</CardTitle>
-                <CardDescription>
-                  Здесь можно создавать и управлять комнатами
-                </CardDescription>
+                <CardTitle>{t("controls.title")}</CardTitle>
+                <CardDescription>{t("controls.description")}</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-6">
                 <RoomsList forCurrentUser={true} />
@@ -67,10 +67,8 @@ export function HomepageClient() {
               className="flex flex-col gap-6 w-full"
             >
               <CardHeader>
-                <CardTitle>Workshop</CardTitle>
-                <CardDescription>
-                  Пакеты сообщества. Ищите по названию, slug или тегу
-                </CardDescription>
+                <CardTitle>{t("packages.title")}</CardTitle>
+                <CardDescription>{t("packages.description")}</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-6">
                 <WorkshopBrowser />
@@ -78,11 +76,8 @@ export function HomepageClient() {
             </TabsContent>
             <TabsContent value="docs" className="flex flex-col gap-6 w-full">
               <CardHeader>
-                <CardTitle>Документация</CardTitle>
-                <CardDescription>
-                  Здесь будет собрано основное api wired-io для разработки
-                  скриптов, чтобы не смотреть постоянно в исходники
-                </CardDescription>
+                <CardTitle>{t("docs.title")}</CardTitle>
+                <CardDescription>{t("docs.description")}</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-6"></CardContent>
             </TabsContent>
@@ -95,31 +90,25 @@ export function HomepageClient() {
 
 export function ClientPanel() {
   const user = useUserStore((state) => state);
+  const t = useTranslations("Home");
   if (!user.authorized) return null;
 
   return (
     <Card className="min-w-md">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <span>
-            {">"} Привет, {user.name}!
-          </span>
+          <span>{t("greeting", { name: user.name })}</span>
           <CurrentUserEditingButton />
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div>
-          wired io еще не такой уж классный как хотелось бы, но автор че то
-          пытается, делает
-        </div>
-        <div className="text-[10px]">
-          надеюсь голова не закружится от параллакса
-        </div>
+        <div>{t("intro")}</div>
+        <div className="text-[10px]">{t("small")}</div>
         <br />
         <div>
-          Внимание: Для автора по крайней мере: возможны проблемы с{" "}
-          <span className="text-blue-300">Wired()</span> контекстом, они могут
-          возникнуть если будет больше одной комнаты,
+          {t.rich("warning", {
+            code: (chunks) => <span className="text-blue-300">{chunks}</span>,
+          })}
         </div>
       </CardContent>
     </Card>

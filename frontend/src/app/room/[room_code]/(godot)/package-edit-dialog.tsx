@@ -1,6 +1,7 @@
 "use client";
 
 import { Loader2Icon } from "lucide-react";
+import { useTranslations } from "next-intl";
 import * as React from "react";
 import { getScriptingPackage } from "@/api/services/scripting-packages";
 import {
@@ -13,9 +14,9 @@ import {
 } from "@/components/animate-ui/components/radix/dialog";
 import {
   SLUG_CHECK_DEBOUNCE_MS,
-  SLUG_HINT,
   isSlugValid,
   slugHintClass,
+  slugHintKey,
   type SlugCheckState,
 } from "@/components/packages/slug";
 import { TagInput } from "@/components/packages/tag-input";
@@ -58,6 +59,7 @@ export function PackageEditDialog({
   packages: RoomPackagesController;
 }) {
   const [name, setName] = React.useState("");
+  const t = useTranslations();
   const [version, setVersion] = React.useState("");
   const [slug, setSlug] = React.useState("");
   const [description, setDescription] = React.useState("");
@@ -276,9 +278,9 @@ export function PackageEditDialog({
                 spellCheck={false}
                 autoCapitalize="none"
               />
-              {SLUG_HINT[slugState] && (
+              {slugHintKey(slugState) && (
                 <p className={`text-xs ${slugHintClass(slugState)}`}>
-                  {SLUG_HINT[slugState]}
+                  {t(slugHintKey(slugState)!)}
                 </p>
               )}
               {slugState === "error" && (
