@@ -42,6 +42,32 @@ ignores for routing) plus feature folders such as `login/`. `(godot)` uses the
 same idea with explicit subfolders, because `_components` is not available for
 a group that also owns real routes.
 
+## Component kits and vendored registries
+
+`src/components/` holds two generated registries next to the app-authored code.
+Both keep their upstream file names, so they are the only place where a
+`kebab-case.tsx` component is expected:
+
+| Folder                   | What it is                       | Import as                            |
+| ------------------------ | -------------------------------- | ------------------------------------ |
+| `components/ui/`         | shadcn/ui primitives             | `@/components/ui/<name>`             |
+| `components/animate-ui/` | animate-ui primitives + composed | `@/components/animate-ui/<layer>/…`  |
+
+`components/ui/` is the default. Reach for `animate-ui/components/*` only when
+the motion is part of the interaction — the public-site primary actions (login,
+the room list, the editing panel). A component that both the public site and the
+editor render keeps `components/ui/`, because the editor is dense and motion
+there costs frames.
+
+Do not add a third copy of a primitive that already exists in either registry.
+`components.json` keeps shadcn's `ui` alias at `@/components/ui`, so a future
+`shadcn add button` overwrites the existing Button instead of landing beside it.
+
+Radix is a dependency of both registries, so import the scoped package the
+component actually needs (`@radix-ui/react-dialog`, `@radix-ui/react-slot`) and
+never the `radix-ui` umbrella — the umbrella ships a second copy of every
+primitive.
+
 ## Why this is written down
 
 The frontend previously mixed PascalCase, kebab-case and one snake_case file

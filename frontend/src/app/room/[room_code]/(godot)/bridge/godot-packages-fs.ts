@@ -108,6 +108,12 @@ export type PackageFileSystem = {
   renamePackage(from: string, to: string): Promise<string[]>;
   sync(): Promise<void>;
   packageDir(slug: string): string;
+  /**
+   * Abandons in-flight bridge calls. Called when the editor instance this file
+   * system talks to is replaced, so a pending answer cannot land in its
+   * successor's file system.
+   */
+  dispose(): void;
 };
 
 /** Payloads the plugin answers with; `contents_base64` is its wire name. */
@@ -302,6 +308,10 @@ export function createPackageFileSystem({
     },
 
     sync,
+
+    dispose() {
+      bridge.dispose();
+    },
   };
 }
 

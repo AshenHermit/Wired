@@ -106,6 +106,7 @@ function makeFiles() {
       return [];
     }),
     sync: vi.fn(async () => {}),
+    dispose: vi.fn(),
   };
 
   return { tree, files };

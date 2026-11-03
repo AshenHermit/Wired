@@ -44,14 +44,36 @@ export class EditorBridgeOperationError extends Error {
   }
 }
 
+/**
+ * A request was abandoned because its client was disposed: the editor that
+ * issued it is gone, so the answer no longer means anything. Not an editor
+ * failure — callers must not report it or start a reconnect loop.
+ */
+export class EditorBridgeDisposedError extends Error {
+  constructor() {
+    super("Мост редактора закрыт: запрос отменён");
+    this.name = "EditorBridgeDisposedError";
+  }
+}
+
 export type EditorBridgeClient = {
   call<T>(op: string, params?: Record<string, unknown>): Promise<T>;
+  /**
+   * Abandons every request this client is still waiting for.
+   *
+   * The page restarts the engine in place, and the plugin answers by request id
+   * alone: a request left over from the previous editor would otherwise resolve
+   * against the replacement's file system or sit until its timeout. Idempotent.
+   */
+  dispose(): void;
 };
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const BRIDGE_POLL_MS = 250;
 
 type PendingRequest = {
+  /** The client waiting for this answer; ids stay unique across all clients. */
+  clientId: number;
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -59,6 +81,7 @@ type PendingRequest = {
 
 const pendingRequests = new Map<number, PendingRequest>();
 let nextRequestId = 1;
+let nextClientId = 1;
 let installedResultHandler: ((message: unknown) => void) | null = null;
 
 function handleBridgeResult(message: unknown): void {
@@ -110,10 +133,17 @@ export function createEditorBridgeClient(options: {
   timeoutMs?: number;
 } = {}): EditorBridgeClient {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const clientId = nextClientId++;
+  let disposed = false;
 
   return {
     call<T>(op: string, params: Record<string, unknown> = {}): Promise<T> {
       return new Promise<T>((resolve, reject) => {
+        if (disposed) {
+          reject(new EditorBridgeDisposedError());
+          return;
+        }
+
         const request =
           typeof window === "undefined"
             ? undefined
@@ -138,6 +168,7 @@ export function createEditorBridgeClient(options: {
           );
         }, timeoutMs);
         pendingRequests.set(requestId, {
+          clientId,
           resolve: (value) => resolve(value as T),
           reject,
           timer,
@@ -151,6 +182,17 @@ export function createEditorBridgeClient(options: {
           reject(new EditorBridgeError(errorMessage(error)));
         }
       });
+    },
+
+    dispose(): void {
+      if (disposed) return;
+      disposed = true;
+      for (const [requestId, pending] of pendingRequests) {
+        if (pending.clientId !== clientId) continue;
+        pendingRequests.delete(requestId);
+        clearTimeout(pending.timer);
+        pending.reject(new EditorBridgeDisposedError());
+      }
     },
   };
 }

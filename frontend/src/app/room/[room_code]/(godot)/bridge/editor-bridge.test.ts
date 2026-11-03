@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createEditorBridgeClient,
+  EditorBridgeDisposedError,
   EditorBridgeError,
   EditorBridgeOperationError,
   EditorBridgeWaitCancelledError,
@@ -211,6 +212,34 @@ describe("EditorBridgeClient", () => {
     );
     await expect(client.call("exists", { packageId: 1 })).rejects.toThrow(
       "Мост редактора недоступен",
+    );
+  });
+
+  it("abandons only its own pending calls when disposed", async () => {
+    const request = installRequest(() => {});
+    const disposed = createEditorBridgeClient();
+    const surviving = createEditorBridgeClient();
+
+    const abandoned = disposed.call("sync");
+    const kept = surviving.call("sync");
+    const [, survivingId] = request.mock.calls.map((call) => call[0] as number);
+
+    // The editor was replaced in place: the old client's answer would land in
+    // the replacement's file system, so only that client is abandoned.
+    disposed.dispose();
+
+    await expect(abandoned).rejects.toThrow(EditorBridgeDisposedError);
+    sendResult({ id: survivingId, ok: true, value: { synced: true } });
+    await expect(kept).resolves.toEqual({ synced: true });
+  });
+
+  it("refuses new calls once disposed", async () => {
+    installRequest(() => {});
+    const client = createEditorBridgeClient();
+    client.dispose();
+
+    await expect(client.call("sync")).rejects.toThrow(
+      EditorBridgeDisposedError,
     );
   });
 });

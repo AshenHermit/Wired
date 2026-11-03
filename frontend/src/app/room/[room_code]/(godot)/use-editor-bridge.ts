@@ -83,6 +83,17 @@ export function useEditorBridge(
   const connectingRef = React.useRef(false);
   const mountedRef = React.useRef(false);
 
+  /**
+   * Drops the file system bound to the previous editor instance.
+   *
+   * The plugin answers by request id only, so a call left in flight when the
+   * engine restarts would otherwise resolve into the replacement's file system.
+   */
+  const disposeFiles = React.useCallback((): void => {
+    filesRef.current?.dispose();
+    filesRef.current = null;
+  }, []);
+
   React.useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -93,8 +104,9 @@ export function useEditorBridge(
         window.clearInterval(reconnectRef.current);
         reconnectRef.current = null;
       }
+      disposeFiles();
     };
-  }, []);
+  }, [disposeFiles]);
 
   /**
    * A lost bridge is retried until the plugin registers itself again. The
@@ -129,12 +141,12 @@ export function useEditorBridge(
   const dropTransport = React.useCallback(
     (cause: unknown): void => {
       if (!mountedRef.current) return;
-      filesRef.current = null;
+      disposeFiles();
       setFsReady(false);
       optionsRef.current.onTransportError(cause);
       startReconnectLoop();
     },
-    [startReconnectLoop],
+    [disposeFiles, startReconnectLoop],
   );
 
   /**
@@ -203,6 +215,9 @@ export function useEditorBridge(
   const afterEditorStart = React.useCallback(
     (editor: GodotEditorInstance): void => {
       engineRef.current = editor;
+      // Whatever the previous editor was still doing belongs to a file system
+      // that no longer exists, so its pending calls are abandoned first.
+      disposeFiles();
       // A previous wait belongs to the editor instance that was just replaced.
       bridgeWaitRef.current?.abort();
       const controller = new AbortController();
@@ -226,7 +241,7 @@ export function useEditorBridge(
         }
       })();
     },
-    [connect, startReconnectLoop],
+    [connect, disposeFiles, startReconnectLoop],
   );
 
   /**
@@ -252,10 +267,10 @@ export function useEditorBridge(
     bridgeWaitRef.current = null;
     stopReconnectLoop();
     engineRef.current = null;
-    filesRef.current = null;
+    disposeFiles();
     connectingRef.current = false;
     setFsReady(false);
-  }, [stopReconnectLoop]);
+  }, [disposeFiles, stopReconnectLoop]);
 
   return {
     fsReady,

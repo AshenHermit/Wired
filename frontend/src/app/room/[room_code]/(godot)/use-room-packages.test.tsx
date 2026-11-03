@@ -162,6 +162,7 @@ function createFakeFs() {
     deletePackage,
     renamePackage,
     sync,
+    dispose: vi.fn(),
     packageDir: (slug: string) => `${PROJECT}/packages/${slug}`,
   };
 
