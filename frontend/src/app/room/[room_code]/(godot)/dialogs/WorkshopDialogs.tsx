@@ -46,7 +46,8 @@ export function WorkshopBrowserDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  packages: RoomPackagesController;
+  /** Only the workshop copy action this dialog drives. */
+  packages: Pick<RoomPackagesController, "addFromWorkshop">;
 }) {
   const t = useTranslations("Workshop");
   const format = useAppMessage();
@@ -115,7 +116,7 @@ type PreviewDetails = {
  *
  * The dialog first looks up the record of the slug: an absent record is
  * created, the caller's own record is updated, and a record of another author
- * is not overwritten — the user is offered a fork instead.
+ * is not overwritten вЂ” the user is offered a fork instead.
  */
 export function WorkshopPublishDialog({
   open,
@@ -128,7 +129,8 @@ export function WorkshopPublishDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   entry: RoomPackageEntry | null;
-  packages: RoomPackagesController;
+  /** Only the publish action this dialog drives. */
+  packages: Pick<RoomPackagesController, "publishToWorkshop">;
   /** The signed-in user, for deciding whether a workshop record is theirs. */
   viewerId: number | null;
   onFork: () => void;
@@ -374,7 +376,11 @@ export function WorkshopForkDialog({
   onOpenChange: (open: boolean) => void;
   entry: RoomPackageEntry | null;
   roomId: number;
-  packages: RoomPackagesController;
+  /** Only the fork actions this dialog drives. */
+  packages: Pick<
+    RoomPackagesController,
+    "checkSlugAvailability" | "forkWorkshopPackage"
+  >;
 }) {
   const [slug, setSlug] = React.useState("");
   const t = useTranslations("Workshop");

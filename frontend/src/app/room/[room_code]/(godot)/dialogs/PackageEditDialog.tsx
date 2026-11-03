@@ -48,7 +48,11 @@ export function PackageEditDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   entry: RoomPackageEntry | null;
-  packages: RoomPackagesController;
+  /** Only the metadata actions this dialog drives. */
+  packages: Pick<
+    RoomPackagesController,
+    "checkSlugAvailability" | "updatePackageMetadata" | "renamePackageDir"
+  >;
 }) {
   const [name, setName] = React.useState("");
   const t = useTranslations("Packages");
