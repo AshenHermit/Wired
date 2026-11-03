@@ -49,6 +49,7 @@ export function TagInput({
   const [error, setError] = React.useState<"format" | "limit" | null>(null);
   const [open, setOpen] = React.useState(false);
   const [activeIndex, setActiveIndex] = React.useState(0);
+  const [navigated, setNavigated] = React.useState(false);
   const listId = React.useId();
   const inputRef = React.useRef<HTMLInputElement>(null);
 
@@ -77,6 +78,7 @@ export function TagInput({
 
   React.useEffect(() => {
     setActiveIndex(0);
+    setNavigated(false);
   }, [draft, value, open]);
 
   const showList = open && !disabled && (loading || options.length > 0);
@@ -127,14 +129,14 @@ export function TagInput({
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === ",") {
+    if (event.key === "," || event.key === " ") {
       event.preventDefault();
       commit(draft);
       return;
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      const option = showList ? options[activeIndex] : undefined;
+      const option = showList && navigated ? options[activeIndex] : undefined;
       if (option) select(option.tag);
       else commit(draft);
       return;
@@ -151,12 +153,14 @@ export function TagInput({
     if (event.key === "ArrowDown" && options.length > 0) {
       event.preventDefault();
       setOpen(true);
+      setNavigated(true);
       setActiveIndex((index) => (index + 1) % options.length);
       return;
     }
     if (event.key === "ArrowUp" && options.length > 0) {
       event.preventDefault();
       setOpen(true);
+      setNavigated(true);
       setActiveIndex(
         (index) => (index - 1 + options.length) % options.length,
       );

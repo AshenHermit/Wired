@@ -317,7 +317,7 @@ export function PackageEditDialog({
                 placeholder="gameplay, hero"
               />
               <p className="text-xs text-muted-foreground">
-                Enter или запятая — добавить тег. До 10 тегов.
+                Enter, запятая или пробел — добавить тег. До 10 тегов.
               </p>
             </div>
             {detailsState === "loading" && (

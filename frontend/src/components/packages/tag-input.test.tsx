@@ -42,6 +42,29 @@ describe("TagInput", () => {
     expect(onChange).toHaveBeenCalledWith(["hero"]);
   });
 
+  it("adds a tag on space", () => {
+    const { onChange, input } = renderInput();
+    fireEvent.change(input, { target: { value: "hero" } });
+    fireEvent.keyDown(input, { key: " " });
+    expect(onChange).toHaveBeenCalledWith(["hero"]);
+  });
+
+  it("commits the typed draft on Enter instead of the first suggestion", () => {
+    const { onChange, input } = renderInput();
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "game" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(["game"]);
+  });
+
+  it("does not add a tag on Enter when the draft is empty", () => {
+    const { onChange, input } = renderInput();
+    fireEvent.focus(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("commits a valid draft on blur", () => {
     const { onChange, input } = renderInput();
     fireEvent.change(input, { target: { value: "newtag" } });
