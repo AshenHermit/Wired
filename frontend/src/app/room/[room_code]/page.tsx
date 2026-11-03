@@ -1,4 +1,4 @@
-import { RoomPageClient } from "./page-client";
+import { RoomPageClient } from "./RoomPageClient";
 
 export default async function Page({
   params,

@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/animate-ui/components/buttons/button";
 import { useTranslations } from "next-intl";
-import { useServiceAuthorization } from "./hooks";
+import { useServiceAuthorization } from "./use-login";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 

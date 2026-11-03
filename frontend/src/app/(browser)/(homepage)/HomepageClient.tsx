@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import Image from "next/image";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { LoginForm } from "../login/login-form";
+import { LoginForm } from "../login/LoginForm";
 import { useUserStore } from "@/store/user-store";
 import {
   Card,
@@ -21,9 +21,9 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/animate-ui/components/animate/tabs";
-import { RoomsList } from "../_components/rooms/rooms-list";
-import { CurrentUserEditingButton } from "../_components/user";
-import { WorkshopBrowser } from "@/components/packages/workshop-browser";
+import { RoomsList } from "../_components/rooms/RoomsList";
+import { CurrentUserEditingButton } from "../_components/UserEditing";
+import { WorkshopBrowser } from "@/components/packages/WorkshopBrowser";
 
 export function HomepageClient() {
   const user = useUserStore((state) => state);

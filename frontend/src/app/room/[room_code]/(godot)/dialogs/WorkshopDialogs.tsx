@@ -16,7 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/animate-ui/components/radix/dialog";
-import { WorkshopBrowser } from "@/components/packages/workshop-browser";
+import { WorkshopBrowser } from "@/components/packages/WorkshopBrowser";
 import {
   slugHintClass,
   slugHintKey,
@@ -31,7 +31,7 @@ import {
   WorkshopSlugTakenError,
   type RoomPackageEntry,
   type RoomPackagesController,
-} from "./use-room-packages";
+} from "../use-room-packages";
 
 /**
  * The public workshop inside the package panel. Adding a record is a server

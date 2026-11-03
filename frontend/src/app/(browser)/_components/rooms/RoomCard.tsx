@@ -12,7 +12,7 @@ import { PlayIcon, WrenchIcon } from "lucide-react";
 import Link from "next/link";
 import * as React from "react";
 import { encodeId } from "@/utils/hash-utils";
-import type { RoomEditingPanelAPI } from "./room-editing-panel";
+import type { RoomEditingPanelAPI } from "./RoomEditingPanel";
 
 /** One room tile; the edit affordance only shows for the room's own author. */
 export function RoomCard({

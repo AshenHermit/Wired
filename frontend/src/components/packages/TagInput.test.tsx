@@ -2,7 +2,7 @@ import { fireEvent, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithIntl as render } from "@/test/render-with-intl";
 import { useWorkshopTags } from "./use-workshop-tags";
-import { TagInput } from "./tag-input";
+import { TagInput } from "./TagInput";
 
 vi.mock("./use-workshop-tags", () => ({
   useWorkshopTags: vi.fn(),

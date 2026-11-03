@@ -8,7 +8,7 @@ vi.mock("@/api/services/scripting-packages", () => ({
 }));
 
 import * as packagesApi from "@/api/services/scripting-packages";
-import { WorkshopBrowser } from "./workshop-browser";
+import { WorkshopBrowser } from "./WorkshopBrowser";
 
 function workshopPackage(
   overrides: Partial<WorkshopPackageSummary> = {},

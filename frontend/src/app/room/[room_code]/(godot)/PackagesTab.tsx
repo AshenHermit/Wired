@@ -55,8 +55,8 @@ import {
   WorkshopBrowserDialog,
   WorkshopForkDialog,
   WorkshopPublishDialog,
-} from "./workshop-dialogs";
-import { PackageEditDialog } from "./package-edit-dialog";
+} from "./dialogs/WorkshopDialogs";
+import { PackageEditDialog } from "./dialogs/PackageEditDialog";
 
 const STATUS_LABEL_KEYS: Record<RoomPackageStatus, MessageKey> = {
   "not-loaded": "Packages.status.notLoaded",

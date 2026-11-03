@@ -15,7 +15,7 @@ import {
 } from "@/components/animate-ui/components/radix/dialog";
 import { slugHintClass, slugHintKey } from "@/components/packages/slug";
 import { useSlugAvailability } from "@/components/packages/use-slug-availability";
-import { TagInput } from "@/components/packages/tag-input";
+import { TagInput } from "@/components/packages/TagInput";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,7 +25,7 @@ import {
   SlugRenameDependentsError,
   type RoomPackageEntry,
   type RoomPackagesController,
-} from "./use-room-packages";
+} from "../use-room-packages";
 
 type DetailsState = "loading" | "ready" | "error";
 

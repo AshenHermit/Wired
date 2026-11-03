@@ -7,8 +7,8 @@ import {
   EditorBridgeError,
   EditorBridgeWaitCancelledError,
   waitForEditorBridge,
-} from "./editor-bridge";
-import type { PackageFileSystem } from "./godot-packages-fs";
+} from "./bridge/editor-bridge";
+import type { PackageFileSystem } from "./bridge/godot-packages-fs";
 
 /**
  * How long the panel waits for the editor plugin to register its bridge before

@@ -15,7 +15,7 @@ import { getGodotProjectInfo } from "@/api/services/godot-game";
 import {
   godotEditorSessionRoot,
   prepareGodotEditorStorage,
-} from "./godot-editor-storage";
+} from "./bridge/godot-editor-storage";
 
 type EditorMessage = AppMessage | { raw: string };
 

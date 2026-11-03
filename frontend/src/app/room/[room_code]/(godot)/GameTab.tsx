@@ -24,7 +24,7 @@ import {
   isGameMessage,
   postGameConfigure,
   postGamePing,
-} from "./game-bridge";
+} from "./bridge/game-bridge";
 
 type GamePhase =
   | "checking"

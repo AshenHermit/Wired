@@ -28,18 +28,18 @@ import {
   EditorBridgeError,
   createEditorBridgeClient,
   requestEditorRescan,
-} from "./editor-bridge";
+} from "./bridge/editor-bridge";
 import {
   GodotFsError,
   createPackageFileSystem,
   type PackageFileSystem,
-} from "./godot-packages-fs";
+} from "./bridge/godot-packages-fs";
 import {
   changedPackageFiles,
   publishPackageFiles,
   reconcilePackageRevision,
   type PackageBaseline,
-} from "./package-sync";
+} from "./bridge/package-sync";
 import { useEditorBridge } from "./use-editor-bridge";
 
 /** How often the panel checks for a newer published revision. */

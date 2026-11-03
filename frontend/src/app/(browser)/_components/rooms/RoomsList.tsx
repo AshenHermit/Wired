@@ -10,11 +10,11 @@ import { useUserStore } from "@/store/user-store";
 import { PlusIcon, RefreshCcwIcon } from "lucide-react";
 import { useTranslations } from "next-intl";
 import * as React from "react";
-import { RoomCard } from "./room-card";
+import { RoomCard } from "./RoomCard";
 import {
   RoomEditingPanel,
   type RoomEditingPanelAPI,
-} from "./room-editing-panel";
+} from "./RoomEditingPanel";
 import { useRooms } from "./use-rooms";
 
 /** The room grid plus its reload, empty, error and "add one" affordances. */
