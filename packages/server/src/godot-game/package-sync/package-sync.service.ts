@@ -15,8 +15,8 @@ import {
 } from 'src/scripting-packages/package-delivery.service';
 import { In, Repository } from 'typeorm';
 import { DispatchScheduler, RETRY_TICK_MS } from './dispatch-scheduler';
-import { RoomRuntimeService } from './room-runtime.service';
-import { RuntimeObserver } from './room-runtime.types';
+import { RoomRuntimeService } from '../runtime/room-runtime.service';
+import { RuntimeObserver } from '../runtime/room-runtime.types';
 import { StatusReporter } from './status-reporter';
 import { ClientState, SyncRecord, SyncRecordStore } from './sync-record-store';
 

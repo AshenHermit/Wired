@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { AppConfigService } from 'src/config/config.service';
 import { GameTicketService } from './game-ticket.service';
-import { GodotRuntimeConfig } from './room-runtime.types';
+import { GodotRuntimeConfig } from '../runtime/room-runtime.types';
 
 const baseConfig: GodotRuntimeConfig = {
   executablePath: 'godot.exe',

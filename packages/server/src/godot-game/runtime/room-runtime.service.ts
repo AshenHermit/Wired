@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { errorMessage } from 'src/common/errors';
 import { AppConfigService } from 'src/config/config.service';
-import { GameTicketService } from './game-ticket.service';
+import { GameTicketService } from '../game-room/game-ticket.service';
 import { RoomRuntimeConfiguration } from './room-runtime.configuration';
 import { RoomRuntimeError } from './room-runtime.errors';
 import { RoomRuntimeRegistry } from './room-runtime.registry';

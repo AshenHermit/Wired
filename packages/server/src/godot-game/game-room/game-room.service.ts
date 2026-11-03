@@ -19,10 +19,10 @@ import { User } from 'src/database/entities/user.entity';
 import { RoomsService } from 'src/rooms/rooms.service';
 import { canViewRoom } from 'src/rooms/room-access';
 import { GameRoomTicketRateLimiter } from './game-room.rate-limiter';
-import { PackageSyncService } from './package-sync.service';
-import { RoomRuntimeError, RoomRuntimeErrorCode } from './room-runtime.errors';
-import { RoomRuntimeService } from './room-runtime.service';
-import type { RoomConnection } from './room-runtime.types';
+import { PackageSyncService } from '../package-sync/package-sync.service';
+import { RoomRuntimeError, RoomRuntimeErrorCode } from '../runtime/room-runtime.errors';
+import { RoomRuntimeService } from '../runtime/room-runtime.service';
+import type { RoomConnection } from '../runtime/room-runtime.types';
 
 const STATUS_BY_ERROR: Record<RoomRuntimeErrorCode, HttpStatus> = {
   invalid_room: HttpStatus.BAD_REQUEST,

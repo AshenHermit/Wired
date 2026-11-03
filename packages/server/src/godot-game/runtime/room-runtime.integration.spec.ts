@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AppConfigService } from 'src/config/config.service';
-import { GameTicketService } from './game-ticket.service';
+import { GameTicketService } from '../game-room/game-ticket.service';
 import { GodotRuntimeProcessFactory } from './godot-runtime-process.factory';
 import { RoomRuntimeService } from './room-runtime.service';
 import { GodotRuntimeConfig } from './room-runtime.types';

@@ -2,8 +2,8 @@ import { GodotGameModule } from './godot-game.module';
 import {
   InMemoryTicketRateLimitStore,
   TICKET_RATE_LIMIT_STORE,
-} from './game-room.rate-limiter';
-import { PackageSyncService } from './package-sync.service';
+} from './game-room/game-room.rate-limiter';
+import { PackageSyncService } from './package-sync/package-sync.service';
 import { PACKAGE_REVISION_DISPATCHER } from 'src/common/runtime-contracts';
 
 type ProviderBinding = { provide?: unknown; useClass?: unknown };

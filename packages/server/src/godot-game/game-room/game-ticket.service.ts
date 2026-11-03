@@ -1,7 +1,7 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { AppConfigService } from 'src/config/config.service';
-import { RoomRuntimeError } from './room-runtime.errors';
+import { RoomRuntimeError } from '../runtime/room-runtime.errors';
 
 export interface MintedGameTicket {
   ticket: string;

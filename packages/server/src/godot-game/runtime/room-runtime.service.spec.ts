@@ -11,7 +11,7 @@ import {
   RuntimeProcessFactory,
   RuntimeSpawnOptions,
 } from './room-runtime.types';
-import { GameTicketService } from './game-ticket.service';
+import { GameTicketService } from '../game-room/game-ticket.service';
 
 class FakeRuntimeProcess implements RuntimeProcess {
   readonly stdin = new PassThrough();

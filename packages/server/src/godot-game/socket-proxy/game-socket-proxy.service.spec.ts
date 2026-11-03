@@ -7,7 +7,7 @@ import { HttpAdapterHost } from '@nestjs/core';
 import { RawData, WebSocket, WebSocketServer } from 'ws';
 import { AppConfigService } from 'src/config/config.service';
 import { GameSocketProxyService } from './game-socket-proxy.service';
-import { RoomRuntimeService } from './room-runtime.service';
+import { RoomRuntimeService } from '../runtime/room-runtime.service';
 
 jest.setTimeout(15_000);
 

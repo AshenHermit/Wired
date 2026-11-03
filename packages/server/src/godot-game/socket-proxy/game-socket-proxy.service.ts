@@ -10,7 +10,7 @@ import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { RawData } from 'ws';
 import { AppConfigService } from 'src/config/config.service';
-import { RoomRuntimeService } from './room-runtime.service';
+import { RoomRuntimeService } from '../runtime/room-runtime.service';
 
 const ROUTE = /^\/rooms\/(\d{1,10})\/game\/ws\/?$/;
 const MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;

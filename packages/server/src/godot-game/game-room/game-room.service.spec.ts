@@ -14,10 +14,10 @@ import {
   GameRoomTicketRateLimiter,
   InMemoryTicketRateLimitStore,
 } from './game-room.rate-limiter';
-import { RoomRuntimeError } from './room-runtime.errors';
-import { RoomRuntimeService } from './room-runtime.service';
-import { PackageSyncService } from './package-sync.service';
-import { RoomConnection, RoomRuntimeInfo } from './room-runtime.types';
+import { RoomRuntimeError } from '../runtime/room-runtime.errors';
+import { RoomRuntimeService } from '../runtime/room-runtime.service';
+import { PackageSyncService } from '../package-sync/package-sync.service';
+import { RoomConnection, RoomRuntimeInfo } from '../runtime/room-runtime.types';
 
 const user = (id: number): User => ({ id, email: `u${id}@wired.io` }) as User;
 
