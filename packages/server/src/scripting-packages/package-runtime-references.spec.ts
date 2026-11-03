@@ -1,4 +1,6 @@
+import type { PackageSlugIndex } from './package-slug-index';
 import {
+  assertUniquePackageSlugs,
   buildSceneDependencies,
   collectRawPackageReferences,
   decodePackageText,
@@ -8,14 +10,15 @@ import {
   stripExtResourceUids,
 } from './package-runtime-references';
 
-const slugIndex = {
-  bySlug: new Map([['hero', 9]]),
-  byId: new Map([[9, 'hero']]),
+const slugIndex: PackageSlugIndex = {
+  byId: new Map([[9, { slug: 'hero', roomId: null }]]),
+  byRoomSlug: new Map(),
+  byGlobalSlug: new Map([['hero', 9]]),
 };
 
 /** Collects and resolves references the way every production caller does. */
 const collect = (text: string) =>
-  resolvePackageReferences(collectRawPackageReferences(text), slugIndex)
+  resolvePackageReferences(collectRawPackageReferences(text), slugIndex, 5)
     .resolved;
 
 describe('package runtime references', () => {
@@ -124,6 +127,7 @@ describe('package runtime references', () => {
           { target: '42', filepath: 'legacy.tscn' },
         ],
         slugIndex,
+        5,
       ),
     ).toEqual({
       resolved: [
@@ -132,6 +136,28 @@ describe('package runtime references', () => {
       ],
       unknown: [],
     });
+  });
+
+  it('resolves a reference in the room namespace first', () => {
+    const index: PackageSlugIndex = {
+      byId: new Map(),
+      byRoomSlug: new Map([['5:hero', 1]]),
+      byGlobalSlug: new Map([['hero', 3]]),
+    };
+    expect(
+      resolvePackageReferences(
+        collectRawPackageReferences('preload("res://packages/hero/main.gd")'),
+        index,
+        5,
+      ).resolved,
+    ).toEqual([{ packageId: 1, filepath: 'main.gd' }]);
+    expect(
+      resolvePackageReferences(
+        collectRawPackageReferences('preload("res://packages/hero/main.gd")'),
+        index,
+        6,
+      ).resolved,
+    ).toEqual([{ packageId: 3, filepath: 'main.gd' }]);
   });
 
   it('reports unknown slugs without dropping known references', () => {
@@ -143,6 +169,7 @@ describe('package runtime references', () => {
           { target: 'missing', filepath: 'c.tscn' },
         ],
         slugIndex,
+        5,
       ),
     ).toEqual({
       resolved: [{ packageId: 9, filepath: 'a.tscn' }],
@@ -158,6 +185,7 @@ describe('package runtime references', () => {
           { target: '9', filepath: 'a.tscn' },
         ],
         slugIndex,
+        5,
       ),
     ).toEqual({
       resolved: [{ packageId: 9, filepath: 'a.tscn' }],
@@ -198,6 +226,19 @@ describe('package runtime references', () => {
     ).toBe(
       'preload("user://wired/rooms/7/packages/hero/3-k5/lib/a.gd") + ' +
         '"user://wired/rooms/7/packages/library/9-k6/tex.png"',
+    );
+  });
+
+  it('rewrites references inside the artifact room namespace', () => {
+    const text = 'const X = preload("res://packages/hero/main.gd")';
+    const rewritten = rewritePackageReferences(text, {
+      roomId: 5,
+      revisionByPackage: new Map([[1, 2]]),
+      artifactKeyByPackage: new Map([[1, 'abc']]),
+      slugByPackage: new Map([[1, 'hero']]),
+    });
+    expect(rewritten).toContain(
+      'user://wired/rooms/5/packages/hero/2-abc/main.gd',
     );
   });
 
@@ -354,6 +395,28 @@ describe('package runtime references', () => {
     ).toThrow('package_reference_invalid_path:a/../b.gd');
   });
 
+  it('rejects two packages with the same slug in one closure', () => {
+    expect(() =>
+      assertUniquePackageSlugs(
+        new Map([
+          [1, 'hero'],
+          [3, 'hero'],
+        ]),
+      ),
+    ).toThrow('package_slug_shadowed:hero');
+  });
+
+  it('accepts distinct slugs in one closure', () => {
+    expect(() =>
+      assertUniquePackageSlugs(
+        new Map([
+          [1, 'hero'],
+          [3, 'lib'],
+        ]),
+      ),
+    ).not.toThrow();
+  });
+
   it('strips uid only from ext_resource lines', () => {
     const text =
       '[gd_scene load_steps=2 format=3 uid="uid://scene"]\n' +
@@ -387,7 +450,7 @@ describe('package runtime references', () => {
       [6, [{ filepath: 'tex.png', text: 'binary-placeholder' }]],
     ]);
     expect(
-      buildSceneDependencies(5, files, dependencies, slugIndex),
+      buildSceneDependencies(5, files, dependencies, slugIndex, 5),
     ).toEqual({
       'main.tscn': [
         '5:main.tscn',
@@ -399,22 +462,22 @@ describe('package runtime references', () => {
   });
 
   it('builds scene dependencies through the slug index', () => {
-    const index = {
-      bySlug: new Map([['hero', 9]]),
-      byId: new Map([[9, 'hero']]),
+    const index: PackageSlugIndex = {
+      byId: new Map([[9, { slug: 'hero', roomId: null }]]),
+      byRoomSlug: new Map(),
+      byGlobalSlug: new Map([['hero', 9]]),
     };
     const rootFiles = [
       {
         filepath: 'scenes/main.tscn',
-        text:
-          '[ext_resource type="PackedScene" path="res://packages/hero/scenes/hero.tscn" id="1"]',
+        text: '[ext_resource type="PackedScene" path="res://packages/hero/scenes/hero.tscn" id="1"]',
       },
     ];
     const dependencyFiles = new Map([
       [9, [{ filepath: 'scenes/hero.tscn', text: '[gd_scene format=3]' }]],
     ]);
     expect(
-      buildSceneDependencies(7, rootFiles, dependencyFiles, index),
+      buildSceneDependencies(7, rootFiles, dependencyFiles, index, 3),
     ).toEqual({
       'scenes/main.tscn': ['7:scenes/main.tscn', '9:scenes/hero.tscn'],
     });

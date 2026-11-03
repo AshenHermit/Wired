@@ -131,8 +131,9 @@ export function collectRawPackageReferences(
 }
 
 /**
- * Resolves raw references to package ids. Numeric targets are ids, everything
- * else is looked up by slug; an unresolved slug is returned in `unknown`
+ * Resolves raw references to package ids in the referencing room's namespace,
+ * falling back to the global namespace. Numeric targets are ids, everything
+ * else is looked up room-first; an unresolved slug is returned in `unknown`
  * (deduplicated, first-seen order) so the caller can raise
  * `package_dependency_unknown_slug:<slug>`. References that resolve to the same
  * package file — a package referenced once by id and once by slug — are
@@ -141,13 +142,14 @@ export function collectRawPackageReferences(
 export function resolvePackageReferences(
   refs: RawPackageFileReference[],
   index: PackageSlugIndex,
+  roomId: number | null,
 ): { resolved: PackageFileReference[]; unknown: string[] } {
   const resolved: PackageFileReference[] = [];
   const unknown: string[] = [];
   const seenResolved = new Set<string>();
   const seenUnknown = new Set<string>();
   for (const ref of refs) {
-    const packageId = resolvePackageTarget(ref.target, index);
+    const packageId = resolvePackageTarget(ref.target, index, roomId);
     if (packageId === null) {
       if (!seenUnknown.has(ref.target)) {
         seenUnknown.add(ref.target);
@@ -163,6 +165,23 @@ export function resolvePackageReferences(
     resolved.push({ packageId, filepath: ref.filepath });
   }
   return { resolved, unknown };
+}
+
+/**
+ * Rejects a closure in which two packages share one slug. A slug addresses a
+ * package in the artifact namespace, so a duplicate would make one of the two
+ * unreachable (a shadow) and rewrite both to the same runtime directory.
+ */
+export function assertUniquePackageSlugs(
+  slugByPackage: ReadonlyMap<number, string>,
+): void {
+  const seen = new Map<string, number>();
+  for (const [packageId, slug] of slugByPackage) {
+    if (seen.has(slug)) {
+      throw new Error(`package_slug_shadowed:${slug}`);
+    }
+    seen.set(slug, packageId);
+  }
 }
 
 /**
@@ -187,8 +206,18 @@ export function rewritePackageReferences(
   },
 ): string {
   const index: PackageSlugIndex = {
-    byId: new Map(options.slugByPackage),
-    bySlug: new Map(
+    byId: new Map(
+      [...options.slugByPackage].map(([id, slug]) => [
+        id,
+        { slug, roomId: options.roomId },
+      ]),
+    ),
+    byRoomSlug: new Map(
+      [...options.slugByPackage].map(
+        ([id, slug]) => [`${options.roomId}:${slug}`, id] as [string, number],
+      ),
+    ),
+    byGlobalSlug: new Map(
       [...options.slugByPackage].map(
         ([id, slug]) => [slug, id] as [string, number],
       ),
@@ -199,7 +228,7 @@ export function rewritePackageReferences(
       PACKAGE_REFERENCE_RE,
       (match, quote: string, target: string, rest: string) => {
         assertSafeRawPath(rest);
-        const id = resolvePackageTarget(target, index);
+        const id = resolvePackageTarget(target, index, options.roomId);
         if (id === null) {
           throw new Error(`package_reference_not_rewritable:${target}`);
         }
@@ -241,15 +270,17 @@ export function stripExtResourceUids(filepath: string, text: string): string {
  * references, in depth-first discovery order. Relative paths resolve against
  * the directory of the referencing file and stay within its own package;
  * cross-package targets are resolved through `index` (a numeric target is an
- * id, anything else a slug) and looked up in `dependencies`. Each entry is the
- * stable key `"<packageId>:<filepath>"`. Targets without a known package or
- * file are skipped — their absence is validated later.
+ * id, anything else a slug resolved in `roomId` first) and looked up in
+ * `dependencies`. Each entry is the stable key `"<packageId>:<filepath>"`.
+ * Targets without a known package or file are skipped — their absence is
+ * validated later.
  */
 export function buildSceneDependencies(
   packageId: number,
   files: PackageTextFile[],
   dependencies: ReadonlyMap<number, readonly PackageTextFile[]>,
   index: PackageSlugIndex,
+  roomId: number | null,
 ): Record<string, string[]> {
   const byKey = new Map<string, { packageId: number; file: PackageTextFile }>();
   const addPackageFiles = (
@@ -289,7 +320,7 @@ export function buildSceneDependencies(
       }
 
       const dir = path.posix.dirname(filepath);
-      for (const ref of collectReferences(entry.file.text, index)) {
+      for (const ref of collectReferences(entry.file.text, index, roomId)) {
         if (ref.kind === 'package') {
           const target = byKey.get(`${ref.packageId}:${ref.filepath}`);
           if (target) {
@@ -319,7 +350,11 @@ type Reference =
   | { kind: 'relative'; filepath: string };
 
 /** Collects the paths a text file references via `path="..."` or preload/load. */
-function collectReferences(text: string, index: PackageSlugIndex): Reference[] {
+function collectReferences(
+  text: string,
+  index: PackageSlugIndex,
+  roomId: number | null,
+): Reference[] {
   const refs: Reference[] = [];
   for (const line of text.split('\n')) {
     if (isCommentLine(line)) {
@@ -328,7 +363,7 @@ function collectReferences(text: string, index: PackageSlugIndex): Reference[] {
     for (const match of line.matchAll(REFERENCE_PATH_RE)) {
       const raw = match[2];
       if (raw.startsWith('res://')) {
-        const parsed = parsePackagePath(raw, index);
+        const parsed = parsePackagePath(raw, index, roomId);
         if (parsed) {
           refs.push({
             kind: 'package',
@@ -349,19 +384,21 @@ function collectReferences(text: string, index: PackageSlugIndex): Reference[] {
 }
 
 /**
- * Resolves an absolute `res://packages/<target>/<path>` to its package id. An
- * unknown slug returns `null`: the manifest build already rejected unknown
- * references, and an unresolvable target contributes no dependency here.
+ * Resolves an absolute `res://packages/<target>/<path>` to its package id in
+ * the referencing room's namespace. An unknown slug returns `null`: the
+ * manifest build already rejected unknown references, and an unresolvable
+ * target contributes no dependency here.
  */
 function parsePackagePath(
   raw: string,
   index: PackageSlugIndex,
+  roomId: number | null,
 ): PackageFileReference | null {
   const match = PACKAGE_PATH_RE.exec(raw);
   if (!match) {
     return null;
   }
-  const packageId = resolvePackageTarget(match[1], index);
+  const packageId = resolvePackageTarget(match[1], index, roomId);
   if (packageId === null) {
     return null;
   }

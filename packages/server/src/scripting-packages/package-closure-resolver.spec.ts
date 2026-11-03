@@ -91,7 +91,11 @@ describe('PackageClosureResolver', () => {
 
     packagesRepository = {
       find: jest.fn(() =>
-        packages.map((pkg) => ({ id: pkg.id, slug: pkg.slug })),
+        packages.map((pkg) => ({
+          id: pkg.id,
+          slug: pkg.slug,
+          room: pkg.room,
+        })),
       ),
     };
 
@@ -601,6 +605,22 @@ describe('PackageClosureResolver', () => {
 
       expect(closure.directDependencyIds).toEqual([9]);
       expect(closure.slugByPackage.get(9)).toBe('hero');
+    });
+
+    it('resolves a slug to the room package before the global one', async () => {
+      definePackage(1, 'RoomHero', 5, 'hero');
+      definePackage(3, 'GlobalHero', null, 'hero');
+      await writePublished(1, 1, {
+        'main.gd': 'preload("res://packages/hero/lib.gd")',
+        'lib.gd': 'extends Node',
+      });
+      await writePublished(3, 1, { 'lib.gd': 'extends Node' });
+
+      const closure = await resolver.resolve(1, 1, 5);
+
+      expect(closure.revisionByPackage.get(1)).toBe(1);
+      expect(closure.revisionByPackage.has(3)).toBe(false);
+      expect(closure.directDependencyIds).toEqual([]);
     });
 
     it('still resolves a legacy numeric reference', async () => {

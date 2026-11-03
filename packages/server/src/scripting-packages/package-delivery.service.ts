@@ -32,6 +32,7 @@ import {
 import { sha256Hex } from './package-hash';
 import { resolvePackagePath } from './package-path';
 import {
+  assertUniquePackageSlugs,
   buildSceneDependencies,
   rewritePackageReferences,
   stripExtResourceUids,
@@ -384,6 +385,12 @@ export class PackageDeliveryService {
     resolved: ResolvedClosure,
     slug: string,
   ): Promise<RuntimeArtifact> {
+    try {
+      assertUniquePackageSlugs(resolved.slugByPackage);
+    } catch (error) {
+      throw new BadRequestException((error as Error).message);
+    }
+
     const staging = `${dir}.staging-${process.pid}-${randomBytes(4).toString('hex')}`;
     try {
       await mkdir(staging, { recursive: true });
@@ -425,7 +432,8 @@ export class PackageDeliveryService {
         resolved.packageId,
         resolved.rootTextFiles,
         resolved.dependencyTextFiles,
-        this.toSlugIndex(resolved.slugByPackage),
+        this.toSlugIndex(resolved.slugByPackage, resolved.roomId),
+        resolved.roomId,
       );
       const directDependencies: PackageRuntimeDependency[] =
         resolved.directDependencyIds.map((id) => ({
@@ -493,13 +501,23 @@ export class PackageDeliveryService {
   /**
    * The slug index of one closure: only the packages reachable from this
    * artifact are addressable, so resolution never needs a database round-trip.
+   * Every closure package belongs to the artifact room for resolution
+   * purposes: a global dependency is reachable from that room's artifact too.
    */
   private toSlugIndex(
     slugByPackage: ReadonlyMap<number, string>,
+    roomId: number,
   ): PackageSlugIndex {
     return {
-      byId: new Map(slugByPackage),
-      bySlug: new Map(
+      byId: new Map(
+        [...slugByPackage].map(([id, slug]) => [id, { slug, roomId }]),
+      ),
+      byRoomSlug: new Map(
+        [...slugByPackage].map(
+          ([id, slug]) => [`${roomId}:${slug}`, id] as [string, number],
+        ),
+      ),
+      byGlobalSlug: new Map(
         [...slugByPackage].map(([id, slug]) => [slug, id] as [string, number]),
       ),
     };

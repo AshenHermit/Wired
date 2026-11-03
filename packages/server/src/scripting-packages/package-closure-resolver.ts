@@ -222,7 +222,12 @@ export class PackageClosureResolver {
     for (const [id, entry] of latestByPackage) {
       let references: PackageFileReference[];
       try {
-        references = await this.collectRevisionReferences(id, entry, slugIndex);
+        references = await this.collectRevisionReferences(
+          id,
+          entry,
+          slugIndex,
+          entry.roomId ?? null,
+        );
       } catch (error) {
         this.logger.warn(
           `Skipping package ${id} during dependent scan: ${
@@ -341,6 +346,7 @@ export class PackageClosureResolver {
           const { resolved, unknown } = resolvePackageReferences(
             raw,
             slugIndex,
+            roomId,
           );
           if (unknown.length > 0) {
             throw new Error(`package_dependency_unknown_slug:${unknown[0]}`);
@@ -558,16 +564,18 @@ export class PackageClosureResolver {
 
   /**
    * Reads the textual files of a revision and collects every cross-package
-   * reference they contain. Binary files are skipped. Throws when a file
-   * cannot be read or a text file fails to decode, so callers can skip the
-   * whole package rather than building a partial reference graph. A reference
-   * to an unknown slug is logged and left out of the graph: publication is
-   * where that error is reported, since a scan must not fail on one package.
+   * reference they contain, resolving slugs in the revision's own room. Binary
+   * files are skipped. Throws when a file cannot be read or a text file fails
+   * to decode, so callers can skip the whole package rather than building a
+   * partial reference graph. A reference to an unknown slug is logged and left
+   * out of the graph: publication is where that error is reported, since a scan
+   * must not fail on one package.
    */
   private async collectRevisionReferences(
     packageId: number,
     entry: { revision: number; files: PackageFileEntry[] },
     slugIndex: PackageSlugIndex,
+    roomId: number | null,
   ): Promise<PackageFileReference[]> {
     const references: PackageFileReference[] = [];
     for (const file of entry.files) {
@@ -583,6 +591,7 @@ export class PackageClosureResolver {
       const { resolved, unknown } = resolvePackageReferences(
         collectRawPackageReferences(text),
         slugIndex,
+        roomId,
       );
       for (const slug of unknown) {
         this.logger.warn(

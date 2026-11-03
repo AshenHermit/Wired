@@ -164,6 +164,10 @@ export class PackageRevisionsService {
 
     await this.assertNoDisabledRoomDependency(packageId, revision, row.files);
 
+    // Loaded before the bytes move: a missing package must fail the publication
+    // before it commits, and pins still resolve in the package's own room.
+    const pkg = await this.packagesService.findOne(packageId);
+
     // Reject uploads for this package while its bytes are verified and moved.
     const lock = await this.acquirePublishLock(packageId);
     this.publishing.add(packageId);
@@ -183,7 +187,12 @@ export class PackageRevisionsService {
       await this.releasePublishLock(lock, packageId);
     }
 
-    await this.recordPinnedDependencies(packageId, revision, row.files);
+    await this.recordPinnedDependencies(
+      packageId,
+      revision,
+      row.files,
+      pkg.room?.id ?? null,
+    );
     await this.dispatchPublished(packageId, revision);
     return toRevision(row, packageId);
   }
@@ -204,6 +213,8 @@ export class PackageRevisionsService {
       return;
     }
 
+    const pkg = await this.packagesService.findOne(packageId);
+    const scopeRoomId = pkg.room?.id ?? null;
     const index = await this.slugIndex();
     const referenced = new Set<number>();
     for (const entry of files) {
@@ -221,12 +232,15 @@ export class PackageRevisionsService {
         // A missing upload is reported by publishRevision's own check.
         continue;
       }
-      for (const reference of this.resolveReferences(text, index)) {
+      for (const reference of this.resolveReferences(
+        text,
+        index,
+        scopeRoomId,
+      )) {
         referenced.add(reference.packageId);
       }
     }
 
-    const pkg = await this.packagesService.findOne(packageId);
     const roomId = pkg.room?.id;
     if (roomId === undefined) {
       return;
@@ -299,23 +313,30 @@ export class PackageRevisionsService {
    */
   private async slugIndex(): Promise<PackageSlugIndex> {
     if (!this.packagesRepository) {
-      return { bySlug: new Map(), byId: new Map() };
+      return {
+        byId: new Map(),
+        byRoomSlug: new Map(),
+        byGlobalSlug: new Map(),
+      };
     }
     return loadPackageSlugIndex(this.packagesRepository);
   }
 
   /**
-   * Resolves the references of one file against the slug index. An unknown slug
-   * is a hard publication error: the artifact could never be rewritten to a
-   * runtime path, so publishing it would only move the failure to the player.
+   * Resolves the references of one file against the scoped slug index. An
+   * unknown slug is a hard publication error: the artifact could never be
+   * rewritten to a runtime path, so publishing it would only move the failure
+   * to the player.
    */
   private resolveReferences(
     text: string,
     index: PackageSlugIndex,
+    scopeRoomId: number | null,
   ): PackageFileReference[] {
     const { resolved, unknown } = resolvePackageReferences(
       collectRawPackageReferences(text),
       index,
+      scopeRoomId,
     );
     if (unknown.length > 0) {
       throw new BadRequestException(
@@ -459,11 +480,15 @@ export class PackageRevisionsService {
    * The bytes are already committed at this point, so a failure here must not
    * turn a successful publication into an error: the resolver falls back to
    * "latest published" for a revision without pins.
+   *
+   * Slugs resolve in the publishing package's room first, then globally, so a
+   * pin points at the same package the artifact build will rewrite to.
    */
   private async recordPinnedDependencies(
     packageId: number,
     revision: number,
     files: PackageFileEntry[],
+    scopeRoomId: number | null,
   ): Promise<void> {
     try {
       const index = await this.slugIndex();
@@ -484,7 +509,7 @@ export class PackageRevisionsService {
           // An undecodable file is reported by the artifact build instead.
           continue;
         }
-        for (const ref of this.resolveReferences(text, index)) {
+        for (const ref of this.resolveReferences(text, index, scopeRoomId)) {
           if (ref.packageId !== packageId) {
             referenced.add(ref.packageId);
           }

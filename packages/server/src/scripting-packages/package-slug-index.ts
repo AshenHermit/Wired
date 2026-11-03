@@ -4,51 +4,81 @@ import { ScriptingPackage } from 'src/database/entities/scripting-package.entity
 /**
  * Package slugs in both directions: `slug -> id` resolves a reference written
  * with a slug, `id -> slug` gives the path alias of a known package.
+ *
+ * Slugs are unique per room and per global scope, so a slug resolves
+ * room-first and then globally ({@link resolvePackageTarget}).
  */
 export interface PackageSlugIndex {
-  bySlug: Map<string, number>;
-  byId: Map<number, string>;
+  byId: Map<number, { slug: string; roomId: number | null }>;
+  byRoomSlug: Map<string, number>;
+  byGlobalSlug: Map<string, number>;
 }
 
 /** Only a digit-only reference target addresses a package by numeric id. */
 const NUMERIC_TARGET_RE = /^\d+$/;
 
+/** A room-scoped slug key; room ids are integers, so `:` cannot collide. */
+function roomSlugKey(roomId: number, slug: string): string {
+  return `${roomId}:${slug}`;
+}
+
 /**
- * Loads the global `slug <-> id` index in one query. Slugs are nullable only
+ * Loads the scoped `slug -> id` index in one query. Slugs are nullable only
  * during the startup backfill; a slugless row is skipped rather than guessed,
  * because paths must never fall back to `String(id)`.
  */
 export async function loadPackageSlugIndex(
   repository: Pick<Repository<ScriptingPackage>, 'find'>,
 ): Promise<PackageSlugIndex> {
-  const rows: Array<{ id: number; slug: string | null }> =
-    await repository.find({ select: { id: true, slug: true } });
+  const rows: Array<{
+    id: number;
+    slug: string | null;
+    room?: { id: number } | null;
+  }> = await repository.find({
+    select: { id: true, slug: true },
+    relations: { room: true },
+  });
 
-  const bySlug = new Map<string, number>();
-  const byId = new Map<number, string>();
+  const byId = new Map<number, { slug: string; roomId: number | null }>();
+  const byRoomSlug = new Map<string, number>();
+  const byGlobalSlug = new Map<string, number>();
   for (const row of rows) {
     if (row.slug === null || row.slug === undefined) {
       continue;
     }
-    bySlug.set(row.slug, row.id);
-    byId.set(row.id, row.slug);
+    const roomId = row.room?.id ?? null;
+    byId.set(row.id, { slug: row.slug, roomId });
+    if (roomId === null) {
+      byGlobalSlug.set(row.slug, row.id);
+    } else {
+      byRoomSlug.set(roomSlugKey(roomId, row.slug), row.id);
+    }
   }
-  return { bySlug, byId };
+  return { byId, byRoomSlug, byGlobalSlug };
 }
 
 /**
  * Resolves a raw reference target to a package id: a digit-only target is a
- * numeric id, anything else is a slug. A legacy numeric slug (`"7"`) therefore
- * means id 7, which is the same package.
+ * numeric id, anything else is a slug. A slug is resolved in the referencing
+ * room first, then in the global scope; another room's package is never
+ * visible. A legacy numeric slug (`"7"`) therefore means id 7, which is the
+ * same package.
  */
 export function resolvePackageTarget(
   target: string,
   index: PackageSlugIndex,
+  roomId: number | null,
 ): number | null {
   if (NUMERIC_TARGET_RE.test(target)) {
     return Number(target);
   }
-  return index.bySlug.get(target) ?? null;
+  if (roomId !== null) {
+    const roomScoped = index.byRoomSlug.get(roomSlugKey(roomId, target));
+    if (roomScoped !== undefined) {
+      return roomScoped;
+    }
+  }
+  return index.byGlobalSlug.get(target) ?? null;
 }
 
 /**
@@ -60,9 +90,9 @@ export function slugForPackage(
   packageId: number,
   index: PackageSlugIndex,
 ): string {
-  const slug = index.byId.get(packageId);
-  if (slug === undefined) {
+  const entry = index.byId.get(packageId);
+  if (entry === undefined) {
     throw new Error(`package_slug_missing:${packageId}`);
   }
-  return slug;
+  return entry.slug;
 }
