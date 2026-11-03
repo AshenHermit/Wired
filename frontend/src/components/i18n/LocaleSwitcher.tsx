@@ -16,6 +16,8 @@ export function LocaleSwitcher({ className = "" }: { className?: string }) {
   function switchTo(next: Locale) {
     if (next === locale) return;
     const secure = window.location.protocol === "https:" ? "; secure" : "";
+    // This is an event-handler side effect, not a render-time mutation.
+    // eslint-disable-next-line react-hooks/immutability
     document.cookie = `${LOCALE_COOKIE}=${next}; path=/; max-age=31536000; samesite=lax${secure}`;
     startTransition(() => router.refresh());
   }

@@ -77,7 +77,7 @@ export const UserEditingPanel = React.forwardRef<
         });
       }
     },
-    [handleRequest, onChange, user]
+    [handleRequest, onChange, t, user]
   );
   return (
     <Dialog defaultOpen={open} onOpenChange={setOpen} open={open}>

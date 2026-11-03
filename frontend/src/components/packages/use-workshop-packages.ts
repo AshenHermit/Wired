@@ -3,6 +3,8 @@
 import type { WorkshopPackageSummary } from "@wired-io/shared";
 import * as React from "react";
 import { listWorkshopPackages } from "@/api/services/scripting-packages";
+import { toAppMessage } from "@/i18n/api-error";
+import type { AppMessage } from "@/i18n/message";
 
 const PAGE_SIZE = 50;
 /** Mirrors the slug check in the package form: no request per keystroke. */
@@ -18,7 +20,7 @@ export function useWorkshopPackages() {
   const [items, setItems] = React.useState<WorkshopPackageSummary[]>([]);
   const [total, setTotal] = React.useState(0);
   const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<AppMessage | null>(null);
   const requestRef = React.useRef(0);
 
   const load = React.useCallback(async (q: string, offset: number) => {
@@ -38,7 +40,7 @@ export function useWorkshopPackages() {
       setTotal(listing.total);
     } catch (caught) {
       if (request !== requestRef.current) return;
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(toAppMessage(caught));
     } finally {
       if (request === requestRef.current) setLoading(false);
     }

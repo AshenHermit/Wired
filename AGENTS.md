@@ -77,3 +77,4 @@ pnpm build                               # recursive: shared + server + frontend
 - Server Prettier: single quotes, trailing commas. ESLint is type-aware; server `lint` auto-fixes, frontend `lint` does not.
 - UI copy and docs are largely Russian; match the language and UTF-8 encoding of the file you edit.
 - API contract changes belong in `packages/shared/src/api/types.ts` plus matching server DTOs/entities. There is no codegen.
+- Frontend UI strings live in `frontend/messages/{en,ru}.json` and are read through next-intl (`useTranslations` / `getTranslations`). The locale is the `NEXT_LOCALE` cookie, default `en`; never hardcode user-facing text in components.

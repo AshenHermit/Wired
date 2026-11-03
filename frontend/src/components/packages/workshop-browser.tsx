@@ -6,6 +6,7 @@ import { useLocale, useTranslations } from "next-intl";
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useAppMessage } from "@/i18n/message";
 import { useWorkshopPackages } from "./use-workshop-packages";
 
 type WorkshopBrowserProps = {
@@ -36,6 +37,7 @@ export function WorkshopBrowser({
   } = useWorkshopPackages();
   const t = useTranslations("Workshop");
   const common = useTranslations("Common");
+  const format = useAppMessage();
   const trimmedQuery = query.trim();
 
   return (
@@ -65,7 +67,7 @@ export function WorkshopBrowser({
 
       {error ? (
         <div className="flex flex-col items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-destructive">
-          <p>{error}</p>
+          <p>{format(error)}</p>
           <Button
             size="sm"
             type="button"

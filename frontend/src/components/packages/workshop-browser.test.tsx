@@ -132,7 +132,9 @@ describe("WorkshopBrowser", () => {
     );
     render(<WorkshopBrowser />);
 
-    expect(await screen.findByText("Сервер недоступен")).toBeTruthy();
+    expect(
+      await screen.findByText("Что-то пошло не так. Попробуйте ещё раз"),
+    ).toBeTruthy();
 
     vi.mocked(packagesApi.listWorkshopPackages).mockResolvedValueOnce({
       items: [],
