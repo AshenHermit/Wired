@@ -8,9 +8,9 @@ import type {
 } from "@wired-io/shared";
 import type { AppMessage } from "@/i18n/message";
 import type { GodotEditorInstance } from "../GodotEditorInstance";
-import type { PackageFileSystem } from "../bridge/godot-packages-fs";
-import { changedPackageFiles } from "../bridge/package-sync";
-import type { PackageBaseline } from "../bridge/package-sync";
+import type { PackageFileSystem } from "@/godot/bridge/godot-packages-fs";
+import { changedPackageFiles } from "@/godot/bridge/package-sync";
+import type { PackageBaseline } from "@/godot/bridge/package-sync";
 
 export type RoomPackageStatus =
   | "not-loaded"

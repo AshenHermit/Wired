@@ -1,5 +1,5 @@
 import type { PackageSyncStatus, ScriptingPackage } from "@wired-io/shared";
-import type { PackageBaseline } from "../bridge/package-sync";
+import type { PackageBaseline } from "@/godot/bridge/package-sync";
 import { IDLE_ACTION, buildEntries, mergePackages, withoutRemoved } from "./model";
 import type { PackageActionState, RoomPackageEntry } from "./model";
 

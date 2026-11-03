@@ -8,13 +8,13 @@ import {
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "@/utils/sha256";
-import { EditorBridgeError, EditorBridgeOperationError } from "./bridge/editor-bridge";
+import { EditorBridgeError, EditorBridgeOperationError } from "@/godot/bridge/editor-bridge";
 import type { GodotEditorInstance } from "./GodotEditorInstance";
 
-vi.mock("./bridge/godot-packages-fs", async () => {
+vi.mock("@/godot/bridge/godot-packages-fs", async () => {
   const actual =
-    await vi.importActual<typeof import("./bridge/godot-packages-fs")>(
-      "./bridge/godot-packages-fs",
+    await vi.importActual<typeof import("@/godot/bridge/godot-packages-fs")>(
+      "@/godot/bridge/godot-packages-fs",
     );
   return { ...actual, createPackageFileSystem: vi.fn() };
 });
@@ -45,7 +45,7 @@ import {
   GodotFsError,
   type CollectedPackageFile,
   type PackageFileSystem,
-} from "./bridge/godot-packages-fs";
+} from "@/godot/bridge/godot-packages-fs";
 import {
   LocalChangesError,
   NewerRevisionError,

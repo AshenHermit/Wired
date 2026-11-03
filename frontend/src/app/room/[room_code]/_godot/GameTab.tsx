@@ -26,7 +26,7 @@ import {
   isGameMessage,
   postGameConfigure,
   postGamePing,
-} from "./bridge/game-bridge";
+} from "@/godot/bridge/game-bridge";
 
 type GamePhase =
   | "checking"

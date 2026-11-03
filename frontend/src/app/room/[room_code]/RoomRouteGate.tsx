@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import { useTranslations } from "next-intl";
-import { RoomWorkspace } from "./(godot)/RoomWorkspace";
+import { RoomWorkspace } from "./_godot/RoomWorkspace";
 import { Room } from "@wired-io/shared";
 import { getRoom } from "@/api/services/rooms";
 import { decodeId } from "@/utils/hash-utils";

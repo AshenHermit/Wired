@@ -22,14 +22,14 @@ import {
 import {
   EditorBridgeError,
   requestEditorRescan,
-} from "../bridge/editor-bridge";
-import type { PackageFileSystem } from "../bridge/godot-packages-fs";
+} from "@/godot/bridge/editor-bridge";
+import type { PackageFileSystem } from "@/godot/bridge/godot-packages-fs";
 import {
   changedPackageFiles,
   publishPackageFiles,
   reconcilePackageRevision,
   type PackageBaseline,
-} from "../bridge/package-sync";
+} from "@/godot/bridge/package-sync";
 import {
   LocalChangesError,
   NewerRevisionError,

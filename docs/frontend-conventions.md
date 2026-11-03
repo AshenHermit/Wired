@@ -19,28 +19,33 @@ disagree, rename the file — searching for `RoomCard` must not land on
 
 Next.js reserves lowercase names for route files (`page.tsx`, `layout.tsx`,
 `route.ts`). A client shell that lives beside them follows the component rule
-instead, so `page.tsx` renders `RoomRouteGate` from `RoomRouteGate.tsx`, which hands the tab shell to `(godot)/RoomWorkspace.tsx`.
+instead, so `page.tsx` renders `RoomRouteGate` from `RoomRouteGate.tsx`, which hands the tab shell to `_godot/RoomWorkspace.tsx`.
 
 ## Test files sit next to their subject
 
 `<Subject>.test.tsx` / `<Subject>.test.ts` mirrors the filename exactly, so
 `TagInput.tsx` is covered by `TagInput.test.tsx`.
 
-## Placement inside a route group
+## Placement inside a route segment
 
 - Route files (`page.tsx`, `layout.tsx`) stay at the top of their segment.
 - Screen-level components and hooks a segment owns stay at that segment's root.
 - Supporting modules move into a named subfolder once there are more than a
-  handful of them: `(godot)/bridge/` holds the editor bridge, game bridge,
-  package sync, editor storage and the package file system; `(godot)/dialogs/`
-  holds the package and workshop dialogs.
+  handful of them: `_godot/dialogs/` holds the package and workshop dialogs,
+  `_godot/room-packages/` holds that tab's model, reducer, errors and actions.
 - Code shared by more than one segment lives in `src/components/`,
   `src/api/`, `src/i18n/` or `src/utils/` — never in another segment's folder.
+- Code that talks to the Godot engine rather than to React lives in
+  `src/godot/`, outside the App Router entirely, because the editor and the
+  game runtime are not route-specific: `src/godot/bridge/` holds the editor
+  bridge, game bridge, package sync, editor storage and the package file system.
 
 `(browser)` keeps its non-route code in `_components/` (which the App Router
-ignores for routing) plus feature folders such as `login/`. `(godot)` uses the
-same idea with explicit subfolders, because `_components` is not available for
-a group that also owns real routes.
+ignores for routing) plus feature folders such as `login/`. `_godot` follows the
+same convention: the underscore marks a private folder, so the parentheses are
+reserved for route groups that really do share layout or loading behaviour —
+and the room tabs are reached only by a relative import from
+`RoomRouteGate.tsx`.
 
 ## Component kits and vendored registries
 

@@ -7,12 +7,12 @@ import type { AppMessage } from "@/i18n/message";
 import {
   EditorBridgeError,
   createEditorBridgeClient,
-} from "./bridge/editor-bridge";
+} from "@/godot/bridge/editor-bridge";
 import {
   GodotFsError,
   createPackageFileSystem,
-} from "./bridge/godot-packages-fs";
-import type { PackageBaseline } from "./bridge/package-sync";
+} from "@/godot/bridge/godot-packages-fs";
+import type { PackageBaseline } from "@/godot/bridge/package-sync";
 import {
   IDLE_ACTION,
   packageFromStatus,
