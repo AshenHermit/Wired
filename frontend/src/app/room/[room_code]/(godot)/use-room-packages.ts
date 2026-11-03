@@ -55,6 +55,9 @@ export type RoomPackageEntry = {
   slug: string;
   name: string;
   version: string;
+  /** Shown read-only on the card; edited in the package dialog. */
+  description: string;
+  tags: string[];
   status: RoomPackageStatus;
   /** The package is active in the room runtime. */
   enabled: boolean;
@@ -110,16 +113,31 @@ export type RoomPackagesController = {
   checkSlugAvailability: (
     slug: string,
     roomId?: number,
+    excludeId?: number,
   ) => Promise<PackageSlugAvailability>;
   /**
-   * Renames a package or changes its version on the backend. Only the
-   * metadata fields of the entry change; local files and runtime state are
-   * untouched.
+   * Updates the package metadata on the backend. A slug change also renames the
+   * editor directory and rewrites every reference the server stored.
    */
   updatePackageMetadata: (
     packageId: number,
-    patch: { name?: string; version?: string },
+    patch: {
+      name?: string;
+      version?: string;
+      slug?: string;
+      description?: string;
+      tags?: string[];
+      confirmSlugRename?: boolean;
+    },
   ) => Promise<ScriptingPackage>;
+  /** Whether `packages/<slug>` already exists in the editor with files. */
+  isPackageDirOccupied: (slug: string) => Promise<boolean>;
+  /** Retries the directory move after a bridge failure; idempotent. */
+  renamePackageDir: (
+    packageId: number,
+    fromSlug: string,
+    toSlug: string,
+  ) => Promise<void>;
   downloadPackage: (
     packageId: number,
     options?: { force?: boolean },
@@ -194,6 +212,40 @@ function errorMessage(error: unknown): string {
 }
 
 /**
+ * The backend refuses to rename a slug that published packages point at. The
+ * dialog lists them and repeats the PATCH with `confirmSlugRename: true`.
+ */
+export class SlugRenameDependentsError extends Error {
+  constructor(
+    public readonly dependents: { packageId: number; name: string }[],
+  ) {
+    super(
+      `На slug ссылаются пакеты: ${dependents
+        .map((dependent) => dependent.name)
+        .join(", ")}`,
+    );
+    this.name = "SlugRenameDependentsError";
+  }
+}
+
+/**
+ * The backend renamed the package, but the editor directory still has the old
+ * name. Nothing is rolled back: the dialog offers `renamePackageDir` as an
+ * idempotent retry.
+ */
+export class PackageDirectoryRenameError extends Error {
+  constructor(
+    public readonly packageId: number,
+    public readonly fromSlug: string,
+    public readonly toSlug: string,
+    cause: unknown,
+  ) {
+    super(`Не удалось переименовать каталог пакета: ${errorMessage(cause)}`);
+    this.name = "PackageDirectoryRenameError";
+  }
+}
+
+/**
  * The workshop slug belongs to another author. The panel cannot update that
  * record, so it offers a fork under a new slug instead; the record is carried
  * along so the dialog can name its author and open the fork form.
@@ -214,6 +266,7 @@ type WorkshopErrorData = {
   tag?: string;
   message?: string | string[];
   workshopPackage?: WorkshopPackageSummary;
+  dependents?: { packageId?: number; name?: string }[];
 };
 
 /** The structured body the backend attaches to a workshop conflict. */
@@ -400,6 +453,8 @@ function buildEntries(
       slug: pkg.slug,
       name: pkg.name,
       version: pkg.version,
+      description: pkg.description ?? "",
+      tags: pkg.tags ?? [],
       status,
       enabled,
       loaded: loadedState !== null,
@@ -522,6 +577,8 @@ function roomPackagesReducer(
                     slug: action.package.slug,
                     name: action.package.name,
                     version: action.package.version,
+                    description: action.package.description ?? "",
+                    tags: action.package.tags ?? [],
                   }
                 : entry,
             )
@@ -794,6 +851,21 @@ export function useRoomPackages(
     [load],
   );
 
+  /**
+   * A slug change moves `packages/<old>` to `packages/<new>`. An existing
+   * non-empty target would either be merged into or rejected by the bridge, so
+   * the form asks first and the hook refuses before the PATCH.
+   */
+  const isPackageDirOccupied = React.useCallback(
+    async (slug: string): Promise<boolean> => {
+      const files = filesRef.current;
+      if (!files || !slug) return false;
+      if (!(await files.exists(slug))) return false;
+      return Object.keys(await files.snapshot(slug)).length > 0;
+    },
+    [filesRef],
+  );
+
   React.useEffect(() => {
     refreshRef.current = refresh;
   }, [refresh]);
@@ -864,6 +936,13 @@ export function useRoomPackages(
           throw new Error("Укажите слаг пакета");
         }
         const files = requireFileSystem(filesRef.current);
+        if (await isPackageDirOccupied(trimmedSlug)) {
+          // A leftover folder from a package deleted in another session would
+          // silently become this package's content.
+          throw new Error(
+            `В редакторе уже есть папка с slug ${trimmedSlug}; переименуйте или удалите её`,
+          );
+        }
         let created: ScriptingPackage;
         try {
           created = await createScriptingPackage({
@@ -894,63 +973,162 @@ export function useRoomPackages(
         await refresh();
         return created;
       }),
-    [filesRef, guarded, refresh, roomId, setAction],
+    [filesRef, guarded, isPackageDirOccupied, refresh, roomId, setAction],
   );
 
   /**
-   * Availability is advisory for the creation and fork forms; the server still
-   * rejects a taken slug. Slugs are room-scoped, so the room is part
+   * Availability is advisory for the creation, edit and fork forms; the server
+   * still rejects a taken slug. Slugs are room-scoped, so the room is part
    * of the question, and the global workshop scope is reported separately.
    */
   const checkSlugAvailability = React.useCallback(
     (
       slug: string,
       targetRoomId: number = roomId,
+      excludeId?: number,
     ): Promise<PackageSlugAvailability> =>
-      checkPackageSlugAvailability(slug, targetRoomId),
+      checkPackageSlugAvailability(slug, targetRoomId, excludeId),
     [roomId],
   );
 
   /**
    * Metadata lives in the room package list only: the editor files, the
-   * stored status and the runtime state are untouched. Name and version are
-   * the only editable fields, and an empty value is refused before any
-   * request is made.
+   * stored status and the runtime state are untouched. A slug change is the
+   * exception — the backend rewrites every stored reference, so the editor
+   * directory is renamed to match, after the PATCH succeeded.
    */
   const updatePackageMetadata = React.useCallback(
     async (
       packageId: number,
-      patch: { name?: string; version?: string },
+      patch: {
+        name?: string;
+        version?: string;
+        slug?: string;
+        description?: string;
+        tags?: string[];
+        confirmSlugRename?: boolean;
+      },
     ): Promise<ScriptingPackage> => {
-      const trimmed: { name?: string; version?: string } = {};
+      const payload: {
+        name?: string;
+        version?: string;
+        slug?: string;
+        description?: string;
+        tags?: string[];
+        confirmSlugRename?: boolean;
+      } = {};
       if (patch.name !== undefined) {
         const name = patch.name.trim();
         if (!name) throw new Error("package_metadata_empty");
-        trimmed.name = name;
+        payload.name = name;
       }
       if (patch.version !== undefined) {
         const version = patch.version.trim();
         if (!version) throw new Error("package_metadata_empty");
-        trimmed.version = version;
+        payload.version = version;
       }
-      if (Object.keys(trimmed).length === 0) {
+      if (patch.slug !== undefined) {
+        const slug = patch.slug.trim();
+        if (!slug) throw new Error("package_metadata_empty");
+        payload.slug = slug;
+      }
+      if (patch.description !== undefined) {
+        payload.description = patch.description.trim();
+      }
+      if (patch.tags !== undefined) {
+        payload.tags = patch.tags;
+      }
+      if (patch.confirmSlugRename !== undefined) {
+        payload.confirmSlugRename = patch.confirmSlugRename;
+      }
+      if (Object.keys(payload).length === 0) {
         throw new Error("package_metadata_empty");
+      }
+
+      const previousSlug = slugOf(packageId);
+      const renaming =
+        payload.slug !== undefined && payload.slug !== previousSlug;
+      if (renaming && (await isPackageDirOccupied(payload.slug!))) {
+        // The bridge would merge into or refuse the target folder, and the
+        // server rename cannot be undone, so refuse before any request.
+        throw new Error("slug_dir_exists");
       }
 
       let updated: ScriptingPackage;
       try {
-        updated = await updateScriptingPackage(packageId, trimmed);
+        updated = await updateScriptingPackage(packageId, payload);
       } catch (cause) {
+        const data = workshopErrorData(cause);
+        if (data?.code === "slug_in_use_by_dependents") {
+          throw new SlugRenameDependentsError(
+            (data.dependents ?? []).map((dependent) => ({
+              packageId: dependent.packageId ?? 0,
+              name: dependent.name ?? `#${dependent.packageId ?? "?"}`,
+            })),
+          );
+        }
         const message = `Не удалось изменить данные пакета: ${errorMessage(cause)}`;
         setAction(packageId, { error: message });
         throw new Error(message);
       }
       dispatch({ type: "updated", package: updated });
+      // The slug is addressable before the state mirror re-renders.
+      createdSlugsRef.current.set(packageId, updated.slug);
+
+      if (renaming) {
+        requestEditorRescan();
+        const files = filesRef.current;
+        if (files && (await files.exists(previousSlug))) {
+          try {
+            await files.renamePackage(previousSlug, updated.slug);
+          } catch (cause) {
+            if (cause instanceof EditorBridgeError) throw cause;
+            throw new PackageDirectoryRenameError(
+              packageId,
+              previousSlug,
+              updated.slug,
+              cause,
+            );
+          }
+        }
+      }
+
       // A successful retry must not leave the previous failure on the card.
       setAction(packageId, { error: null });
+      await refresh();
       return updated;
     },
-    [setAction],
+    [filesRef, isPackageDirOccupied, refresh, setAction, slugOf],
+  );
+
+  /** Moves the editor directory after a slug change that already happened. */
+  const renamePackageDir = React.useCallback(
+    async (
+      packageId: number,
+      fromSlug: string,
+      toSlug: string,
+    ): Promise<void> => {
+      const files = requireFileSystem(filesRef.current);
+      try {
+        // Idempotent: a previous attempt may have moved the folder and then
+        // failed while syncing.
+        if (!(await files.exists(toSlug)) && (await files.exists(fromSlug))) {
+          await files.renamePackage(fromSlug, toSlug);
+        }
+      } catch (cause) {
+        if (cause instanceof EditorBridgeError) throw cause;
+        throw new PackageDirectoryRenameError(
+          packageId,
+          fromSlug,
+          toSlug,
+          cause,
+        );
+      }
+      requestEditorRescan();
+      setAction(packageId, { error: null });
+      await refresh();
+    },
+    [filesRef, refresh, setAction],
   );
 
   const beginAction = React.useCallback(
@@ -1343,7 +1521,9 @@ export function useRoomPackages(
     refresh,
     createPackage,
     checkSlugAvailability,
+    isPackageDirOccupied,
     updatePackageMetadata,
+    renamePackageDir,
     downloadPackage,
     removePackage,
     setPackageEnabled,

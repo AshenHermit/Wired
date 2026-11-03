@@ -49,6 +49,8 @@ import {
 import {
   LocalChangesError,
   NewerRevisionError,
+  PackageDirectoryRenameError,
+  SlugRenameDependentsError,
   WorkshopSlugTakenError,
   useRoomPackages,
 } from "./use-room-packages";
@@ -277,15 +279,18 @@ async function manifestOf(
 }
 
 function roomStatus(
-  packages: { id: number; revision: number; enabled?: boolean }[] = [
-    { id: 5, revision: 2 },
-  ],
+  packages: {
+    id: number;
+    revision: number;
+    enabled?: boolean;
+    slug?: string;
+  }[] = [{ id: 5, revision: 2 }],
 ): RoomPackagesStatus {
   return {
     roomId: 1,
-    packages: packages.map(({ id, revision, enabled = true }) => ({
+    packages: packages.map(({ id, revision, enabled = true, slug }) => ({
       packageId: id,
-      slug: id === 5 ? "demo" : id === 6 ? "other" : "new",
+      slug: slug ?? (id === 5 ? "demo" : id === 6 ? "other" : "new"),
       name: id === 5 ? "Demo" : "Other",
       enabled,
       revision,
@@ -295,6 +300,13 @@ function roomStatus(
       clients: [],
     })),
   };
+}
+
+/** An axios-shaped failure, the way the API client rethrows a backend 4xx. */
+function apiError(status: number, data: unknown): Error {
+  return Object.assign(new Error("Request failed"), {
+    response: { status, data },
+  });
 }
 
 function revision(
@@ -891,6 +903,7 @@ describe("useRoomPackages", () => {
     expect(packagesApi.checkPackageSlugAvailability).toHaveBeenCalledWith(
       "hero",
       1,
+      undefined,
     );
     unmount();
   });
@@ -1421,6 +1434,135 @@ describe("useRoomPackages", () => {
     expect(packagesApi.updateScriptingPackage).toHaveBeenCalledWith(5, {
       name: "Trimmed",
     });
+    unmount();
+  });
+
+  it("renames the editor directory after a slug change and refreshes", async () => {
+    const rescan = vi.fn();
+    const { result, unmount } = await startHook({ rescan });
+    fs.put("demo", HERO, "extends Node");
+    vi.mocked(packagesApi.updateScriptingPackage).mockResolvedValue(
+      roomPackage(5, "Demo", "demo_v2"),
+    );
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValue(
+      roomStatus([{ id: 5, revision: 2, slug: "demo_v2" }]),
+    );
+
+    await act(async () => {
+      await result.current.updatePackageMetadata(5, { slug: "demo_v2" });
+    });
+
+    expect(packagesApi.updateScriptingPackage).toHaveBeenCalledWith(5, {
+      slug: "demo_v2",
+    });
+    expect(fs.renamePackage).toHaveBeenCalledWith("demo", "demo_v2");
+    // The refresh that follows the rename already asks for the new directory.
+    expect(fs.snapshot).toHaveBeenCalledWith("demo_v2");
+    expect(rescan).toHaveBeenCalled();
+    expect(result.current.entries[0].slug).toBe("demo_v2");
+    unmount();
+  });
+
+  it("keeps the baseline so a renamed package does not show local changes", async () => {
+    vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
+      await manifestOf("extends Node"),
+    );
+    const { result, unmount } = await startHook();
+
+    await act(async () => {
+      await result.current.downloadPackage(5);
+    });
+    expect(result.current.entries[0]).toMatchObject({
+      loaded: true,
+      loadedRevision: 2,
+      status: "loaded",
+    });
+
+    vi.mocked(packagesApi.updateScriptingPackage).mockResolvedValue(
+      roomPackage(5, "Demo", "demo_v2"),
+    );
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValue(
+      roomStatus([{ id: 5, revision: 2, slug: "demo_v2" }]),
+    );
+    await act(async () => {
+      await result.current.updatePackageMetadata(5, { slug: "demo_v2" });
+    });
+
+    expect(result.current.entries[0]).toMatchObject({
+      packageId: 5,
+      slug: "demo_v2",
+      status: "loaded",
+      localChanges: [],
+      loaded: true,
+      loadedRevision: 2,
+      publishedRevision: 2,
+    });
+    expect(fs.read("demo_v2", HERO)).toBe("extends Node");
+    unmount();
+  });
+
+  it("surfaces dependents so the dialog can confirm", async () => {
+    const { result, unmount } = await startHook();
+    vi.mocked(packagesApi.updateScriptingPackage).mockRejectedValue(
+      apiError(409, {
+        code: "slug_in_use_by_dependents",
+        reason: "dependents",
+        dependents: [{ packageId: 9, name: "Level" }],
+      }),
+    );
+
+    await act(async () => {
+      await expect(
+        result.current.updatePackageMetadata(5, { slug: "demo_v2" }),
+      ).rejects.toBeInstanceOf(SlugRenameDependentsError);
+    });
+
+    expect(result.current.actionFor(5).error).toBeNull();
+    expect(fs.renamePackage).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("keeps the server rename when the directory move fails and retries idempotently", async () => {
+    const { result, unmount } = await startHook();
+    fs.put("demo", HERO, "extends Node");
+    vi.mocked(packagesApi.updateScriptingPackage).mockResolvedValue(
+      roomPackage(5, "Demo", "demo_v2"),
+    );
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValue(
+      roomStatus([{ id: 5, revision: 2, slug: "demo_v2" }]),
+    );
+    fs.renamePackage.mockRejectedValueOnce(new Error("bridge"));
+
+    await act(async () => {
+      await expect(
+        result.current.updatePackageMetadata(5, { slug: "demo_v2" }),
+      ).rejects.toBeInstanceOf(PackageDirectoryRenameError);
+    });
+    // The backend rename stands; only the editor directory is left behind.
+    expect(packagesApi.updateScriptingPackage).toHaveBeenCalledTimes(1);
+    expect(fs.has("demo", HERO)).toBe(true);
+
+    await act(async () => {
+      await result.current.renamePackageDir(5, "demo", "demo_v2");
+    });
+    expect(fs.renamePackage).toHaveBeenCalledTimes(2);
+    expect(fs.has("demo_v2", HERO)).toBe(true);
+    expect(fs.has("demo", HERO)).toBe(false);
+    expect(result.current.actionFor(5).error).toBeNull();
+    unmount();
+  });
+
+  it("refuses a slug whose folder already has files", async () => {
+    const { result, unmount } = await startHook();
+    fs.exists.mockResolvedValue(true);
+    fs.snapshot.mockResolvedValue({ [HERO]: "hash" });
+
+    await act(async () => {
+      await expect(
+        result.current.updatePackageMetadata(5, { slug: "hero2" }),
+      ).rejects.toThrow("slug_dir_exists");
+    });
+    expect(packagesApi.updateScriptingPackage).not.toHaveBeenCalled();
     unmount();
   });
 
