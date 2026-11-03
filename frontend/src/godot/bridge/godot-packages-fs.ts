@@ -107,7 +107,11 @@ export type PackageFileSystem = {
   ): Promise<{ written: string[]; deleted: string[] }>;
   deletePackage(slug: string): Promise<void>;
   renamePackage(from: string, to: string): Promise<string[]>;
-  sync(): Promise<void>;
+  /**
+   * Flushes the editor's in-memory writes to its persistent file system, so the
+   * engine sees them. Doubles as the probe that proves the bridge is alive.
+   */
+  flushFilesystem(): Promise<void>;
   packageDir(slug: string): string;
   /**
    * Abandons in-flight bridge calls. Called when the editor instance this file
@@ -194,7 +198,7 @@ export function createPackageFileSystem({
   const packageDir = (slug: string): string =>
     `${projectRoot}/${PACKAGES_DIR}/${assertPackageSlug(slug)}`;
 
-  const sync = async (): Promise<void> => {
+  const flushFilesystem = async (): Promise<void> => {
     await bridge.call("sync", {});
   };
 
@@ -216,7 +220,7 @@ export function createPackageFileSystem({
     async createPackageDir(slug) {
       assertPackageSlug(slug);
       await bridge.call("createDir", { packageSlug: slug });
-      await sync();
+      await flushFilesystem();
     },
 
     /** Hashes of the source files currently in the package directory. */
@@ -253,7 +257,7 @@ export function createPackageFileSystem({
      * The plugin prepares a staging directory, the revision is copied there,
      * and only then does the plugin rename it into place. A failure while
      * staging or swapping leaves the previous revision untouched and never
-     * reaches `sync`.
+     * reaches `flushFilesystem`.
      */
     async replaceContents(slug, contents) {
       assertPackageSlug(slug);
@@ -287,14 +291,14 @@ export function createPackageFileSystem({
       const result = await bridge.call<ReplacePayload>("replace", {
         packageSlug: slug,
       });
-      await sync();
+      await flushFilesystem();
       return { written: result.written, deleted: result.deleted };
     },
 
     async deletePackage(slug) {
       assertPackageSlug(slug);
       await bridge.call("delete", { packageSlug: slug });
-      await sync();
+      await flushFilesystem();
     },
 
     async renamePackage(from, to) {
@@ -304,11 +308,11 @@ export function createPackageFileSystem({
         "rename",
         { packageSlug: from, newSlug: to },
       );
-      await sync();
+      await flushFilesystem();
       return rewritten;
     },
 
-    sync,
+    flushFilesystem,
 
     dispose() {
       bridge.dispose();

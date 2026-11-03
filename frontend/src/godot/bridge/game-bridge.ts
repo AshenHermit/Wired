@@ -32,17 +32,12 @@ export type GameConfigurePayload = {
   packages: Array<{ packageId: number; revision: number }>;
 };
 
-export type GameStatusStage =
-  | "booted"
-  | "waiting"
-  | "connecting"
-  | "authenticated"
-  | "ready"
-  | "connection_failed"
-  | "disconnected"
-  | "error";
-
-const STATUS_STAGES: readonly GameStatusStage[] = [
+/**
+ * The stages the exported build reports, oldest first. The union is derived
+ * from this list so a new stage cannot compile without also being accepted by
+ * the payload guard below.
+ */
+export const GAME_STATUS_STAGES = [
   "booted",
   "waiting",
   "connecting",
@@ -51,7 +46,9 @@ const STATUS_STAGES: readonly GameStatusStage[] = [
   "connection_failed",
   "disconnected",
   "error",
-];
+] as const;
+
+export type GameStatusStage = (typeof GAME_STATUS_STAGES)[number];
 
 export type GameToHostMessage =
   | { source: "wired-game"; type: "wired:game-booted"; payload: Record<string, never> }
@@ -113,7 +110,7 @@ export function isGameMessage(data: unknown): data is GameToHostMessage {
     case "wired:game-status":
       return (
         typeof payload.stage === "string" &&
-        STATUS_STAGES.includes(payload.stage as GameStatusStage) &&
+        GAME_STATUS_STAGES.includes(payload.stage as GameStatusStage) &&
         (payload.detail === undefined || typeof payload.detail === "string")
       );
     case "wired:game-error":

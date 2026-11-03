@@ -275,20 +275,28 @@ export function waitForEditorBridge(
   });
 }
 
-/** Asks the running editor to notice files written directly into its FS. */
-export function requestEditorRescan(): boolean {
+/**
+ * Asks the running editor to notice files written directly into its FS.
+ *
+ * Fire-and-forget by design: every caller has already written through the
+ * bridge, so it knows the bridge is alive, and the rescan only refreshes the
+ * editor's file index. A build without the rescan op is therefore logged
+ * instead of thrown, so an older plugin cannot turn a successful write into a
+ * failed package action.
+ */
+export function requestEditorRescan(): void {
   if (typeof window === "undefined") {
-    return false;
+    return;
   }
   const rescan = window.__wiredEditorBridge?.rescan;
   if (typeof rescan !== "function") {
-    return false;
+    console.warn("Editor bridge does not support rescanning; files may be stale");
+    return;
   }
   try {
     rescan();
-    return true;
-  } catch {
-    return false;
+  } catch (cause) {
+    console.warn(`Editor rescan failed: ${errorMessage(cause)}`);
   }
 }
 

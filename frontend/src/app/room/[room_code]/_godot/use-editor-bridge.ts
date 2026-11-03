@@ -178,7 +178,7 @@ export function useEditorBridge(
     }
 
     try {
-      await files.sync();
+      await files.flushFilesystem();
     } catch (cause) {
       connectingRef.current = false;
       if (cause instanceof EditorBridgeError) {

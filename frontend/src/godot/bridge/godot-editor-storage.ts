@@ -92,16 +92,22 @@ export async function clearGodotEditorStorage(
   );
 }
 
-let prepared: Promise<void> | null = null;
+const prepared = new WeakMap<IDBFactory, Promise<void>>();
 
 /**
  * Clears the previous sessions once per document, before the editor mounts its
- * own file system. Memoized so a remount in the same document never deletes
- * the database the running editor is writing to.
+ * own file system. Memoized per `IDBFactory` so a remount in the same document
+ * never deletes the database the running editor is writing to, while a caller
+ * that passes its own factory still gets the work done on that factory rather
+ * than inheriting a promise started with someone else's.
  */
 export function prepareGodotEditorStorage(
   factory: IDBFactory | undefined = globalThis.indexedDB,
 ): Promise<void> {
-  prepared ??= clearGodotEditorStorage(factory).catch(() => {});
-  return prepared;
+  if (!factory) return Promise.resolve();
+  const existing = prepared.get(factory);
+  if (existing) return existing;
+  const run = clearGodotEditorStorage(factory).catch(() => {});
+  prepared.set(factory, run);
+  return run;
 }

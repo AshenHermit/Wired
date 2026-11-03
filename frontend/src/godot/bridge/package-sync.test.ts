@@ -8,7 +8,7 @@ import {
   planPackageSync,
   publishPackageFiles,
   reconcilePackageRevision,
-  syncPackageRevision,
+  overwritePackageRevision,
   type PackageBaseline,
 } from "./package-sync";
 import { sha256Hex } from "@/utils/sha256";
@@ -105,7 +105,7 @@ function makeFiles() {
       tree.delete(from);
       return [];
     }),
-    sync: vi.fn(async () => {}),
+    flushFilesystem: vi.fn(async () => {}),
     dispose: vi.fn(),
   };
 
@@ -200,7 +200,7 @@ describe("publishPackageFiles", () => {
   });
 });
 
-describe("syncPackageRevision", () => {
+describe("overwritePackageRevision", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -222,7 +222,7 @@ describe("syncPackageRevision", () => {
       encoder.encode("extends Node").buffer
     );
 
-    const result = await syncPackageRevision(5, "hero", files);
+    const result = await overwritePackageRevision(5, "hero", files);
 
     expect(api.getRevisionFile).toHaveBeenCalledWith(5, 4, "scripts/hero.gd");
     expect(result.written).toEqual(["scripts/hero.gd"]);
@@ -248,7 +248,7 @@ describe("syncPackageRevision", () => {
       encoder.encode("corrupted!!").buffer
     );
 
-    await expect(syncPackageRevision(5, "hero", files)).rejects.toThrow(
+    await expect(overwritePackageRevision(5, "hero", files)).rejects.toThrow(
       /size|sha256/i
     );
 

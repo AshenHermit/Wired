@@ -4,7 +4,7 @@ export const defaultLocale: Locale = "en";
 export const LOCALE_COOKIE = "NEXT_LOCALE";
 
 export function isLocale(value: unknown): value is Locale {
-  return value === "en" || value === "ru";
+  return locales.includes(value as Locale);
 }
 
 export function resolveLocale(value: string | null | undefined): Locale {

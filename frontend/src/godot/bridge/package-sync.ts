@@ -294,8 +294,11 @@ export async function reconcilePackageRevision(
  * Forces the latest published revision into the editor file system. Used by the
  * explicit "replace local files" action of the conflict prompt, never during
  * automatic synchronization.
+ *
+ * The name says what it costs: unlike `reconcilePackageRevision` it cannot
+ * report a conflict, it overwrites whatever the project holds locally.
  */
-export async function syncPackageRevision(
+export async function overwritePackageRevision(
   packageId: number,
   slug: string,
   files: PackageFileSystem,

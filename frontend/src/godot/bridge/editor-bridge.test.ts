@@ -42,19 +42,27 @@ describe("requestEditorRescan", () => {
     delete (window as { __wiredEditorBridge?: unknown }).__wiredEditorBridge;
   });
 
-  it("returns false when the editor bridge is not available", () => {
-    expect(requestEditorRescan()).toBe(false);
+  it("warns instead of throwing when the editor bridge is not available", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(() => requestEditorRescan()).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(
+      "Editor bridge does not support rescanning; files may be stale",
+    );
+
+    warn.mockRestore();
   });
 
   it("calls the bridge callback when it is registered", () => {
     const rescan = vi.fn();
     Object.assign(window, { __wiredEditorBridge: { rescan } });
 
-    expect(requestEditorRescan()).toBe(true);
+    requestEditorRescan();
+
     expect(rescan).toHaveBeenCalledTimes(1);
   });
 
-  it("does not throw when the bridge callback fails", () => {
+  it("logs the cause instead of throwing when the bridge callback fails", () => {
     Object.assign(window, {
       __wiredEditorBridge: {
         rescan: () => {
@@ -62,8 +70,12 @@ describe("requestEditorRescan", () => {
         },
       },
     });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    expect(requestEditorRescan()).toBe(false);
+    expect(() => requestEditorRescan()).not.toThrow();
+    expect(warn).toHaveBeenCalledWith("Editor rescan failed: editor is gone");
+
+    warn.mockRestore();
   });
 });
 

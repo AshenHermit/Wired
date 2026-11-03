@@ -151,7 +151,7 @@ function createFakeFs() {
       return [];
     },
   );
-  const sync = vi.fn(async (): Promise<void> => {});
+  const flushFilesystem = vi.fn(async (): Promise<void> => {});
 
   const files: PackageFileSystem = {
     exists,
@@ -161,7 +161,7 @@ function createFakeFs() {
     replaceContents,
     deletePackage,
     renamePackage,
-    sync,
+    flushFilesystem,
     dispose: vi.fn(),
     packageDir: (slug: string) => `${PROJECT}/packages/${slug}`,
   };
@@ -175,7 +175,7 @@ function createFakeFs() {
     replaceContents,
     deletePackage,
     renamePackage,
-    sync,
+    flushFilesystem,
     reads,
     put(slug: string, filepath: string, content: string) {
       dirs.add(slug);
@@ -563,7 +563,7 @@ describe("useRoomPackages", () => {
         await vi.advanceTimersByTimeAsync(2_000);
       });
 
-      // The 2 s loop probed the bridge with `sync` and only then declared the
+      // The 2 s loop probed the bridge with `flushFilesystem` and only then declared the
       // file system ready again.
       expect(result.current.fsReady).toBe(true);
       expect(result.current.error).toBeNull();
@@ -591,7 +591,7 @@ describe("useRoomPackages", () => {
 
       const transport = new EditorBridgeError("Мост редактора недоступен");
       fs.snapshot.mockRejectedValue(transport);
-      fs.sync.mockRejectedValue(transport);
+      fs.flushFilesystem.mockRejectedValue(transport);
 
       // Two actions fail in the same tick: the second loss must reuse the loop
       // the first one started instead of stacking another interval.
@@ -603,16 +603,16 @@ describe("useRoomPackages", () => {
       });
       expect(result.current.fsReady).toBe(false);
 
-      const probes = fs.sync.mock.calls.length;
+      const probes = fs.flushFilesystem.mock.calls.length;
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2_000);
       });
-      expect(fs.sync.mock.calls.length).toBe(probes + 1);
+      expect(fs.flushFilesystem.mock.calls.length).toBe(probes + 1);
 
       unmount();
       const connections = vi.mocked(createPackageFileSystem).mock.calls.length;
       await vi.advanceTimersByTimeAsync(20_000);
-      expect(fs.sync.mock.calls.length).toBe(probes + 1);
+      expect(fs.flushFilesystem.mock.calls.length).toBe(probes + 1);
       expect(createPackageFileSystem).toHaveBeenCalledTimes(connections);
     } finally {
       vi.useRealTimers();
@@ -643,7 +643,7 @@ describe("useRoomPackages", () => {
       );
       const action = result.current.removePackageDirectory(5);
       await act(async () => {});
-      const probes = fs.sync.mock.calls.length;
+      const probes = fs.flushFilesystem.mock.calls.length;
       const connections = vi.mocked(createPackageFileSystem).mock.calls.length;
 
       unmount();
@@ -655,7 +655,7 @@ describe("useRoomPackages", () => {
       // Nothing was mounted to clear it, so a loop installed here would probe
       // forever. The drop after unmount must install nothing.
       await vi.advanceTimersByTimeAsync(20_000);
-      expect(fs.sync.mock.calls.length).toBe(probes);
+      expect(fs.flushFilesystem.mock.calls.length).toBe(probes);
       expect(createPackageFileSystem).toHaveBeenCalledTimes(connections);
     } finally {
       vi.useRealTimers();
@@ -695,7 +695,7 @@ describe("useRoomPackages", () => {
     vi.useFakeTimers();
     try {
       bridgeWith();
-      fs.sync.mockRejectedValue(
+      fs.flushFilesystem.mockRejectedValue(
         new EditorBridgeError("Мост редактора не ответил за 60000 мс"),
       );
       const { result, unmount } = renderHook(() =>
@@ -708,7 +708,7 @@ describe("useRoomPackages", () => {
         await vi.advanceTimersByTimeAsync(0);
       });
 
-      expect(fs.sync).toHaveBeenCalledTimes(1);
+      expect(fs.flushFilesystem).toHaveBeenCalledTimes(1);
       expect(result.current.fsReady).toBe(false);
       expect(result.current.error).toEqual({ key: "Errors.bridgeUnavailable" });
       unmount();
@@ -721,8 +721,8 @@ describe("useRoomPackages", () => {
     vi.useFakeTimers();
     try {
       bridgeWith();
-      fs.sync.mockRejectedValueOnce(
-        new EditorBridgeOperationError("sync не выполнен"),
+      fs.flushFilesystem.mockRejectedValueOnce(
+        new EditorBridgeOperationError("flushFilesystem не выполнен"),
       );
       const { result, unmount } = renderHook(() =>
         useRoomPackages(1, ONE_PACKAGE),
