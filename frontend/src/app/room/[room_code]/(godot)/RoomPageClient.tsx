@@ -20,6 +20,7 @@ import {
 import React from "react";
 import { GameTab } from "./GameTab";
 import { useUserStore } from "@/store/user-store";
+import { LocaleSwitcher } from "@/components/i18n/LocaleSwitcher";
 import {
   ROOM_TABS_POSITION_KEY,
   useDraggablePanel,
@@ -85,6 +86,7 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
               Game
             </TabsTrigger>
           </TabsList>
+          <LocaleSwitcher className="ml-auto" />
         </div>
         {isDragging && (
           <div

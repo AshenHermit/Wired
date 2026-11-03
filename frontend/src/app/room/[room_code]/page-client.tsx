@@ -5,6 +5,7 @@ import { Room } from "@wired-io/shared";
 import { getRoom } from "@/api/services/rooms";
 import { decodeId } from "@/utils/hash-utils";
 import { Spinner } from "@/components/ui/spinner";
+import { LocaleSwitcher } from "@/components/i18n/LocaleSwitcher";
 
 export function RoomPageClient({ roomCode }: { roomCode: string }) {
   const [room, setRoom] = React.useState<Room | null>(null);
@@ -30,6 +31,7 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
   if (error != null) {
     return (
       <div className="w-screen h-screen flex items-center justify-center p-8 text-center">
+        <LocaleSwitcher className="fixed right-4 top-4 z-20" />
         <div className="max-w-md space-y-2">
           <h1 className="text-xl font-semibold">Комната недоступна</h1>
           <p className="text-muted-foreground">{error}</p>
@@ -47,6 +49,7 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
   if (room.type === "ts-game") {
     return (
       <div className="w-screen h-screen flex items-center justify-center p-8 text-center">
+        <LocaleSwitcher className="fixed right-4 top-4 z-20" />
         <div className="max-w-md space-y-2">
           <h1 className="text-xl font-semibold">
             Комнаты Phaser больше не поддерживаются
