@@ -356,9 +356,9 @@ describe('PackageRevisionsService', () => {
         'preload("res://packages/missing/x.tscn")',
       );
 
-      await expect(service.publish(7, 3)).rejects.toThrow(
-        'package_dependency_unknown_slug:missing',
-      );
+      await expect(service.publish(7, 3)).rejects.toMatchObject({
+        response: { code: 'package_dependency_unknown_slug', slug: 'missing' },
+      });
       expect(storage.publishRevision).not.toHaveBeenCalled();
     });
 
@@ -887,9 +887,9 @@ describe('PackageRevisionsService', () => {
           sourcePackageId: 5,
           targetPackageId: 12,
         }),
-      ).rejects.toThrow(
-        new BadRequestException('package_dependency_not_global:hero'),
-      );
+      ).rejects.toMatchObject({
+        response: { code: 'package_dependency_not_global', slug: 'hero' },
+      });
       expect(storage.publishRevision).not.toHaveBeenCalled();
       expect(repository.delete).toHaveBeenCalledWith(1);
     });

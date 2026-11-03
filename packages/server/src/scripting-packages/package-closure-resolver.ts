@@ -5,6 +5,7 @@ import { ScriptingPackage } from 'src/database/entities/scripting-package.entity
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { errorMessage } from 'src/common/errors';
 import { MAX_PACKAGE_FILE_SIZE } from './package-manifest';
+import { packageDependencyError } from './package-errors';
 import {
   collectRawPackageReferences,
   decodePackageText,
@@ -330,7 +331,14 @@ export class PackageClosureResolver {
           try {
             text = decodePackageText(entry.filepath, data);
           } catch (error) {
-            throw new BadRequestException((error as Error).message);
+            throw new BadRequestException(
+              {
+                code: 'package_file_not_text',
+                filepath: entry.filepath,
+                message: errorMessage(error),
+              },
+              { cause: error },
+            );
           }
           textFiles.push({ filepath: entry.filepath, text });
         }
@@ -350,25 +358,43 @@ export class PackageClosureResolver {
             roomId,
           );
           if (unknown.length > 0) {
-            throw new Error(`package_dependency_unknown_slug:${unknown[0]}`);
+            throw packageDependencyError(
+              'package_dependency_unknown_slug',
+              `Package "${unknown[0]}" is not available to this room.`,
+              { slug: unknown[0] },
+            );
           }
           references = resolved;
         } catch (error) {
-          throw new BadRequestException((error as Error).message);
+          if (error instanceof BadRequestException) throw error;
+          throw new BadRequestException(
+            {
+              code: 'package_reference_unreadable',
+              filepath: file.filepath,
+              message: errorMessage(error),
+            },
+            { cause: error },
+          );
         }
         for (const ref of references) {
           if (ref.packageId === id) {
             if (!fileSet.has(ref.filepath)) {
-              throw new BadRequestException(
-                `package_dependency_missing_file:${packageId}:${ref.filepath}`,
+              throw packageDependencyError(
+                'package_dependency_missing_file',
+                `Package ${packageId} does not contain ${
+                  ref.filepath
+                }, which its own sources reference.`,
+                { packageId, filepath: ref.filepath },
               );
             }
             continue;
           }
 
           if (visiting.includes(ref.packageId)) {
-            throw new BadRequestException(
-              `package_dependency_cycle:${[...visiting, ref.packageId].join('->')}`,
+            throw packageDependencyError(
+              'package_dependency_cycle',
+              'Packages reference each other in a cycle.',
+              { cycle: [...visiting, ref.packageId].join('->') },
             );
           }
 
@@ -381,8 +407,12 @@ export class PackageClosureResolver {
 
           const dependencyFiles = filesByPackage.get(ref.packageId)!;
           if (!dependencyFiles.some((f) => f.filepath === ref.filepath)) {
-            throw new BadRequestException(
-              `package_dependency_missing_file:${ref.packageId}:${ref.filepath}`,
+            throw packageDependencyError(
+              'package_dependency_missing_file',
+              `Package ${ref.packageId} does not contain ${
+                ref.filepath
+              }, which its dependents reference.`,
+              { packageId: ref.packageId, filepath: ref.filepath },
             );
           }
 
@@ -489,8 +519,10 @@ export class PackageClosureResolver {
           `Revision ${exactRevision} of package ${packageId} is not published`,
         );
       }
-      throw new BadRequestException(
-        `package_dependency_unpublished:${packageId}`,
+      throw packageDependencyError(
+        'package_dependency_unpublished',
+        `Package ${packageId} has no published revision to depend on.`,
+        { packageId },
       );
     }
     if (exactRevision !== null && row.status !== 'published') {
@@ -501,8 +533,10 @@ export class PackageClosureResolver {
 
     const room = row.package?.room ?? null;
     if (room && room.id !== roomId) {
-      throw new BadRequestException(
-        `package_dependency_room_mismatch:${packageId}`,
+      throw packageDependencyError(
+        'package_dependency_room_mismatch',
+        `Package ${packageId} belongs to another room.`,
+        { packageId },
       );
     }
 

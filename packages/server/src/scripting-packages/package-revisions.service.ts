@@ -33,6 +33,7 @@ import {
   resolvePackageReferences,
 } from './package-runtime-references';
 import { loadPackageSlugIndex, PackageSlugIndex } from './package-slug-index';
+import { packageDependencyError } from './package-errors';
 import { ScriptingPackagesService } from './scripting-packages.service';
 import {
   PACKAGE_REVISION_DISPATCHER,
@@ -364,8 +365,10 @@ export class PackageRevisionsService {
     if (!roomScoped) {
       return;
     }
-    throw new BadRequestException(
-      `package_dependency_not_global:${roomScoped.slug}`,
+    throw packageDependencyError(
+      'package_dependency_not_global',
+      `Package "${roomScoped.slug}" belongs to a room, so it cannot be a dependency of a published package.`,
+      { slug: roomScoped.slug },
     );
   }
 
@@ -506,8 +509,10 @@ export class PackageRevisionsService {
       scopeRoomId,
     );
     if (unknown.length > 0) {
-      throw new BadRequestException(
-        `package_dependency_unknown_slug:${unknown[0]}`,
+      throw packageDependencyError(
+        'package_dependency_unknown_slug',
+        `Package "${unknown[0]}" is not available to this room.`,
+        { slug: unknown[0] },
       );
     }
     return resolved;

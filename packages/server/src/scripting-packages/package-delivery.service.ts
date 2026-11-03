@@ -22,6 +22,7 @@ import {
 import path from 'node:path';
 import { Repository } from 'typeorm';
 import { Room } from 'src/database/entities/room.entity';
+import { errorMessage } from 'src/common/errors';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import {
@@ -300,7 +301,13 @@ export class PackageDeliveryService {
     try {
       assertUniquePackageSlugs(resolved.slugByPackage);
     } catch (error) {
-      throw new BadRequestException((error as Error).message);
+      throw new BadRequestException(
+        {
+          code: 'package_slug_shadowed',
+          message: errorMessage(error),
+        },
+        { cause: error },
+      );
     }
 
     const cached = await this.readManifest(dir);
@@ -513,7 +520,14 @@ export class PackageDeliveryService {
         slugByPackage,
       });
     } catch (error) {
-      throw new BadRequestException((error as Error).message);
+      throw new BadRequestException(
+        {
+          code: 'package_reference_unresolved',
+          filepath,
+          message: errorMessage(error),
+        },
+        { cause: error },
+      );
     }
     return Buffer.from(stripExtResourceUids(filepath, rewritten), 'utf8');
   }

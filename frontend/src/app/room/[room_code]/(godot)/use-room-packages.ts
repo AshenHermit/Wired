@@ -12,6 +12,7 @@ import type {
   WorkshopPublishResult,
 } from "@wired-io/shared";
 import { getRoomPackages } from "@/api/services/godot-game";
+import { apiErrorBody } from "@/i18n/api-error";
 import type { AppMessage } from "@/i18n/message";
 import {
   checkPackageSlugAvailability,
@@ -283,9 +284,7 @@ type WorkshopErrorData = {
 
 /** The structured body the backend attaches to a workshop conflict. */
 function workshopErrorData(error: unknown): WorkshopErrorData | null {
-  const data = (error as { response?: { data?: unknown } } | undefined)
-    ?.response?.data;
-  return data && typeof data === "object" ? (data as WorkshopErrorData) : null;
+  return apiErrorBody<WorkshopErrorData>(error);
 }
 
 /**
@@ -297,11 +296,8 @@ function workshopErrorMessage(
   fallback: AppMessage = { key: "Errors.unexpected" },
 ): AppMessage {
   const data = workshopErrorData(error);
-  const code = data?.code ?? "";
-  const backendMessage =
-    typeof data?.message === "string" ? data.message : "";
 
-  switch (code) {
+  switch (data?.code) {
     case "package_not_published":
       return { key: "Packages.errors.notPublished" };
     case "slug_taken":
@@ -309,27 +305,19 @@ function workshopErrorMessage(
     case "publish_conflict":
       return { key: "Packages.errors.publishConflict" };
     case "invalid_tags":
-      return data?.tag
+      return data.tag
         ? { key: "Packages.errors.invalidTag", values: { tag: data.tag } }
         : { key: "Packages.errors.invalidTags" };
-  }
-
-  // Dependency failures are raised as `<code>:<slug>` in a plain message, so
-  // they have no structured `code` field to switch on.
-  const raw = code || backendMessage;
-  const notGlobal = "package_dependency_not_global:";
-  if (raw.startsWith(notGlobal)) {
-    return {
-      key: "Packages.errors.dependencyNotGlobal",
-      values: { slug: raw.slice(notGlobal.length) },
-    };
-  }
-  const unknownSlug = "package_dependency_unknown_slug:";
-  if (raw.startsWith(unknownSlug)) {
-    return {
-      key: "Packages.errors.dependencyUnknownSlug",
-      values: { slug: raw.slice(unknownSlug.length) },
-    };
+    case "package_dependency_not_global":
+      return {
+        key: "Packages.errors.dependencyNotGlobal",
+        values: { slug: data.slug ?? "" },
+      };
+    case "package_dependency_unknown_slug":
+      return {
+        key: "Packages.errors.dependencyUnknownSlug",
+        values: { slug: data.slug ?? "" },
+      };
   }
 
   console.error(error);
@@ -339,21 +327,10 @@ function workshopErrorMessage(
 /** A short, non-translated reason used for thrown errors and console logs. */
 function workshopErrorDiagnostic(error: unknown): string {
   const data = workshopErrorData(error);
-  const code = data?.code ?? "";
-  const backendMessage =
-    typeof data?.message === "string" ? data.message : "";
-
-  if (code === "invalid_tags") {
-    return data?.tag ? `invalid_tags:${data.tag}` : "invalid_tags";
-  }
-  if (code) return code;
-  if (backendMessage.startsWith("package_dependency_")) {
-    return backendMessage.replace(
-      /^(package_dependency_(?:not_global|unknown_slug)):(.+)$/,
-      "$1:#$2",
-    );
-  }
-  return "workshop_failed";
+  if (!data?.code) return "workshop_failed";
+  return data.code === "invalid_tags" && data.tag
+    ? `invalid_tags:${data.tag}`
+    : data.code;
 }
 
 /**
@@ -362,18 +339,10 @@ function workshopErrorDiagnostic(error: unknown): string {
  * "Request failed with status code 409".
  */
 function deleteConflictMessage(error: unknown): AppMessage | null {
-  const data = (
-    error as
-      | {
-          response?: {
-            data?: {
-              code?: string;
-              dependents?: { packageId?: number; name?: string }[];
-            };
-          };
-        }
-      | undefined
-  )?.response?.data;
+  const data = apiErrorBody<{
+    code?: string;
+    dependents?: { packageId?: number; name?: string }[];
+  }>(error);
   if (data?.code !== "package_has_dependents" || !data.dependents?.length) {
     return null;
   }
@@ -385,6 +354,18 @@ function deleteConflictMessage(error: unknown): AppMessage | null {
         .join(", "),
     },
   };
+}
+
+/** A workshop action failure: the translated reason plus a diagnostic code. */
+function workshopFailure(
+  cause: unknown,
+  fallback: AppMessage,
+  code: string,
+): WorkshopActionError {
+  return new WorkshopActionError(
+    workshopErrorMessage(cause, fallback),
+    `${code}:${workshopErrorDiagnostic(cause)}`,
+  );
 }
 
 function mergePackages(
@@ -1196,6 +1177,26 @@ export function useRoomPackages(
     [setAction],
   );
 
+  /**
+   * Reports a failed action on the card and rethrows it as a coded error. The
+   * bridge already carries the message the editor wants to show, so its
+   * failures pass through untouched.
+   */
+  const failAction = React.useCallback(
+    (
+      packageId: number,
+      cause: unknown,
+      error: AppMessage,
+      code: string,
+    ): never => {
+      if (cause instanceof EditorBridgeError) throw cause;
+      console.error(cause);
+      setAction(packageId, { error });
+      throw new Error(`${code}:${errorMessage(cause)}`);
+    },
+    [setAction],
+  );
+
   const downloadPackage = React.useCallback(
     (
       packageId: number,
@@ -1245,12 +1246,12 @@ export function useRoomPackages(
           await refresh();
         } catch (cause) {
           if (cause instanceof LocalChangesError) throw cause;
-          if (cause instanceof EditorBridgeError) throw cause;
-          console.error(cause);
-          setAction(packageId, {
-            error: { key: "Packages.errors.downloadFailed" },
-          });
-          throw new Error(`package_download_failed:${errorMessage(cause)}`);
+          failAction(
+            packageId,
+            cause,
+            { key: "Packages.errors.downloadFailed" },
+            "package_download_failed",
+          );
         } finally {
           endAction(packageId);
         }
@@ -1271,11 +1272,10 @@ export function useRoomPackages(
         try {
           created = await copyWorkshopPackageToRoom(workshopPackageId, roomId);
         } catch (cause) {
-          throw new WorkshopActionError(
-            workshopErrorMessage(cause, {
-              key: "Packages.errors.addFromWorkshopFailed",
-            }),
-            `workshop_add_failed:${workshopErrorDiagnostic(cause)}`,
+          throw workshopFailure(
+            cause,
+            { key: "Packages.errors.addFromWorkshopFailed" },
+            "workshop_add_failed",
           );
         }
         dispatch({ type: "created", package: created });
@@ -1352,11 +1352,10 @@ export function useRoomPackages(
         try {
           created = await forkPackageToWorkshop(packageId, slug.trim());
         } catch (cause) {
-          throw new WorkshopActionError(
-            workshopErrorMessage(cause, {
-              key: "Packages.errors.forkFailed",
-            }),
-            `workshop_fork_failed:${workshopErrorDiagnostic(cause)}`,
+          throw workshopFailure(
+            cause,
+            { key: "Packages.errors.forkFailed" },
+            "workshop_fork_failed",
           );
         }
         dispatch({ type: "created", package: created });
@@ -1408,12 +1407,12 @@ export function useRoomPackages(
           await refresh();
         } catch (cause) {
           if (cause instanceof LocalChangesError) throw cause;
-          if (cause instanceof EditorBridgeError) throw cause;
-          console.error(cause);
-          setAction(packageId, {
-            error: { key: "Packages.errors.removeFailed" },
-          });
-          throw new Error(`package_remove_failed:${errorMessage(cause)}`);
+          failAction(
+            packageId,
+            cause,
+            { key: "Packages.errors.removeFailed" },
+            "package_remove_failed",
+          );
         } finally {
           endAction(packageId);
         }
@@ -1436,15 +1435,14 @@ export function useRoomPackages(
           });
           await refresh();
         } catch (cause) {
-          console.error(cause);
-          setAction(packageId, {
-            error: {
+          failAction(
+            packageId,
+            cause,
+            {
               key: enabled
                 ? "Packages.errors.enableFailed"
                 : "Packages.errors.disableFailed",
             },
-          });
-          throw new Error(
             enabled ? "package_enable_failed" : "package_disable_failed",
           );
         } finally {
@@ -1515,12 +1513,12 @@ export function useRoomPackages(
           });
           await refresh();
         } catch (cause) {
-          if (cause instanceof EditorBridgeError) throw cause;
-          console.error(cause);
-          setAction(packageId, {
-            error: { key: "Packages.errors.adoptFailed" },
-          });
-          throw new Error(`package_adopt_failed:${errorMessage(cause)}`);
+          failAction(
+            packageId,
+            cause,
+            { key: "Packages.errors.adoptFailed" },
+            "package_adopt_failed",
+          );
         } finally {
           endAction(packageId);
         }
@@ -1580,12 +1578,12 @@ export function useRoomPackages(
           await refresh();
         } catch (cause) {
           if (cause instanceof NewerRevisionError) throw cause;
-          if (cause instanceof EditorBridgeError) throw cause;
-          console.error(cause);
-          setAction(packageId, {
-            error: { key: "Packages.errors.emitFailed" },
-          });
-          throw new Error("package_emit_failed");
+          failAction(
+            packageId,
+            cause,
+            { key: "Packages.errors.emitFailed" },
+            "package_emit_failed",
+          );
         } finally {
           endAction(packageId);
         }

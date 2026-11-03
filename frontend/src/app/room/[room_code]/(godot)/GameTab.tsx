@@ -13,6 +13,7 @@ import {
   getRoomPackages,
 } from "@/api/services/godot-game";
 import { Spinner } from "@/components/ui/spinner";
+import { apiErrorBody, apiErrorResponse } from "@/i18n/api-error";
 import { useAppMessage, type AppMessage } from "@/i18n/message";
 import { API_PREFIX } from "@/utils/variables";
 import { readAccessToken } from "@/utils/auth-cookie";
@@ -352,18 +353,13 @@ type ConnectionFailure = {
 
 /** Keeps the structured backend `code` available to the retry loop. */
 function describeConnectionFailure(error: unknown): ConnectionFailure {
-  const response = (
-    error as {
-      response?: {
-        status?: number;
-        data?: { code?: unknown; retryAfterSeconds?: unknown };
-      };
-    }
-  ).response;
-  const data = response?.data;
+  const status = apiErrorResponse(error)?.status;
+  const data = apiErrorBody<{ code?: unknown; retryAfterSeconds?: unknown }>(
+    error,
+  );
   const code = typeof data?.code === "string" ? data.code : "";
 
-  if (response?.status === 429) {
+  if (status === 429) {
     const retryAfterSeconds = Number(data?.retryAfterSeconds);
     const seconds =
       Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0

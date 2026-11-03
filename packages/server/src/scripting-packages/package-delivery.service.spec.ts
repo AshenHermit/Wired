@@ -437,9 +437,9 @@ describe('PackageDeliveryService', () => {
     });
     await writePublished(6, 9, { 'lib.gd': 'extends Node' });
 
-    await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toThrow(
-      'package_dependency_room_mismatch:6',
-    );
+    await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toMatchObject({
+      response: { code: 'package_dependency_room_mismatch', packageId: 6 },
+    });
     await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toBeInstanceOf(
       BadRequestException,
     );
@@ -452,9 +452,9 @@ describe('PackageDeliveryService', () => {
       'main.gd': 'const Lib = preload("res://packages/6/lib.gd")',
     });
 
-    await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toThrow(
-      'package_dependency_unpublished:6',
-    );
+    await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toMatchObject({
+      response: { code: 'package_dependency_unpublished', packageId: 6 },
+    });
   });
 
   it('rejects a dependency whose referenced file is missing', async () => {
@@ -465,9 +465,13 @@ describe('PackageDeliveryService', () => {
     });
     await writePublished(6, 9, { 'other.gd': 'extends Node' });
 
-    await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toThrow(
-      'package_dependency_missing_file:6:tex.png',
-    );
+    await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toMatchObject({
+      response: {
+        code: 'package_dependency_missing_file',
+        packageId: 6,
+        filepath: 'tex.png',
+      },
+    });
   });
 
   it('rejects a same-package reference to a missing file', async () => {
@@ -477,12 +481,16 @@ describe('PackageDeliveryService', () => {
         '[ext_resource type="Script" path="res://packages/5/missing.gd" id="1"]\n',
     });
 
-    await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toThrow(
-      'package_dependency_missing_file:5:missing.gd',
-    );
+    await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toMatchObject({
+      response: {
+        code: 'package_dependency_missing_file',
+        packageId: 5,
+        filepath: 'missing.gd',
+      },
+    });
   });
 
-  it('rejects a dependency cycle with the stack in the message', async () => {
+  it('rejects a dependency cycle with the stack in the payload', async () => {
     definePackage(5, 'Heroes', 7);
     definePackage(6, 'Library', null);
     await writePublished(5, 3, {
@@ -492,9 +500,9 @@ describe('PackageDeliveryService', () => {
       'b.gd': 'const A = preload("res://packages/5/a.gd")',
     });
 
-    await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toThrow(
-      'package_dependency_cycle:5->6->5',
-    );
+    await expect(service.getRuntimeManifest(5, 3, 7)).rejects.toMatchObject({
+      response: { code: 'package_dependency_cycle' },
+    });
   });
 
   it.each([

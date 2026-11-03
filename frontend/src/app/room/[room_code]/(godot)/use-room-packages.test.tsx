@@ -1766,7 +1766,7 @@ describe("useRoomPackages", () => {
   it("explains a workshop dependency that only exists in a room", async () => {
     vi.mocked(packagesApi.publishPackageToWorkshop).mockRejectedValue({
       response: {
-        data: { message: "package_dependency_not_global:hero" },
+        data: { code: "package_dependency_not_global", slug: "hero" },
       },
     });
     const { result, unmount } = await startHook();
@@ -1776,7 +1776,9 @@ describe("useRoomPackages", () => {
     );
 
     expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toContain("#hero");
+    expect((failure as Error).message).toContain(
+      "package_dependency_not_global",
+    );
     expect((failure as Error).message).not.toContain("Request failed");
     expect(result.current.actionFor(5).error).toEqual({
       key: "Packages.errors.dependencyNotGlobal",
@@ -1788,7 +1790,7 @@ describe("useRoomPackages", () => {
   it("explains a workshop dependency missing from the workshop", async () => {
     vi.mocked(packagesApi.publishPackageToWorkshop).mockRejectedValue({
       response: {
-        data: { message: "package_dependency_unknown_slug:missing" },
+        data: { code: "package_dependency_unknown_slug", slug: "missing" },
       },
     });
     const { result, unmount } = await startHook();
@@ -1797,7 +1799,9 @@ describe("useRoomPackages", () => {
       result.current.publishToWorkshop(5).catch((error: unknown) => error),
     );
 
-    expect((failure as Error).message).toContain("#missing");
+    expect((failure as Error).message).toContain(
+      "package_dependency_unknown_slug",
+    );
     expect((failure as Error).message).toContain("workshop");
     expect(result.current.actionFor(5).error).toEqual({
       key: "Packages.errors.dependencyUnknownSlug",

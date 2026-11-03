@@ -659,9 +659,9 @@ describe('PackageClosureResolver', () => {
         packages: [{ id: 7, slug: 'root' }],
         reference: 'res://packages/missing/lib.gd',
       });
-      await expect(unknown.resolve(7, 1, 3)).rejects.toThrow(
-        'package_dependency_unknown_slug:missing',
-      );
+      await expect(unknown.resolve(7, 1, 3)).rejects.toMatchObject({
+        response: { code: 'package_dependency_unknown_slug', slug: 'missing' },
+      });
     });
 
     it('keeps package_dependency_unpublished for a known unpublished slug', async () => {
@@ -673,9 +673,9 @@ describe('PackageClosureResolver', () => {
         published: [7],
         reference: 'res://packages/hero/lib.gd',
       });
-      await expect(unpublished.resolve(7, 1, 3)).rejects.toThrow(
-        'package_dependency_unpublished',
-      );
+      await expect(unpublished.resolve(7, 1, 3)).rejects.toMatchObject({
+        response: { code: 'package_dependency_unpublished', packageId: 9 },
+      });
     });
   });
 
