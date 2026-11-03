@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { errorMessage } from 'src/common/errors';
 import { RoomRuntimeConfiguration } from './room-runtime.configuration';
 import { RoomRuntimeError } from './room-runtime.errors';
 import { RoomRuntimeLog } from './room-runtime.log';
@@ -339,7 +340,7 @@ export class RoomRuntimeSession {
     }
     this.guardedPipes.add(pipe);
     pipe.on('error', (error: Error) => {
-      this.appendLog(`[wired] ${label} error: ${this.errorMessage(error)}`);
+      this.appendLog(`[wired] ${label} error: ${errorMessage(error)}`);
     });
   }
 
@@ -458,7 +459,7 @@ export class RoomRuntimeSession {
       return true;
     } catch (error) {
       this.appendLog(
-        `[wired] control write failed: ${this.errorMessage(error)}`,
+        `[wired] control write failed: ${errorMessage(error)}`,
       );
       return false;
     }
@@ -599,7 +600,7 @@ export class RoomRuntimeSession {
       this.record.process.kill();
     } catch (error) {
       this.options.logger.warn(
-        `Failed to kill room ${this.record.roomId} after start failure: ${this.errorMessage(error)}`,
+        `Failed to kill room ${this.record.roomId} after start failure: ${errorMessage(error)}`,
       );
     }
   }
@@ -643,7 +644,7 @@ export class RoomRuntimeSession {
       }
       void this.stop('idle_timeout').catch((error) => {
         this.options.logger.warn(
-          `Idle stop failed for room ${record.roomId}: ${this.errorMessage(error)}`,
+          `Idle stop failed for room ${record.roomId}: ${errorMessage(error)}`,
         );
       });
     }, delay);
@@ -701,7 +702,7 @@ export class RoomRuntimeSession {
         }
       } catch (error) {
         this.appendLog(
-          `[wired] failed to send shutdown command: ${this.errorMessage(error)}`,
+          `[wired] failed to send shutdown command: ${errorMessage(error)}`,
         );
       }
 
@@ -723,7 +724,7 @@ export class RoomRuntimeSession {
     try {
       record.process.kill();
     } catch (error) {
-      this.appendLog(`[wired] force kill failed: ${this.errorMessage(error)}`);
+      this.appendLog(`[wired] force kill failed: ${errorMessage(error)}`);
     }
 
     const exitedAfterKill = await this.waitForExit(FORCE_KILL_WAIT_MS);
@@ -803,7 +804,7 @@ export class RoomRuntimeSession {
     } catch (error) {
       // A consumer bug must never break the runtime state machine.
       this.appendLog(
-        `[wired] event observer failed: ${this.errorMessage(error)}`,
+        `[wired] event observer failed: ${errorMessage(error)}`,
       );
     }
   }
@@ -812,7 +813,4 @@ export class RoomRuntimeSession {
     return error instanceof Error ? error : new Error(String(error));
   }
 
-  private errorMessage(error: unknown): string {
-    return this.toError(error).message;
-  }
 }

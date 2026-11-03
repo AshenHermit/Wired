@@ -1,5 +1,6 @@
 import { ConflictException, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
+import { errorMessage } from 'src/common/errors';
 import { DataSource, QueryRunner } from 'typeorm';
 
 /**
@@ -172,7 +173,7 @@ export class PackagePublishLockService {
   private warnLockFailure(packageId: number, error: unknown): void {
     this.logger.warn(
       `Package ${packageId} publication lock is only process-local: ${
-        error instanceof Error ? error.message : String(error)
+        errorMessage(error)
       }`,
     );
   }

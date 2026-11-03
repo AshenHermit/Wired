@@ -17,6 +17,9 @@ function extractMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Request failed";
 }
 
+/** Query string values accepted by the client, forwarded to axios verbatim. */
+export type ApiClientQuery = Record<string, unknown>;
+
 export class ApiClient {
   axios: AxiosInstance;
 
@@ -24,10 +27,10 @@ export class ApiClient {
     this.axios = axiosClient;
   }
 
-  async processResponse<T>(res: Promise<AxiosResponse<any, any>>) {
+  async processResponse<T>(res: Promise<AxiosResponse<T>>): Promise<T> {
     try {
       const response = await res;
-      return response.data as T;
+      return response.data;
     } catch (error) {
       if (axios.isAxiosError(error)) {
         // Keep the response: callers need the HTTP status and the structured
@@ -46,27 +49,27 @@ export class ApiClient {
     }
   }
 
-  async get<T, R>(endpoint: string, data?: R) {
-    return this.processResponse<T>(this.axios.get(endpoint, { params: data }));
+  async get<T>(endpoint: string, params?: ApiClientQuery): Promise<T> {
+    return this.processResponse<T>(this.axios.get(endpoint, { params }));
   }
-  async getFile<R>(endpoint: string, data?: R) {
+  async getFile(endpoint: string, params?: ApiClientQuery): Promise<ArrayBuffer> {
     return this.processResponse<ArrayBuffer>(
-      this.axios.get(endpoint, { params: data, responseType: "arraybuffer" })
+      this.axios.get(endpoint, { params, responseType: "arraybuffer" })
     );
   }
-  async post<T, R>(endpoint: string, data?: R) {
-    return this.processResponse<T>(this.axios.post(endpoint, data));
+  async post<T>(endpoint: string, body?: unknown): Promise<T> {
+    return this.processResponse<T>(this.axios.post(endpoint, body));
   }
-  async patch<T, R>(endpoint: string, data?: R) {
-    return this.processResponse<T>(this.axios.patch(endpoint, data));
+  async patch<T>(endpoint: string, body?: unknown): Promise<T> {
+    return this.processResponse<T>(this.axios.patch(endpoint, body));
   }
-  async delete<T, R>(endpoint: string, data?: R) {
+  async delete<T>(endpoint: string, params?: ApiClientQuery): Promise<T> {
     return this.processResponse<T>(
-      this.axios.delete(endpoint, { params: data })
+      this.axios.delete(endpoint, { params })
     );
   }
 
-  async postFile<T>(endpoint: string, file: File) {
+  async postFile<T>(endpoint: string, file: File): Promise<T> {
     const formData = new FormData();
     formData.append("file", file);
     return this.processResponse<T>(

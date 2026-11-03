@@ -14,6 +14,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { PackageFileEntry } from '@wired-io/shared';
+import { errorMessage } from 'src/common/errors';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { User } from 'src/database/entities/user.entity';
@@ -469,7 +470,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     } catch (error) {
       this.logger.warn(
         `Package ${packageId} was saved but its room was not notified: ${
-          error instanceof Error ? error.message : String(error)
+          errorMessage(error)
         }`,
       );
     }
@@ -701,13 +702,6 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
   }
 
   /**
-   * A room package may reference files of another package by absolute path
-   * (`res://packages/<id>/...`), and the runtime keeps those references
-   * pointing into the referenced package's own directory. Deleting a package
-   * whose files are still referenced would therefore break every enabled
-   * dependent on its next reload, so the delete is refused while one exists.
-   */
-  /**
    * Enabling is the fourth invariant point: a package may have been disabled
    * while one of its dependencies was deleted, and dispatching it then would
    * fail every later game connection for the room.
@@ -765,6 +759,13 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     }
   }
 
+  /**
+   * A room package may reference files of another package by absolute path
+   * (`res://packages/<id>/...`), and the runtime keeps those references
+   * pointing into the referenced package's own directory. Deleting a package
+   * whose files are still referenced would therefore break every enabled
+   * dependent on its next reload, so the delete is refused while one exists.
+   */
   private async assertNoEnabledDependents(packageId: number): Promise<void> {
     if (!this.delivery) {
       return;
@@ -832,7 +833,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     } catch (error) {
       this.logger.warn(
         `ScriptingPackage ${id} was deleted but its files were not removed: ${
-          error instanceof Error ? error.message : String(error)
+          errorMessage(error)
         }`,
       );
     }
@@ -842,7 +843,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       } catch (error) {
         this.logger.warn(
           `Package ${id} was deleted but its room was not notified: ${
-            error instanceof Error ? error.message : String(error)
+            errorMessage(error)
           }`,
         );
       }

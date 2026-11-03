@@ -8,7 +8,11 @@ import { PackageDeliveryModule } from 'src/scripting-packages/package-delivery.m
 import { GameExportController } from './game-export.controller';
 import { GameRoomController } from './game-room.controller';
 import { GameSocketProxyService } from './game-socket-proxy.service';
-import { GameRoomTicketRateLimiter } from './game-room.rate-limiter';
+import {
+  GameRoomTicketRateLimiter,
+  InMemoryTicketRateLimitStore,
+  TICKET_RATE_LIMIT_STORE,
+} from './game-room.rate-limiter';
 import { GameRoomService } from './game-room.service';
 import { GameTicketService } from './game-ticket.service';
 import { NodeRuntimeProcessFactory } from './node-runtime-process.factory';
@@ -34,6 +38,12 @@ import { RuntimeProcessFactory } from './room-runtime.types';
     GameSocketProxyService,
     GameRoomService,
     GameRoomTicketRateLimiter,
+    {
+      // Default binding for the limiter's seam. A multi-instance deploy
+      // overrides it with a shared store.
+      provide: TICKET_RATE_LIMIT_STORE,
+      useClass: InMemoryTicketRateLimitStore,
+    },
     PackageSyncService,
     {
       provide: RuntimeProcessFactory,

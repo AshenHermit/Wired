@@ -314,22 +314,6 @@ describe("PackageFileSystem", () => {
     expect(tree.size).toBe(0);
   });
 
-  it("does not create staging when the engine primitive is missing", async () => {
-    const { files, bridge, order, tree } = makeWorkspace(
-      {},
-      {
-        getEngine: () => undefined as unknown as PackageEngine,
-      },
-    );
-
-    await expect(
-      files.replaceContents("hero", new Map([["main.gd", data("main")]])),
-    ).rejects.toBeInstanceOf(GodotFsError);
-    expect(bridge.call).not.toHaveBeenCalled();
-    expect(order).toEqual([]);
-    expect(tree.size).toBe(0);
-  });
-
   it("keeps editor metadata out of collect", async () => {
     const entries = [
       {

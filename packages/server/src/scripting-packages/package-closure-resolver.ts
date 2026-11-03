@@ -3,6 +3,7 @@ import { PackageFileEntry } from '@wired-io/shared';
 import { Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
+import { errorMessage } from 'src/common/errors';
 import { MAX_PACKAGE_FILE_SIZE } from './package-manifest';
 import {
   collectRawPackageReferences,
@@ -231,7 +232,7 @@ export class PackageClosureResolver {
       } catch (error) {
         this.logger.warn(
           `Skipping package ${id} during dependent scan: ${
-            error instanceof Error ? error.message : String(error)
+            errorMessage(error)
           }`,
         );
         continue;

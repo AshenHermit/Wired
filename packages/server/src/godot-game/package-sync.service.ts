@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { PackageSyncStatus } from '@wired-io/shared';
+import { errorMessage } from 'src/common/errors';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import {
@@ -240,12 +241,12 @@ export class PackageSyncService
     this.store.forgetPeers(roomId);
     void this.reconcileRoom(roomId, true).catch((error: unknown) => {
       this.logger.error(
-        `Failed to reconcile packages for room ${roomId}: ${this.errorMessage(error)}`,
+        `Failed to reconcile packages for room ${roomId}: ${errorMessage(error)}`,
       );
     });
     void this.announceRoomPackages(roomId).catch((error: unknown) => {
       this.logger.error(
-        `Failed to announce room packages for room ${roomId}: ${this.errorMessage(error)}`,
+        `Failed to announce room packages for room ${roomId}: ${errorMessage(error)}`,
       );
     });
   }
@@ -267,7 +268,7 @@ export class PackageSyncService
     // notification was lost; the manifest remains the source of truth.
     void this.reconcileRoom(roomId).catch((error: unknown) => {
       this.logger.error(
-        `Failed to reconcile packages after a join in room ${roomId}: ${this.errorMessage(error)}`,
+        `Failed to reconcile packages after a join in room ${roomId}: ${errorMessage(error)}`,
       );
     });
   }
@@ -449,7 +450,7 @@ export class PackageSyncService
       dependents = await this.delivery.findDependentRoomPackages(packageId);
     } catch (error) {
       this.logger.error(
-        `Failed to scan dependents of package ${packageId}: ${this.errorMessage(error)}`,
+        `Failed to scan dependents of package ${packageId}: ${errorMessage(error)}`,
       );
       return;
     }
@@ -544,7 +545,4 @@ export class PackageSyncService
     this.scheduler.runDue(this.store.all(), (record) => this.dispatch(record));
   }
 
-  private errorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-  }
 }

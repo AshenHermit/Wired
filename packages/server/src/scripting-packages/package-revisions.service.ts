@@ -15,6 +15,7 @@ import {
   PackageRevision,
 } from '@wired-io/shared';
 import { In, Repository } from 'typeorm';
+import { errorMessage } from 'src/common/errors';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import {
@@ -519,7 +520,7 @@ export class PackageRevisionsService {
   ): void {
     this.logger.warn(
       `Package ${packageId} revision ${revision} copy cleanup failed: ${
-        error instanceof Error ? error.message : String(error)
+        errorMessage(error)
       }`,
     );
   }
@@ -587,7 +588,7 @@ export class PackageRevisionsService {
     } catch (error) {
       this.logger.warn(
         `Package ${packageId} revision ${revision} was published but its dependency pins were not recorded: ${
-          error instanceof Error ? error.message : String(error)
+          errorMessage(error)
         }`,
       );
     }
@@ -610,7 +611,7 @@ export class PackageRevisionsService {
     } catch (error) {
       this.logger.error(
         `Package ${packageId} revision ${revision} was published but runtime dispatch failed: ${
-          error instanceof Error ? error.message : String(error)
+          errorMessage(error)
         }`,
       );
     }

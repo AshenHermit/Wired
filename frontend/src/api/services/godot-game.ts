@@ -8,7 +8,7 @@ import { withApiPrefix } from "@/utils/variables";
 import { apiClient } from "../api-client/client-api";
 
 export async function getGodotProjectInfo() {
-  const info = await apiClient.get<ProjectInfo, void>(
+  const info = await apiClient.get<ProjectInfo>(
     "godot-project-info/wired"
   );
   // The backend answers with its own path; the browser fetches project files
@@ -22,14 +22,14 @@ export async function getGodotProjectInfo() {
  * Call this for every connection attempt: tickets cannot be reused.
  */
 export async function createGameConnection(roomId: number) {
-  return apiClient.post<GameRoomConnection, void>(
+  return apiClient.post<GameRoomConnection>(
     `rooms/${roomId}/game/connection`
   );
 }
 
 /** Runtime status; the backend never starts Godot for this call. */
 export async function getGameRoomStatus(roomId: number) {
-  return apiClient.get<GameRoomRuntimeStatus, void>(
+  return apiClient.get<GameRoomRuntimeStatus>(
     `rooms/${roomId}/game/status`
   );
 }
@@ -39,7 +39,7 @@ export async function getGameRoomStatus(roomId: number) {
  * clients have applied them. Used by the editor to catch up after Emit.
  */
 export async function getRoomPackages(roomId: number) {
-  return apiClient.get<RoomPackagesStatus, void>(
+  return apiClient.get<RoomPackagesStatus>(
     `rooms/${roomId}/game/packages`
   );
 }

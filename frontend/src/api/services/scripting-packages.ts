@@ -21,7 +21,7 @@ import { uint8ArrayToFile } from "@/utils/file-utils";
 export async function createScriptingPackage(
   data: CreateScriptingPackagePayload
 ) {
-  return apiClient.post<ScriptingPackage, CreateScriptingPackagePayload>(
+  return apiClient.post<ScriptingPackage>(
     "scripting-packages",
     data
   );
@@ -32,21 +32,21 @@ export async function createScriptingPackage(
  * dialog uses it to prefill a new workshop record from the room package.
  */
 export async function getScriptingPackage(id: number) {
-  return apiClient.get<ScriptingPackage, void>(`scripting-packages/${id}`);
+  return apiClient.get<ScriptingPackage>(`scripting-packages/${id}`);
 }
 
 export async function updateScriptingPackage(
   id: number,
   data: UpdateScriptingPackagePayload
 ) {
-  return apiClient.patch<ScriptingPackage, UpdateScriptingPackagePayload>(
+  return apiClient.patch<ScriptingPackage>(
     `scripting-packages/${id}`,
     data
   );
 }
 
 export async function deleteScriptingPackage(id: number) {
-  await apiClient.delete<void, void>(`scripting-packages/${id}`);
+  await apiClient.delete<void>(`scripting-packages/${id}`);
 }
 
 /**
@@ -60,10 +60,7 @@ export async function checkPackageSlugAvailability(
   roomId?: number,
   excludeId?: number
 ): Promise<PackageSlugAvailability> {
-  return apiClient.get<
-    PackageSlugAvailability,
-    { slug: string; roomId?: number; excludeId?: number }
-  >("scripting-packages/slug-availability", {
+  return apiClient.get<PackageSlugAvailability>("scripting-packages/slug-availability", {
     slug,
     ...(roomId === undefined ? {} : { roomId }),
     ...(excludeId === undefined ? {} : { excludeId }),
@@ -79,10 +76,7 @@ export async function listWorkshopPackages(params: {
   limit?: number;
   offset?: number;
 }): Promise<WorkshopListing> {
-  return apiClient.get<
-    WorkshopListing,
-    { q?: string; limit?: number; offset?: number }
-  >("scripting-packages/workshop", params);
+  return apiClient.get<WorkshopListing>("scripting-packages/workshop", params);
 }
 
 export async function listWorkshopTags(params: {
@@ -90,19 +84,13 @@ export async function listWorkshopTags(params: {
   limit?: number;
   offset?: number;
 }): Promise<WorkshopTagListing> {
-  return apiClient.get<
-    WorkshopTagListing,
-    { q?: string; limit?: number; offset?: number }
-  >("scripting-packages/workshop/tags", params);
+  return apiClient.get<WorkshopTagListing>("scripting-packages/workshop/tags", params);
 }
 
 export async function lookupWorkshopPackage(
   slug: string
 ): Promise<WorkshopPackageSummary | null> {
-  const result = await apiClient.get<
-    { package: WorkshopPackageSummary | null },
-    { slug: string }
-  >("scripting-packages/workshop/lookup", { slug });
+  const result = await apiClient.get<{ package: WorkshopPackageSummary | null }>("scripting-packages/workshop/lookup", { slug });
   return result.package;
 }
 
@@ -110,7 +98,7 @@ export async function publishPackageToWorkshop(
   id: number,
   metadata: WorkshopPackageMetadata
 ): Promise<WorkshopPublishResult> {
-  return apiClient.post<WorkshopPublishResult, WorkshopPackageMetadata>(
+  return apiClient.post<WorkshopPublishResult>(
     `scripting-packages/${id}/workshop`,
     metadata
   );
@@ -120,7 +108,7 @@ export async function forkPackageToWorkshop(
   id: number,
   slug: string
 ): Promise<ScriptingPackage> {
-  return apiClient.post<ScriptingPackage, WorkshopForkPayload>(
+  return apiClient.post<ScriptingPackage>(
     `scripting-packages/${id}/workshop-fork`,
     { slug }
   );
@@ -130,7 +118,7 @@ export async function copyWorkshopPackageToRoom(
   id: number,
   roomId: number
 ): Promise<ScriptingPackage> {
-  return apiClient.post<ScriptingPackage, RoomCopyPayload>(
+  return apiClient.post<ScriptingPackage>(
     `scripting-packages/${id}/room-copy`,
     { roomId }
   );
@@ -144,7 +132,7 @@ export async function createPackageRevision(
   packageId: number,
   data: CreatePackageRevisionPayload
 ) {
-  return apiClient.post<PackageRevision, CreatePackageRevisionPayload>(
+  return apiClient.post<PackageRevision>(
     `scripting-packages/${packageId}/revisions`,
     data
   );
@@ -182,13 +170,13 @@ export async function publishPackageRevision(
   packageId: number,
   revision: number
 ) {
-  return apiClient.post<PackageRevision, void>(
+  return apiClient.post<PackageRevision>(
     `scripting-packages/${packageId}/revisions/${revision}/publish`
   );
 }
 
 export async function getPackageManifest(packageId: number) {
-  return apiClient.get<PackageManifest, void>(
+  return apiClient.get<PackageManifest>(
     `scripting-packages/${packageId}/manifest`
   );
 }
@@ -198,7 +186,7 @@ export async function getRevisionFile(
   revision: number,
   filepath: string
 ) {
-  return apiClient.getFile<void>(
+  return apiClient.getFile(
     `scripting-packages/${packageId}/revisions/${revision}/files/${encodeFilePath(
       filepath
     )}`

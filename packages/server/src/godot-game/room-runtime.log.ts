@@ -8,6 +8,7 @@ import {
   WriteStream,
 } from 'node:fs';
 import { join } from 'node:path';
+import { errorMessage } from 'src/common/errors';
 import { safeRoomName } from './room-runtime.names';
 
 const DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
@@ -48,7 +49,7 @@ export class RoomRuntimeLog {
       );
     } catch (error) {
       this.logger.warn(
-        `Cannot open runtime log for room ${this.roomId}: ${this.errorMessage(error)}`,
+        `Cannot open runtime log for room ${this.roomId}: ${errorMessage(error)}`,
       );
     }
   }
@@ -88,7 +89,4 @@ export class RoomRuntimeLog {
     }
   }
 
-  private errorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-  }
 }

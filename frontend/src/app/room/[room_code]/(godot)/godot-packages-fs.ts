@@ -46,6 +46,9 @@ export const PACKAGES_DIR = "packages";
  * line of defense before a path is handed to the engine.
  */
 export function assertRelativePackagePath(relativePath: string): string {
+  // Filepaths reach this from the plugin's `collect` payload, where the
+  // annotation is a claim about the wire rather than a guarantee, so the raw
+  // value is checked before the path rules below dereference it.
   if (typeof relativePath !== "string" || relativePath.length === 0) {
     throw new GodotFsError("Package file path must be a non-empty string");
   }
@@ -81,7 +84,7 @@ export type CollectedPackageFile = {
 export const PACKAGE_DIR_SLUG_PATTERN = /^[a-z0-9_]{1,64}$/;
 
 export function assertPackageSlug(slug: string): string {
-  if (typeof slug !== "string" || !PACKAGE_DIR_SLUG_PATTERN.test(slug)) {
+  if (!PACKAGE_DIR_SLUG_PATTERN.test(slug)) {
     throw new GodotFsError(`Недопустимый slug пакета: ${slug}`);
   }
   return slug;
@@ -140,60 +143,22 @@ function assertStagingPath(stagingPath: string, slug: string): string {
   return stagingPath;
 }
 
-const BASE64_ALPHABET =
-  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-const BASE64_LOOKUP = (() => {
-  const table = new Uint8Array(128);
-  table.fill(255);
-  for (let index = 0; index < BASE64_ALPHABET.length; index += 1) {
-    table[BASE64_ALPHABET.charCodeAt(index)] = index;
-  }
-  return table;
-})();
-
 /**
- * Decodes the plugin's base64 payload directly into a byte buffer.
+ * Decodes the plugin's base64 payload into bytes.
  *
- * Package files are binary (`import` caches, scenes, PNGs), so routing them
- * through `atob` — a JavaScript string with one code unit per byte — is both
- * wasteful and easy to get wrong for non-UTF-8 contents. The buffer path writes
- * every sextet into a preallocated `Uint8Array`; platforms that expose the
- * staged `Uint8Array.fromBase64` use it directly.
+ * `atob` runs the standard forgiving decode (it strips the line wrapping the
+ * plugin may add) and maps each code unit to one byte, which is exactly the
+ * payload's encoding; the byte buffer is built without ever materialising the
+ * value as text.
  */
 function decodeBase64(contentsBase64: string): Uint8Array {
-  const fromBase64 = (
-    Uint8Array as unknown as {
-      fromBase64?: (value: string) => Uint8Array;
-    }
-  ).fromBase64;
-  if (typeof fromBase64 === "function") {
-    return fromBase64(contentsBase64);
+  let binary: string;
+  try {
+    binary = atob(contentsBase64);
+  } catch {
+    throw new GodotFsError("Редактор вернул некорректный base64-файл пакета");
   }
-
-  const clean = contentsBase64.replace(/[\s=]/g, "");
-  const length = clean.length;
-  const output = new Uint8Array(Math.floor((length * 3) / 4));
-  let buffer = 0;
-  let bits = 0;
-  let offset = 0;
-  for (let index = 0; index < length; index += 1) {
-    const code = clean.charCodeAt(index);
-    const value = code < BASE64_LOOKUP.length ? BASE64_LOOKUP[code] : 255;
-    if (value === 255) {
-      throw new GodotFsError(
-        "Редактор вернул некорректный base64-файл пакета",
-      );
-    }
-    buffer = (buffer << 6) | value;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      output[offset] = (buffer >> bits) & 0xff;
-      offset += 1;
-    }
-  }
-  return offset === output.length ? output : output.subarray(0, offset);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
 /**
@@ -293,12 +258,8 @@ export function createPackageFileSystem({
       // Read the write primitive before the plugin creates a staging directory:
       // an editor that was reset between the revision download and this write
       // must fail here, not after files were copied into an orphan staging dir.
+      // A gone engine is reported by the getter itself, never as a TypeError.
       const engine = getEngine();
-      if (!engine) {
-        throw new GodotFsError(
-          "Файловая система Godot-редактора ещё не готова: дождитесь загрузки проекта",
-        );
-      }
 
       const { staging_path: stagingPath } =
         await bridge.call<PrepareReplacePayload>("prepareReplace", {

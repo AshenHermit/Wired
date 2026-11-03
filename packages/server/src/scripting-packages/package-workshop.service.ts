@@ -15,6 +15,7 @@ import {
   WorkshopPublishResult,
   WorkshopTagListing,
 } from '@wired-io/shared';
+import { errorMessage } from 'src/common/errors';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { User } from 'src/database/entities/user.entity';
@@ -403,7 +404,7 @@ export class PackageWorkshopService {
     } catch (error) {
       this.logger.warn(
         `Package ${packageId} copy rollback failed: ${
-          error instanceof Error ? error.message : String(error)
+          errorMessage(error)
         }`,
       );
     }

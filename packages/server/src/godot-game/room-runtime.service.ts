@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { errorMessage } from 'src/common/errors';
 import { AppConfigService } from 'src/config/config.service';
 import { GameTicketService } from './game-ticket.service';
 import { RoomRuntimeConfiguration } from './room-runtime.configuration';
@@ -136,7 +137,7 @@ export class RoomRuntimeService implements OnModuleDestroy {
       sessions.map((session) =>
         session.stop('backend_shutdown').catch((error) => {
           this.logger.error(
-            `Failed to stop room ${session.roomId}: ${this.errorMessage(error)}`,
+            `Failed to stop room ${session.roomId}: ${errorMessage(error)}`,
           );
         }),
       ),
@@ -261,12 +262,9 @@ export class RoomRuntimeService implements OnModuleDestroy {
     } catch (error) {
       // Observer failures are local bookkeeping problems, not runtime failures.
       this.logger.error(
-        `Runtime observer failed for room ${roomId}: ${this.errorMessage(error)}`,
+        `Runtime observer failed for room ${roomId}: ${errorMessage(error)}`,
       );
     }
   }
 
-  private errorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-  }
 }

@@ -1,4 +1,4 @@
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { AppConfigService } from 'src/config/config.service';
 
 export interface TicketRateLimitDecision {
@@ -60,23 +60,18 @@ const MAX_TRACKED_KEYS = 5_000;
  * signed-in client from starting or reusing runtimes by hammering the join
  * endpoint.
  *
- * The decision logic is independent of the storage: the default store is
- * in-memory (single instance only), and a shared backend can be supplied
- * through `TICKET_RATE_LIMIT_STORE` without touching this class or its
- * callers.
+ * The decision logic is independent of the storage: `GodotGameModule` binds
+ * `TICKET_RATE_LIMIT_STORE` to the in-memory store, and a horizontally scaled
+ * deploy overrides that binding with a shared backend (Redis, Postgres) without
+ * touching this class or its callers.
  */
 @Injectable()
 export class GameRoomTicketRateLimiter {
-  private readonly store: TicketRateLimitStore;
-
   constructor(
     private readonly configService: AppConfigService,
-    @Optional()
     @Inject(TICKET_RATE_LIMIT_STORE)
-    store?: TicketRateLimitStore,
-  ) {
-    this.store = store ?? new InMemoryTicketRateLimitStore();
-  }
+    private readonly store: TicketRateLimitStore,
+  ) {}
 
   consume(
     userId: number,

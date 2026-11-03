@@ -18,6 +18,7 @@ const createLimiter = (
 ): GameRoomTicketRateLimiter =>
   new GameRoomTicketRateLimiter(
     configService(ticketRateLimit, ticketRateLimitWindowMs),
+    new InMemoryTicketRateLimitStore(),
   );
 
 describe('GameRoomTicketRateLimiter', () => {

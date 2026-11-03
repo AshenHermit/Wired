@@ -11,7 +11,10 @@ import { Room } from 'src/database/entities/room.entity';
 import { User } from 'src/database/entities/user.entity';
 import { RoomsService } from 'src/rooms/rooms.service';
 import { GameRoomService } from './game-room.service';
-import { GameRoomTicketRateLimiter } from './game-room.rate-limiter';
+import {
+  GameRoomTicketRateLimiter,
+  InMemoryTicketRateLimitStore,
+} from './game-room.rate-limiter';
 import { RoomRuntimeError } from './room-runtime.errors';
 import { RoomRuntimeService } from './room-runtime.service';
 import { PackageSyncService } from './package-sync.service';
@@ -108,7 +111,7 @@ describe('GameRoomService', () => {
     service = new GameRoomService(
       rooms as unknown as RoomsService,
       runtime as unknown as RoomRuntimeService,
-      new GameRoomTicketRateLimiter(configService),
+      new GameRoomTicketRateLimiter(configService, new InMemoryTicketRateLimitStore()),
       packageSync as unknown as PackageSyncService,
     );
     rooms.findOne.mockResolvedValue(room());
