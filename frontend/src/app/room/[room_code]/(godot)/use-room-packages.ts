@@ -5,12 +5,18 @@ import type {
   PackageRevisionSyncState,
   PackageSyncStatus,
   ScriptingPackage,
+  WorkshopPackageMetadata,
+  WorkshopPackageSummary,
+  WorkshopPublishResult,
 } from "@wired-io/shared";
 import { getRoomPackages } from "@/api/services/godot-game";
 import {
   checkPackageSlugAvailability,
+  copyWorkshopPackageToRoom,
   createScriptingPackage,
   deleteScriptingPackage,
+  forkPackageToWorkshop,
+  publishPackageToWorkshop,
   updateScriptingPackage,
   type PackageSlugAvailability,
 } from "@/api/services/scripting-packages";
@@ -101,7 +107,10 @@ export type RoomPackagesController = {
     slug: string,
   ) => Promise<ScriptingPackage>;
   /** Asks the backend whether a new package may use this slug. */
-  checkSlugAvailability: (slug: string) => Promise<PackageSlugAvailability>;
+  checkSlugAvailability: (
+    slug: string,
+    roomId?: number,
+  ) => Promise<PackageSlugAvailability>;
   /**
    * Renames a package or changes its version on the backend. Only the
    * metadata fields of the entry change; local files and runtime state are
@@ -128,6 +137,18 @@ export type RoomPackagesController = {
     packageId: number,
     options?: { force?: boolean },
   ) => Promise<void>;
+  /** Copies a workshop record into the room and downloads the copy. */
+  addFromWorkshop: (workshopPackageId: number) => Promise<ScriptingPackage>;
+  /** Publishes the latest published revision into the global workshop record. */
+  publishToWorkshop: (
+    packageId: number,
+    metadata?: WorkshopPackageMetadata,
+  ) => Promise<WorkshopPublishResult>;
+  /** Creates a room copy under a new slug; publishing it is a separate step. */
+  forkWorkshopPackage: (
+    packageId: number,
+    slug: string,
+  ) => Promise<ScriptingPackage>;
 };
 
 /**
@@ -170,6 +191,51 @@ export class NewerRevisionError extends Error {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The workshop slug belongs to another author. The panel cannot update that
+ * record, so it offers a fork under a new slug instead; the record is carried
+ * along so the dialog can name its author and open the fork form.
+ */
+export class WorkshopSlugTakenError extends Error {
+  constructor(
+    public readonly slug: string,
+    public readonly workshopPackage: WorkshopPackageSummary,
+  ) {
+    super(`Slug ${slug} уже занят в workshop`);
+    this.name = "WorkshopSlugTakenError";
+  }
+}
+
+type WorkshopErrorData = {
+  code?: string;
+  slug?: string;
+  workshopPackage?: WorkshopPackageSummary;
+};
+
+/** The structured body the backend attaches to a workshop conflict. */
+function workshopErrorData(error: unknown): WorkshopErrorData | null {
+  const data = (error as { response?: { data?: unknown } } | undefined)
+    ?.response?.data;
+  return data && typeof data === "object" ? (data as WorkshopErrorData) : null;
+}
+
+/**
+ * The workshop actions show a Russian reason for the codes a user can act on;
+ * every other failure keeps the backend message.
+ */
+function workshopErrorMessage(error: unknown): string {
+  switch (workshopErrorData(error)?.code) {
+    case "package_not_published":
+      return "Сначала опубликуйте пакет (Emit)";
+    case "slug_taken":
+      return "Slug уже занят в комнате";
+    case "publish_conflict":
+      return "Пакет уже копируется, повторите попытку";
+    default:
+      return errorMessage(error);
+  }
 }
 
 /**
@@ -520,6 +586,13 @@ export function useRoomPackages(
   const [error, setError] = React.useState<string | null>(null);
 
   const loadedRef = React.useRef<Map<number, PackageBaseline>>(new Map());
+  /**
+   * Slugs of packages created by an action in this tick. The reducer state is
+   * only readable after React re-renders, but `addFromWorkshop` and
+   * `forkWorkshopPackage` download the copy immediately, so its slug must be
+   * addressable before the state mirror catches up.
+   */
+  const createdSlugsRef = React.useRef<Map<number, string>>(new Map());
   const snapshotsRef = React.useRef<Map<number, Record<string, string>>>(
     new Map(),
   );
@@ -600,10 +673,11 @@ export function useRoomPackages(
    */
   const slugOf = React.useCallback((packageId: number): string => {
     const pkg = stateRef.current.packages.find((item) => item.id === packageId);
-    if (!pkg?.slug) {
+    const slug = pkg?.slug ?? createdSlugsRef.current.get(packageId);
+    if (!slug) {
       throw new Error(`package_slug_missing:${packageId}`);
     }
-    return pkg.slug;
+    return slug;
   }, []);
 
   const load = React.useCallback(
@@ -716,6 +790,7 @@ export function useRoomPackages(
     snapshotsRef.current.clear();
     remoteRef.current.clear();
     inFlightRef.current.clear();
+    createdSlugsRef.current.clear();
     dispatch({ type: "reset", packages: roomPackages });
     setStatusLoaded(false);
     setError(null);
@@ -798,13 +873,17 @@ export function useRoomPackages(
   );
 
   /**
-   * Availability is advisory for the creation form; the server still rejects a
-   * taken or retired slug on POST.
+   * Availability is advisory for the creation and fork forms; the server still
+   * rejects a taken or retired slug. Slugs are room-scoped, so the room is part
+   * of the question, and the global workshop scope is reported separately.
    */
   const checkSlugAvailability = React.useCallback(
-    (slug: string): Promise<PackageSlugAvailability> =>
-      checkPackageSlugAvailability(slug),
-    [],
+    (
+      slug: string,
+      targetRoomId: number = roomId,
+    ): Promise<PackageSlugAvailability> =>
+      checkPackageSlugAvailability(slug, targetRoomId),
+    [roomId],
   );
 
   /**
@@ -932,6 +1011,105 @@ export function useRoomPackages(
     [beginAction, endAction, filesRef, guarded, refresh, setAction, slugOf],
   );
 
+  /**
+   * Copies a workshop record into this room. The copy is independent: it keeps
+   * the workshop slug (slugs are room-scoped), comes from the server with its
+   * published revision, and is downloaded into the editor like any other
+   * package. A failed download leaves the copy created and reports why.
+   */
+  const addFromWorkshop = React.useCallback(
+    (workshopPackageId: number): Promise<ScriptingPackage> =>
+      guarded(async () => {
+        let created: ScriptingPackage;
+        try {
+          created = await copyWorkshopPackageToRoom(workshopPackageId, roomId);
+        } catch (cause) {
+          throw new Error(
+            `Не удалось добавить пакет из workshop: ${workshopErrorMessage(cause)}`,
+          );
+        }
+        dispatch({ type: "created", package: created });
+        createdSlugsRef.current.set(created.id, created.slug);
+        await refresh();
+        await downloadPackage(created.id).catch(() => undefined);
+        // The download writes its own notice, so the reason of the copy is set
+        // last to stay visible on the card.
+        setAction(created.id, { notice: "Пакет добавлен в комнату" });
+        return created;
+      }),
+    [downloadPackage, guarded, refresh, roomId, setAction],
+  );
+
+  /**
+   * Publishes the latest published revision of a room package into the global
+   * workshop record. It only touches the global record: the room package, its
+   * files and its revision stay exactly as they are.
+   */
+  const publishToWorkshop = React.useCallback(
+    (
+      packageId: number,
+      metadata: WorkshopPackageMetadata = {},
+    ): Promise<WorkshopPublishResult> =>
+      guarded(async () => {
+        try {
+          const result = await publishPackageToWorkshop(packageId, metadata);
+          setAction(packageId, {
+            error: null,
+            notice:
+              result.mode === "created"
+                ? "Пакет опубликован в workshop"
+                : "Публикация в workshop обновлена",
+          });
+          return result;
+        } catch (cause) {
+          const data = workshopErrorData(cause);
+          if (data?.code === "workshop_slug_taken" && data.workshopPackage) {
+            // Not a failure on the card: the dialog turns this into the fork
+            // offer instead.
+            setAction(packageId, { error: null });
+            throw new WorkshopSlugTakenError(
+              data.slug ?? slugOf(packageId),
+              data.workshopPackage,
+            );
+          }
+          const message = `Не удалось опубликовать пакет в workshop: ${workshopErrorMessage(
+            cause,
+          )}`;
+          setAction(packageId, { error: message });
+          throw new Error(message);
+        }
+      }),
+    [guarded, setAction, slugOf],
+  );
+
+  /**
+   * Forks a room package under a new slug. The copy stays in the room, keeps
+   * the original parent and rewrites its self-references on the server; it is
+   * downloaded like any other package, and publishing it is a separate step.
+   */
+  const forkWorkshopPackage = React.useCallback(
+    (packageId: number, slug: string): Promise<ScriptingPackage> =>
+      guarded(async () => {
+        let created: ScriptingPackage;
+        try {
+          created = await forkPackageToWorkshop(packageId, slug.trim());
+        } catch (cause) {
+          throw new Error(
+            `Не удалось создать форк: ${workshopErrorMessage(cause)}`,
+          );
+        }
+        dispatch({ type: "created", package: created });
+        createdSlugsRef.current.set(created.id, created.slug);
+        await refresh();
+        await downloadPackage(created.id).catch(() => undefined);
+        setAction(created.id, {
+          notice: `Форк создан: ${created.slug}. Опубликуйте его в workshop отдельно`,
+        });
+        return created;
+      }),
+    [downloadPackage, guarded, refresh, setAction],
+  );
+
   const removePackage = React.useCallback(
     (
       packageId: number,
@@ -1030,6 +1208,7 @@ export function useRoomPackages(
           }
           snapshotsRef.current.delete(packageId);
           loadedRef.current.delete(packageId);
+          createdSlugsRef.current.delete(packageId);
           dispatch({ type: "removed", ids: [packageId] });
           setAction(packageId, { notice: "Пакет удалён из комнаты" });
           await refresh();
@@ -1146,5 +1325,8 @@ export function useRoomPackages(
     deletePackage,
     adoptPackage,
     emitPackage,
+    addFromWorkshop,
+    publishToWorkshop,
+    forkWorkshopPackage,
   };
 }

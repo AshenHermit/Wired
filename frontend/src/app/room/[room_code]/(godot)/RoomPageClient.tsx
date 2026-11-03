@@ -105,7 +105,11 @@ export function GodotRoomPageClient({ room }: { room: Room }) {
             />
           </TabsContent>
           <TabsContent value="packages" className="w-full !h-full">
-            <PackagesTab packages={packages} authorId={authorId} />
+            <PackagesTab
+              packages={packages}
+              authorId={authorId}
+              roomId={room.id}
+            />
           </TabsContent>
           <TabsContent value="game" className="w-full !h-full">
             {gameMounted && <GameTab room={room} />}

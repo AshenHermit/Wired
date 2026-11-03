@@ -1,12 +1,29 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkshopPackageSummary } from "@wired-io/shared";
 import type { PackageSlugAvailability } from "@/api/services/scripting-packages";
 import type {
   RoomPackageEntry,
   RoomPackagesController,
 } from "./use-room-packages";
-import { LocalChangesError, NewerRevisionError } from "./use-room-packages";
+import {
+  LocalChangesError,
+  NewerRevisionError,
+  WorkshopSlugTakenError,
+} from "./use-room-packages";
 import { PackagesTab } from "./PackagesTab";
+
+vi.mock("@/api/services/scripting-packages", async (importActual) => {
+  const actual =
+    await importActual<typeof import("@/api/services/scripting-packages")>();
+  return {
+    ...actual,
+    listWorkshopPackages: vi.fn(),
+    lookupWorkshopPackage: vi.fn(),
+  };
+});
+
+import * as packagesApi from "@/api/services/scripting-packages";
 
 function entry(overrides: Partial<RoomPackageEntry> = {}): RoomPackageEntry {
   return {
@@ -51,7 +68,11 @@ function controller(
     createPackage: vi.fn().mockResolvedValue({ id: 7, name: "New" }),
     checkSlugAvailability: vi
       .fn()
-      .mockResolvedValue({ slug: "new", available: true }),
+      .mockResolvedValue({
+        slug: "new",
+        available: true,
+        global: { available: true },
+      }),
     updatePackageMetadata: vi.fn().mockResolvedValue({} as never),
     downloadPackage: vi.fn().mockResolvedValue(undefined),
     removePackage: vi.fn().mockResolvedValue(undefined),
@@ -59,8 +80,37 @@ function controller(
     deletePackage: vi.fn().mockResolvedValue(undefined),
     adoptPackage: vi.fn().mockResolvedValue(undefined),
     emitPackage: vi.fn().mockResolvedValue(undefined),
+    addFromWorkshop: vi.fn().mockResolvedValue({ id: 9 }),
+    publishToWorkshop: vi
+      .fn()
+      .mockResolvedValue({ mode: "created", package: workshopPackage() }),
+    forkWorkshopPackage: vi.fn().mockResolvedValue({ id: 11 }),
   };
   return { ...base, ...overrides };
+}
+
+function workshopPackage(
+  overrides: Partial<WorkshopPackageSummary> = {},
+): WorkshopPackageSummary {
+  return {
+    id: 100,
+    slug: "demo",
+    name: "Workshop Demo",
+    version: "1.0.0",
+    description: "",
+    tags: [],
+    author: {
+      id: 42,
+      email: "author@example.com",
+      name: "Автор",
+      service: "google",
+      picture: "",
+    },
+    revision: 1,
+    publishedAt: "2026-10-30T10:00:00.000Z",
+    updatedAt: "2026-10-30T10:00:00.000Z",
+    ...overrides,
+  };
 }
 
 async function openPackageActions() {
@@ -72,6 +122,14 @@ async function openPackageActions() {
   return within(menu);
 }
 
+beforeEach(() => {
+  vi.mocked(packagesApi.listWorkshopPackages).mockResolvedValue({
+    items: [],
+    total: 0,
+  });
+  vi.mocked(packagesApi.lookupWorkshopPackage).mockResolvedValue(null);
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -79,7 +137,7 @@ afterEach(() => {
 describe("PackagesTab", () => {
   it("lists all room packages with their editor and backend states", () => {
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         authorId={42}
         packages={controller({
           entries: [
@@ -130,7 +188,7 @@ describe("PackagesTab", () => {
   });
 
   it("explains that Godot needs a project reload to see written files", () => {
-    render(<PackagesTab authorId={42} packages={controller()} />);
+    render(<PackagesTab roomId={1}authorId={42} packages={controller()} />);
 
     expect(
       screen.getByText(/Project → Reload Current Project/),
@@ -146,7 +204,7 @@ describe("PackagesTab", () => {
       .mockResolvedValueOnce(undefined);
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         authorId={42}
         packages={controller({ downloadPackage })}
       />,
@@ -171,7 +229,7 @@ describe("PackagesTab", () => {
       );
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         authorId={42}
         packages={controller({ downloadPackage })}
       />,
@@ -193,7 +251,7 @@ describe("PackagesTab", () => {
       .mockResolvedValueOnce(undefined);
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         authorId={42}
         packages={controller({ removePackage })}
       />,
@@ -216,7 +274,7 @@ describe("PackagesTab", () => {
       .mockResolvedValue({ id: 7, name: "New" } as never);
 
     render(
-      <PackagesTab authorId={42} packages={controller({ createPackage })} />,
+      <PackagesTab roomId={1}authorId={42} packages={controller({ createPackage })} />,
     );
 
     fireEvent.click(
@@ -246,7 +304,7 @@ describe("PackagesTab", () => {
   it("allows Emit only for a package loaded into the editor", async () => {
     const emitPackage = vi.fn().mockResolvedValue(undefined);
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         authorId={42}
         packages={controller({
           entries: [
@@ -275,7 +333,7 @@ describe("PackagesTab", () => {
   it("adopts a leftover directory so its files can be published", async () => {
     const adoptPackage = vi.fn().mockResolvedValue(undefined);
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         authorId={42}
         packages={controller({
           entries: [
@@ -304,7 +362,7 @@ describe("PackagesTab", () => {
       .mockResolvedValueOnce(undefined);
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         authorId={42}
         packages={controller({
           entries: [
@@ -331,7 +389,7 @@ describe("PackagesTab", () => {
 
   it("shows a disabled badge and hides Emit for a disabled package", () => {
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         authorId={42}
         packages={controller({
           entries: [entry({ enabled: false, status: "disabled" })],
@@ -346,7 +404,7 @@ describe("PackagesTab", () => {
 
   it("keeps Emit and Использовать каталог outside the actions menu", () => {
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         packages={controller({ entries: [entry({ loaded: false, localChanges: ["a.gd"] })] })}
         authorId={1}
       />,
@@ -361,7 +419,7 @@ describe("PackagesTab", () => {
   it("confirms permanent deletion in a dialog", async () => {
     const deletePackage = vi.fn().mockResolvedValue(undefined);
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         authorId={42}
         packages={controller({
           entries: [entry({ packageId: 42 })],
@@ -385,7 +443,7 @@ describe("PackagesTab", () => {
   });
 
   it("opens the creation modal from the header button", () => {
-    render(<PackagesTab packages={controller()} authorId={42} />);
+    render(<PackagesTab roomId={1}packages={controller()} authorId={42} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
 
@@ -394,7 +452,7 @@ describe("PackagesTab", () => {
   });
 
   it("lowercases the typed slug", () => {
-    render(<PackagesTab packages={controller()} authorId={42} />);
+    render(<PackagesTab roomId={1}packages={controller()} authorId={42} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
     const slugInput = screen.getByLabelText("Slug");
@@ -411,7 +469,7 @@ describe("PackagesTab", () => {
     });
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         packages={controller({ checkSlugAvailability })}
         authorId={42}
       />,
@@ -425,7 +483,7 @@ describe("PackagesTab", () => {
     await waitFor(() =>
       expect(screen.getByText("Slug уже занят")).toBeTruthy(),
     );
-    expect(checkSlugAvailability).toHaveBeenCalledWith("hero");
+    expect(checkSlugAvailability).toHaveBeenCalledWith("hero", 1);
     expect(screen.getByRole("button", { name: "Создать" })).toHaveProperty(
       "disabled",
       true,
@@ -440,7 +498,7 @@ describe("PackagesTab", () => {
     });
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         packages={controller({ checkSlugAvailability })}
         authorId={42}
       />,
@@ -477,7 +535,7 @@ describe("PackagesTab", () => {
     );
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         packages={controller({ checkSlugAvailability })}
         authorId={42}
       />,
@@ -515,7 +573,7 @@ describe("PackagesTab", () => {
 
   it("disables creation while the editor is not ready", async () => {
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         packages={controller({ fsReady: false })}
         authorId={42}
       />,
@@ -535,7 +593,7 @@ describe("PackagesTab", () => {
   });
 
   it("disables creation without an author", async () => {
-    render(<PackagesTab packages={controller()} authorId={null} />);
+    render(<PackagesTab roomId={1}packages={controller()} authorId={null} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
     fireEvent.change(screen.getByLabelText("Имя пакета"), {
@@ -554,7 +612,7 @@ describe("PackagesTab", () => {
     const createPackage = vi.fn().mockRejectedValue(new Error("boom"));
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         packages={controller({ createPackage })}
         authorId={42}
       />,
@@ -582,7 +640,7 @@ describe("PackagesTab", () => {
       .mockRejectedValue(new Error("Slug уже занят"));
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         packages={controller({ createPackage })}
         authorId={42}
       />,
@@ -612,7 +670,7 @@ describe("PackagesTab", () => {
       .mockResolvedValue({ slug: "hero", available: true });
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         packages={controller({ checkSlugAvailability })}
         authorId={42}
       />,
@@ -634,7 +692,7 @@ describe("PackagesTab", () => {
 
     await waitFor(() => expect(screen.getByText("Slug свободен")).toBeTruthy());
     expect(checkSlugAvailability).toHaveBeenCalledTimes(2);
-    expect(checkSlugAvailability).toHaveBeenLastCalledWith("hero");
+    expect(checkSlugAvailability).toHaveBeenLastCalledWith("hero", 1);
   });
 
   it("saves an edited package name", async () => {
@@ -643,7 +701,7 @@ describe("PackagesTab", () => {
       .mockResolvedValue({ id: 7, slug: "hero", name: "Renamed" } as never);
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero", name: "Demo" })],
           updatePackageMetadata,
@@ -673,7 +731,7 @@ describe("PackagesTab", () => {
       .mockResolvedValue({ id: 7, slug: "hero", version: "1.2.3" } as never);
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero" })],
           updatePackageMetadata,
@@ -700,7 +758,7 @@ describe("PackagesTab", () => {
     const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero", name: "Demo" })],
           updatePackageMetadata,
@@ -725,7 +783,7 @@ describe("PackagesTab", () => {
     const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero", name: "Demo" })],
           updatePackageMetadata,
@@ -751,7 +809,7 @@ describe("PackagesTab", () => {
     const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
 
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero" })],
           updatePackageMetadata,
@@ -773,7 +831,7 @@ describe("PackagesTab", () => {
 
   it("renders the slug instead of the numeric id", () => {
     render(
-      <PackagesTab
+      <PackagesTab roomId={1}
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero" })],
         })}
@@ -783,5 +841,310 @@ describe("PackagesTab", () => {
 
     expect(screen.getByText("#hero")).toBeTruthy();
     expect(screen.queryByText("#7")).toBeNull();
+  });
+
+  it("opens the workshop browser in a dialog", async () => {
+    vi.mocked(packagesApi.listWorkshopPackages).mockResolvedValue({
+      items: [workshopPackage()],
+      total: 1,
+    });
+    render(<PackagesTab roomId={1} packages={controller()} authorId={42} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Workshop" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText(
+        "Пакеты сообщества. Добавление создаст копию в этой комнате.",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).getByLabelText("Поиск пакетов")).toBeTruthy();
+    expect(
+      await within(dialog).findByRole("button", { name: "Добавить" }),
+    ).toBeTruthy();
+  });
+
+  it("adds a workshop package into the room", async () => {
+    vi.mocked(packagesApi.listWorkshopPackages).mockResolvedValue({
+      items: [workshopPackage()],
+      total: 1,
+    });
+    const addFromWorkshop = vi.fn().mockResolvedValue({ id: 9 } as never);
+    render(
+      <PackagesTab
+        roomId={1}
+        packages={controller({ addFromWorkshop })}
+        authorId={42}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Workshop" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      await within(dialog).findByRole("button", { name: "Добавить" }),
+    );
+
+    await waitFor(() => expect(addFromWorkshop).toHaveBeenCalledWith(100));
+  });
+
+  it("disables publishing a package without a published revision", async () => {
+    render(
+      <PackagesTab
+        roomId={1}
+        packages={controller({
+          entries: [entry({ publishedRevision: null })],
+        })}
+        authorId={42}
+      />,
+    );
+
+    const menu = await openPackageActions();
+    const item = menu.getByRole("menuitem", {
+      name: /опубликовать в workshop/i,
+    });
+    expect(item.getAttribute("data-disabled")).toBe("true");
+    expect(item.getAttribute("title")).toBe(
+      "Сначала опубликуйте пакет через Emit",
+    );
+
+    fireEvent.click(item);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("publishes to the workshop from the package menu", async () => {
+    const publishToWorkshop = vi
+      .fn()
+      .mockResolvedValue({ mode: "created", package: workshopPackage() });
+    render(
+      <PackagesTab
+        roomId={1}
+        packages={controller({ publishToWorkshop })}
+        authorId={42}
+      />,
+    );
+
+    const menu = await openPackageActions();
+    fireEvent.click(
+      menu.getByRole("menuitem", { name: /опубликовать в workshop/i }),
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText(
+        "Будет создана новая запись в workshop",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).getByLabelText("Название")).toHaveProperty(
+      "value",
+      "Demo",
+    );
+    expect(within(dialog).getByLabelText("Версия")).toHaveProperty(
+      "value",
+      "0.1.0",
+    );
+
+    fireEvent.change(within(dialog).getByLabelText("Теги"), {
+      target: { value: "ui, gameplay" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Опубликовать" }));
+
+    await waitFor(() =>
+      expect(publishToWorkshop).toHaveBeenCalledWith(5, {
+        name: "Demo",
+        version: "0.1.0",
+        tags: ["ui", "gameplay"],
+      }),
+    );
+  });
+
+  it("offers a fork when the workshop slug belongs to another author", async () => {
+    vi.mocked(packagesApi.lookupWorkshopPackage).mockResolvedValue(
+      workshopPackage({
+        author: {
+          id: 7,
+          email: "other@example.com",
+          name: "Чужой автор",
+          service: "google",
+          picture: "",
+        },
+      }),
+    );
+    const publishToWorkshop = vi.fn();
+    render(
+      <PackagesTab
+        roomId={1}
+        packages={controller({ publishToWorkshop })}
+        authorId={42}
+      />,
+    );
+
+    const menu = await openPackageActions();
+    fireEvent.click(
+      menu.getByRole("menuitem", { name: /опубликовать в workshop/i }),
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText("Slug занят: Чужой автор"),
+    ).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("button", { name: "Опубликовать" }),
+    ).toBeNull();
+    expect(publishToWorkshop).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Создать fork" }));
+
+    // The fork form replaces the publication form.
+    expect(await screen.findByLabelText("Новый slug")).toBeTruthy();
+    expect(
+      screen.getByText(/Создастся копия пакета/),
+    ).toBeTruthy();
+  });
+
+  it("switches to the fork form when the server reports a taken slug", async () => {
+    const publishToWorkshop = vi
+      .fn()
+      .mockRejectedValue(
+        new WorkshopSlugTakenError(
+          "demo",
+          workshopPackage({
+            author: {
+              id: 7,
+              email: "other@example.com",
+              name: "Чужой автор",
+              service: "google",
+              picture: "",
+            },
+          }),
+        ),
+      );
+    render(
+      <PackagesTab
+        roomId={1}
+        packages={controller({ publishToWorkshop })}
+        authorId={42}
+      />,
+    );
+
+    const menu = await openPackageActions();
+    fireEvent.click(
+      menu.getByRole("menuitem", { name: /опубликовать в workshop/i }),
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      await within(dialog).findByRole("button", { name: "Опубликовать" }),
+    );
+
+    expect(
+      await within(dialog).findByText("Slug занят: Чужой автор"),
+    ).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Создать fork" })).toBeTruthy();
+  });
+
+  it("forks a package with a new free slug", async () => {
+    vi.mocked(packagesApi.lookupWorkshopPackage).mockResolvedValue(
+      workshopPackage({
+        author: {
+          id: 7,
+          email: "other@example.com",
+          name: "Чужой автор",
+          service: "google",
+          picture: "",
+        },
+      }),
+    );
+    const checkSlugAvailability = vi.fn().mockResolvedValue({
+      slug: "hero_two",
+      available: true,
+      global: { available: true },
+    });
+    const forkWorkshopPackage = vi.fn().mockResolvedValue({ id: 11 } as never);
+    render(
+      <PackagesTab
+        roomId={1}
+        packages={controller({
+          checkSlugAvailability,
+          forkWorkshopPackage,
+        })}
+        authorId={42}
+      />,
+    );
+
+    const menu = await openPackageActions();
+    fireEvent.click(
+      menu.getByRole("menuitem", { name: /опубликовать в workshop/i }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      await within(dialog).findByRole("button", { name: "Создать fork" }),
+    );
+
+    const slugInput = await screen.findByLabelText("Новый slug");
+    fireEvent.change(slugInput, { target: { value: "Hero_Two" } });
+    expect(slugInput).toHaveProperty("value", "hero_two");
+
+    await waitFor(() =>
+      expect(screen.getByText("Slug свободен")).toBeTruthy(),
+    );
+    expect(checkSlugAvailability).toHaveBeenCalledWith("hero_two", 1);
+
+    const submit = screen.getByRole("button", { name: "Создать fork" });
+    await waitFor(() => expect(submit).toHaveProperty("disabled", false));
+    fireEvent.click(submit);
+
+    await waitFor(() =>
+      expect(forkWorkshopPackage).toHaveBeenCalledWith(5, "hero_two"),
+    );
+  });
+
+  it("keeps the fork disabled when the slug is taken in the workshop", async () => {
+    vi.mocked(packagesApi.lookupWorkshopPackage).mockResolvedValue(
+      workshopPackage({
+        author: {
+          id: 7,
+          email: "other@example.com",
+          name: "Чужой автор",
+          service: "google",
+          picture: "",
+        },
+      }),
+    );
+    const checkSlugAvailability = vi.fn().mockResolvedValue({
+      slug: "hero_two",
+      available: true,
+      global: { available: false, reason: "taken" },
+    });
+    render(
+      <PackagesTab
+        roomId={1}
+        packages={controller({ checkSlugAvailability })}
+        authorId={42}
+      />,
+    );
+
+    const menu = await openPackageActions();
+    fireEvent.click(
+      menu.getByRole("menuitem", { name: /опубликовать в workshop/i }),
+    );
+    const publishDialog = await screen.findByRole("dialog");
+    // The record belongs to another author, so the primary action is the fork.
+    fireEvent.click(
+      await within(publishDialog).findByRole("button", {
+        name: "Создать fork",
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText("Новый slug"), {
+      target: { value: "hero_two" },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByText("Slug уже занят")).toBeTruthy(),
+    );
+    expect(screen.getByRole("button", { name: "Создать fork" })).toHaveProperty(
+      "disabled",
+      true,
+    );
   });
 });

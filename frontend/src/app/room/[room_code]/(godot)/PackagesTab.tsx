@@ -12,6 +12,7 @@ import {
   PlusIcon,
   PowerIcon,
   RefreshCwIcon,
+  StoreIcon,
   Trash2Icon,
   TriangleAlertIcon,
   UploadIcon,
@@ -36,12 +37,24 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  SLUG_CHECK_DEBOUNCE_MS,
+  SLUG_HINT,
+  isSlugValid,
+  slugHintClass,
+  type SlugCheckState,
+} from "@/components/packages/slug";
+import {
   LocalChangesError,
   NewerRevisionError,
   type RoomPackageEntry,
   type RoomPackageStatus,
   type RoomPackagesController,
 } from "./use-room-packages";
+import {
+  WorkshopBrowserDialog,
+  WorkshopForkDialog,
+  WorkshopPublishDialog,
+} from "./workshop-dialogs";
 
 const STATUS_LABEL: Record<RoomPackageStatus, string> = {
   "not-loaded": "не загружен",
@@ -73,45 +86,6 @@ const RUNTIME_LABEL: Record<string, string> = {
   applied: "runtime применил ревизию",
   failed: "runtime не смог применить ревизию",
 };
-
-/** Mirrors the server: lowercase latin letters, digits or `_`, one letter. */
-const SLUG_PATTERN = /^(?=.*[a-z])[a-z0-9_]+$/;
-const SLUG_MAX_LENGTH = 64;
-/** How long the creation form waits before asking the backend about a slug. */
-const SLUG_CHECK_DEBOUNCE_MS = 300;
-
-type SlugCheckState =
-  | "idle"
-  | "invalid"
-  | "checking"
-  | "available"
-  | "taken"
-  | "retired"
-  | "error";
-
-const SLUG_HINT: Partial<Record<SlugCheckState, string>> = {
-  invalid: "Строчные латинские буквы, цифры и _, минимум одна буква",
-  checking: "Проверяем slug…",
-  available: "Slug свободен",
-  taken: "Slug уже занят",
-  retired: "Этот slug был удалён и не может быть использован снова",
-  error: "Не удалось проверить slug. Попробуйте ещё раз",
-};
-
-function isSlugValid(slug: string): boolean {
-  return (
-    slug.length > 0 &&
-    slug.length <= SLUG_MAX_LENGTH &&
-    SLUG_PATTERN.test(slug)
-  );
-}
-
-function slugHintClass(state: SlugCheckState): string {
-  if (state === "taken" || state === "retired" || state === "error") {
-    return "text-destructive";
-  }
-  return "text-muted-foreground";
-}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -432,21 +406,25 @@ function MetadataField({
 function PackageCard({
   entry,
   packages,
+  authorId,
   onDownload,
   onRemove,
   onAdopt,
   onEmit,
   onToggle,
   onDelete,
+  onPublishToWorkshop,
 }: {
   entry: RoomPackageEntry;
   packages: RoomPackagesController;
+  authorId: number | null;
   onDownload: (entry: RoomPackageEntry) => void;
   onRemove: (entry: RoomPackageEntry) => void;
   onAdopt: (entry: RoomPackageEntry) => void;
   onEmit: (entry: RoomPackageEntry) => void;
   onToggle: (entry: RoomPackageEntry) => void;
   onDelete: (entry: RoomPackageEntry) => void;
+  onPublishToWorkshop: (entry: RoomPackageEntry) => void;
 }) {
   const action = packages.actionFor(entry.packageId);
   const disabled = !packages.fsReady || action.busy;
@@ -570,6 +548,20 @@ function PackageCard({
                 <PowerIcon className="size-4" />
                 {entry.enabled ? "Отключить" : "Включить"}
               </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={
+                  disabled || !authorId || entry.publishedRevision === null
+                }
+                onSelect={() => onPublishToWorkshop(entry)}
+                title={
+                  entry.publishedRevision === null
+                    ? "Сначала опубликуйте пакет через Emit"
+                    : undefined
+                }
+              >
+                <StoreIcon className="size-4" />
+                Опубликовать в workshop
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"
@@ -667,11 +659,19 @@ function PackageCard({
 export function PackagesTab({
   packages,
   authorId,
+  roomId,
 }: {
   packages: RoomPackagesController;
   authorId: number | null;
+  roomId: number;
 }) {
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [workshopOpen, setWorkshopOpen] = React.useState(false);
+  const [publishEntry, setPublishEntry] =
+    React.useState<RoomPackageEntry | null>(null);
+  const [forkEntry, setForkEntry] = React.useState<RoomPackageEntry | null>(
+    null,
+  );
   const [name, setName] = React.useState("");
   const [slug, setSlug] = React.useState("");
   const [version, setVersion] = React.useState("0.1.0");
@@ -722,7 +722,7 @@ export function PackagesTab({
     setSlugState("checking");
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void checkSlugAvailability(trimmed)
+      void checkSlugAvailability(trimmed, roomId)
         .then((result) => {
           if (cancelled) return;
           if (result.available) {
@@ -740,7 +740,7 @@ export function PackagesTab({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [checkSlugAvailability, createOpen, slug, slugCheckAttempt]);
+  }, [checkSlugAvailability, createOpen, roomId, slug, slugCheckAttempt]);
 
   const retrySlugCheck = () => {
     const trimmed = slug.trim();
@@ -878,6 +878,15 @@ export function PackagesTab({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setWorkshopOpen(true)}
+            >
+              <StoreIcon className="size-4" />
+              Workshop
+            </Button>
             <Button type="button" size="sm" onClick={openCreate}>
               <PlusIcon className="size-4" />
               Создать пакет
@@ -1035,6 +1044,7 @@ export function PackagesTab({
                 key={entry.packageId}
                 entry={entry}
                 packages={packages}
+                authorId={authorId}
                 onDownload={handleDownload}
                 onRemove={handleRemove}
                 onAdopt={(pkg) =>
@@ -1045,11 +1055,40 @@ export function PackagesTab({
                 onEmit={handleEmit}
                 onToggle={handleToggle}
                 onDelete={(pkg) => void handleDelete(pkg)}
+                onPublishToWorkshop={setPublishEntry}
               />
             ))}
           </ul>
         )}
         {dialog}
+        <WorkshopBrowserDialog
+          open={workshopOpen}
+          onOpenChange={setWorkshopOpen}
+          packages={packages}
+        />
+        <WorkshopPublishDialog
+          open={publishEntry !== null}
+          onOpenChange={(open) => {
+            if (!open) setPublishEntry(null);
+          }}
+          entry={publishEntry}
+          packages={packages}
+          authorId={authorId}
+          onFork={() => {
+            const entry = publishEntry;
+            setPublishEntry(null);
+            if (entry) setForkEntry(entry);
+          }}
+        />
+        <WorkshopForkDialog
+          open={forkEntry !== null}
+          onOpenChange={(open) => {
+            if (!open) setForkEntry(null);
+          }}
+          entry={forkEntry}
+          roomId={roomId}
+          packages={packages}
+        />
       </div>
     </div>
   );

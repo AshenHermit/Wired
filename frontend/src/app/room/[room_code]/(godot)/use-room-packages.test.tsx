@@ -3,6 +3,7 @@ import {
   PackageRevision,
   RoomPackagesStatus,
   ScriptingPackage,
+  WorkshopPackageSummary,
 } from "@wired-io/shared";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +33,9 @@ vi.mock("@/api/services/scripting-packages", () => ({
   getRevisionFile: vi.fn(),
   updateScriptingPackage: vi.fn(),
   deleteScriptingPackage: vi.fn(),
+  copyWorkshopPackageToRoom: vi.fn(),
+  publishPackageToWorkshop: vi.fn(),
+  forkPackageToWorkshop: vi.fn(),
 }));
 
 import * as gameApi from "@/api/services/godot-game";
@@ -45,6 +49,7 @@ import {
 import {
   LocalChangesError,
   NewerRevisionError,
+  WorkshopSlugTakenError,
   useRoomPackages,
 } from "./use-room-packages";
 
@@ -208,15 +213,42 @@ function roomPackage(
 const ONE_PACKAGE = [roomPackage(5, "Demo")];
 const TWO_PACKAGES = [roomPackage(5, "Demo"), roomPackage(6, "Other")];
 
+/** A record of the public workshop: a global package with a published revision. */
+function workshopPackage(
+  id: number,
+  slug: string,
+  authorId = 42,
+): WorkshopPackageSummary {
+  return {
+    id,
+    slug,
+    name: "Workshop Demo",
+    version: "1.0.0",
+    description: "",
+    tags: [],
+    author: {
+      id: authorId,
+      email: "author@example.com",
+      name: authorId === 42 ? "Автор" : "Чужой автор",
+      service: "google",
+      picture: "",
+    },
+    revision: 1,
+    publishedAt: "2026-10-30T10:00:00.000Z",
+    updatedAt: "2026-10-30T10:00:00.000Z",
+  };
+}
+
 async function manifestOf(
   content: string,
   revision = 2,
   packageId = 5,
+  slug = packageId === 5 ? "demo" : "other",
 ): Promise<PackageManifest> {
   const data = encoder.encode(content);
   return {
     packageId,
-    slug: packageId === 5 ? "demo" : "other",
+    slug,
     name: packageId === 5 ? "Demo" : "Other",
     revision,
     files: [
@@ -306,6 +338,16 @@ describe("useRoomPackages", () => {
       roomPackage(5, "Demo"),
     );
     vi.mocked(packagesApi.deleteScriptingPackage).mockResolvedValue(undefined);
+    vi.mocked(packagesApi.copyWorkshopPackageToRoom).mockResolvedValue(
+      roomPackage(9, "Shop Demo", "shop_demo"),
+    );
+    vi.mocked(packagesApi.publishPackageToWorkshop).mockResolvedValue({
+      mode: "updated",
+      package: workshopPackage(100, "demo"),
+    });
+    vi.mocked(packagesApi.forkPackageToWorkshop).mockResolvedValue(
+      roomPackage(11, "Demo", "demo_fork"),
+    );
     mockPublishedFile();
   });
 
@@ -835,6 +877,7 @@ describe("useRoomPackages", () => {
     );
     expect(packagesApi.checkPackageSlugAvailability).toHaveBeenCalledWith(
       "hero",
+      1,
     );
     unmount();
   });
@@ -1446,5 +1489,129 @@ describe("useRoomPackages", () => {
       enabled: false,
       status: "disabled",
     });
+  });
+
+  it("adds a workshop package, downloads it and refreshes", async () => {
+    const { result, unmount } = await startHook();
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValue(
+      roomStatus([
+        { id: 5, revision: 2 },
+        { id: 9, revision: 1 },
+      ]),
+    );
+    vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
+      await manifestOf("extends Node", 1, 9, "shop_demo"),
+    );
+    const loads = vi.mocked(gameApi.getRoomPackages).mock.calls.length;
+
+    await act(async () => {
+      await result.current.addFromWorkshop(100);
+    });
+
+    expect(packagesApi.copyWorkshopPackageToRoom).toHaveBeenCalledWith(100, 1);
+    // The copy is listed again and its published files land in the editor.
+    expect(vi.mocked(gameApi.getRoomPackages).mock.calls.length).toBe(
+      loads + 2,
+    );
+    expect(fs.read("shop_demo", HERO)).toBe("extends Node");
+    expect(
+      result.current.entries.find((item) => item.packageId === 9),
+    ).toMatchObject({ slug: "shop_demo", name: "Shop Demo", loaded: true });
+    expect(result.current.actionFor(9).notice).toBe("Пакет добавлен в комнату");
+    unmount();
+  });
+
+  it("publishes to the workshop without touching the room package", async () => {
+    const { result, unmount } = await startHook();
+
+    await act(async () => {
+      await result.current.publishToWorkshop(5, { name: "Workshop Demo" });
+    });
+
+    expect(packagesApi.publishPackageToWorkshop).toHaveBeenCalledWith(5, {
+      name: "Workshop Demo",
+    });
+    expect(result.current.actionFor(5).notice).toBe(
+      "Публикация в workshop обновлена",
+    );
+
+    vi.mocked(packagesApi.publishPackageToWorkshop).mockResolvedValue({
+      mode: "created",
+      package: workshopPackage(100, "demo"),
+    });
+    await act(async () => {
+      await result.current.publishToWorkshop(5);
+    });
+    expect(packagesApi.publishPackageToWorkshop).toHaveBeenLastCalledWith(
+      5,
+      {},
+    );
+    expect(result.current.actionFor(5).notice).toBe(
+      "Пакет опубликован в workshop",
+    );
+
+    // Publication is metadata only: no editor directory, file or revision moves.
+    expect(fs.createPackageDir).not.toHaveBeenCalled();
+    expect(fs.replaceContents).not.toHaveBeenCalled();
+    expect(packagesApi.createPackageRevision).not.toHaveBeenCalled();
+    expect(result.current.entries[0]).toMatchObject({
+      name: "Demo",
+      version: "0.1.0",
+    });
+    unmount();
+  });
+
+  it("throws WorkshopSlugTakenError for a workshop slug of another author", async () => {
+    const taken = workshopPackage(100, "demo", 7);
+    vi.mocked(packagesApi.publishPackageToWorkshop).mockRejectedValue({
+      response: {
+        data: {
+          code: "workshop_slug_taken",
+          slug: "demo",
+          workshopPackage: taken,
+        },
+      },
+    });
+    const { result, unmount } = await startHook();
+
+    const failure = await result.current
+      .publishToWorkshop(5)
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(WorkshopSlugTakenError);
+    expect(failure).toMatchObject({
+      slug: "demo",
+      workshopPackage: taken,
+    });
+    unmount();
+  });
+
+  it("forks to a new slug and downloads the copy", async () => {
+    const { result, unmount } = await startHook();
+    vi.mocked(gameApi.getRoomPackages).mockResolvedValue(
+      roomStatus([
+        { id: 5, revision: 2 },
+        { id: 11, revision: 1 },
+      ]),
+    );
+    vi.mocked(packagesApi.getPackageManifest).mockResolvedValue(
+      await manifestOf("extends Node", 1, 11, "demo_fork"),
+    );
+
+    await act(async () => {
+      await result.current.forkWorkshopPackage(5, "demo_fork");
+    });
+
+    expect(packagesApi.forkPackageToWorkshop).toHaveBeenCalledWith(
+      5,
+      "demo_fork",
+    );
+    expect(fs.read("demo_fork", HERO)).toBe("extends Node");
+    expect(
+      result.current.entries.find((item) => item.packageId === 11),
+    ).toMatchObject({ slug: "demo_fork", loaded: true });
+    expect(result.current.actionFor(11).notice).toBe(
+      "Форк создан: demo_fork. Опубликуйте его в workshop отдельно",
+    );
+    unmount();
   });
 });
