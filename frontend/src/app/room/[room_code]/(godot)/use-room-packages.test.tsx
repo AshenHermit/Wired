@@ -1585,6 +1585,75 @@ describe("useRoomPackages", () => {
     unmount();
   });
 
+  it("explains a workshop dependency that only exists in a room", async () => {
+    vi.mocked(packagesApi.publishPackageToWorkshop).mockRejectedValue({
+      response: {
+        data: { message: "package_dependency_not_global:hero" },
+      },
+    });
+    const { result, unmount } = await startHook();
+
+    const failure = await act(async () =>
+      result.current.publishToWorkshop(5).catch((error: unknown) => error),
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain("#hero");
+    expect((failure as Error).message).not.toContain("Request failed");
+    expect(result.current.actionFor(5).error).toBe((failure as Error).message);
+    unmount();
+  });
+
+  it("explains a workshop dependency missing from the workshop", async () => {
+    vi.mocked(packagesApi.publishPackageToWorkshop).mockRejectedValue({
+      response: {
+        data: { message: "package_dependency_unknown_slug:missing" },
+      },
+    });
+    const { result, unmount } = await startHook();
+
+    const failure = await result.current
+      .publishToWorkshop(5)
+      .catch((error: unknown) => error);
+
+    expect((failure as Error).message).toContain("#missing");
+    expect((failure as Error).message).toContain("workshop");
+    unmount();
+  });
+
+  it("explains invalid workshop tags using the echoed tag", async () => {
+    vi.mocked(packagesApi.publishPackageToWorkshop).mockRejectedValue({
+      response: { data: { code: "invalid_tags", tag: "Bad Tag" } },
+    });
+    const { result, unmount } = await startHook();
+
+    const failure = await result.current
+      .publishToWorkshop(5)
+      .catch((error: unknown) => error);
+
+    expect((failure as Error).message).toContain("Bad Tag");
+    unmount();
+  });
+
+  it("explains a retired workshop slug", async () => {
+    vi.mocked(packagesApi.publishPackageToWorkshop).mockRejectedValue({
+      response: {
+        data: {
+          code: "slug_retired",
+          message: "Этот slug был удалён и не может быть использован снова",
+        },
+      },
+    });
+    const { result, unmount } = await startHook();
+
+    const failure = await result.current
+      .publishToWorkshop(5)
+      .catch((error: unknown) => error);
+
+    expect((failure as Error).message).toContain("удалён");
+    unmount();
+  });
+
   it("forks to a new slug and downloads the copy", async () => {
     const { result, unmount } = await startHook();
     vi.mocked(gameApi.getRoomPackages).mockResolvedValue(

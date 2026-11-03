@@ -23,6 +23,14 @@ export async function createScriptingPackage(
   );
 }
 
+/**
+ * Reads one package by id, including its description and tags. The publish
+ * dialog uses it to prefill a new workshop record from the room package.
+ */
+export async function getScriptingPackage(id: number) {
+  return apiClient.get<ScriptingPackage, void>(`scripting-packages/${id}`);
+}
+
 export async function updateScriptingPackage(
   id: number,
   data: UpdateScriptingPackagePayload

@@ -211,6 +211,8 @@ export class WorkshopSlugTakenError extends Error {
 type WorkshopErrorData = {
   code?: string;
   slug?: string;
+  tag?: string;
+  message?: string | string[];
   workshopPackage?: WorkshopPackageSummary;
 };
 
@@ -226,16 +228,41 @@ function workshopErrorData(error: unknown): WorkshopErrorData | null {
  * every other failure keeps the backend message.
  */
 function workshopErrorMessage(error: unknown): string {
-  switch (workshopErrorData(error)?.code) {
+  const data = workshopErrorData(error);
+  const code = data?.code ?? "";
+  const backendMessage =
+    typeof data?.message === "string" ? data.message : "";
+
+  switch (code) {
     case "package_not_published":
       return "Сначала опубликуйте пакет (Emit)";
     case "slug_taken":
       return "Slug уже занят в комнате";
     case "publish_conflict":
       return "Пакет уже копируется, повторите попытку";
-    default:
-      return errorMessage(error);
+    case "slug_retired":
+      return "Slug был удалён и не может быть использован снова: выберите новый slug";
+    case "invalid_tags":
+      return data?.tag
+        ? `Тег «${data.tag}» недопустим: до 32 символов, строчные латинские буквы, цифры, «-» и «_»`
+        : "Некорректные теги: до 10 тегов, строчные латинские буквы, цифры, «-» и «_»";
   }
+
+  // Dependency failures are raised as `<code>:<slug>` in a plain message, so
+  // they have no structured `code` field to switch on.
+  const raw = code || backendMessage;
+  const notGlobal = "package_dependency_not_global:";
+  if (raw.startsWith(notGlobal)) {
+    const slug = raw.slice(notGlobal.length);
+    return `Пакет зависит от пакета комнаты #${slug}: его нельзя опубликовать в workshop без форка зависимости`;
+  }
+  const unknownSlug = "package_dependency_unknown_slug:";
+  if (raw.startsWith(unknownSlug)) {
+    const slug = raw.slice(unknownSlug.length);
+    return `Сначала опубликуйте зависимость #${slug} в workshop`;
+  }
+
+  return backendMessage || errorMessage(error);
 }
 
 /**

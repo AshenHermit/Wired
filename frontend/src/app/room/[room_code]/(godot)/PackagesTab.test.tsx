@@ -1,6 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkshopPackageSummary } from "@wired-io/shared";
+import type {
+  ScriptingPackage,
+  WorkshopPackageSummary,
+} from "@wired-io/shared";
 import type { PackageSlugAvailability } from "@/api/services/scripting-packages";
 import type {
   RoomPackageEntry,
@@ -20,6 +23,7 @@ vi.mock("@/api/services/scripting-packages", async (importActual) => {
     ...actual,
     listWorkshopPackages: vi.fn(),
     lookupWorkshopPackage: vi.fn(),
+    getScriptingPackage: vi.fn(),
   };
 });
 
@@ -113,6 +117,26 @@ function workshopPackage(
   };
 }
 
+/** The room package a publish dialog falls back to when no record exists. */
+function roomPackage(
+  overrides: Partial<ScriptingPackage> = {},
+): ScriptingPackage {
+  return {
+    id: 5,
+    slug: "demo",
+    name: "Demo",
+    version: "0.1.0",
+    description: "Описание из комнаты",
+    tags: ["room", "demo"],
+    enabled: true,
+    dependencies: [],
+    scripts: [],
+    createdAt: "2026-10-30T10:00:00.000Z",
+    updatedAt: "2026-10-30T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
 async function openPackageActions() {
   fireEvent.pointerDown(
     screen.getByRole("button", { name: "Действия с пакетом" }),
@@ -128,6 +152,7 @@ beforeEach(() => {
     total: 0,
   });
   vi.mocked(packagesApi.lookupWorkshopPackage).mockResolvedValue(null);
+  vi.mocked(packagesApi.getScriptingPackage).mockResolvedValue(roomPackage());
 });
 
 afterEach(() => {
@@ -942,6 +967,13 @@ describe("PackagesTab", () => {
       "value",
       "0.1.0",
     );
+    // A free slug is prefilled from the room package, not left blank.
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText("Описание")).toHaveProperty(
+        "value",
+        "Описание из комнаты",
+      ),
+    );
 
     fireEvent.change(within(dialog).getByLabelText("Теги"), {
       target: { value: "ui, gameplay" },
@@ -952,10 +984,127 @@ describe("PackagesTab", () => {
       expect(publishToWorkshop).toHaveBeenCalledWith(5, {
         name: "Demo",
         version: "0.1.0",
-        description: "",
+        description: "Описание из комнаты",
         tags: ["ui", "gameplay"],
       }),
     );
+  });
+
+  it("prefills description and tags from the room package for a free slug", async () => {
+    const publishToWorkshop = vi
+      .fn()
+      .mockResolvedValue({ mode: "created", package: workshopPackage() });
+    render(
+      <PackagesTab
+        roomId={1}
+        packages={controller({ publishToWorkshop })}
+        authorId={42}
+      />,
+    );
+
+    const menu = await openPackageActions();
+    fireEvent.click(
+      menu.getByRole("menuitem", { name: /опубликовать в workshop/i }),
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByText("Будет создана новая запись в workshop");
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText("Описание")).toHaveProperty(
+        "value",
+        "Описание из комнаты",
+      ),
+    );
+    expect(within(dialog).getByLabelText("Теги")).toHaveProperty(
+      "value",
+      "room, demo",
+    );
+    expect(packagesApi.getScriptingPackage).toHaveBeenCalledWith(5);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Опубликовать" }));
+
+    await waitFor(() =>
+      expect(publishToWorkshop).toHaveBeenCalledWith(5, {
+        name: "Demo",
+        version: "0.1.0",
+        description: "Описание из комнаты",
+        tags: ["room", "demo"],
+      }),
+    );
+  });
+
+  it("does not overwrite typed metadata with a late room-package prefill", async () => {
+    let resolveRoomPackage!: (value: ScriptingPackage) => void;
+    vi.mocked(packagesApi.getScriptingPackage).mockReturnValue(
+      new Promise<ScriptingPackage>((resolve) => {
+        resolveRoomPackage = resolve;
+      }),
+    );
+    render(<PackagesTab roomId={1} packages={controller()} authorId={42} />);
+
+    const menu = await openPackageActions();
+    fireEvent.click(
+      menu.getByRole("menuitem", { name: /опубликовать в workshop/i }),
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByText("Будет создана новая запись в workshop");
+    const submit = within(dialog).getByRole("button", {
+      name: "Опубликовать",
+    });
+    // Publishing waits for the room package prefill: submitting now would
+    // create a record without its description and tags.
+    expect(submit).toHaveProperty("disabled", true);
+
+    fireEvent.change(within(dialog).getByLabelText("Описание"), {
+      target: { value: "Моё описание" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Теги"), {
+      target: { value: "my, own" },
+    });
+
+    await act(async () => {
+      resolveRoomPackage(roomPackage());
+    });
+
+    expect(within(dialog).getByLabelText("Описание")).toHaveProperty(
+      "value",
+      "Моё описание",
+    );
+    expect(within(dialog).getByLabelText("Теги")).toHaveProperty(
+      "value",
+      "my, own",
+    );
+    expect(submit).toHaveProperty("disabled", false);
+  });
+
+  it("disables publishing until a failed workshop lookup is retried", async () => {
+    vi.mocked(packagesApi.lookupWorkshopPackage).mockRejectedValue(
+      new Error("network down"),
+    );
+    render(<PackagesTab roomId={1} packages={controller()} authorId={42} />);
+
+    const menu = await openPackageActions();
+    fireEvent.click(
+      menu.getByRole("menuitem", { name: /опубликовать в workshop/i }),
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText(
+        /Не удалось проверить запись в workshop/,
+      ),
+    ).toBeTruthy();
+    const submit = within(dialog).getByRole("button", {
+      name: "Опубликовать",
+    });
+    expect(submit).toHaveProperty("disabled", true);
+
+    vi.mocked(packagesApi.lookupWorkshopPackage).mockResolvedValue(null);
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Проверить снова" }),
+    );
+    await waitFor(() => expect(submit).toHaveProperty("disabled", false));
   });
 
   it("sends cleared description and tags instead of omitting them", async () => {
