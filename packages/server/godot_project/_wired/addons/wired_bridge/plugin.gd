@@ -29,6 +29,7 @@ const VALID_OPS := [
 	"replace",
 	"delete",
 	"deleteFiles",
+	"rename",
 	"sync",
 ]
 
@@ -226,6 +227,12 @@ func _handle_request(request_id: int, op: String, params: Dictionary) -> void:
 				_respond_error(request_id, "deleteFiles ожидает массив paths")
 				return
 			result = WiredPackageFs.op_delete_files(package_slug, raw_paths as Array)
+		"rename":
+			var raw_new_slug: Variant = params.get("newSlug", "")
+			if not raw_new_slug is String:
+				_respond_error(request_id, "некорректный newSlug")
+				return
+			result = WiredPackageFs.op_rename(package_slug, str(raw_new_slug))
 		"sync":
 			JavaScriptBridge.force_fs_sync()
 			result = {}

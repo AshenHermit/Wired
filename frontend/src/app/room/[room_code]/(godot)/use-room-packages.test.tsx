@@ -138,6 +138,17 @@ function createFakeFs() {
     dirs.delete(slug);
     trees.delete(slug);
   });
+  const renamePackage = vi.fn(
+    async (from: string, to: string): Promise<string[]> => {
+      const contents = trees.get(from);
+      if (!contents) return [];
+      trees.set(to, new Map(contents));
+      trees.delete(from);
+      dirs.delete(from);
+      dirs.add(to);
+      return [];
+    },
+  );
   const sync = vi.fn(async (): Promise<void> => {});
 
   const files: PackageFileSystem = {
@@ -147,6 +158,7 @@ function createFakeFs() {
     collectFiles,
     replaceContents,
     deletePackage,
+    renamePackage,
     sync,
     packageDir: (slug: string) => `${PROJECT}/packages/${slug}`,
   };
@@ -159,6 +171,7 @@ function createFakeFs() {
     collectFiles,
     replaceContents,
     deletePackage,
+    renamePackage,
     sync,
     reads,
     put(slug: string, filepath: string, content: string) {

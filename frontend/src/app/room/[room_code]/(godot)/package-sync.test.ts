@@ -98,6 +98,13 @@ function makeFiles() {
     deletePackage: vi.fn(async (slug: string) => {
       tree.delete(slug);
     }),
+    renamePackage: vi.fn(async (from: string, to: string) => {
+      const contents = tree.get(from);
+      if (!contents) return [];
+      tree.set(to, contents);
+      tree.delete(from);
+      return [];
+    }),
     sync: vi.fn(async () => {}),
   };
 

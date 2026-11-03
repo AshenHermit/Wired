@@ -19,6 +19,10 @@ extends RefCounted
 
 const DEFAULT_ROOT := "res://packages"
 
+## Extensions whose text may contain `res://packages/<slug>/` references. Bare
+## extensions, as `String.get_extension()` returns them.
+const SLUG_REWRITE_EXTENSIONS := ["gd", "tscn", "tres", "import"]
+
 static var root_override: String = ""
 
 static var _slug_regex: RegEx = null
@@ -342,6 +346,60 @@ static func op_delete_files(package_slug: String, paths: Array) -> Dictionary:
 		if not deleted.has(editor_path):
 			deleted.append(editor_path)
 	return {"deleted": deleted}
+
+
+## Moves a package directory to a new slug and rewrites the slug in its text
+## files. [method op_collect] and [method op_replace] cannot do this: they drop
+## `*.uid`/`*.import`, so the editor would lose its metadata and regenerate uids.
+## The move is a single rename, so the package keeps its files and metadata.
+## Rewritten files are package-relative paths.
+static func op_rename(package_slug: String, new_slug: String) -> Dictionary:
+	var invalid := _invalid_slug(package_slug)
+	if invalid.is_empty():
+		invalid = _invalid_slug(new_slug)
+	if not invalid.is_empty():
+		return {"error": invalid}
+	if package_slug == new_slug:
+		return {"rewritten": []}
+	var old_dir := package_dir(package_slug)
+	var new_dir := package_dir(new_slug)
+	if not DirAccess.dir_exists_absolute(old_dir):
+		return {"error": "slug_source_missing"}
+	if DirAccess.dir_exists_absolute(new_dir):
+		# A folder left behind by an earlier delete is reused, but a folder with
+		# files is another package: moving onto it would destroy both.
+		if not _list_files(new_dir).is_empty():
+			return {"error": "slug_target_not_empty"}
+		var remove_error := _remove_tree(new_dir)
+		if remove_error != OK:
+			return {
+				"error": "не удалось удалить пустой каталог %s: %s" % [new_slug, error_string(remove_error)],
+			}
+	var rename_error := DirAccess.rename_absolute(old_dir, new_dir)
+	if rename_error != OK:
+		return {
+			"error": "не удалось переименовать пакет %s: %s" % [package_slug, error_string(rename_error)],
+		}
+
+	var rewritten: Array[String] = []
+	var from_prefix := "res://packages/%s/" % package_slug
+	var to_prefix := "res://packages/%s/" % new_slug
+	for rel_path: String in _list_files(new_dir):
+		if not SLUG_REWRITE_EXTENSIONS.has(rel_path.get_extension()):
+			continue
+		var abs_path := new_dir.path_join(rel_path)
+		var text := FileAccess.get_file_as_string(abs_path)
+		if not text.contains(from_prefix):
+			continue
+		var file := FileAccess.open(abs_path, FileAccess.WRITE)
+		if file == null:
+			return {
+				"error": "не удалось записать %s: %s" % [abs_path, error_string(FileAccess.get_open_error())],
+			}
+		file.store_string(text.replace(from_prefix, to_prefix))
+		file.close()
+		rewritten.append(rel_path)
+	return {"rewritten": rewritten}
 
 
 # --- helpers --------------------------------------------------------------

@@ -100,6 +100,7 @@ export type PackageFileSystem = {
     contents: Map<string, Uint8Array>,
   ): Promise<{ written: string[]; deleted: string[] }>;
   deletePackage(slug: string): Promise<void>;
+  renamePackage(from: string, to: string): Promise<string[]>;
   sync(): Promise<void>;
   packageDir(slug: string): string;
 };
@@ -324,6 +325,17 @@ export function createPackageFileSystem({
       assertPackageSlug(slug);
       await bridge.call("delete", { packageSlug: slug });
       await sync();
+    },
+
+    async renamePackage(from, to) {
+      assertPackageSlug(from);
+      assertPackageSlug(to);
+      const { rewritten } = await bridge.call<{ rewritten: string[] }>(
+        "rename",
+        { packageSlug: from, newSlug: to },
+      );
+      await sync();
+      return rewritten;
     },
 
     sync,

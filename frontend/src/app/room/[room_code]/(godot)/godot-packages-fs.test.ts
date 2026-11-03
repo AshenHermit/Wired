@@ -420,6 +420,35 @@ describe("PackageFileSystem", () => {
     expect(files.packageDir("demo")).toBe(`${projectRoot}/packages/demo`);
   });
 
+  it("renames a package directory through the bridge and syncs", async () => {
+    const { files, bridge, order, syncHandler } = makeWorkspace({
+      rename: () => ({ rewritten: ["a.gd"] }),
+    });
+
+    await expect(files.renamePackage("hero", "hero2")).resolves.toEqual([
+      "a.gd",
+    ]);
+
+    expect(bridge.call).toHaveBeenCalledWith("rename", {
+      packageSlug: "hero",
+      newSlug: "hero2",
+    });
+    expect(order).toEqual(["rename", "sync"]);
+    expect(syncHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects invalid slugs before renaming", async () => {
+    const { files, bridge } = makeWorkspace();
+
+    await expect(files.renamePackage("Hero", "hero2")).rejects.toBeInstanceOf(
+      GodotFsError,
+    );
+    await expect(files.renamePackage("hero", "../hero2")).rejects.toBeInstanceOf(
+      GodotFsError,
+    );
+    expect(bridge.call).not.toHaveBeenCalled();
+  });
+
   it("uses the live engine", async () => {
     const workspace = makeWorkspace();
     const firstEngine = workspace.engine;
