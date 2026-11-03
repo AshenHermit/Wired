@@ -13,6 +13,14 @@ export interface PackageRevisionDispatcher {
   revisionPublished(packageId: number, revision: number): Promise<void>;
 
   /**
+   * Re-dispatches packages whose published files changed without a new
+   * revision: a slug rename rewrites the renamed package and every dependent in
+   * place. Clients re-fetch the same revision, which is a normal dependent
+   * refresh.
+   */
+  packagesChanged(packageIds: number[]): Promise<void>;
+
+  /**
    * Applies a new `enabled` flag: disabling unloads the package from the room
    * runtime, enabling reconciles its latest published revision back in.
    */

@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { PackageFileEntry } from '@wired-io/shared';
-import { mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, rmSync } from 'fs';
 import { mkdir, readdir, readFile, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -708,6 +708,18 @@ describe('PackageDeliveryService', () => {
         revision: 9,
       });
       expect(await artifactDirs(5, 3, 7)).toHaveLength(1);
+    });
+
+    it('removes every runtime artifact of the package', async () => {
+      definePackage(5, 'Heroes', 7);
+      await writePublished(5, 3, { 'hero.gd': 'extends Node' });
+      await service.getRuntimeManifest(5, 3, 7);
+      const runtimeDir = path.join(storage.packageRootDir(5), 'runtime');
+      expect(existsSync(runtimeDir)).toBe(true);
+
+      await service.invalidateArtifacts(5);
+
+      expect(existsSync(runtimeDir)).toBe(false);
     });
 
     it('shares one build between concurrent requests', async () => {

@@ -232,6 +232,24 @@ export class PackageDeliveryService {
   }
 
   /**
+   * Deletes every runtime artifact of the package. A rewritten revision keeps
+   * its artifact key (the key hashes ids and revisions only), so a cached
+   * artifact would otherwise be served with the pre-rewrite bytes.
+   */
+  async invalidateArtifacts(packageId: number): Promise<void> {
+    await rm(path.join(this.storage.packageRootDir(packageId), 'runtime'), {
+      recursive: true,
+      force: true,
+    });
+  }
+
+  /** Drops both the in-memory closure cache and the on-disk artifacts. */
+  async invalidatePackage(packageId: number): Promise<void> {
+    this.resolver.invalidatePackage(packageId);
+    await this.invalidateArtifacts(packageId);
+  }
+
+  /**
    * Returns a cached artifact or builds a new one. A cache hit is identified
    * by the root package's artifact key (the hash of its resolved closure), so a
    * dependency publishing a new revision naturally produces a different path

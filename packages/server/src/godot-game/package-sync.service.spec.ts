@@ -80,9 +80,7 @@ describe('PackageSyncService', () => {
       findDependentRoomPackages: jest.fn().mockResolvedValue([]),
       collectRuntimePackageIds: jest
         .fn()
-        .mockImplementation(() =>
-          Promise.resolve([42, 43]).then((ids) => ids as number[]),
-        ),
+        .mockImplementation(() => Promise.resolve([42, 43]).then((ids) => ids)),
     };
     service = new PackageSyncService(
       packages as unknown as Repository<ScriptingPackage>,
@@ -271,6 +269,16 @@ describe('PackageSyncService', () => {
       runtime: { state: 'pending', revision: 5 },
     });
     expect(status.state).not.toBe('stale');
+  });
+
+  it('re-dispatches packages changed at the same revision', async () => {
+    await service.revisionPublished(42, 3);
+    expect(runtime.sendPackage).toHaveBeenCalledTimes(1);
+
+    await service.packagesChanged([42, 42]);
+
+    expect(runtime.sendPackage).toHaveBeenCalledTimes(2);
+    expect(runtime.sendPackage).toHaveBeenLastCalledWith('7', 42, 3);
   });
 
   it('retries a dependent that exhausted its attempts when a library publishes', async () => {

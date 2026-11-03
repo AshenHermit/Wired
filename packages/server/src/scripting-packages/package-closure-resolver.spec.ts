@@ -525,6 +525,22 @@ describe('PackageClosureResolver', () => {
 
       expect(internals().fileBytes.size).toBe(0);
     });
+
+    it('re-reads bytes after invalidatePackage', async () => {
+      definePackage(5, 'Heroes', 7);
+      await writePublished(5, 3, {
+        'a.gd': 'extends Node',
+        'b.gd': 'extends Node',
+      });
+      const read = jest.spyOn(storage, 'readPublishedFile');
+
+      await resolver.resolve(5, 3, 7);
+      resolver.invalidatePackage(5);
+      await resolver.resolve(5, 3, 7);
+
+      expect(read).toHaveBeenCalledTimes(4);
+      expect(internals().fileBytes.size).toBe(2);
+    });
   });
 
   describe('resolve', () => {

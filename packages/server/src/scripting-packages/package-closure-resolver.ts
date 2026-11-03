@@ -528,6 +528,22 @@ export class PackageClosureResolver {
     return result;
   }
 
+  /**
+   * Drops every cached byte of one package so the next resolve reads the files
+   * from disk again. Called after a slug rename rewrites revisions in place:
+   * the cache key is (package, revision, filepath) and never changes.
+   */
+  invalidatePackage(packageId: number): void {
+    const prefix = `${packageId}:`;
+    for (const [key, data] of this.fileBytes) {
+      if (!key.startsWith(prefix)) {
+        continue;
+      }
+      this.fileBytes.delete(key);
+      this.fileCacheBytes -= data.byteLength;
+    }
+  }
+
   private async readFileBytes(
     packageId: number,
     revision: number,

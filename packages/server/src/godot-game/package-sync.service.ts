@@ -108,6 +108,36 @@ export class PackageSyncService
     await this.dispatchDependents(packageId);
   }
 
+  /**
+   * Re-dispatches packages whose published bytes changed without a new
+   * revision (a slug rename rewrites them in place). Each package is refreshed
+   * at its own latest published revision; an unchanged revision must still be
+   * resent, so `dispatchOwnRevision` — which skips equal revisions — is not
+   * used here.
+   */
+  async packagesChanged(packageIds: number[]): Promise<void> {
+    const ids = [...new Set(packageIds)].sort((a, b) => a - b);
+    if (ids.length === 0) {
+      return;
+    }
+    const rows = await this.packages.find({
+      where: { id: In(ids) },
+      relations: { room: true },
+    });
+    const latest = await this.latestPublishedRevisions(ids);
+    for (const pkg of rows) {
+      const revision = latest.get(pkg.id);
+      if (revision === undefined || !pkg.room || pkg.enabled === false) {
+        continue;
+      }
+      this.refreshDependent({
+        packageId: pkg.id,
+        roomId: pkg.room.id,
+        revision: revision.revision,
+      });
+    }
+  }
+
   /** Latest published revision per package of the room plus target states. */
   async getStatuses(roomId: string): Promise<PackageSyncStatus[]> {
     const packages = await this.roomPackages(roomId, false);
