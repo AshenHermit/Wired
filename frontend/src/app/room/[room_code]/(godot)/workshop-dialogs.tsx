@@ -1,9 +1,6 @@
 "use client";
 
-import type {
-  WorkshopPackageMetadata,
-  WorkshopPackageSummary,
-} from "@wired-io/shared";
+import type { WorkshopPackageSummary } from "@wired-io/shared";
 import { Loader2Icon, StoreIcon } from "lucide-react";
 import * as React from "react";
 import {
@@ -29,7 +26,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   WorkshopSlugTakenError,
   type RoomPackageEntry,
@@ -111,18 +107,21 @@ export function WorkshopBrowserDialog({
 
 type LookupState = "loading" | "free" | "mine" | "taken" | "error";
 
+type PreviewDetails = {
+  name: string;
+  version: string;
+  description: string;
+  tags: string[];
+};
+
 /**
  * Publishes the latest published revision of a room package into the global
- * workshop record. The dialog first looks up the record of the slug: an absent
- * record is created, the caller's own record is updated, and a record of
- * another author is not overwritten — the user is offered a fork instead.
+ * workshop record. The dialog is a preview: metadata is edited in the package
+ * edit dialog, so publishing only mirrors the room package's own fields.
  *
- * Only the global record is written. Name, version, description and tags of
- * the room package stay untouched: all four fields are sent from the dialog,
- * so an emptied description or tag list clears the record value instead of
- * silently falling back to the room package. The fields are prefilled from the
- * record when it exists and from the room package otherwise, so a first
- * publish keeps the room package's description and tags.
+ * The dialog first looks up the record of the slug: an absent record is
+ * created, the caller's own record is updated, and a record of another author
+ * is not overwritten — the user is offered a fork instead.
  */
 export function WorkshopPublishDialog({
   open,
@@ -139,94 +138,71 @@ export function WorkshopPublishDialog({
   authorId: number | null;
   onFork: () => void;
 }) {
-  const [name, setName] = React.useState("");
-  const [version, setVersion] = React.useState("");
-  const [description, setDescription] = React.useState("");
-  const [tags, setTags] = React.useState("");
   const [lookup, setLookup] = React.useState<LookupState>("loading");
   const [existing, setExisting] =
     React.useState<WorkshopPackageSummary | null>(null);
   const [lookupAttempt, setLookupAttempt] = React.useState(0);
-  // A free slug still fetches the room package; publishing before its
-  // description and tags arrive would create an empty record.
-  const [prefillPending, setPrefillPending] = React.useState(false);
+  const [details, setDetails] = React.useState<PreviewDetails>({
+    name: "",
+    version: "",
+    description: "",
+    tags: [],
+  });
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  // A prefill must never replace text the user already typed. The flags are
-  // reset whenever the dialog opens for a package.
-  const editedRef = React.useRef({
-    name: false,
-    version: false,
-    description: false,
-    tags: false,
-  });
-
   const packageId = entry?.packageId ?? null;
   const slug = entry?.slug ?? "";
-  const initialName = entry?.name ?? "";
-  const initialVersion = entry?.version ?? "";
 
+  // The room package stands in until the details request answers, so the
+  // preview never opens empty.
   React.useEffect(() => {
     if (!open || packageId === null) return;
-    editedRef.current = {
-      name: false,
-      version: false,
-      description: false,
-      tags: false,
-    };
-    // The room package is the prefill until the lookup answers; a found
-    // workshop record replaces it with what would actually be updated.
-    setName(initialName);
-    setVersion(initialVersion);
-    setDescription("");
-    setTags("");
     setExisting(null);
     setLookup("loading");
-    setPrefillPending(false);
     setError(null);
-  }, [initialName, initialVersion, open, packageId]);
+    setDetails({
+      name: entry?.name ?? "",
+      version: entry?.version ?? "",
+      description: entry?.description ?? "",
+      tags: entry?.tags ?? [],
+    });
+  }, [entry, open, packageId]);
 
   React.useEffect(() => {
     if (!open || packageId === null) return;
     setError(null);
-    setPrefillPending(false);
 
     let cancelled = false;
+    // The record decides which action the button performs; the room package
+    // carries the description and tags the preview shows.
     void lookupWorkshopPackage(slug)
       .then(async (found) => {
         if (cancelled) return;
         setExisting(found);
-        if (found === null) {
-          setLookup("free");
-          // The status contract carries only name and version, so the room
-          // package is read for the description and tags of a new record.
-          setPrefillPending(true);
-          const roomPackage = await getScriptingPackage(packageId).catch(
-            () => null,
-          );
-          if (cancelled) return;
-          setPrefillPending(false);
-          if (roomPackage === null) return;
-          if (!editedRef.current.description) {
-            setDescription(roomPackage.description);
-          }
-          if (!editedRef.current.tags) {
-            setTags(roomPackage.tags.join(", "));
-          }
-          return;
-        }
-        setLookup(found.author?.id === authorId ? "mine" : "taken");
-        if (!editedRef.current.name) setName(found.name);
-        if (!editedRef.current.version) setVersion(found.version);
-        if (!editedRef.current.description) setDescription(found.description);
-        if (!editedRef.current.tags) setTags(found.tags.join(", "));
+        setLookup(
+          found === null
+            ? "free"
+            : found.author?.id === authorId
+              ? "mine"
+              : "taken",
+        );
+        if (found !== null) return;
+        const roomPackage = await getScriptingPackage(packageId).catch(
+          () => null,
+        );
+        if (cancelled || roomPackage === null) return;
+        setDetails({
+          name: roomPackage.name,
+          version: roomPackage.version,
+          description: roomPackage.description,
+          tags: roomPackage.tags,
+        });
       })
       .catch((cause) => {
         if (cancelled) return;
         // Neither creation nor update can be offered safely: without the
-        // lookup the dialog cannot tell whether a record already exists, and a
-        // blind update would wipe its description and tags.
+        // lookup the dialog cannot tell whether a record already exists.
         setLookup("error");
         setError(`Не удалось проверить запись в workshop: ${messageOf(cause)}`);
       });
@@ -240,24 +216,11 @@ export function WorkshopPublishDialog({
     if (!entry || submitting || (lookup !== "free" && lookup !== "mine")) {
       return;
     }
-    const trimmedName = name.trim();
-    const trimmedVersion = version.trim();
-    if (!trimmedName || !trimmedVersion) return;
-
-    // Always send all four fields: an empty description or tag list is a
-    // deliberate clearing, and omitting the field would make the backend fall
-    // back to the room package values the user cannot see here.
-    const metadata: WorkshopPackageMetadata = {
-      name: trimmedName,
-      version: trimmedVersion,
-      description: description.trim(),
-      tags: parseTags(tags),
-    };
 
     setSubmitting(true);
     setError(null);
     try {
-      await packages.publishToWorkshop(entry.packageId, metadata);
+      await packages.publishToWorkshop(entry.packageId);
       onOpenChange(false);
     } catch (cause) {
       if (cause instanceof WorkshopSlugTakenError) {
@@ -274,14 +237,7 @@ export function WorkshopPublishDialog({
   };
 
   const taken = lookup === "taken";
-  // A failed lookup leaves the fields prefilled from the room package only,
-  // which is not enough to update an existing record safely.
-  const canSubmit =
-    !submitting &&
-    !prefillPending &&
-    (lookup === "free" || lookup === "mine") &&
-    name.trim().length > 0 &&
-    version.trim().length > 0;
+  const canSubmit = !submitting && (lookup === "free" || lookup === "mine");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -297,64 +253,36 @@ export function WorkshopPublishDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="workshop-publish-name">Название</Label>
-              <Input
-                id="workshop-publish-name"
-                value={name}
-                onChange={(event) => {
-                  editedRef.current.name = true;
-                  setName(event.target.value);
-                }}
-                disabled={submitting || lookup === "loading"}
-                autoFocus
-              />
+          <dl className="space-y-3 text-sm">
+            <div className="space-y-1">
+              <dt className="text-muted-foreground">Название</dt>
+              <dd className="font-medium">{details.name}</dd>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="workshop-publish-version">Версия</Label>
-              <Input
-                id="workshop-publish-version"
-                value={version}
-                onChange={(event) => {
-                  editedRef.current.version = true;
-                  setVersion(event.target.value);
-                }}
-                disabled={submitting || lookup === "loading"}
-              />
+            <div className="space-y-1">
+              <dt className="text-muted-foreground">Slug</dt>
+              <dd className="font-mono">#{slug}</dd>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="workshop-publish-description">Описание</Label>
-              <Textarea
-                id="workshop-publish-description"
-                value={description}
-                onChange={(event) => {
-                  editedRef.current.description = true;
-                  setDescription(event.target.value);
-                }}
-                placeholder="Что делает пакет и как его использовать"
-                disabled={submitting || lookup === "loading"}
-              />
+            <div className="space-y-1">
+              <dt className="text-muted-foreground">Версия</dt>
+              <dd>{details.version}</dd>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="workshop-publish-tags">Теги</Label>
-              <Input
-                id="workshop-publish-tags"
-                value={tags}
-                onChange={(event) => {
-                  editedRef.current.tags = true;
-                  setTags(event.target.value);
-                }}
-                placeholder="gamedev, ui, 1d"
-                autoComplete="off"
-                spellCheck={false}
-                disabled={submitting || lookup === "loading"}
-              />
-              <p className="text-xs text-muted-foreground">
-                Через запятую или пробел.
-              </p>
+            <div className="space-y-1">
+              <dt className="text-muted-foreground">Описание</dt>
+              <dd className="whitespace-pre-wrap">
+                {details.description.trim() || "Без описания"}
+              </dd>
             </div>
-          </div>
+            <div className="space-y-1">
+              <dt className="text-muted-foreground">Теги</dt>
+              <dd>
+                {details.tags.length > 0 ? details.tags.join(", ") : "Без тегов"}
+              </dd>
+            </div>
+          </dl>
+
+          <p className="text-xs text-muted-foreground">
+            Метаданные меняются в диалоге «Редактировать пакет».
+          </p>
 
           <div className="text-xs">
             {lookup === "loading" && (

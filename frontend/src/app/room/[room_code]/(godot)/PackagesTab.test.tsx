@@ -954,7 +954,7 @@ describe("PackagesTab", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("publishes to the workshop from the package menu", async () => {
+  it("publishes without editing metadata", async () => {
     const publishToWorkshop = vi
       .fn()
       .mockResolvedValue({ mode: "created", package: workshopPackage() });
@@ -977,48 +977,18 @@ describe("PackagesTab", () => {
         "Будет создана новая запись в workshop",
       ),
     ).toBeTruthy();
-    expect(within(dialog).getByLabelText("Название")).toHaveProperty(
-      "value",
-      "Demo",
-    );
-    expect(within(dialog).getByLabelText("Версия")).toHaveProperty(
-      "value",
-      "0.1.0",
-    );
-    // A free slug is prefilled from the room package, not left blank.
-    await waitFor(() =>
-      expect(within(dialog).getByLabelText("Описание")).toHaveProperty(
-        "value",
-        "Описание из комнаты",
-      ),
-    );
+    // Metadata lives in the package edit dialog, so the preview has no inputs.
+    expect(within(dialog).queryByRole("textbox")).toBeNull();
+    expect(within(dialog).getByText("Demo")).toBeTruthy();
+    expect(within(dialog).getByText("0.1.0")).toBeTruthy();
 
-    fireEvent.change(within(dialog).getByLabelText("Теги"), {
-      target: { value: "ui, gameplay" },
-    });
     fireEvent.click(within(dialog).getByRole("button", { name: "Опубликовать" }));
 
-    await waitFor(() =>
-      expect(publishToWorkshop).toHaveBeenCalledWith(5, {
-        name: "Demo",
-        version: "0.1.0",
-        description: "Описание из комнаты",
-        tags: ["ui", "gameplay"],
-      }),
-    );
+    await waitFor(() => expect(publishToWorkshop).toHaveBeenCalledWith(5));
   });
 
-  it("prefills description and tags from the room package for a free slug", async () => {
-    const publishToWorkshop = vi
-      .fn()
-      .mockResolvedValue({ mode: "created", package: workshopPackage() });
-    render(
-      <PackagesTab
-        roomId={1}
-        packages={controller({ publishToWorkshop })}
-        authorId={42}
-      />,
-    );
+  it("shows the room package description and tags in the preview", async () => {
+    render(<PackagesTab roomId={1} packages={controller()} authorId={42} />);
 
     const menu = await openPackageActions();
     fireEvent.click(
@@ -1026,32 +996,14 @@ describe("PackagesTab", () => {
     );
 
     const dialog = await screen.findByRole("dialog");
-    await within(dialog).findByText("Будет создана новая запись в workshop");
-    await waitFor(() =>
-      expect(within(dialog).getByLabelText("Описание")).toHaveProperty(
-        "value",
-        "Описание из комнаты",
-      ),
-    );
-    expect(within(dialog).getByLabelText("Теги")).toHaveProperty(
-      "value",
-      "room, demo",
-    );
+    expect(
+      await within(dialog).findByText("Описание из комнаты"),
+    ).toBeTruthy();
+    expect(within(dialog).getByText("room, demo")).toBeTruthy();
     expect(packagesApi.getScriptingPackage).toHaveBeenCalledWith(5);
-
-    fireEvent.click(within(dialog).getByRole("button", { name: "Опубликовать" }));
-
-    await waitFor(() =>
-      expect(publishToWorkshop).toHaveBeenCalledWith(5, {
-        name: "Demo",
-        version: "0.1.0",
-        description: "Описание из комнаты",
-        tags: ["room", "demo"],
-      }),
-    );
   });
 
-  it("does not overwrite typed metadata with a late room-package prefill", async () => {
+  it("fills the preview when the room package details arrive", async () => {
     let resolveRoomPackage!: (value: ScriptingPackage) => void;
     vi.mocked(packagesApi.getScriptingPackage).mockReturnValue(
       new Promise<ScriptingPackage>((resolve) => {
@@ -1067,33 +1019,13 @@ describe("PackagesTab", () => {
 
     const dialog = await screen.findByRole("dialog");
     await within(dialog).findByText("Будет создана новая запись в workshop");
-    const submit = within(dialog).getByRole("button", {
-      name: "Опубликовать",
-    });
-    // Publishing waits for the room package prefill: submitting now would
-    // create a record without its description and tags.
-    expect(submit).toHaveProperty("disabled", true);
-
-    fireEvent.change(within(dialog).getByLabelText("Описание"), {
-      target: { value: "Моё описание" },
-    });
-    fireEvent.change(within(dialog).getByLabelText("Теги"), {
-      target: { value: "my, own" },
-    });
+    expect(within(dialog).queryByText("Описание из комнаты")).toBeNull();
 
     await act(async () => {
       resolveRoomPackage(roomPackage());
     });
 
-    expect(within(dialog).getByLabelText("Описание")).toHaveProperty(
-      "value",
-      "Моё описание",
-    );
-    expect(within(dialog).getByLabelText("Теги")).toHaveProperty(
-      "value",
-      "my, own",
-    );
-    expect(submit).toHaveProperty("disabled", false);
+    expect(within(dialog).getByText("Описание из комнаты")).toBeTruthy();
   });
 
   it("disables publishing until a failed workshop lookup is retried", async () => {
@@ -1125,7 +1057,7 @@ describe("PackagesTab", () => {
     await waitFor(() => expect(submit).toHaveProperty("disabled", false));
   });
 
-  it("sends cleared description and tags instead of omitting them", async () => {
+  it("publishes an existing record without changing its metadata", async () => {
     vi.mocked(packagesApi.lookupWorkshopPackage).mockResolvedValue(
       workshopPackage({
         name: "Workshop Demo",
@@ -1152,31 +1084,10 @@ describe("PackagesTab", () => {
 
     const dialog = await screen.findByRole("dialog");
     await within(dialog).findByText("Публикация обновится");
-    expect(within(dialog).getByLabelText("Описание")).toHaveProperty(
-      "value",
-      "Старое описание",
-    );
-    expect(within(dialog).getByLabelText("Теги")).toHaveProperty(
-      "value",
-      "old, tags",
-    );
 
-    fireEvent.change(within(dialog).getByLabelText("Теги"), {
-      target: { value: "" },
-    });
-    fireEvent.change(within(dialog).getByLabelText("Описание"), {
-      target: { value: "  " },
-    });
     fireEvent.click(within(dialog).getByRole("button", { name: "Опубликовать" }));
 
-    await waitFor(() =>
-      expect(publishToWorkshop).toHaveBeenCalledWith(5, {
-        name: "Workshop Demo",
-        version: "1.0.0",
-        description: "",
-        tags: [],
-      }),
-    );
+    await waitFor(() => expect(publishToWorkshop).toHaveBeenCalledWith(5));
   });
 
   it("offers a fork when the workshop slug belongs to another author", async () => {
