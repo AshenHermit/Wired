@@ -1456,6 +1456,10 @@ describe("useRoomPackages", () => {
       slug: "demo_v2",
     });
     expect(fs.renamePackage).toHaveBeenCalledWith("demo", "demo_v2");
+    // Godot may only rescan once the directory already has its new name.
+    expect(fs.renamePackage.mock.invocationCallOrder[0]).toBeLessThan(
+      rescan.mock.invocationCallOrder[0],
+    );
     // The refresh that follows the rename already asks for the new directory.
     expect(fs.snapshot).toHaveBeenCalledWith("demo_v2");
     expect(rescan).toHaveBeenCalled();
@@ -1549,6 +1553,25 @@ describe("useRoomPackages", () => {
     expect(fs.has("demo_v2", HERO)).toBe(true);
     expect(fs.has("demo", HERO)).toBe(false);
     expect(result.current.actionFor(5).error).toBeNull();
+    unmount();
+  });
+
+  it("retries the directory move even when the target folder already exists", async () => {
+    const { result, unmount } = await startHook();
+    fs.put("demo", HERO, "extends Node");
+    fs.put("demo_v2", HERO, "extends Node");
+    fs.renamePackage.mockRejectedValueOnce(new Error("slug_target_not_empty"));
+
+    await act(async () => {
+      await expect(
+        result.current.renamePackageDir(5, "demo", "demo_v2"),
+      ).rejects.toBeInstanceOf(PackageDirectoryRenameError);
+    });
+
+    // The retry must ask the bridge again instead of reporting success
+    // while the package still lives under its old slug.
+    expect(fs.renamePackage).toHaveBeenCalledWith("demo", "demo_v2");
+    expect(fs.has("demo", HERO)).toBe(true);
     unmount();
   });
 

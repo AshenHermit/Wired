@@ -1076,7 +1076,6 @@ export function useRoomPackages(
       createdSlugsRef.current.set(packageId, updated.slug);
 
       if (renaming) {
-        requestEditorRescan();
         const files = filesRef.current;
         if (files && (await files.exists(previousSlug))) {
           try {
@@ -1091,6 +1090,8 @@ export function useRoomPackages(
             );
           }
         }
+        // Rescan only once the directory carries its new name.
+        requestEditorRescan();
       }
 
       // A successful retry must not leave the previous failure on the card.
@@ -1111,8 +1112,10 @@ export function useRoomPackages(
       const files = requireFileSystem(filesRef.current);
       try {
         // Idempotent: a previous attempt may have moved the folder and then
-        // failed while syncing.
-        if (!(await files.exists(toSlug)) && (await files.exists(fromSlug))) {
+        // failed while syncing. A leftover target directory is not a reason to
+        // skip the move: `rename` reuses an empty one and reports
+        // `slug_target_not_empty` for a non-empty one.
+        if (await files.exists(fromSlug)) {
           await files.renamePackage(fromSlug, toSlug);
         }
       } catch (cause) {

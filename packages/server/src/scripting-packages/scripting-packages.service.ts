@@ -520,12 +520,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       });
     }
     const roomId = pkg.room.id;
-    const oldSlug = pkg.slug ?? String(pkg.id);
     const scope = `room:${roomId}`;
-    const lockKeys = [
-      `package_slug:${scope}:${oldSlug}`,
-      `package_slug:${scope}:${nextSlug}`,
-    ].sort();
     const prepared: Array<{
       packageId: number;
       revision: number;
@@ -536,13 +531,35 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
 
     try {
       await this.packagesRepository.manager.transaction(async (manager) => {
+        const packages = manager.getRepository(ScriptingPackage);
+        // Another client may have renamed this package between the outer read
+        // and this lock. The row lock keeps the slug stable for the rewrite,
+        // and the rewrite source must be the slug the bytes actually use.
+        const current = await packages.findOne({
+          where: { id: pkg.id },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!current) {
+          throw new NotFoundException(`Package ${pkg.id} not found`);
+        }
+        const oldSlug = current.slug ?? String(pkg.id);
+        if (oldSlug === nextSlug) {
+          // The target slug is already in place: only the other fields apply.
+          enabledChanged = await this.preparePackageUpdate(current, dto);
+          await packages.save(current);
+          return;
+        }
+        const lockKeys = [
+          `package_slug:${scope}:${oldSlug}`,
+          `package_slug:${scope}:${nextSlug}`,
+        ].sort();
         for (const key of lockKeys) {
           await manager.query(
             'SELECT pg_advisory_xact_lock(hashtext($1))',
             [key],
           );
         }
-        const live = await manager.getRepository(ScriptingPackage).findOne({
+        const live = await packages.findOne({
           where: { slug: nextSlug, room: { id: roomId } },
         });
         if (live && live.id !== pkg.id) {

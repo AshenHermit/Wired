@@ -1062,6 +1062,7 @@ describe('ScriptingPackagesService slug rename', () => {
   function makeRenameService(
     options: {
       pkg?: Record<string, unknown>;
+      self?: Record<string, unknown> | null;
       live?: Record<string, unknown> | null;
       ownRevisions?: RevisionRow[];
       dependentRevisions?: RevisionRow[];
@@ -1095,7 +1096,9 @@ describe('ScriptingPackagesService slug rename', () => {
     };
 
     const packages = {
-      findOne: jest.fn(async () => options.live ?? null),
+      findOne: jest.fn(async (query: { where: { id?: number } }) =>
+        query.where.id === undefined ? (options.live ?? null) : (options.self ?? pkg),
+      ),
       find: jest.fn(async () => options.dependentRows ?? []),
       save: jest.fn(async (value: unknown) => value),
     };
@@ -1345,5 +1348,35 @@ describe('ScriptingPackagesService slug rename', () => {
       description: 'd',
       tags: ['a'],
     });
+  });
+
+  it('rewrites from the slug it re-reads inside the transaction', async () => {
+    const { service, storage } = makeRenameService({
+      self: { id: 5, slug: 'hero_old', name: 'Hero', room: { id: 3 } },
+    });
+
+    await service.update(5, { slug: 'hero2' });
+
+    const transform = storage.rewriteRevision.mock.calls[0][3] as (
+      filepath: string,
+      data: Buffer,
+    ) => Buffer;
+    expect(
+      transform('a.gd', Buffer.from('res://packages/hero_old/a.gd')).toString(),
+    ).toBe('res://packages/hero2/a.gd');
+  });
+
+  it('applies only metadata when another request already used the target slug', async () => {
+    const { service, storage, dispatcher, packages } = makeRenameService({
+      self: { id: 5, slug: 'hero2', name: 'Hero', room: { id: 3 } },
+    });
+
+    await service.update(5, { slug: 'hero2', name: 'Fresh' });
+
+    expect(storage.rewriteRevision).not.toHaveBeenCalled();
+    expect(dispatcher.packagesChanged).not.toHaveBeenCalled();
+    expect(packages.save).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Fresh', slug: 'hero2' }),
+    );
   });
 });
