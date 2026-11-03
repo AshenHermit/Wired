@@ -1,0 +1,276 @@
+"use client";
+
+import * as React from "react";
+import {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+} from "@/components/animate-ui/components/radix/popover";
+import { cn } from "@/lib/utils";
+import { useWorkshopTags } from "./use-workshop-tags";
+
+export const TAG_PATTERN = /^[a-z0-9_-]{1,32}$/;
+export const MAX_TAGS = 10;
+
+type Suggestion = {
+  tag: string;
+  count: number | null;
+};
+
+function pluralizePackages(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${count} пакет`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return `${count} пакета`;
+  }
+  return `${count} пакетов`;
+}
+
+export function TagInput({
+  id,
+  value,
+  onChange,
+  disabled = false,
+  max = MAX_TAGS,
+  placeholder = "gameplay, hero",
+}: {
+  id?: string;
+  value: string[];
+  onChange: (next: string[]) => void;
+  disabled?: boolean;
+  max?: number;
+  placeholder?: string;
+}) {
+  const { tags: workshopTags, loading } = useWorkshopTags();
+  const [draft, setDraft] = React.useState("");
+  const [error, setError] = React.useState<"format" | "limit" | null>(null);
+  const [open, setOpen] = React.useState(false);
+  const [activeIndex, setActiveIndex] = React.useState(0);
+  const listId = React.useId();
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  const normalizedDraft = draft.trim().toLowerCase();
+
+  const options = React.useMemo<Suggestion[]>(() => {
+    const matches = workshopTags
+      .filter(
+        (item) =>
+          !value.includes(item.tag) &&
+          (normalizedDraft === "" || item.tag.includes(normalizedDraft)),
+      )
+      .slice(0, 8)
+      .map((item) => ({ tag: item.tag, count: item.count }));
+
+    const canCreate =
+      normalizedDraft !== "" &&
+      TAG_PATTERN.test(normalizedDraft) &&
+      !value.includes(normalizedDraft) &&
+      !matches.some((item) => item.tag === normalizedDraft);
+
+    return canCreate
+      ? [...matches, { tag: normalizedDraft, count: null }]
+      : matches;
+  }, [normalizedDraft, value, workshopTags]);
+
+  React.useEffect(() => {
+    setActiveIndex(0);
+  }, [draft, value, open]);
+
+  const showList = open && !disabled && (loading || options.length > 0);
+
+  function commit(raw: string) {
+    const tag = raw.trim().toLowerCase();
+    if (!tag) {
+      setDraft("");
+      return;
+    }
+    if (!TAG_PATTERN.test(tag)) {
+      setError("format");
+      return;
+    }
+    if (value.includes(tag)) {
+      setDraft("");
+      setError(null);
+      return;
+    }
+    if (value.length >= max) {
+      setError("limit");
+      return;
+    }
+    onChange([...value, tag]);
+    setDraft("");
+    setError(null);
+  }
+
+  function select(tag: string) {
+    if (value.length >= max) {
+      setError("limit");
+      return;
+    }
+    if (value.includes(tag)) {
+      setDraft("");
+      setError(null);
+      return;
+    }
+    onChange([...value, tag]);
+    setDraft("");
+    setError(null);
+    inputRef.current?.focus();
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === ",") {
+      event.preventDefault();
+      commit(draft);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const option = showList ? options[activeIndex] : undefined;
+      if (option) select(option.tag);
+      else commit(draft);
+      return;
+    }
+    if (event.key === "Backspace" && draft === "" && value.length > 0) {
+      event.preventDefault();
+      onChange(value.slice(0, -1));
+      return;
+    }
+    if (event.key === "Escape") {
+      setOpen(false);
+      return;
+    }
+    if (event.key === "ArrowDown" && options.length > 0) {
+      event.preventDefault();
+      setOpen(true);
+      setActiveIndex((index) => (index + 1) % options.length);
+      return;
+    }
+    if (event.key === "ArrowUp" && options.length > 0) {
+      event.preventDefault();
+      setOpen(true);
+      setActiveIndex(
+        (index) => (index - 1 + options.length) % options.length,
+      );
+    }
+  }
+
+  const activeOptionId =
+    showList && options[activeIndex]
+      ? `${listId}-option-${activeIndex}`
+      : undefined;
+
+  return (
+    <div className="space-y-1.5">
+      <div
+        className={cn(
+          "flex min-h-9 w-full flex-wrap items-center gap-1 rounded-md border border-input bg-transparent px-2 py-1 text-sm shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
+          error &&
+            "border-destructive focus-within:border-destructive focus-within:ring-destructive/20",
+          disabled && "cursor-not-allowed opacity-50",
+        )}
+      >
+        {value.map((tag) => (
+          <span
+            key={tag}
+            className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+          >
+            {tag}
+            <button
+              type="button"
+              aria-label={`Удалить тег ${tag}`}
+              disabled={disabled}
+              onClick={() => onChange(value.filter((item) => item !== tag))}
+              className="rounded-full text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed"
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <Popover open={showList} onOpenChange={setOpen}>
+          <PopoverAnchor asChild>
+            <input
+              ref={inputRef}
+              id={id}
+              value={draft}
+              disabled={disabled}
+              placeholder={value.length === 0 ? placeholder : undefined}
+              autoComplete="off"
+              role="combobox"
+              aria-expanded={showList}
+              aria-controls={showList ? listId : undefined}
+              aria-autocomplete="list"
+              aria-activedescendant={activeOptionId}
+              className="min-w-24 flex-1 bg-transparent outline-none disabled:cursor-not-allowed"
+              onChange={(event) => {
+                setDraft(event.target.value);
+                setError(null);
+                setOpen(true);
+              }}
+              onFocus={() => setOpen(true)}
+              onBlur={() => {
+                setOpen(false);
+                if (draft.trim() !== "") commit(draft);
+              }}
+              onKeyDown={handleKeyDown}
+            />
+          </PopoverAnchor>
+          <PopoverContent
+            align="start"
+            sideOffset={4}
+            className="w-(--radix-popover-anchor-width) p-1"
+          >
+            {loading && (
+              <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                Загружаем теги…
+              </p>
+            )}
+            <div
+              role="listbox"
+              id={listId}
+              className="max-h-64 overflow-y-auto"
+            >
+              {options.map((option, index) => (
+                <button
+                  key={`${option.tag}-${index}`}
+                  id={`${listId}-option-${index}`}
+                  type="button"
+                  role="option"
+                  aria-selected={index === activeIndex}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => select(option.tag)}
+                  className={cn(
+                    "flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-sm",
+                    index === activeIndex && "bg-accent text-accent-foreground",
+                  )}
+                >
+                  <span>
+                    {option.count === null
+                      ? `Создать „${option.tag}“`
+                      : option.tag}
+                  </span>
+                  {option.count !== null && (
+                    <span className="text-xs text-muted-foreground">
+                      {pluralizePackages(option.count)}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
+      </div>
+      {error === "format" && (
+        <p className="text-xs text-destructive">
+          Латиница, цифры, _ и -, до 32 символов.
+        </p>
+      )}
+      {error === "limit" && (
+        <p className="text-xs text-destructive">
+          Можно добавить не больше {max} тегов.
+        </p>
+      )}
+    </div>
+  );
+}
