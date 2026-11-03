@@ -16,7 +16,6 @@ import {
   Trash2Icon,
   TriangleAlertIcon,
   UploadIcon,
-  XIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -55,6 +54,7 @@ import {
   WorkshopForkDialog,
   WorkshopPublishDialog,
 } from "./workshop-dialogs";
+import { PackageEditDialog } from "./package-edit-dialog";
 
 const STATUS_LABEL: Record<RoomPackageStatus, string> = {
   "not-loaded": "не загружен",
@@ -224,185 +224,6 @@ function useConfirmedAction(
   );
 }
 
-/**
- * Inline editor of one package metadata field. The pencils stay visible for
- * every viewer: the backend enforces who may edit, and a failure is rendered in
- * the card through the controller's action state.
- */
-function MetadataField({
-  entry,
-  field,
-  packages,
-  emptyError,
-}: {
-  entry: RoomPackageEntry;
-  field: "name" | "version";
-  packages: RoomPackagesController;
-  emptyError: string;
-}) {
-  const [editing, setEditing] = React.useState(false);
-  const [draft, setDraft] = React.useState("");
-  const [saving, setSaving] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-
-  const inputLabel = field === "name" ? "Имя пакета" : "Версия";
-  const actionError = packages.actionFor(entry.packageId).error;
-
-  const start = () => {
-    setDraft(entry[field]);
-    setError(null);
-    setEditing(true);
-  };
-
-  const cancel = () => {
-    setEditing(false);
-    setDraft("");
-    setError(null);
-  };
-
-  const save = async () => {
-    const value = draft.trim();
-    if (!value) {
-      setError(emptyError);
-      return;
-    }
-    if (value === entry[field]) {
-      cancel();
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      await packages.updatePackageMetadata(entry.packageId, {
-        [field]: value,
-      });
-      setEditing(false);
-      setDraft("");
-    } catch (failure) {
-      setError(messageOf(failure));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void save();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      cancel();
-    }
-  };
-
-  const controls = (
-    <>
-      <Input
-        aria-label={inputLabel}
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={handleKeyDown}
-        disabled={saving}
-        autoFocus
-        className={field === "name" ? "h-8 w-44" : "h-7 w-28 text-xs"}
-      />
-      <Button
-        type="button"
-        size="icon"
-        variant="ghost"
-        className="size-6"
-        aria-label={`Сохранить ${field === "name" ? "имя" : "версию"} пакета`}
-        title="Сохранить"
-        onClick={() => void save()}
-        disabled={saving}
-      >
-        {saving ? (
-          <Loader2Icon className="size-3.5 animate-spin" />
-        ) : (
-          <CheckIcon className="size-3.5" />
-        )}
-      </Button>
-      <Button
-        type="button"
-        size="icon"
-        variant="ghost"
-        className="size-6"
-        aria-label={`Отменить редактирование ${field === "name" ? "имени" : "версии"}`}
-        title="Отмена"
-        onClick={cancel}
-        disabled={saving}
-      >
-        <XIcon className="size-3.5" />
-      </Button>
-    </>
-  );
-
-  const errorBlock =
-    error && error !== actionError ? (
-      <span className="text-xs text-destructive">{error}</span>
-    ) : null;
-
-  if (field === "name") {
-    return (
-      <span className="flex min-w-0 flex-col gap-1">
-        <span className="flex min-w-0 items-center gap-1">
-          <PackageIcon className="size-4 shrink-0 text-muted-foreground" />
-          {editing ? (
-            controls
-          ) : (
-            <>
-              <span className="truncate text-base font-semibold">
-                {entry.name}
-              </span>
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="size-6"
-                aria-label="Редактировать имя пакета"
-                title="Редактировать имя пакета"
-                onClick={start}
-              >
-                <PencilIcon className="size-3.5" />
-              </Button>
-            </>
-          )}
-        </span>
-        {errorBlock}
-      </span>
-    );
-  }
-
-  return (
-    <span className="flex flex-col gap-1">
-      <span className="flex items-center gap-1">
-        {editing ? (
-          controls
-        ) : (
-          <>
-            <span>
-              {entry.version ? `версия ${entry.version}` : "версия не указана"}
-            </span>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="size-5"
-              aria-label="Редактировать версию"
-              title="Редактировать версию"
-              onClick={start}
-            >
-              <PencilIcon className="size-3" />
-            </Button>
-          </>
-        )}
-      </span>
-      {errorBlock}
-    </span>
-  );
-}
-
 function PackageCard({
   entry,
   packages,
@@ -414,6 +235,7 @@ function PackageCard({
   onToggle,
   onDelete,
   onPublishToWorkshop,
+  onEdit,
 }: {
   entry: RoomPackageEntry;
   packages: RoomPackagesController;
@@ -425,6 +247,7 @@ function PackageCard({
   onToggle: (entry: RoomPackageEntry) => void;
   onDelete: (entry: RoomPackageEntry) => void;
   onPublishToWorkshop: (entry: RoomPackageEntry) => void;
+  onEdit: (entry: RoomPackageEntry) => void;
 }) {
   const action = packages.actionFor(entry.packageId);
   const disabled = !packages.fsReady || action.busy;
@@ -434,12 +257,10 @@ function PackageCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <MetadataField
-              entry={entry}
-              field="name"
-              packages={packages}
-              emptyError="Имя пакета не может быть пустым"
-            />
+            <PackageIcon className="size-4 shrink-0 text-muted-foreground" />
+            <span className="truncate text-base font-semibold">
+              {entry.name}
+            </span>
             <span
               className="font-mono text-xs text-muted-foreground"
               title="Slug пакета"
@@ -453,12 +274,9 @@ function PackageCard({
             </span>
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
-            <MetadataField
-              entry={entry}
-              field="version"
-              packages={packages}
-              emptyError="Версия не может быть пустой"
-            />
+            <span>
+              {entry.version ? `версия ${entry.version}` : "версия не указана"}
+            </span>
             <span>
               {entry.publishedRevision !== null
                 ? `· опубликована ревизия ${entry.publishedRevision}`
@@ -474,6 +292,16 @@ function PackageCard({
               </span>
             )}
           </div>
+          {(entry.description || entry.tags.length > 0) && (
+            <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+              {entry.description && (
+                <p className="line-clamp-2">{entry.description}</p>
+              )}
+              {entry.tags.length > 0 && (
+                <p>{entry.tags.join(", ")}</p>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -547,6 +375,13 @@ function PackageCard({
               >
                 <PowerIcon className="size-4" />
                 {entry.enabled ? "Отключить" : "Включить"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={disabled}
+                onSelect={() => onEdit(entry)}
+              >
+                <PencilIcon className="size-4" />
+                Редактировать пакет
               </DropdownMenuItem>
               <DropdownMenuItem
                 disabled={
@@ -672,11 +507,16 @@ export function PackagesTab({
   const [forkEntry, setForkEntry] = React.useState<RoomPackageEntry | null>(
     null,
   );
+  const [editEntry, setEditEntry] = React.useState<RoomPackageEntry | null>(
+    null,
+  );
   const [name, setName] = React.useState("");
   const [slug, setSlug] = React.useState("");
   const [version, setVersion] = React.useState("0.1.0");
   const [slugState, setSlugState] = React.useState<SlugCheckState>("idle");
   const [slugCheckAttempt, setSlugCheckAttempt] = React.useState(0);
+  const [slugTakenInWorkshop, setSlugTakenInWorkshop] =
+    React.useState(false);
   const [creating, setCreating] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
 
@@ -690,6 +530,7 @@ export function PackagesTab({
     setVersion("0.1.0");
     setSlugState("idle");
     setSlugCheckAttempt(0);
+    setSlugTakenInWorkshop(false);
     setCreateError(null);
   }, []);
 
@@ -730,6 +571,9 @@ export function PackagesTab({
           } else {
             setSlugState("taken");
           }
+          setSlugTakenInWorkshop(
+            result.global !== undefined && !result.global.available,
+          );
         })
         .catch(() => {
           if (cancelled) return;
@@ -762,6 +606,7 @@ export function PackagesTab({
   const handleSlugChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const next = event.target.value.toLowerCase();
     setSlug(next);
+    setSlugTakenInWorkshop(false);
     const trimmed = next.trim();
     setSlugState(
       !trimmed ? "idle" : isSlugValid(trimmed) ? "checking" : "invalid",
@@ -939,7 +784,8 @@ export function PackagesTab({
                   <span className="font-mono text-foreground">
                     packages/&lt;slug&gt;
                   </span>{" "}
-                  в редакторе и не меняется после создания. Новый пакет сразу
+                  в редакторе. Позже его можно изменить в меню пакета — папка и
+                  ссылки в пакетах комнаты обновятся. Новый пакет сразу
                   появится в редакторе пустым каталогом, остальные пакеты
                   комнаты при этом не загружаются.
                 </DialogDescription>
@@ -979,6 +825,12 @@ export function PackagesTab({
                   {SLUG_HINT[slugState] && (
                     <p className={`text-xs ${slugHintClass(slugState)}`}>
                       {SLUG_HINT[slugState]}
+                    </p>
+                  )}
+                  {slugState === "available" && slugTakenInWorkshop && (
+                    <p className="text-xs text-muted-foreground">
+                      Этот slug занят в workshop — при публикации будет
+                      предложен fork.
                     </p>
                   )}
                   {slugState === "error" && (
@@ -1056,11 +908,20 @@ export function PackagesTab({
                 onToggle={handleToggle}
                 onDelete={(pkg) => void handleDelete(pkg)}
                 onPublishToWorkshop={setPublishEntry}
+                onEdit={setEditEntry}
               />
             ))}
           </ul>
         )}
         {dialog}
+        <PackageEditDialog
+          open={editEntry !== null}
+          entry={editEntry}
+          packages={packages}
+          onOpenChange={(open) => {
+            if (!open) setEditEntry(null);
+          }}
+        />
         <WorkshopBrowserDialog
           open={workshopOpen}
           onOpenChange={setWorkshopOpen}

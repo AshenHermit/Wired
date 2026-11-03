@@ -12,6 +12,8 @@ import type {
 import {
   LocalChangesError,
   NewerRevisionError,
+  PackageDirectoryRenameError,
+  SlugRenameDependentsError,
   WorkshopSlugTakenError,
 } from "./use-room-packages";
 import { PackagesTab } from "./PackagesTab";
@@ -692,138 +694,182 @@ describe("PackagesTab", () => {
     expect(checkSlugAvailability).toHaveBeenLastCalledWith("hero", 1);
   });
 
-  it("saves an edited package name", async () => {
+  it("opens from the card menu and saves every field", async () => {
     const updatePackageMetadata = vi
       .fn()
-      .mockResolvedValue({ id: 7, slug: "hero", name: "Renamed" } as never);
+      .mockResolvedValue({ id: 7, slug: "hero2" } as never);
+    vi.mocked(packagesApi.getScriptingPackage).mockResolvedValue(
+      roomPackage({ description: "desc", tags: ["a", "b"] }),
+    );
 
     render(
       <PackagesTab roomId={1}
         packages={controller({
-          entries: [entry({ packageId: 7, slug: "hero", name: "Demo" })],
+          entries: [
+            entry({ packageId: 7, slug: "hero", name: "Hero", version: "1.0" }),
+          ],
           updatePackageMetadata,
         })}
         authorId={42}
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Редактировать имя пакета" }),
-    );
-    const input = screen.getByLabelText("Имя пакета");
-    fireEvent.change(input, { target: { value: "" } });
-    fireEvent.change(input, { target: { value: "Renamed" } });
-    fireEvent.keyDown(input, { key: "Enter" });
+    const menu = await openPackageActions();
+    fireEvent.click(menu.getByRole("menuitem", { name: "Редактировать пакет" }));
+
+    const slugInput = await screen.findByLabelText("Slug");
+    await waitFor(() => expect(slugInput).toHaveProperty("value", "hero"));
+
+    fireEvent.change(slugInput, { target: { value: "hero2" } });
+    const save = screen.getByRole("button", { name: "Сохранить" });
+    await waitFor(() => expect(save).toHaveProperty("disabled", false));
+    fireEvent.click(save);
 
     await waitFor(() =>
       expect(updatePackageMetadata).toHaveBeenCalledWith(7, {
-        name: "Renamed",
+        name: "Hero",
+        version: "1.0",
+        slug: "hero2",
+        description: "desc",
+        tags: ["a", "b"],
       }),
     );
   });
 
-  it("saves an edited package version", async () => {
+  it("shows dependents and repeats the request with confirmation", async () => {
     const updatePackageMetadata = vi
       .fn()
-      .mockResolvedValue({ id: 7, slug: "hero", version: "1.2.3" } as never);
+      .mockRejectedValueOnce(
+        new SlugRenameDependentsError([{ packageId: 9, name: "Level" }]),
+      )
+      .mockResolvedValue({} as never);
 
     render(
       <PackagesTab roomId={1}
         packages={controller({
-          entries: [entry({ packageId: 7, slug: "hero" })],
+          entries: [entry({ packageId: 7, slug: "hero", name: "Hero" })],
           updatePackageMetadata,
         })}
         authorId={42}
       />,
     );
 
+    const menu = await openPackageActions();
+    fireEvent.click(menu.getByRole("menuitem", { name: "Редактировать пакет" }));
+
+    const slugInput = await screen.findByLabelText("Slug");
+    fireEvent.change(slugInput, { target: { value: "hero2" } });
+    const save = screen.getByRole("button", { name: "Сохранить" });
+    await waitFor(() => expect(save).toHaveProperty("disabled", false));
+    fireEvent.click(save);
+
+    expect(await screen.findByText("Level")).toBeTruthy();
+
     fireEvent.click(
-      screen.getByRole("button", { name: "Редактировать версию" }),
+      screen.getByRole("button", { name: "Переименовать и обновить ссылки" }),
     );
-    const input = screen.getByLabelText("Версия");
-    fireEvent.change(input, { target: { value: "1.2.3" } });
-    fireEvent.keyDown(input, { key: "Enter" });
 
     await waitFor(() =>
-      expect(updatePackageMetadata).toHaveBeenCalledWith(7, {
-        version: "1.2.3",
-      }),
+      expect(updatePackageMetadata).toHaveBeenLastCalledWith(
+        7,
+        expect.objectContaining({ slug: "hero2", confirmSlugRename: true }),
+      ),
     );
   });
 
-  it("cancels inline editing with Escape", () => {
-    const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
+  it("offers a retry when only the editor directory rename failed", async () => {
+    const updatePackageMetadata = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new PackageDirectoryRenameError(7, "hero", "hero2", new Error("io")),
+      );
+    const renamePackageDir = vi.fn().mockResolvedValue(undefined);
 
     render(
       <PackagesTab roomId={1}
         packages={controller({
-          entries: [entry({ packageId: 7, slug: "hero", name: "Demo" })],
+          entries: [entry({ packageId: 7, slug: "hero", name: "Hero" })],
           updatePackageMetadata,
+          renamePackageDir,
         })}
         authorId={42}
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Редактировать имя пакета" }),
-    );
-    const input = screen.getByLabelText("Имя пакета");
-    fireEvent.change(input, { target: { value: "Renamed" } });
-    fireEvent.keyDown(input, { key: "Escape" });
+    const menu = await openPackageActions();
+    fireEvent.click(menu.getByRole("menuitem", { name: "Редактировать пакет" }));
 
-    expect(screen.queryByLabelText("Имя пакета")).toBeNull();
-    expect(screen.getByText("Demo")).toBeTruthy();
-    expect(updatePackageMetadata).not.toHaveBeenCalled();
+    const slugInput = await screen.findByLabelText("Slug");
+    fireEvent.change(slugInput, { target: { value: "hero2" } });
+    const save = screen.getByRole("button", { name: "Сохранить" });
+    await waitFor(() => expect(save).toHaveProperty("disabled", false));
+    fireEvent.click(save);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Повторить переименование папки" }),
+    );
+
+    expect(renamePackageDir).toHaveBeenCalledWith(7, "hero", "hero2");
   });
 
-  it("does not submit an empty package name", () => {
-    const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
-
+  it("shows the card metadata read-only", () => {
     render(
       <PackagesTab roomId={1}
         packages={controller({
-          entries: [entry({ packageId: 7, slug: "hero", name: "Demo" })],
-          updatePackageMetadata,
+          entries: [
+            entry({
+              packageId: 7,
+              slug: "hero",
+              name: "Demo",
+              description: "desc",
+              tags: ["a", "b"],
+            }),
+          ],
         })}
         authorId={42}
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Редактировать имя пакета" }),
-    );
-    const input = screen.getByLabelText("Имя пакета");
-    fireEvent.change(input, { target: { value: "   " } });
-    fireEvent.keyDown(input, { key: "Enter" });
-
-    expect(updatePackageMetadata).not.toHaveBeenCalled();
     expect(
-      screen.getByText("Имя пакета не может быть пустым"),
-    ).toBeTruthy();
+      screen.queryByRole("button", { name: /Редактировать имя/ }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /Редактировать версию/ })).toBeNull();
+    expect(screen.getByText("desc")).toBeTruthy();
+    expect(screen.getByText("a, b")).toBeTruthy();
+    expect(screen.getByText("#hero")).toBeTruthy();
   });
 
-  it("does not submit an empty package version", () => {
-    const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
+  it("hints that a workshop slug is taken without blocking creation", async () => {
+    const checkSlugAvailability = vi.fn().mockResolvedValue({
+      slug: "hero",
+      available: true,
+      global: { available: false, reason: "taken" },
+    });
 
     render(
       <PackagesTab roomId={1}
-        packages={controller({
-          entries: [entry({ packageId: 7, slug: "hero" })],
-          updatePackageMetadata,
-        })}
+        packages={controller({ checkSlugAvailability })}
         authorId={42}
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Редактировать версию" }),
-    );
-    const input = screen.getByLabelText("Версия");
-    fireEvent.change(input, { target: { value: "  " } });
-    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
+    fireEvent.change(screen.getByLabelText("Имя пакета"), {
+      target: { value: "New" },
+    });
+    fireEvent.change(screen.getByLabelText("Slug"), {
+      target: { value: "hero" },
+    });
 
-    expect(updatePackageMetadata).not.toHaveBeenCalled();
-    expect(screen.getByText("Версия не может быть пустой")).toBeTruthy();
+    expect(
+      await screen.findByText(/при публикации будет предложен fork/i),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Создать" })).toHaveProperty(
+        "disabled",
+        false,
+      ),
+    );
   });
 
   it("renders the slug instead of the numeric id", () => {

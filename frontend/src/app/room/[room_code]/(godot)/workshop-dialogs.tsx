@@ -41,7 +41,7 @@ function messageOf(error: unknown): string {
 }
 
 /** Tags are typed as a free-form list and normalized by the backend. */
-function parseTags(raw: string): string[] {
+export function parseTags(raw: string): string[] {
   return raw
     .split(/[,\s]+/)
     .map((tag) => tag.trim())
