@@ -952,7 +952,62 @@ describe("PackagesTab", () => {
       expect(publishToWorkshop).toHaveBeenCalledWith(5, {
         name: "Demo",
         version: "0.1.0",
+        description: "",
         tags: ["ui", "gameplay"],
+      }),
+    );
+  });
+
+  it("sends cleared description and tags instead of omitting them", async () => {
+    vi.mocked(packagesApi.lookupWorkshopPackage).mockResolvedValue(
+      workshopPackage({
+        name: "Workshop Demo",
+        version: "1.0.0",
+        description: "Старое описание",
+        tags: ["old", "tags"],
+      }),
+    );
+    const publishToWorkshop = vi
+      .fn()
+      .mockResolvedValue({ mode: "updated", package: workshopPackage() });
+    render(
+      <PackagesTab
+        roomId={1}
+        packages={controller({ publishToWorkshop })}
+        authorId={42}
+      />,
+    );
+
+    const menu = await openPackageActions();
+    fireEvent.click(
+      menu.getByRole("menuitem", { name: /опубликовать в workshop/i }),
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByText("Публикация обновится");
+    expect(within(dialog).getByLabelText("Описание")).toHaveProperty(
+      "value",
+      "Старое описание",
+    );
+    expect(within(dialog).getByLabelText("Теги")).toHaveProperty(
+      "value",
+      "old, tags",
+    );
+
+    fireEvent.change(within(dialog).getByLabelText("Теги"), {
+      target: { value: "" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Описание"), {
+      target: { value: "  " },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Опубликовать" }));
+
+    await waitFor(() =>
+      expect(publishToWorkshop).toHaveBeenCalledWith(5, {
+        name: "Workshop Demo",
+        version: "1.0.0",
+        description: "",
+        tags: [],
       }),
     );
   });

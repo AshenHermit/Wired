@@ -115,8 +115,9 @@ type LookupState = "loading" | "free" | "mine" | "taken" | "error";
  * another author is not overwritten — the user is offered a fork instead.
  *
  * Only the global record is written. Name, version, description and tags of
- * the room package stay untouched, so empty fields are omitted and the backend
- * keeps the room package values.
+ * the room package stay untouched: all four fields are sent from the dialog,
+ * so an emptied description or tag list clears the record value instead of
+ * silently falling back to the room package.
  */
 export function WorkshopPublishDialog({
   open,
@@ -202,14 +203,15 @@ export function WorkshopPublishDialog({
     const trimmedVersion = version.trim();
     if (!trimmedName || !trimmedVersion) return;
 
+    // Always send all four fields: an empty description or tag list is a
+    // deliberate clearing, and omitting the field would make the backend fall
+    // back to the room package values the user cannot see here.
     const metadata: WorkshopPackageMetadata = {
       name: trimmedName,
       version: trimmedVersion,
+      description: description.trim(),
+      tags: parseTags(tags),
     };
-    const trimmedDescription = description.trim();
-    if (trimmedDescription) metadata.description = trimmedDescription;
-    const parsedTags = parseTags(tags);
-    if (parsedTags.length > 0) metadata.tags = parsedTags;
 
     setSubmitting(true);
     setError(null);
