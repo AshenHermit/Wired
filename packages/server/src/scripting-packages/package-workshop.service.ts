@@ -48,7 +48,7 @@ const LOOKUP_SQL = `${WORKSHOP_SELECT}
 WHERE p."roomId" IS NULL AND p.slug = $1
 LIMIT 1`;
 
-const TAGS_SQL = `SELECT t.tag, COUNT(*)::int AS count, COUNT(*) OVER() AS total
+const TAGS_SQL = `SELECT t.tag, COUNT(DISTINCT p.id)::int AS count, COUNT(*) OVER() AS total
 FROM scripting_package p
 JOIN LATERAL (
   SELECT 1 FROM scripting_package_revision
@@ -60,7 +60,7 @@ CROSS JOIN LATERAL jsonb_array_elements_text(p.tags) AS t(tag)
 WHERE p."roomId" IS NULL
   AND ($1 = '' OR t.tag ILIKE $1)
 GROUP BY t.tag
-ORDER BY COUNT(*) DESC, t.tag ASC
+ORDER BY COUNT(DISTINCT p.id) DESC, t.tag ASC
 LIMIT $2 OFFSET $3`;
 
 const SUMMARY_SQL = `${WORKSHOP_SELECT}

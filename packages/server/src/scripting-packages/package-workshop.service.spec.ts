@@ -867,4 +867,14 @@ describe('PackageWorkshopService copies', () => {
 
     expect(paramsOf(query)).toEqual(['', 100, 0]);
   });
+
+  it('counts each package once per tag', async () => {
+    const query = jest.fn(() => Promise.resolve([]));
+    const service = makeService({ query });
+
+    await service.tags({});
+
+    expect(sqlOf(query)).toContain('COUNT(DISTINCT p.id)::int AS count');
+    expect(sqlOf(query)).toContain('ORDER BY COUNT(DISTINCT p.id) DESC');
+  });
 });
