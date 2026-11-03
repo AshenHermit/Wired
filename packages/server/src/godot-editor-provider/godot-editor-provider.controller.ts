@@ -7,12 +7,12 @@ import {
   StreamableFile,
 } from '@nestjs/common';
 import { ProjectInfo } from '@wired-io/shared';
-import { Extension, getContentType } from 'content-type-to-ext';
 import { Response } from 'express';
 import { createReadStream } from 'fs';
 import { glob, stat } from 'fs/promises';
 import path, { resolve } from 'path';
 import { AppConfigService } from 'src/config/config.service';
+import { contentTypeFor } from 'src/common/content-types';
 import { resolvePackagePath } from 'src/scripting-packages/package-path';
 import { Public } from 'src/auth/auth-policy';
 
@@ -58,9 +58,7 @@ export class GodotEditorProviderController {
       ),
     );
     res?.set({
-      'Content-Type': getContentType(
-        path.extname(relativeFilepath).substring(1) as Extension,
-      ),
+      'Content-Type': contentTypeFor(relativeFilepath),
       'Cross-Origin-Embedder-Policy': 'require-corp',
       'Cross-Origin-Opener-Policy': 'same-origin',
     });

@@ -119,11 +119,25 @@ describe('PackageClosureResolver', () => {
   }
 
   /**
+   * The chainable surface the resolver actually calls on a query builder.
+   */
+  interface QueryBuilderStub {
+    distinctOn: jest.Mock;
+    innerJoinAndSelect: jest.Mock;
+    leftJoinAndSelect: jest.Mock;
+    where: jest.Mock;
+    andWhere: jest.Mock;
+    orderBy: jest.Mock;
+    addOrderBy: jest.Mock;
+    getMany: jest.Mock;
+  }
+
+  /**
    * Minimal stand-in for the TypeORM query builder that loads the newest
    * published revision of every package (DISTINCT ON `package.id`).
    */
-  function latestRevisionsQueryBuilder() {
-    const builder = {
+  function latestRevisionsQueryBuilder(): QueryBuilderStub {
+    const builder: QueryBuilderStub = {
       distinctOn: jest.fn(() => builder),
       innerJoinAndSelect: jest.fn(() => builder),
       leftJoinAndSelect: jest.fn(() => builder),

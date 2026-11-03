@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import execa from 'execa';
+import { spawn } from 'node:child_process';
 import {
   NodeRuntimeProcessFactory,
   ProcessGroupWatchdog,
@@ -8,9 +8,12 @@ import {
 } from './node-runtime-process.factory';
 import { RuntimeSpawnOptions } from './room-runtime.types';
 
-jest.mock('execa', () => jest.fn());
+jest.mock('node:child_process', () => ({
+  ...jest.requireActual('node:child_process'),
+  spawn: jest.fn(),
+}));
 
-const mockedExeca = execa as unknown as jest.Mock;
+const mockedSpawn = spawn as unknown as jest.Mock;
 
 class FakeChildProcess extends EventEmitter {
   readonly stdin = new PassThrough();
@@ -62,8 +65,8 @@ describe('NodeRuntimeProcessFactory', () => {
 
   beforeEach(() => {
     children = [];
-    mockedExeca.mockReset();
-    mockedExeca.mockImplementation(() => {
+    mockedSpawn.mockReset();
+    mockedSpawn.mockImplementation(() => {
       const child = new FakeChildProcess(4_242);
       children.push(child);
       return child;
@@ -75,16 +78,15 @@ describe('NodeRuntimeProcessFactory', () => {
     jest.restoreAllMocks();
   });
 
-  it('spawns the runtime in its own process group', () => {
+  it('spawns the runtime detached with piped stdio', () => {
     factory.spawn(spawnOptions);
 
-    expect(mockedExeca).toHaveBeenCalledWith(
+    expect(mockedSpawn).toHaveBeenCalledWith(
       spawnOptions.executablePath,
       spawnOptions.args,
       expect.objectContaining({
         detached: true,
         stdio: ['pipe', 'pipe', 'pipe'],
-        reject: false,
       }),
     );
   });

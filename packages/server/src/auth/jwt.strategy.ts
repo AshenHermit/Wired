@@ -56,6 +56,9 @@ export class JwtSilentStrategy extends PassportStrategy(
 export interface AuthenticatedRequest extends Request {
   user: User;
 }
-export interface SilentAuthRequest extends Request {
-  user: User | null;
-}
+/**
+ * `user` is `null` for an anonymous caller, so this cannot extend `Request`
+ * (whose `user` is optional and never null) without breaking the declaration
+ * merge from `@types/passport`.
+ */
+export type SilentAuthRequest = Request & { user: User | null };

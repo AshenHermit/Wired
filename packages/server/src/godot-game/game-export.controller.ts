@@ -13,30 +13,11 @@ import { Request, Response } from 'express';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { AppConfigService } from 'src/config/config.service';
+import { contentTypeFor } from 'src/common/content-types';
 import { Public } from 'src/auth/auth-policy';
 
 const EXPORT_PREFIX = '/game-export/';
 const DEFAULT_FILE = 'index.html';
-
-const CONTENT_TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.htm': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.wasm': 'application/wasm',
-  '.pck': 'application/octet-stream',
-  '.json': 'application/json; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.map': 'application/json; charset=utf-8',
-};
 
 /**
  * Serves the generated Godot Web export from the backend so the iframe stays
@@ -138,7 +119,7 @@ export class GameExportController implements OnModuleInit {
     const isShell = extension === '.html' || extension === '.htm';
     const etag = `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
     res.set({
-      'Content-Type': CONTENT_TYPES[extension] ?? 'application/octet-stream',
+      'Content-Type': contentTypeFor(target),
       'Cache-Control': isShell ? 'no-store' : 'no-cache',
       ETag: etag,
       'X-Content-Type-Options': 'nosniff',

@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import execa from 'execa';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   RuntimeProcess,
   RuntimeProcessFactory,
@@ -146,14 +145,13 @@ export class ProcessGroupWatchdog {
 }
 
 /**
- * Spawns the Godot runtime through execa.
+ * Spawns the Godot runtime as a detached child process.
  *
- * execa owns the platform differences of starting a child process and of
- * killing it (including Windows), while this adapter exposes only the narrow
- * surface the runtime session needs. `reject: false` is important: the
- * process runs for hours and exits with a non-zero code on failure, which
- * must be handled by the session's exit callback rather than by an
- * unobserved rejected promise.
+ * `node:child_process` is all that is needed here: the output has to be streamed
+ * rather than buffered, a non-zero exit is handled by the session's exit
+ * callback rather than by a rejected promise, and killing goes through
+ * `ProcessGroupWatchdog` so the whole Godot tree dies. A wrapper library only
+ * adds a dependency for behaviour that is deliberately unused.
  *
  * `detached: true` gives the runtime its own process group, so one kill
  * reaches the whole Godot tree and the process no longer dies (or survives)
@@ -164,15 +162,12 @@ export class NodeRuntimeProcessFactory extends RuntimeProcessFactory {
   private readonly watchdog = new ProcessGroupWatchdog();
 
   spawn(options: RuntimeSpawnOptions): RuntimeProcess {
-    const child = execa(options.executablePath, options.args, {
+    const child = spawn(options.executablePath, options.args, {
       cwd: options.cwd,
       env: options.env,
       // stdin is the graceful shutdown channel; stdout/stderr carry the
       // readiness and presence markers parsed by the session.
       stdio: ['pipe', 'pipe', 'pipe'],
-      // Room runtimes are long-lived; do not accumulate their output in memory.
-      buffer: false,
-      reject: false,
       // Own process group, see the class comment.
       detached: true,
       windowsHide: true,

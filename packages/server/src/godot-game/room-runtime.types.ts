@@ -1,3 +1,5 @@
+import type { AppConfig } from 'src/config/config.interface';
+
 /**
  * Lifecycle of a Godot server process dedicated to one Wired room.
  *
@@ -8,47 +10,13 @@
 export type RoomRuntimeState =
   'starting' | 'running' | 'stopping' | 'stopped' | 'failed';
 
-export interface GodotRuntimeConfig {
-  /** Godot executable. Server-side configuration only; never client input. */
-  executablePath: string;
-  /** Godot project directory launched for each room. */
-  projectPath: string;
-  /** Inclusive local port range reserved for room runtimes. */
-  portStart: number;
-  portEnd: number;
-  bindAddress: string;
-  /** Stop an unused room after this much time with no authenticated players. */
-  idleTimeoutMs: number;
-  /** Time Godot gets to save state and exit after a shutdown command. */
-  shutdownGraceMs: number;
-  /** Time to wait for the `WIRED_SERVER_READY` line. */
-  startTimeoutMs: number;
-  ticketTtlSec: number;
-  ticketSecret: string;
-  /** Ticket issues allowed per user and room inside one window. 0 disables. */
-  ticketRateLimit: number;
-  ticketRateLimitWindowMs: number;
-  /** Base URL of the Wired API as reachable from the local runtime. */
-  apiUrl: string;
-  /** Directory for per-room state and runtime logs. */
-  stateDir: string;
-  /**
-   * Directory of the generated Web export. Kept outside the Godot project so
-   * the editor never copies a build into the room's project filesystem.
-   */
-  exportDir: string;
-  /**
-   * Public WebSocket base for deployed environments. Supports `{room}` and,
-   * for legacy deployments, `{port}`. Empty means the endpoint is derived
-   * from `apiUrl` outside production; production requires this value.
-   */
-  publicWsBaseUrl: string;
-  /** Concurrent proxied game sockets allowed per room. */
-  wsMaxClientsPerRoom: number;
-  /** Concurrent proxied game sockets allowed for the whole backend. */
-  wsMaxTotal: number;
-  logBufferLines: number;
-}
+/**
+ * The runtime's configuration, owned by `AppConfig`.
+ *
+ * A separate shape here used to restate all nineteen knobs, so a new setting
+ * had to be duplicated and could drift from the one the server actually loads.
+ */
+export type GodotRuntimeConfig = AppConfig['godotRuntime'];
 
 export interface RoomRuntimeInfo {
   key: string;
