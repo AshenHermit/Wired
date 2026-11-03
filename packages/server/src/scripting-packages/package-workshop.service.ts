@@ -62,6 +62,17 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
+/** A `ConflictException` raised with a machine-readable `code` payload. */
+function isConflictWithCode(error: unknown, code: string): boolean {
+  if (!(error instanceof ConflictException)) return false;
+  const response = error.getResponse();
+  return (
+    typeof response === 'object' &&
+    response !== null &&
+    (response as { code?: string }).code === code
+  );
+}
+
 /**
  * Rewrites only whole-slug self references: `res://packages/hero/` must not
  * touch `res://packages/hero_controller/`. Binary files are copied as is.
@@ -190,11 +201,26 @@ export class PackageWorkshopService {
     let created: ScriptingPackage | undefined;
     let target = existing;
     if (!target) {
-      created = await this.packagesService.createGlobalRecord({
-        slug: pkg.slug,
-        ...values,
-        author: user,
-      });
+      try {
+        created = await this.packagesService.createGlobalRecord({
+          slug: pkg.slug,
+          ...values,
+          author: user,
+        });
+      } catch (error) {
+        // Another request can create the record between the lookup above and
+        // this insert. The caller still needs the record it collided with, so
+        // the same `workshop_slug_taken` contract applies as for a record that
+        // was already there.
+        if (!isConflictWithCode(error, 'slug_taken')) throw error;
+        const winner = await this.findGlobalBySlug(pkg.slug);
+        if (!winner) throw error;
+        throw new ConflictException({
+          code: 'workshop_slug_taken',
+          slug: pkg.slug,
+          workshopPackage: await this.summaryById(winner.id),
+        });
+      }
       target = created;
     }
 

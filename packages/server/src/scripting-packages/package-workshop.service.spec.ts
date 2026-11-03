@@ -422,6 +422,46 @@ describe('PackageWorkshopService copies', () => {
     expect(flow.packagesService.update).not.toHaveBeenCalled();
   });
 
+  it('reports the record that won the creation race', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne
+      .mockResolvedValueOnce(roomPackage())
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 20, slug: 'hero', author: { id: 99 } });
+    flow.revisionsRepository.findOne.mockResolvedValue({ revision: 2 });
+    flow.packagesService.createGlobalRecord.mockRejectedValue(
+      new ConflictException({ code: 'slug_taken', slug: 'hero' }),
+    );
+    flow.repository.query.mockResolvedValue([{ ...row, id: 20 }]);
+
+    const error = await rejection(flow.service.publishToWorkshop(5, user));
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getStatus()).toBe(409);
+    expect(error.getResponse()).toMatchObject({
+      code: 'workshop_slug_taken',
+      slug: 'hero',
+      workshopPackage: { id: 20, slug: 'hero' },
+    });
+    expect(flow.revisionsService.publishCopiedRevision).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a slug_taken that no global record explains', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne
+      .mockResolvedValueOnce(roomPackage())
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+    flow.revisionsRepository.findOne.mockResolvedValue({ revision: 2 });
+    const failure = new ConflictException({
+      code: 'slug_taken',
+      slug: 'hero',
+    });
+    flow.packagesService.createGlobalRecord.mockRejectedValue(failure);
+
+    await expect(flow.service.publishToWorkshop(5, user)).rejects.toBe(failure);
+  });
+
   it('rejects publishing a package without a published revision', async () => {
     const flow = makeFlow();
     flow.repository.findOne.mockResolvedValueOnce(roomPackage());

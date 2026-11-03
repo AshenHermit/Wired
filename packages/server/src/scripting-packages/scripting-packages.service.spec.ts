@@ -967,6 +967,19 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     expect(manager.delete).toHaveBeenCalledWith(ScriptingPackage, 10);
   });
 
+  it('does not tombstone a rolled-back global package when asked not to', async () => {
+    const manager = makeTransactionManager();
+    const service = makeSlugService({
+      manager,
+      pkg: { id: 10, slug: 'hero', room: null },
+    });
+
+    await service.remove(10, { tombstone: false });
+
+    expect(manager.save).not.toHaveBeenCalled();
+    expect(manager.delete).toHaveBeenCalledWith(ScriptingPackage, 10);
+  });
+
   it('does not tombstone a deleted room package', async () => {
     const manager = makeTransactionManager();
     const service = makeSlugService({
