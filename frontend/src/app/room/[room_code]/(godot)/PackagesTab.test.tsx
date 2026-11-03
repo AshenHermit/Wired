@@ -1,5 +1,8 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { renderWithIntl as render } from "@/test/render-with-intl";
+import {
+  IntlProvider,
+  renderWithIntl as render,
+} from "@/test/render-with-intl";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ScriptingPackage,
@@ -15,6 +18,7 @@ import {
   NewerRevisionError,
   PackageDirectoryRenameError,
   SlugRenameDependentsError,
+  WorkshopActionError,
   WorkshopSlugTakenError,
 } from "./use-room-packages";
 import { PackagesTab } from "./PackagesTab";
@@ -274,6 +278,32 @@ describe("PackagesTab", () => {
 
     expect(screen.getByText("Room packages")).toBeTruthy();
     expect(screen.getByText("not loaded")).toBeTruthy();
+  });
+
+  it("retranslates a stored package notice", () => {
+    const props = {
+      roomId: 1,
+      authorId: 42,
+      packages: controller({
+        actionFor: () => ({
+          busy: false,
+          progress: null,
+          notice: { key: "Packages.notices.addedToRoom" },
+          error: null,
+        }),
+      }),
+    };
+    const view = render(<PackagesTab {...props} />, { locale: "ru" });
+
+    expect(screen.getByText("Пакет добавлен в комнату")).toBeTruthy();
+
+    view.rerender(
+      <IntlProvider locale="en">
+        <PackagesTab {...props} />
+      </IntlProvider>,
+    );
+
+    expect(screen.getByText("Package added to the room")).toBeTruthy();
   });
 
   it("explains that Godot needs a project reload to see written files", () => {
@@ -1121,6 +1151,39 @@ describe("PackagesTab", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Опубликовать" }));
 
     await waitFor(() => expect(publishToWorkshop).toHaveBeenCalledWith(5));
+  });
+
+  it("shows a mapped workshop dependency error in the publish dialog", async () => {
+    const publishToWorkshop = vi.fn().mockRejectedValue(
+      new WorkshopActionError(
+        {
+          key: "Packages.errors.dependencyNotGlobal",
+          values: { slug: "hero" },
+        },
+        "workshop_publish_failed:package_dependency_not_global:#hero",
+      ),
+    );
+    render(
+      <PackagesTab
+        roomId={1}
+        packages={controller({ publishToWorkshop })}
+        authorId={42}
+      />,
+    );
+
+    const menu = await openPackageActions();
+    fireEvent.click(
+      menu.getByRole("menuitem", { name: /опубликовать в workshop/i }),
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Опубликовать" }));
+
+    expect(
+      await within(dialog).findByText(
+        "Пакет зависит от пакета комнаты #hero: его нельзя опубликовать в workshop без форка зависимости",
+      ),
+    ).toBeTruthy();
   });
 
   it("shows the room package description and tags in the preview", async () => {

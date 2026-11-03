@@ -260,6 +260,17 @@ export class PackagesActionError extends Error {
   }
 }
 
+/** A workshop failure that carries both its translated reason and a diagnostic. */
+export class WorkshopActionError extends Error {
+  constructor(
+    public readonly appMessage: AppMessage,
+    diagnostic: string,
+  ) {
+    super(diagnostic);
+    this.name = "WorkshopActionError";
+  }
+}
+
 type WorkshopErrorData = {
   code?: string;
   slug?: string;
@@ -280,7 +291,10 @@ function workshopErrorData(error: unknown): WorkshopErrorData | null {
  * The workshop actions show a translated reason for the codes a user can act
  * on; every other failure falls back to the shared unexpected error.
  */
-function workshopErrorMessage(error: unknown): AppMessage {
+function workshopErrorMessage(
+  error: unknown,
+  fallback: AppMessage = { key: "Errors.unexpected" },
+): AppMessage {
   const data = workshopErrorData(error);
   const code = data?.code ?? "";
   const backendMessage =
@@ -318,7 +332,7 @@ function workshopErrorMessage(error: unknown): AppMessage {
   }
 
   console.error(error);
-  return { key: "Errors.unexpected" };
+  return fallback;
 }
 
 /** A short, non-translated reason used for thrown errors and console logs. */
@@ -1268,7 +1282,10 @@ export function useRoomPackages(
         try {
           created = await copyWorkshopPackageToRoom(workshopPackageId, roomId);
         } catch (cause) {
-          throw new Error(
+          throw new WorkshopActionError(
+            workshopErrorMessage(cause, {
+              key: "Packages.errors.addFromWorkshopFailed",
+            }),
             `workshop_add_failed:${workshopErrorDiagnostic(cause)}`,
           );
         }
@@ -1321,10 +1338,12 @@ export function useRoomPackages(
             );
           }
           console.error(cause);
-          setAction(packageId, {
-            error: { key: "Packages.errors.publishFailed" },
+          const message = workshopErrorMessage(cause, {
+            key: "Packages.errors.publishFailed",
           });
-          throw new Error(
+          setAction(packageId, { error: message });
+          throw new WorkshopActionError(
+            message,
             `workshop_publish_failed:${workshopErrorDiagnostic(cause)}`,
           );
         }
@@ -1344,7 +1363,10 @@ export function useRoomPackages(
         try {
           created = await forkPackageToWorkshop(packageId, slug.trim());
         } catch (cause) {
-          throw new Error(
+          throw new WorkshopActionError(
+            workshopErrorMessage(cause, {
+              key: "Packages.errors.forkFailed",
+            }),
             `workshop_fork_failed:${workshopErrorDiagnostic(cause)}`,
           );
         }

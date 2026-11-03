@@ -1780,7 +1780,8 @@ describe("useRoomPackages", () => {
     expect((failure as Error).message).toContain("#hero");
     expect((failure as Error).message).not.toContain("Request failed");
     expect(result.current.actionFor(5).error).toEqual({
-      key: "Packages.errors.publishFailed",
+      key: "Packages.errors.dependencyNotGlobal",
+      values: { slug: "hero" },
     });
     unmount();
   });
@@ -1793,12 +1794,16 @@ describe("useRoomPackages", () => {
     });
     const { result, unmount } = await startHook();
 
-    const failure = await result.current
-      .publishToWorkshop(5)
-      .catch((error: unknown) => error);
+    const failure = await act(async () =>
+      result.current.publishToWorkshop(5).catch((error: unknown) => error),
+    );
 
     expect((failure as Error).message).toContain("#missing");
     expect((failure as Error).message).toContain("workshop");
+    expect(result.current.actionFor(5).error).toEqual({
+      key: "Packages.errors.dependencyUnknownSlug",
+      values: { slug: "missing" },
+    });
     unmount();
   });
 
@@ -1808,11 +1813,15 @@ describe("useRoomPackages", () => {
     });
     const { result, unmount } = await startHook();
 
-    const failure = await result.current
-      .publishToWorkshop(5)
-      .catch((error: unknown) => error);
+    const failure = await act(async () =>
+      result.current.publishToWorkshop(5).catch((error: unknown) => error),
+    );
 
     expect((failure as Error).message).toContain("Bad Tag");
+    expect(result.current.actionFor(5).error).toEqual({
+      key: "Packages.errors.invalidTag",
+      values: { tag: "Bad Tag" },
+    });
     unmount();
   });
 

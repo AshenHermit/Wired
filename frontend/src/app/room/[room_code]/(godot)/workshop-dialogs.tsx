@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAppMessage, type AppMessage } from "@/i18n/message";
 import {
+  WorkshopActionError,
   WorkshopSlugTakenError,
   type RoomPackageEntry,
   type RoomPackagesController,
@@ -67,7 +68,11 @@ export function WorkshopBrowserDialog({
       await packages.addFromWorkshop(workshopPackage.id);
     } catch (cause) {
       console.error(cause);
-      setError({ key: "Packages.errors.addFromWorkshopFailed" });
+      setError(
+        cause instanceof WorkshopActionError
+          ? cause.appMessage
+          : { key: "Packages.errors.addFromWorkshopFailed" },
+      );
     } finally {
       setPendingId(null);
     }
@@ -224,7 +229,11 @@ export function WorkshopPublishDialog({
         setLookup("taken");
       } else {
         console.error(cause);
-        setError({ key: "Packages.errors.publishFailed" });
+        setError(
+          cause instanceof WorkshopActionError
+            ? cause.appMessage
+            : { key: "Packages.errors.publishFailed" },
+        );
       }
     } finally {
       setSubmitting(false);
@@ -437,7 +446,11 @@ export function WorkshopForkDialog({
       onOpenChange(false);
     } catch (cause) {
       console.error(cause);
-      setError({ key: "Packages.errors.forkFailed" });
+      setError(
+        cause instanceof WorkshopActionError
+          ? cause.appMessage
+          : { key: "Packages.errors.forkFailed" },
+      );
     } finally {
       setSubmitting(false);
     }
