@@ -138,6 +138,18 @@ describe('ScriptingPackagesService', () => {
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
+    it('keeps PATCH/DELETE closed to room contributors', async () => {
+      const service = makeService({
+        id: 10,
+        author,
+        contributors: [],
+        room: { id: 5, author: roomAuthor, contributors: [contributor] },
+      });
+      await expect(
+        service.assertPackageEditing(contributor as never, 10),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
     it('rejects a stranger for a standalone package', async () => {
       const service = makeService({
         id: 10,
@@ -155,6 +167,41 @@ describe('ScriptingPackagesService', () => {
       await expect(
         service.assertPackageEditing(stranger as never, 10),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('assertPackagePublishing', () => {
+    function makeService(pkg: unknown) {
+      const packagesRepository = { findOne: jest.fn(async () => pkg) };
+      return new ScriptingPackagesService(
+        packagesRepository as never,
+        {} as never,
+        { findOne: jest.fn(async () => null) } as never,
+      );
+    }
+
+    it('lets a room contributor publish a revision', async () => {
+      const service = makeService({
+        id: 10,
+        author: { id: 1 },
+        contributors: [],
+        room: { id: 5, author: { id: 3 }, contributors: [{ id: 2 }] },
+      });
+      await expect(
+        service.assertPackagePublishing({ id: 2 } as never, 10),
+      ).resolves.toBeUndefined();
+    });
+
+    it('rejects revision endpoints for a global package', async () => {
+      const service = makeService({
+        id: 10,
+        author: { id: 1 },
+        contributors: [],
+        room: null,
+      });
+      await expect(
+        service.assertPackagePublishing({ id: 1 } as never, 10),
+      ).rejects.toMatchObject({ response: { code: 'package_not_in_room' } });
     });
   });
 

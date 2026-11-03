@@ -51,7 +51,10 @@ describe('ScriptingPackagesController revisions API', () => {
     publishedAt: null,
   };
 
-  let packagesService: { assertPackageEditing: jest.Mock };
+  let packagesService: {
+    assertPackageEditing: jest.Mock;
+    assertPackagePublishing: jest.Mock;
+  };
   let revisionsService: Record<string, jest.Mock>;
   let delivery: Record<string, jest.Mock>;
   let readUrls: { verifyToken: jest.Mock };
@@ -60,7 +63,10 @@ describe('ScriptingPackagesController revisions API', () => {
   let controller: ScriptingPackagesController;
 
   beforeEach(() => {
-    packagesService = { assertPackageEditing: jest.fn() };
+    packagesService = {
+      assertPackageEditing: jest.fn(),
+      assertPackagePublishing: jest.fn(),
+    };
     revisionsService = {
       createDraft: jest.fn(async () => revision),
       uploadFile: jest.fn(async () => ({ size: 3, sha256: file.sha256 })),
@@ -94,18 +100,22 @@ describe('ScriptingPackagesController revisions API', () => {
     );
   });
 
-  it('requires editing rights before creating a draft revision', async () => {
+  it('requires publishing rights before creating a draft revision', async () => {
     const payload = { files: [file] };
 
     await expect(controller.createRevision(request, 7, payload)).resolves.toBe(
       revision,
     );
 
-    expect(packagesService.assertPackageEditing).toHaveBeenCalledWith(user, 7);
+    expect(packagesService.assertPackagePublishing).toHaveBeenCalledWith(
+      user,
+      7,
+    );
+    expect(packagesService.assertPackageEditing).not.toHaveBeenCalled();
     expect(revisionsService.createDraft).toHaveBeenCalledWith(7, payload);
   });
 
-  it('requires editing rights before uploading a revision file', async () => {
+  it('requires publishing rights before uploading a revision file', async () => {
     const upload = {
       buffer: Buffer.from('abc'),
       size: 3,
@@ -120,7 +130,11 @@ describe('ScriptingPackagesController revisions API', () => {
       upload,
     );
 
-    expect(packagesService.assertPackageEditing).toHaveBeenCalledWith(user, 7);
+    expect(packagesService.assertPackagePublishing).toHaveBeenCalledWith(
+      user,
+      7,
+    );
+    expect(packagesService.assertPackageEditing).not.toHaveBeenCalled();
     expect(revisionsService.uploadFile).toHaveBeenCalledWith(
       7,
       2,
@@ -142,18 +156,22 @@ describe('ScriptingPackagesController revisions API', () => {
     expect(revisionsService.uploadFile).not.toHaveBeenCalled();
   });
 
-  it('requires editing rights before publishing', async () => {
+  it('requires publishing rights before publishing', async () => {
     await controller.publishRevision(request, 7, 2);
 
-    expect(packagesService.assertPackageEditing).toHaveBeenCalledWith(user, 7);
+    expect(packagesService.assertPackagePublishing).toHaveBeenCalledWith(
+      user,
+      7,
+    );
+    expect(packagesService.assertPackageEditing).not.toHaveBeenCalled();
     expect(revisionsService.publish).toHaveBeenCalledWith(7, 2);
   });
 
-  it('lists published revisions without editing rights', async () => {
+  it('lists published revisions without publishing rights', async () => {
     await expect(
       controller.listRevisions({ user: null } as never, 7, undefined),
     ).resolves.toEqual([revision]);
-    expect(packagesService.assertPackageEditing).not.toHaveBeenCalled();
+    expect(packagesService.assertPackagePublishing).not.toHaveBeenCalled();
     expect(revisionsService.list).toHaveBeenCalledWith(7, {
       includeDrafts: false,
     });
@@ -163,18 +181,22 @@ describe('ScriptingPackagesController revisions API', () => {
     await expect(
       controller.listRevisions({ user: null } as never, 7, '0'),
     ).resolves.toEqual([revision]);
-    expect(packagesService.assertPackageEditing).not.toHaveBeenCalled();
+    expect(packagesService.assertPackagePublishing).not.toHaveBeenCalled();
     expect(revisionsService.list).toHaveBeenCalledWith(7, {
       includeDrafts: false,
     });
   });
 
-  it('lists drafts only for users with editing rights', async () => {
+  it('lists drafts only for users with publishing rights', async () => {
     await expect(controller.listRevisions(request, 7, '1')).resolves.toEqual([
       revision,
     ]);
 
-    expect(packagesService.assertPackageEditing).toHaveBeenCalledWith(user, 7);
+    expect(packagesService.assertPackagePublishing).toHaveBeenCalledWith(
+      user,
+      7,
+    );
+    expect(packagesService.assertPackageEditing).not.toHaveBeenCalled();
     expect(revisionsService.list).toHaveBeenCalledWith(7, {
       includeDrafts: true,
     });

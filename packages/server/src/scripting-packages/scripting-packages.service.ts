@@ -190,6 +190,53 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     }
   }
 
+  /**
+   * Publishing is broader than editing: a room contributor may emit revisions.
+   * Workshop packages (`room = null`) never receive revisions over HTTP, so
+   * they are rejected even for their own author.
+   */
+  async assertPackagePublishing(user: User, packageId: number): Promise<void> {
+    const pkg = await this.packagesRepository.findOne({
+      where: { id: packageId },
+      relations: [
+        'author',
+        'contributors',
+        'room',
+        'room.author',
+        'room.contributors',
+      ],
+    });
+    if (!pkg) {
+      throw new NotFoundException(
+        `ScriptingPackage with id=${packageId} not found`,
+      );
+    }
+
+    const isAuthor = pkg.author?.id === user.id;
+    const isContributor = pkg.contributors?.some(
+      (contributor) => contributor.id === user.id,
+    );
+    const isRoomMember =
+      Boolean(pkg.room) &&
+      (pkg.room!.author?.id === user.id ||
+        (pkg.room!.contributors?.some(
+          (contributor) => contributor.id === user.id,
+        ) ??
+          false));
+
+    if (!isAuthor && !isContributor && !isRoomMember) {
+      throw new ForbiddenException(
+        'You are not allowed to publish this package',
+      );
+    }
+    if (!pkg.room) {
+      throw new ConflictException({
+        code: 'package_not_in_room',
+        message: 'Workshop packages cannot receive revisions directly',
+      });
+    }
+  }
+
   findAll(): Promise<ScriptingPackage[]> {
     return this.packagesRepository.find({
       relations: [

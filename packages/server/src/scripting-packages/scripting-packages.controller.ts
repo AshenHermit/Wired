@@ -104,7 +104,7 @@ export class ScriptingPackagesController {
     @Param('id', ParseIntPipe) id: number,
     @Body() payload: CreatePackageRevisionPayload,
   ): Promise<PackageRevision> {
-    await this.packagesService.assertPackageEditing(req.user, id);
+    await this.packagesService.assertPackagePublishing(req.user, id);
     return await this.revisionsService.createDraft(id, payload);
   }
 
@@ -124,7 +124,7 @@ export class ScriptingPackagesController {
           'Authentication is required to list draft revisions',
         );
       }
-      await this.packagesService.assertPackageEditing(req.user, id);
+      await this.packagesService.assertPackagePublishing(req.user, id);
     }
     return this.revisionsService.list(id, { includeDrafts });
   }
@@ -142,7 +142,7 @@ export class ScriptingPackagesController {
     @Param('path') path: string | string[],
     @UploadedFile() file: Express.Multer.File,
   ) {
-    await this.packagesService.assertPackageEditing(req.user, id);
+    await this.packagesService.assertPackagePublishing(req.user, id);
     if (!file || !file.buffer) {
       throw new BadRequestException('Package file body is required');
     }
@@ -162,7 +162,7 @@ export class ScriptingPackagesController {
     @Param('id', ParseIntPipe) id: number,
     @Param('revision', ParseIntPipe) revision: number,
   ): Promise<PackageRevision> {
-    await this.packagesService.assertPackageEditing(req.user, id);
+    await this.packagesService.assertPackagePublishing(req.user, id);
     return await this.revisionsService.publish(id, revision);
   }
 
