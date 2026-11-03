@@ -158,7 +158,7 @@ export class ProcessGroupWatchdog {
  * together with the backend's signal group by accident.
  */
 @Injectable()
-export class NodeRuntimeProcessFactory extends RuntimeProcessFactory {
+export class GodotRuntimeProcessFactory extends RuntimeProcessFactory {
   private readonly watchdog = new ProcessGroupWatchdog();
 
   spawn(options: RuntimeSpawnOptions): RuntimeProcess {

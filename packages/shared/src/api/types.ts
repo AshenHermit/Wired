@@ -10,16 +10,6 @@ export type User = {
   contributedPackages?: ScriptingPackage[];
 };
 
-export type ScriptFile = {
-  filepath: string;
-  script: string;
-};
-
-export type PhysicalFile = {
-  filepath: string;
-  hash?: string;
-};
-
 /**
  * One file of a package revision. `filepath` is a relative POSIX path inside
  * the package directory (no `..`, no drive letters, no leading slash).
@@ -113,7 +103,6 @@ export type ScriptingPackage = {
   tags: string[];
   enabled: boolean;
   dependencies: string[];
-  scripts: ScriptFile[];
   createdAt: string;
   updatedAt: string;
   author?: User;
@@ -153,7 +142,6 @@ export type CreateScriptingPackagePayload = {
   description?: string;
   tags?: string[];
   dependencies?: string[];
-  scripts?: ScriptFile[];
   /** The author is always the authenticated caller, never a payload field. */
   roomId?: number;
   parentPackageId?: number;
@@ -381,3 +369,33 @@ export type RoomPackagesStatus = {
   roomId: number;
   packages: PackageSyncStatus[];
 };
+
+/**
+ * One package that takes part in a running game: an unpublished package has no
+ * revision to apply, and a disabled one is deliberately out of the room.
+ */
+export type ActivePackage = { packageId: number; revision: number };
+
+/** The packages the runtime is expected to have loaded. */
+export function activePackages(status: RoomPackagesStatus): ActivePackage[] {
+  return status.packages
+    .filter((entry) => entry.enabled && entry.revision > 0)
+    .map(({ packageId, revision }) => ({ packageId, revision }));
+}
+
+/**
+ * Whether the runtime has applied every active package at or beyond its
+ * published revision. Vacuously true when nothing is active.
+ */
+export function packagesApplied(status: RoomPackagesStatus): boolean {
+  return activePackages(status).every(({ packageId, revision }) => {
+    const entry = status.packages.find(
+      (candidate) => candidate.packageId === packageId,
+    );
+    return (
+      entry !== undefined &&
+      entry.runtime.state === "applied" &&
+      entry.runtime.revision >= revision
+    );
+  });
+}

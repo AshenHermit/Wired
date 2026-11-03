@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AppConfigService } from 'src/config/config.service';
 import { GameTicketService } from './game-ticket.service';
-import { NodeRuntimeProcessFactory } from './node-runtime-process.factory';
+import { GodotRuntimeProcessFactory } from './godot-runtime-process.factory';
 import { RoomRuntimeService } from './room-runtime.service';
 import { GodotRuntimeConfig } from './room-runtime.types';
 
@@ -75,7 +75,7 @@ describeIntegration('RoomRuntimeService with real Godot', () => {
     } as unknown as AppConfigService;
     service = new RoomRuntimeService(
       configService,
-      new NodeRuntimeProcessFactory(),
+      new GodotRuntimeProcessFactory(),
       new GameTicketService(configService),
     );
   });

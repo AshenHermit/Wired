@@ -11,6 +11,8 @@ import {
   GameRoomConnection,
   GameRoomRuntimeStatus,
   RoomPackagesStatus,
+  activePackages,
+  packagesApplied,
 } from '@wired-io/shared';
 import { Room } from 'src/database/entities/room.entity';
 import { User } from 'src/database/entities/user.entity';
@@ -153,17 +155,25 @@ export class GameRoomService {
   private async waitForInitialPackages(roomId: string): Promise<void> {
     const deadline = Date.now() + PACKAGE_READY_TIMEOUT_MS;
     for (;;) {
-      const statuses = (
-        await this.packageSync.getStatuses(roomId)
-      ).filter((status) => status.enabled && status.revision > 0);
-      if (statuses.some((s) => s.runtime.state === 'failed')) {
+      const status: RoomPackagesStatus = {
+        roomId: Number(roomId),
+        packages: await this.packageSync.getStatuses(roomId),
+      };
+      const active = new Set(
+        activePackages(status).map(({ packageId }) => packageId),
+      );
+      if (
+        status.packages.some(
+          (entry) => active.has(entry.packageId) && entry.runtime.state === 'failed',
+        )
+      ) {
         throw connectionFailure(
           HttpStatus.BAD_GATEWAY,
           'packages_failed',
           'Room packages failed to apply',
         );
       }
-      if (statuses.every((s) => s.runtime.state === 'applied')) return;
+      if (packagesApplied(status)) return;
       if (Date.now() >= deadline) {
         throw connectionFailure(
           HttpStatus.CONFLICT,

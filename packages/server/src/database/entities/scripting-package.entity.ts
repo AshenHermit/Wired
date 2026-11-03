@@ -12,11 +12,22 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { Room } from './room.entity';
-import { PhysicalFile } from '@wired-io/shared';
+
+/*
+ * The shapes below describe columns written by the retired Phaser-era package
+ * model. Package content now travels as revision files, so nothing writes them
+ * any more; they survive only because `DB_SYNC` cannot drop populated columns
+ * and older rows still carry values.
+ */
 
 export type ScriptFile = {
   filepath: string;
   script: string;
+};
+
+export type PhysicalFile = {
+  filepath: string;
+  hash?: string;
 };
 
 @Entity()

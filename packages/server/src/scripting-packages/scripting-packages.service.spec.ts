@@ -660,9 +660,11 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           {} as never,
-          undefined,
-          undefined,
+          {} as never,
+          {} as never,
           delivery as never,
+          {} as never,
+          new PackagePublishLockService(),
         ),
       };
     }
@@ -1107,9 +1109,10 @@ describe('ScriptingPackagesService enable guard', () => {
       packagesRepository as never,
       {} as never,
       storage as never,
-      undefined,
-      undefined,
+      {} as never,
+      {} as never,
       revisionsRepository as never,
+      new PackagePublishLockService(),
     );
     return { service, packagesRepository };
   }

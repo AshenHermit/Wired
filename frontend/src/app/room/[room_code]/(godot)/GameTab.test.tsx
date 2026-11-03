@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { Room, RoomPackagesStatus } from "@wired-io/shared";
+import { activePackages, packagesApplied } from "@wired-io/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   IntlProvider,
@@ -10,12 +11,7 @@ import {
   getGameRoomStatus,
   getRoomPackages,
 } from "@/api/services/godot-game";
-import {
-  GameTab,
-  activePackages,
-  packagesAreApplied,
-  packagesFailed,
-} from "./GameTab";
+import { GameTab, packagesFailed } from "./GameTab";
 vi.mock("@/api/services/godot-game", () => ({
   createGameConnection: vi.fn(),
   getGameRoomStatus: vi.fn(),
@@ -521,7 +517,7 @@ describe("package readiness helpers", () => {
       pkg({ packageId: 2, enabled: true, revision: 0 }),
     ]);
 
-    expect(packagesAreApplied(status)).toBe(true);
+    expect(packagesApplied(status)).toBe(true);
     expect(packagesFailed(status)).toBe(false);
   });
 
@@ -551,7 +547,7 @@ describe("package readiness helpers", () => {
       }),
     ]);
 
-    expect(packagesAreApplied(status)).toBe(false);
+    expect(packagesApplied(status)).toBe(false);
     expect(packagesFailed(status)).toBe(false);
   });
 

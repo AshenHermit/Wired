@@ -2,7 +2,9 @@
 
 import {
   Room,
+  activePackages,
   isGameConnectionErrorCode,
+  packagesApplied,
   type GameConnectionErrorCode,
   type GameRoomRuntimeStatus,
   type RoomPackagesStatus,
@@ -47,7 +49,7 @@ const HANDSHAKE_TIMEOUT_MS = 15_000;
 const STATUS_POLL_MS = 5_000;
 // A cold runtime start has to launch Godot and apply every package revision
 // before the backend can mint a usable ticket. The connection flow waits for
-// that instead of turning a normal startup into "Игра недоступна".
+// that instead of turning a normal startup into "РРіСЂР° РЅРµРґРѕСЃС‚СѓРїРЅР°".
 const CONNECTION_WAIT_MS = 90_000;
 const RUNTIME_POLL_MS = 1_000;
 const CONNECTION_RETRY_MS = 2_000;
@@ -423,8 +425,6 @@ function runtimeMessage(
   }
 }
 
-export type ActivePackage = { packageId: number; revision: number };
-
 class GameTabError extends Error {
   constructor(readonly appMessage: AppMessage) {
     super(appMessage.key);
@@ -432,31 +432,9 @@ class GameTabError extends Error {
 }
 
 /**
- * Packages that take part in the running game: an unpublished package has no
- * revision to apply and a disabled one is intentionally out of the room.
+ * Whether any active package has failed to apply. Shares `activePackages` with
+ * the readiness gate so a package cannot count as applied here and failed there.
  */
-export function activePackages(
-  packages: RoomPackagesStatus,
-): ActivePackage[] {
-  return packages.packages
-    .filter((entry) => entry.enabled && entry.revision > 0)
-    .map(({ packageId, revision }) => ({ packageId, revision }));
-}
-
-export function packagesAreApplied(packages: RoomPackagesStatus): boolean {
-  const active = activePackages(packages);
-  if (active.length === 0) return true;
-  return active.every(({ packageId, revision }) => {
-    const status = packages.packages.find(
-      (entry) => entry.packageId === packageId,
-    );
-    return (
-      status?.runtime.state === "applied" &&
-      status.runtime.revision >= revision
-    );
-  });
-}
-
 export function packagesFailed(packages: RoomPackagesStatus): boolean {
   const active = new Set(activePackages(packages).map(({ packageId }) => packageId));
   return packages.packages.some(
@@ -490,7 +468,7 @@ function reportRuntimeProgress(
     );
   }).length;
   onProgress(
-    runtimeMessage(status, packagesAreApplied(packages), applied, active.length),
+    runtimeMessage(status, packagesApplied(packages), applied, active.length),
   );
 }
 
@@ -522,7 +500,7 @@ async function waitForRuntimeUntil(
     if (packagesFailed(packages)) {
       throw new GameTabError({ key: "Game.packagesFailed" });
     }
-    if (status.state === "running" && packagesAreApplied(packages)) {
+    if (status.state === "running" && packagesApplied(packages)) {
       return;
     }
     if (
@@ -927,7 +905,7 @@ export function GameTab({ room }: { room: Room }) {
         <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-md bg-black/60 px-3 py-1 text-xs">
           {t("players", { count: players })}
           {events.length > 0 && (
-            <span className="ml-2 opacity-70">· {events.at(-1)}</span>
+            <span className="ml-2 opacity-70">В· {events.at(-1)}</span>
           )}
         </div>
       )}

@@ -183,7 +183,6 @@ export function packageFromStatus(status: PackageSyncStatus): ScriptingPackage {
     tags: [],
     enabled: status.enabled,
     dependencies: [],
-    scripts: [],
     createdAt: timestamp,
     updatedAt: timestamp,
   };

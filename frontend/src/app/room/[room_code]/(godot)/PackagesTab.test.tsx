@@ -143,7 +143,6 @@ function roomPackage(
     tags: ["room", "demo"],
     enabled: true,
     dependencies: [],
-    scripts: [],
     createdAt: "2026-10-30T10:00:00.000Z",
     updatedAt: "2026-10-30T10:00:00.000Z",
     ...overrides,

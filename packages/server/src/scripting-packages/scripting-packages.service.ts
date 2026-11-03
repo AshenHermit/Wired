@@ -9,7 +9,6 @@ import {
   Logger,
   NotFoundException,
   OnApplicationBootstrap,
-  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
@@ -56,54 +55,14 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     private readonly packagesRepository: Repository<ScriptingPackage>,
     @InjectRepository(Room)
     private readonly roomsRepository: Repository<Room>,
-    @Optional()
-    private readonly storage?: PackageStorageService,
-    @Optional()
+    private readonly storage: PackageStorageService,
     @Inject(PACKAGE_REVISION_DISPATCHER)
-    private readonly dispatcher?: PackageRevisionDispatcher,
-    @Optional()
-    private readonly delivery?: PackageDeliveryService,
-    @Optional()
+    private readonly dispatcher: PackageRevisionDispatcher,
+    private readonly delivery: PackageDeliveryService,
     @InjectRepository(ScriptingPackageRevision)
-    private readonly revisionsRepository?: Repository<ScriptingPackageRevision>,
-    @Optional()
-    private readonly locks?: PackagePublishLockService,
+    private readonly revisionsRepository: Repository<ScriptingPackageRevision>,
+    private readonly locks: PackagePublishLockService,
   ) {}
-
-  /**
-   * Collaborators the module always registers.
-   *
-   * They stay optional only so a unit test can build the service with two
-   * repositories, which means every use has to go through one of the accessors
-   * below: a missing collaborator is a wiring error, and silently running
-   * without one would delete files or reconcile nothing.
-   */
-  private get packageStorage(): PackageStorageService {
-    return this.require('storage', this.storage);
-  }
-
-  private get packageDispatcher(): PackageRevisionDispatcher {
-    return this.require('dispatcher', this.dispatcher);
-  }
-
-  private get packageDelivery(): PackageDeliveryService {
-    return this.require('delivery', this.delivery);
-  }
-
-  private get revisions(): Repository<ScriptingPackageRevision> {
-    return this.require('revisions', this.revisionsRepository);
-  }
-
-  private get publishLocks(): PackagePublishLockService {
-    return this.require('publishLock', this.locks);
-  }
-
-  private require<T>(name: string, value: T | undefined): T {
-    if (!value) {
-      throw new Error(`package_dependency_missing:${name}`);
-    }
-    return value;
-  }
 
   /**
    * Packages created before slugs existed get their numeric id as a slug.
@@ -111,14 +70,6 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
    * covers a rolling deploy where an old build writes NULL slugs.
    */
   async onApplicationBootstrap(): Promise<void> {
-    // Probe every collaborator once so a misconfigured module fails at boot
-    // rather than the first time someone deletes or publishes a package.
-    this.packageStorage;
-    this.packageDispatcher;
-    this.packageDelivery;
-    this.revisions;
-    this.publishLocks;
-
     const updated = await this.packagesRepository.query(
       `UPDATE scripting_package
        SET slug = id::text
@@ -507,8 +458,6 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     if (dto.description !== undefined) pkg.description = dto.description;
     if (dto.dependencies !== undefined) pkg.dependencies = dto.dependencies;
     if (dto.tags !== undefined) pkg.tags = normalizeTags(dto.tags);
-    if (dto.scripts !== undefined) pkg.scripts = dto.scripts;
-    if (dto.physicalFiles !== undefined) pkg.physicalFiles = dto.physicalFiles;
 
     const previousEnabled = pkg.enabled !== false;
     if (dto.enabled === true && previousEnabled === false) {
@@ -521,7 +470,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
 
   private async notifyEnabledChanged(packageId: number): Promise<void> {
     try {
-      await this.packageDispatcher.packageEnabledChanged(packageId);
+      await this.dispatcher.packageEnabledChanged(packageId);
     } catch (error) {
       this.logger.warn(
         `Package ${packageId} was saved but its room was not notified: ${
@@ -601,7 +550,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
           });
         }
         const dependents =
-          (await this.packageDelivery.findDependentRoomPackages(pkg.id)) ?? [];
+          (await this.delivery.findDependentRoomPackages(pkg.id)) ?? [];
         if (dependents.length > 0 && dto.confirmSlugRename !== true) {
           const rows = await manager.getRepository(ScriptingPackage).find({
             where: { id: In(dependents.map((row) => row.packageId)) },
@@ -616,7 +565,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
           });
         }
 
-        await this.publishLocks.runWithPublishLocks(
+        await this.locks.runWithPublishLocks(
           [pkg.id, ...dependents.map((row) => row.packageId)],
           async () => {
             const revisions = manager.getRepository(ScriptingPackageRevision);
@@ -659,7 +608,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
             }> = [];
             for (const target of targets) {
               prepared.push(target);
-              const files = await this.packageStorage.rewriteRevision(
+              const files = await this.storage.rewriteRevision(
                 target.packageId,
                 target.revision,
                 target.kind,
@@ -698,7 +647,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       });
     } catch (error) {
       for (const target of prepared.reverse()) {
-        await this.packageStorage
+        await this.storage
           .abortRewrite(target.packageId, target.revision, target.kind)
           .catch((cause) =>
             this.logger.warn(`rewrite abort failed: ${String(cause)}`),
@@ -715,14 +664,14 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     }
 
     for (const target of prepared) {
-      await this.packageStorage
+      await this.storage
         .finishRewrite(target.packageId, target.revision, target.kind)
         .catch((cause) =>
           this.logger.warn(`rewrite cleanup failed: ${String(cause)}`),
         );
     }
     for (const packageId of rewrittenIds) {
-      await this.packageDelivery
+      await this.delivery
         .invalidatePackage(packageId)
         .catch((cause) =>
           this.logger.warn(`artifact invalidation failed: ${String(cause)}`),
@@ -730,7 +679,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     }
     if (rewrittenIds.length > 0) {
       try {
-        await this.packageDispatcher.packagesChanged(rewrittenIds);
+        await this.dispatcher.packagesChanged(rewrittenIds);
       } catch (cause) {
         this.logger.warn(
           `Package ${pkg.id} was renamed but its room was not notified: ${String(
@@ -774,13 +723,13 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       const currentId = queue.pop() as number;
       if (visited.has(currentId)) continue;
       visited.add(currentId);
-      const latest = await this.revisions.findOne({
+      const latest = await this.revisionsRepository.findOne({
         where: { package: { id: currentId }, status: 'published' },
         relations: { package: true },
         order: { revision: 'DESC' },
       });
       if (!latest) continue;
-      const pins = await this.packageStorage.readPinnedDependencies(
+      const pins = await this.storage.readPinnedDependencies(
         currentId,
         latest.revision,
       );
@@ -821,7 +770,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
    * dependent on its next reload, so the delete is refused while one exists.
    */
   private async assertNoEnabledDependents(packageId: number): Promise<void> {
-    const dependents = await this.packageDelivery.findDependentRoomPackages(packageId);
+    const dependents = await this.delivery.findDependentRoomPackages(packageId);
     if (dependents.length === 0) {
       return;
     }
@@ -880,7 +829,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       }
     });
     try {
-      await this.packageStorage.removePackage(id);
+      await this.storage.removePackage(id);
     } catch (error) {
       this.logger.warn(
         `ScriptingPackage ${id} was deleted but its files were not removed: ${
@@ -890,7 +839,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     }
     if (roomId !== null) {
       try {
-        this.packageDispatcher.packageRemoved(id, roomId);
+        this.dispatcher.packageRemoved(id, roomId);
       } catch (error) {
         this.logger.warn(
           `Package ${id} was deleted but its room was not notified: ${

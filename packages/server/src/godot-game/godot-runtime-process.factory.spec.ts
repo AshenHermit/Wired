@@ -2,10 +2,10 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { spawn } from 'node:child_process';
 import {
-  NodeRuntimeProcessFactory,
+  GodotRuntimeProcessFactory,
   ProcessGroupWatchdog,
   processGroup,
-} from './node-runtime-process.factory';
+} from './godot-runtime-process.factory';
 import { RuntimeSpawnOptions } from './room-runtime.types';
 
 jest.mock('node:child_process', () => ({
@@ -59,8 +59,8 @@ const spawnOptions: RuntimeSpawnOptions = {
   env: { WIRED_GAME_TICKET_SECRET: 'test-secret' },
 };
 
-describe('NodeRuntimeProcessFactory', () => {
-  let factory: NodeRuntimeProcessFactory;
+describe('GodotRuntimeProcessFactory', () => {
+  let factory: GodotRuntimeProcessFactory;
   let children: FakeChildProcess[];
 
   beforeEach(() => {
@@ -71,7 +71,7 @@ describe('NodeRuntimeProcessFactory', () => {
       children.push(child);
       return child;
     });
-    factory = new NodeRuntimeProcessFactory();
+    factory = new GodotRuntimeProcessFactory();
   });
 
   afterEach(() => {
