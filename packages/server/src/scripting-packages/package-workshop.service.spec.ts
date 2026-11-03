@@ -502,6 +502,38 @@ describe('PackageWorkshopService copies', () => {
     expect(flow.packagesService.createGlobalRecord).not.toHaveBeenCalled();
   });
 
+  it('rejects publishing by the package author who is no longer in the room', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne.mockResolvedValueOnce(
+      roomPackage({
+        author: { id: user.id } as User,
+        room: { id: 5, author: { id: 99 }, contributors: [{ id: 98 }] } as Room,
+      }),
+    );
+
+    const error = await rejection(flow.service.publishToWorkshop(5, user));
+
+    expect(error).toBeInstanceOf(ForbiddenException);
+    expect(flow.packagesService.createGlobalRecord).not.toHaveBeenCalled();
+  });
+
+  it('rejects forking by the package author who is no longer in the room', async () => {
+    const flow = makeFlow();
+    flow.repository.findOne.mockResolvedValueOnce(
+      roomPackage({
+        author: { id: user.id } as User,
+        room: { id: 5, author: { id: 99 }, contributors: [{ id: 98 }] } as Room,
+      }),
+    );
+
+    const error = await rejection(
+      flow.service.forkToWorkshop(5, user, 'hero2'),
+    );
+
+    expect(error).toBeInstanceOf(ForbiddenException);
+    expect(flow.packagesService.create).not.toHaveBeenCalled();
+  });
+
   it('forks with a new slug and keeps the parent', async () => {
     const flow = makeFlow();
     flow.repository.findOne.mockResolvedValueOnce(

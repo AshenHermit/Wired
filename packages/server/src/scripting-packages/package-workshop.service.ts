@@ -375,7 +375,9 @@ export class PackageWorkshopService {
 
   /**
    * Copy sources are always room packages and the caller needs rights there:
-   * a workshop record is published only by being copied from a room.
+   * a workshop record is published only by being copied from a room, so room
+   * participation (author or contributor) is the only gate — being the
+   * package's own author does not outlive removal from the room.
    */
   private async loadPublishablePackage(
     packageId: number,
@@ -383,13 +385,7 @@ export class PackageWorkshopService {
   ): Promise<ScriptingPackage> {
     const pkg = await this.packagesRepository.findOne({
       where: { id: packageId },
-      relations: [
-        'author',
-        'parentPackage',
-        'room',
-        'room.author',
-        'room.contributors',
-      ],
+      relations: ['parentPackage', 'room', 'room.author', 'room.contributors'],
     });
     if (!pkg) {
       throw new NotFoundException(
@@ -403,14 +399,13 @@ export class PackageWorkshopService {
       });
     }
 
-    const isAuthor = pkg.author?.id === user.id;
     const isRoomMember =
       pkg.room.author?.id === user.id ||
       (pkg.room.contributors?.some(
         (contributor) => contributor.id === user.id,
       ) ??
         false);
-    if (!isAuthor && !isRoomMember) {
+    if (!isRoomMember) {
       throw new ForbiddenException(
         'You are not allowed to publish this package',
       );
