@@ -162,6 +162,34 @@ export type UpdateScriptingPackagePayload =
     confirmSlugRename?: boolean;
   };
 
+/**
+ * Authoring rule for package slugs, enforced by the server DTOs and mirrored by
+ * the editor dialogs: lowercase latin letters, digits or `_`, at least one
+ * letter, at most 64 characters.
+ */
+export const PACKAGE_SLUG_PATTERN = /^(?=.*[a-z])[a-z0-9_]+$/;
+export const PACKAGE_SLUG_MAX_LENGTH = 64;
+
+export function isValidPackageSlug(slug: string): boolean {
+  return (
+    slug.length > 0 &&
+    slug.length <= PACKAGE_SLUG_MAX_LENGTH &&
+    PACKAGE_SLUG_PATTERN.test(slug)
+  );
+}
+
+/**
+ * Response of `GET /scripting-packages/slug-availability`. Room slugs are only
+ * unique inside their room, so the global workshop scope is reported separately
+ * and always checked by the caller.
+ */
+export type PackageSlugAvailability = {
+  slug: string;
+  available: boolean;
+  reason?: "taken";
+  global: { available: boolean; reason?: "taken" };
+};
+
 export type WorkshopPackageSummary = {
   id: number;
   slug: string;

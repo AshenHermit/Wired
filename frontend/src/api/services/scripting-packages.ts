@@ -4,6 +4,7 @@ import {
   PackageFileEntry,
   PackageManifest,
   PackageRevision,
+  PackageSlugAvailability,
   ScriptingPackage,
   UpdateScriptingPackagePayload,
   WorkshopListing,
@@ -46,17 +47,8 @@ export async function deleteScriptingPackage(id: number) {
   await apiClient.delete<void, void>(`scripting-packages/${id}`);
 }
 
-export type PackageSlugAvailability = {
-  slug: string;
-  available: boolean;
-  reason?: "taken";
-  global: { available: boolean; reason?: "taken" };
-};
-
 /**
- * Asks the backend whether a new package may use this slug. Slugs are unique
- * per scope, so a taken slug cannot be reused inside its room or inside the
- * workshop.
+ * Asks the backend whether a new package may use this slug.
  * Room slugs are only unique inside their room, so the global workshop scope is
  * reported separately and always checked by the caller.
  * `excludeId` keeps a renamed package from reporting its own slug as taken.

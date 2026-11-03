@@ -12,6 +12,7 @@ import {
 import { Type } from 'class-transformer';
 import { ScriptFile } from 'src/database/entities/scripting-package.entity';
 import { PhysicalFile } from '@wired-io/shared';
+import { IsPackageSlug } from './package-slug.decorator';
 
 export class ScriptFileDto implements ScriptFile {
   @ApiProperty({ example: 'main.ts', description: 'Script file path' })
@@ -40,11 +41,7 @@ export class PhysicalFileDto implements PhysicalFile {
 export class CreateScriptingPackageDto {
   @ApiProperty({ example: 'hero_controller' })
   @IsString()
-  @MaxLength(64)
-  @Matches(/^(?=.*[a-z])[a-z0-9_]+$/, {
-    message:
-      'slug must contain lowercase latin letters, digits or _, and at least one letter',
-  })
+  @IsPackageSlug()
   slug: string;
 
   @ApiProperty({ example: 'My package', description: 'Package title' })

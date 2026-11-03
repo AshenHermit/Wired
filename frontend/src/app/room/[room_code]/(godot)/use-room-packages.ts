@@ -3,6 +3,7 @@
 import * as React from "react";
 import type {
   PackageRevisionSyncState,
+  PackageSlugAvailability,
   PackageSyncStatus,
   ScriptingPackage,
   WorkshopPackageMetadata,
@@ -19,7 +20,6 @@ import {
   forkPackageToWorkshop,
   publishPackageToWorkshop,
   updateScriptingPackage,
-  type PackageSlugAvailability,
 } from "@/api/services/scripting-packages";
 import type { GodotEditorInstance } from "./GodotEditorInstance";
 import {

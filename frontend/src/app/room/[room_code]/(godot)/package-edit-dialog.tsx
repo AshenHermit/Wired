@@ -13,13 +13,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/animate-ui/components/radix/dialog";
-import {
-  SLUG_CHECK_DEBOUNCE_MS,
-  isSlugValid,
-  slugHintClass,
-  slugHintKey,
-  type SlugCheckState,
-} from "@/components/packages/slug";
+import { slugHintClass, slugHintKey } from "@/components/packages/slug";
+import { useSlugAvailability } from "@/components/packages/use-slug-availability";
 import { TagInput } from "@/components/packages/tag-input";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -69,8 +64,6 @@ export function PackageEditDialog({
   const [detailsState, setDetailsState] =
     React.useState<DetailsState>("loading");
   const [detailsAttempt, setDetailsAttempt] = React.useState(0);
-  const [slugState, setSlugState] = React.useState<SlugCheckState>("idle");
-  const [slugCheckAttempt, setSlugCheckAttempt] = React.useState(0);
   const [dependents, setDependents] = React.useState<
     { packageId: number; name: string }[] | null
   >(null);
@@ -79,6 +72,17 @@ export function PackageEditDialog({
   const [error, setError] = React.useState<AppMessage | null>(null);
 
   const checkSlugAvailability = packages.checkSlugAvailability;
+
+  /** A rename is checked against the room scope, ignoring this package. */
+  const slugAvailability = useSlugAvailability({
+    slug,
+    enabled: open && entry !== null,
+    unchanged: entry?.slug,
+    check: (candidate) =>
+      checkSlugAvailability(candidate, undefined, entry?.packageId),
+    verdict: (result) => (result.available ? "available" : "taken"),
+  });
+  const slugState = slugAvailability.state;
 
   React.useEffect(() => {
     if (!open || !entry) return;
@@ -89,7 +93,6 @@ export function PackageEditDialog({
     setTags(entry.tags);
     setTagsInvalid(false);
     tagsInvalidRef.current = false;
-    setSlugState("available");
     setDependents(null);
     setDirError(false);
     setError(null);
@@ -118,58 +121,8 @@ export function PackageEditDialog({
     };
   }, [open, entry, detailsAttempt]);
 
-  React.useEffect(() => {
-    if (!open || !entry) return;
-    const trimmed = slug.trim();
-    if (trimmed === entry.slug) {
-      setSlugState("available");
-      return;
-    }
-    if (!trimmed) {
-      setSlugState("idle");
-      return;
-    }
-    if (!isSlugValid(trimmed)) {
-      setSlugState("invalid");
-      return;
-    }
-    setSlugState("checking");
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void checkSlugAvailability(trimmed, undefined, entry.packageId)
-        .then((result) => {
-          if (cancelled) return;
-          setSlugState(result.available ? "available" : "taken");
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setSlugState("error");
-        });
-    }, SLUG_CHECK_DEBOUNCE_MS);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [checkSlugAvailability, entry, open, slug, slugCheckAttempt]);
-
   const handleSlugChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const next = event.target.value.toLowerCase();
-    setSlug(next);
-    const trimmed = next.trim();
-    setSlugState(
-      !trimmed
-        ? "idle"
-        : trimmed === entry?.slug
-          ? "available"
-          : isSlugValid(trimmed)
-            ? "checking"
-            : "invalid",
-    );
-  };
-
-  const retrySlugCheck = () => {
-    if (!slug.trim() || !isSlugValid(slug.trim())) return;
-    setSlugCheckAttempt((attempt) => attempt + 1);
+    setSlug(event.target.value.toLowerCase());
   };
 
   const canSubmit =
@@ -296,7 +249,7 @@ export function PackageEditDialog({
                   variant="link"
                   size="sm"
                   className="h-auto px-0 text-xs"
-                  onClick={retrySlugCheck}
+                  onClick={slugAvailability.retry}
                 >
                   {t("editDialog.checkAgain")}
                 </Button>

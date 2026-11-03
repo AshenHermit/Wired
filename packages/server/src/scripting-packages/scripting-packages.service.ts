@@ -33,18 +33,10 @@ import {
   PACKAGE_REVISION_DISPATCHER,
   PackageRevisionDispatcher,
 } from 'src/godot-game/package-sync.types';
-
-/** Same rule as `CreateScriptingPackageDto`: lowercase, digits, `_`, 1-64. */
-const SLUG_PATTERN = /^(?=.*[a-z])[a-z0-9_]+$/;
-const SLUG_MAX_LENGTH = 64;
-
-/** Availability of a slug in the requested scope plus the global scope. */
-export type PackageSlugAvailability = {
-  slug: string;
-  available: boolean;
-  reason?: 'taken';
-  global: { available: boolean; reason?: 'taken' };
-};
+import {
+  PackageSlugAvailability,
+  isValidPackageSlug,
+} from '@wired-io/shared';
 
 function isUniqueViolation(error: unknown): boolean {
   return (
@@ -113,11 +105,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
 
   normalizeSlug(slug: string): string {
     const normalized = typeof slug === 'string' ? slug.trim() : '';
-    if (
-      normalized.length === 0 ||
-      normalized.length > SLUG_MAX_LENGTH ||
-      !SLUG_PATTERN.test(normalized)
-    ) {
+    if (!isValidPackageSlug(normalized)) {
       throw new BadRequestException({
         code: 'invalid_slug',
         message:

@@ -5,10 +5,10 @@ import {
 } from "@/test/render-with-intl";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  PackageSlugAvailability,
   ScriptingPackage,
   WorkshopPackageSummary,
 } from "@wired-io/shared";
-import type { PackageSlugAvailability } from "@/api/services/scripting-packages";
 import type {
   RoomPackageEntry,
   RoomPackagesController,
@@ -585,6 +585,7 @@ describe("PackagesTab", () => {
       slug: "hero",
       available: false,
       reason: "taken",
+      global: { available: true },
     });
 
     render(
@@ -758,7 +759,11 @@ describe("PackagesTab", () => {
     const checkSlugAvailability = vi
       .fn()
       .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValue({ slug: "hero", available: true });
+      .mockResolvedValue({
+        slug: "hero",
+        available: true,
+        global: { available: true },
+      });
 
     render(
       <PackagesTab roomId={1}

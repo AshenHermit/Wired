@@ -74,12 +74,14 @@ export type CollectedPackageFile = {
  * Editor folder names are package slugs: lowercase latin letters, digits and
  * underscores. Legacy packages created before slugs may still use a numeric
  * slug, which this pattern accepts; the server applies the stricter
- * new-package regex on creation.
+ * new-package regex on creation. Deliberately laxer than
+ * `PACKAGE_SLUG_PATTERN` in `@wired-io/shared`: this is a path-safety check on
+ * existing directories, not an authoring rule.
  */
-export const PACKAGE_SLUG_PATTERN = /^[a-z0-9_]{1,64}$/;
+export const PACKAGE_DIR_SLUG_PATTERN = /^[a-z0-9_]{1,64}$/;
 
 export function assertPackageSlug(slug: string): string {
-  if (typeof slug !== "string" || !PACKAGE_SLUG_PATTERN.test(slug)) {
+  if (typeof slug !== "string" || !PACKAGE_DIR_SLUG_PATTERN.test(slug)) {
     throw new GodotFsError(`Недопустимый slug пакета: ${slug}`);
   }
   return slug;

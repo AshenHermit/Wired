@@ -18,12 +18,10 @@ import {
 } from "@/components/animate-ui/components/radix/dialog";
 import { WorkshopBrowser } from "@/components/packages/workshop-browser";
 import {
-  SLUG_CHECK_DEBOUNCE_MS,
-  isSlugValid,
   slugHintClass,
   slugHintKey,
-  type SlugCheckState,
 } from "@/components/packages/slug";
+import { useSlugAvailability } from "@/components/packages/use-slug-availability";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -382,59 +380,30 @@ export function WorkshopForkDialog({
   const slugT = useTranslations();
   const common = useTranslations("Common");
   const format = useAppMessage();
-  const [slugState, setSlugState] = React.useState<SlugCheckState>("idle");
-  const [slugCheckAttempt, setSlugCheckAttempt] = React.useState(0);
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<AppMessage | null>(null);
 
   const checkSlugAvailability = packages.checkSlugAvailability;
 
-  React.useEffect(() => {
-    if (!open) return;
-    setSlug("");
-    setSlugState("idle");
-    setSlugCheckAttempt(0);
-    setSubmitting(false);
-    setError(null);
-  }, [open]);
-
   /**
    * The slug must be free both inside the room and in the global workshop
    * scope; a response for a slug that already changed is ignored.
    */
+  const slugAvailability = useSlugAvailability({
+    slug,
+    enabled: open,
+    check: (candidate) => checkSlugAvailability(candidate, roomId),
+    verdict: (result) =>
+      result.available && result.global.available ? "available" : "taken",
+  });
+  const slugState = slugAvailability.state;
+
   React.useEffect(() => {
     if (!open) return;
-    const trimmed = slug.trim();
-    if (!trimmed) {
-      setSlugState("idle");
-      return;
-    }
-    if (!isSlugValid(trimmed)) {
-      setSlugState("invalid");
-      return;
-    }
-    setSlugState("checking");
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void checkSlugAvailability(trimmed, roomId)
-        .then((available) => {
-          if (cancelled) return;
-          setSlugState(
-            available.available && available.global.available
-              ? "available"
-              : "taken",
-          );
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setSlugState("error");
-        });
-    }, SLUG_CHECK_DEBOUNCE_MS);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [checkSlugAvailability, open, roomId, slug, slugCheckAttempt]);
+    setSlug("");
+    setSubmitting(false);
+    setError(null);
+  }, [open]);
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -478,16 +447,7 @@ export function WorkshopForkDialog({
               id="workshop-fork-slug"
               value={slug}
               onChange={(event) => {
-                const next = event.target.value.toLowerCase();
-                setSlug(next);
-                const trimmed = next.trim();
-                setSlugState(
-                  !trimmed
-                    ? "idle"
-                    : isSlugValid(trimmed)
-                      ? "checking"
-                      : "invalid",
-                );
+                setSlug(event.target.value.toLowerCase());
               }}
               placeholder={t("newSlugPlaceholder")}
               autoComplete="off"
@@ -507,7 +467,7 @@ export function WorkshopForkDialog({
                 variant="link"
                 size="sm"
                 className="h-auto px-0 text-xs"
-                onClick={() => setSlugCheckAttempt((attempt) => attempt + 1)}
+                onClick={slugAvailability.retry}
               >
                 {t("checkAgain")}
               </Button>

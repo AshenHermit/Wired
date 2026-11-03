@@ -4,10 +4,9 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  Matches,
-  MaxLength,
   MinLength,
 } from 'class-validator';
+import { IsPackageSlug } from './package-slug.decorator';
 
 export class WorkshopPublishDto {
   @ApiProperty({
@@ -52,11 +51,7 @@ export class WorkshopPublishDto {
 export class WorkshopForkDto {
   @ApiProperty({ example: 'hero_controller' })
   @IsString()
-  @MaxLength(64)
-  @Matches(/^(?=.*[a-z])[a-z0-9_]+$/, {
-    message:
-      'slug must contain lowercase latin letters, digits or _, and at least one letter',
-  })
+  @IsPackageSlug()
   slug: string;
 }
 

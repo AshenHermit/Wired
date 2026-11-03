@@ -38,12 +38,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  SLUG_CHECK_DEBOUNCE_MS,
-  isSlugValid,
   slugHintClass,
   slugHintKey,
-  type SlugCheckState,
 } from "@/components/packages/slug";
+import { useSlugAvailability } from "@/components/packages/use-slug-availability";
 import {
   LocalChangesError,
   NewerRevisionError,
@@ -528,10 +526,6 @@ export function PackagesTab({
   const [name, setName] = React.useState("");
   const [slug, setSlug] = React.useState("");
   const [version, setVersion] = React.useState("0.1.0");
-  const [slugState, setSlugState] = React.useState<SlugCheckState>("idle");
-  const [slugCheckAttempt, setSlugCheckAttempt] = React.useState(0);
-  const [slugTakenInWorkshop, setSlugTakenInWorkshop] =
-    React.useState(false);
   const t = useTranslations("Packages");
   const common = useTranslations("Common");
   const slugT = useTranslations();
@@ -543,13 +537,24 @@ export function PackagesTab({
   const runConfirmed = useConfirmedAction(confirm);
   const checkSlugAvailability = packages.checkSlugAvailability;
 
+  /**
+   * Availability is advisory: the server still rejects a taken slug on POST.
+   * A room slug is free even when the workshop already uses it, so the two
+   * scopes are reported separately.
+   */
+  const slugAvailability = useSlugAvailability({
+    slug,
+    enabled: createOpen,
+    check: (candidate) => checkSlugAvailability(candidate, roomId),
+    verdict: (result) => (result.available ? "available" : "taken"),
+  });
+  const slugState = slugAvailability.state;
+  const slugTakenInWorkshop = slugAvailability.result?.global.available === false;
+
   const resetCreateForm = React.useCallback(() => {
     setName("");
     setSlug("");
     setVersion("0.1.0");
-    setSlugState("idle");
-    setSlugCheckAttempt(0);
-    setSlugTakenInWorkshop(false);
     setCreateError(null);
   }, []);
 
@@ -564,53 +569,6 @@ export function PackagesTab({
     resetCreateForm();
   };
 
-  /**
-   * Availability is advisory: the server still rejects a taken slug
-   * on POST. A response that arrives after the field changed is ignored.
-   */
-  React.useEffect(() => {
-    if (!createOpen) return;
-    const trimmed = slug.trim();
-    if (!trimmed) {
-      setSlugState("idle");
-      return;
-    }
-    if (!isSlugValid(trimmed)) {
-      setSlugState("invalid");
-      return;
-    }
-    setSlugState("checking");
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void checkSlugAvailability(trimmed, roomId)
-        .then((result) => {
-          if (cancelled) return;
-          if (result.available) {
-            setSlugState("available");
-          } else {
-            setSlugState("taken");
-          }
-          setSlugTakenInWorkshop(
-            result.global !== undefined && !result.global.available,
-          );
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setSlugState("error");
-        });
-    }, SLUG_CHECK_DEBOUNCE_MS);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [checkSlugAvailability, createOpen, roomId, slug, slugCheckAttempt]);
-
-  const retrySlugCheck = () => {
-    const trimmed = slug.trim();
-    if (!trimmed || !isSlugValid(trimmed)) return;
-    setSlugCheckAttempt((attempt) => attempt + 1);
-  };
-
   const canCreate =
     Boolean(authorId) &&
     packages.fsReady &&
@@ -618,18 +576,8 @@ export function PackagesTab({
     slugState === "available" &&
     !creating;
 
-  /**
-   * The state follows the input synchronously, so a submit can never rely on a
-   * stale `available` from the previous value while the debounce is pending.
-   */
   const handleSlugChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const next = event.target.value.toLowerCase();
-    setSlug(next);
-    setSlugTakenInWorkshop(false);
-    const trimmed = next.trim();
-    setSlugState(
-      !trimmed ? "idle" : isSlugValid(trimmed) ? "checking" : "invalid",
-    );
+    setSlug(event.target.value.toLowerCase());
   };
 
   const handleDownload = (entry: RoomPackageEntry) => {
@@ -873,7 +821,7 @@ export function PackagesTab({
                       variant="link"
                       size="sm"
                       className="h-auto px-0 text-xs"
-                      onClick={retrySlugCheck}
+                      onClick={slugAvailability.retry}
                     >
                       {t("createDialog.checkAgain")}
                     </Button>
