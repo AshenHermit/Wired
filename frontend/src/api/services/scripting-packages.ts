@@ -48,13 +48,14 @@ export async function deleteScriptingPackage(id: number) {
 export type PackageSlugAvailability = {
   slug: string;
   available: boolean;
-  reason?: "taken" | "retired";
-  global: { available: boolean; reason?: "taken" | "retired" };
+  reason?: "taken";
+  global: { available: boolean; reason?: "taken" };
 };
 
 /**
- * Asks the backend whether a new package may use this slug. Slugs are locked
- * after creation, so a retired slug reports `retired` and cannot be reused.
+ * Asks the backend whether a new package may use this slug. Slugs are unique
+ * per scope, so a taken slug cannot be reused inside its room or inside the
+ * workshop.
  * Room slugs are only unique inside their room, so the global workshop scope is
  * reported separately and always checked by the caller.
  */

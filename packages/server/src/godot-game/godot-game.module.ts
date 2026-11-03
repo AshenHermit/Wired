@@ -3,7 +3,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppConfigModule } from 'src/config/config.module';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
-import { RetiredPackageSlug } from 'src/database/entities/retired-package-slug.entity';
 import { RoomsModule } from 'src/rooms/rooms.module';
 import { PackageDeliveryModule } from 'src/scripting-packages/package-delivery.module';
 import { GameExportController } from './game-export.controller';
@@ -26,7 +25,6 @@ import { RuntimeProcessFactory } from './room-runtime.types';
     TypeOrmModule.forFeature([
       ScriptingPackage,
       ScriptingPackageRevision,
-      RetiredPackageSlug,
     ]),
   ],
   controllers: [GameRoomController, GameExportController],

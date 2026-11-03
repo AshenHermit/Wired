@@ -231,7 +231,7 @@ export class PackageWorkshopService {
       });
     } catch (error) {
       if (created) {
-        await this.rollbackCreatedPackage(created.id, { tombstone: false });
+        await this.rollbackCreatedPackage(created.id);
       }
       throw this.toCopyError(error);
     }
@@ -358,12 +358,9 @@ export class PackageWorkshopService {
   }
 
   /** A failed rollback must not replace the error of the copy itself. */
-  private async rollbackCreatedPackage(
-    packageId: number,
-    options?: { tombstone?: boolean },
-  ): Promise<void> {
+  private async rollbackCreatedPackage(packageId: number): Promise<void> {
     try {
-      await this.packagesService.remove(packageId, options);
+      await this.packagesService.remove(packageId);
     } catch (error) {
       this.logger.warn(
         `Package ${packageId} copy rollback failed: ${

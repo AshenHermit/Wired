@@ -707,7 +707,7 @@ describe('PackageWorkshopService copies', () => {
     expect(flow.packagesService.create).not.toHaveBeenCalled();
   });
 
-  it('deletes a fresh record without retiring its slug when the copy fails', async () => {
+  it('deletes a fresh record when the copy fails', async () => {
     const flow = makeFlow();
     flow.repository.findOne
       .mockResolvedValueOnce(roomPackage())
@@ -722,10 +722,7 @@ describe('PackageWorkshopService copies', () => {
 
     await expect(flow.service.publishToWorkshop(5, user)).rejects.toBe(failure);
 
-    expect(flow.packagesService.remove.mock.calls[0]).toEqual([
-      20,
-      { tombstone: false },
-    ]);
+    expect(flow.packagesService.remove.mock.calls[0]).toEqual([20]);
   });
 
   it('maps a duplicate revision on publish to a publish conflict', async () => {

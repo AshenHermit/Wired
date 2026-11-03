@@ -1635,25 +1635,6 @@ describe("useRoomPackages", () => {
     unmount();
   });
 
-  it("explains a retired workshop slug", async () => {
-    vi.mocked(packagesApi.publishPackageToWorkshop).mockRejectedValue({
-      response: {
-        data: {
-          code: "slug_retired",
-          message: "Этот slug был удалён и не может быть использован снова",
-        },
-      },
-    });
-    const { result, unmount } = await startHook();
-
-    const failure = await result.current
-      .publishToWorkshop(5)
-      .catch((error: unknown) => error);
-
-    expect((failure as Error).message).toContain("удалён");
-    unmount();
-  });
-
   it("forks to a new slug and downloads the copy", async () => {
     const { result, unmount } = await startHook();
     vi.mocked(gameApi.getRoomPackages).mockResolvedValue(

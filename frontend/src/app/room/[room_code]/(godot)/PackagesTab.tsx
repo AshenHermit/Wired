@@ -705,7 +705,7 @@ export function PackagesTab({
   };
 
   /**
-   * Availability is advisory: the server still rejects a taken or retired slug
+   * Availability is advisory: the server still rejects a taken slug
    * on POST. A response that arrives after the field changed is ignored.
    */
   React.useEffect(() => {
@@ -728,7 +728,7 @@ export function PackagesTab({
           if (result.available) {
             setSlugState("available");
           } else {
-            setSlugState(result.reason === "retired" ? "retired" : "taken");
+            setSlugState("taken");
           }
         })
         .catch(() => {

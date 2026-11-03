@@ -3,7 +3,6 @@ import { Room } from './room.entity';
 import { User } from './user.entity';
 import { ScriptingPackage } from './scripting-package.entity';
 import { ScriptingPackageRevision } from './scripting-package-revision.entity';
-import { RetiredPackageSlug } from './retired-package-slug.entity';
 
 function createDataSource(): DataSource {
   return new DataSource({
@@ -14,7 +13,6 @@ function createDataSource(): DataSource {
       User,
       ScriptingPackage,
       ScriptingPackageRevision,
-      RetiredPackageSlug,
     ],
   });
 }

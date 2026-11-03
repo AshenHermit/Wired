@@ -240,8 +240,6 @@ function workshopErrorMessage(error: unknown): string {
       return "Slug уже занят в комнате";
     case "publish_conflict":
       return "Пакет уже копируется, повторите попытку";
-    case "slug_retired":
-      return "Slug был удалён и не может быть использован снова: выберите новый slug";
     case "invalid_tags":
       return data?.tag
         ? `Тег «${data.tag}» недопустим: до 32 символов, строчные латинские буквы, цифры, «-» и «_»`
@@ -901,7 +899,7 @@ export function useRoomPackages(
 
   /**
    * Availability is advisory for the creation and fork forms; the server still
-   * rejects a taken or retired slug. Slugs are room-scoped, so the room is part
+   * rejects a taken slug. Slugs are room-scoped, so the room is part
    * of the question, and the global workshop scope is reported separately.
    */
   const checkSlugAvailability = React.useCallback(

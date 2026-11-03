@@ -10,7 +10,6 @@ export type SlugCheckState =
   | "checking"
   | "available"
   | "taken"
-  | "retired"
   | "error";
 
 export const SLUG_HINT: Partial<Record<SlugCheckState, string>> = {
@@ -18,7 +17,6 @@ export const SLUG_HINT: Partial<Record<SlugCheckState, string>> = {
   checking: "Проверяем slug…",
   available: "Slug свободен",
   taken: "Slug уже занят",
-  retired: "Этот slug был удалён и не может быть использован снова",
   error: "Не удалось проверить slug. Попробуйте ещё раз",
 };
 
@@ -31,7 +29,7 @@ export function isSlugValid(slug: string): boolean {
 }
 
 export function slugHintClass(state: SlugCheckState): string {
-  if (state === "taken" || state === "retired" || state === "error") {
+  if (state === "taken" || state === "error") {
     return "text-destructive";
   }
   return "text-muted-foreground";

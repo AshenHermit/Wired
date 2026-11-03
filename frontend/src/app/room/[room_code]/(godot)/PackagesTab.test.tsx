@@ -515,38 +515,6 @@ describe("PackagesTab", () => {
     );
   });
 
-  it("explains that a retired slug cannot be reused", async () => {
-    const checkSlugAvailability = vi.fn().mockResolvedValue({
-      slug: "hero",
-      available: false,
-      reason: "retired",
-    });
-
-    render(
-      <PackagesTab roomId={1}
-        packages={controller({ checkSlugAvailability })}
-        authorId={42}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
-    fireEvent.change(screen.getByLabelText("Slug"), {
-      target: { value: "hero" },
-    });
-
-    await waitFor(() =>
-      expect(
-        screen.getByText(
-          "Этот slug был удалён и не может быть использован снова",
-        ),
-      ).toBeTruthy(),
-    );
-    expect(screen.getByRole("button", { name: "Создать" })).toHaveProperty(
-      "disabled",
-      true,
-    );
-  });
-
   it("ignores an availability response for a slug that was changed", async () => {
     const resolvers = new Map<
       string,

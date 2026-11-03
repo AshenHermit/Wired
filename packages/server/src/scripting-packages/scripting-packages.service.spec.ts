@@ -6,7 +6,6 @@ import {
 } from '@nestjs/common';
 import { IsNull } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
-import { RetiredPackageSlug } from 'src/database/entities/retired-package-slug.entity';
 import { ScriptingPackagesService } from './scripting-packages.service';
 
 type FakeManager = {
@@ -25,12 +24,10 @@ type FakeManager = {
 function makeTransactionManager(
   options: {
     liveFindOne?: jest.Mock;
-    retiredFindOne?: jest.Mock;
     save?: jest.Mock;
     delete?: jest.Mock;
   } = {},
 ): FakeManager {
-  const retiredFindOne = options.retiredFindOne ?? jest.fn(async () => null);
   const manager = {
     query: jest.fn(async () => []),
     findOne: options.liveFindOne ?? jest.fn(async () => null),
@@ -41,16 +38,11 @@ function makeTransactionManager(
     getRepository: jest.fn(),
     transaction: jest.fn(),
   } as FakeManager;
-  manager.getRepository.mockImplementation((entity: unknown) => {
-    if (entity === RetiredPackageSlug) {
-      return { findOne: retiredFindOne };
-    }
-    return {
-      create: (value: unknown) => value,
-      findOne: manager.findOne,
-      save: manager.save,
-    };
-  });
+  manager.getRepository.mockImplementation(() => ({
+    create: (value: unknown) => value,
+    findOne: manager.findOne,
+    save: manager.save,
+  }));
   manager.transaction.mockImplementation(
     async (work: (current: FakeManager) => Promise<unknown>) => work(manager),
   );
@@ -86,7 +78,6 @@ describe('ScriptingPackagesService', () => {
       return new ScriptingPackagesService(
         packagesRepository as never,
         {} as never,
-        { findOne: jest.fn(async () => null) } as never,
       );
     }
 
@@ -176,7 +167,6 @@ describe('ScriptingPackagesService', () => {
       return new ScriptingPackagesService(
         packagesRepository as never,
         {} as never,
-        { findOne: jest.fn(async () => null) } as never,
       );
     }
 
@@ -226,7 +216,6 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           roomsRepository as never,
-          { findOne: jest.fn(async () => null) } as never,
         ),
       };
     }
@@ -326,7 +315,6 @@ describe('ScriptingPackagesService', () => {
       const service = new ScriptingPackagesService(
         packagesRepository as never,
         roomsRepository as never,
-        { findOne: jest.fn(async () => null) } as never,
       );
 
       await service.update(10, {
@@ -349,7 +337,6 @@ describe('ScriptingPackagesService', () => {
       const service = new ScriptingPackagesService(
         packagesRepository as never,
         {} as never,
-        { findOne: jest.fn(async () => null) } as never,
       );
       return { service, packagesRepository };
     }
@@ -415,7 +402,6 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           {} as never,
-          { findOne: jest.fn(async () => null) } as never,
           storage as never,
         ),
       };
@@ -485,7 +471,6 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           {} as never,
-          { findOne: jest.fn(async () => null) } as never,
           undefined,
           dispatcher as never,
         ),
@@ -577,7 +562,6 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           {} as never,
-          { findOne: jest.fn(async () => null) } as never,
           undefined,
           undefined,
           delivery as never,
@@ -618,18 +602,15 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     options: {
       query?: jest.Mock;
       findOne?: jest.Mock;
-      retiredFindOne?: jest.Mock;
       save?: jest.Mock;
       manager?: FakeManager;
       pkg?: unknown;
       room?: unknown;
     } = {},
   ) {
-    const retiredFindOne = options.retiredFindOne ?? jest.fn(async () => null);
     const manager =
       options.manager ??
       makeTransactionManager({
-        retiredFindOne,
         save: options.save,
       });
     const packagesRepository = {
@@ -642,11 +623,9 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     const roomsRepository = {
       findOne: jest.fn(async () => options.room ?? null),
     };
-    const retiredRepository = { findOne: retiredFindOne };
     return new ScriptingPackagesService(
       packagesRepository as never,
       roomsRepository as never,
-      retiredRepository as never,
       undefined,
       undefined,
       undefined,
@@ -697,17 +676,18 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     });
   });
 
-  it('reports a retired global slug as retired', async () => {
-    const service = makeSlugService({
-      findOne: jest.fn(async () => null),
-      retiredFindOne: jest.fn(async () => ({ slug: 'hero', packageId: 7 })),
-    });
+  it('reports a deleted global slug as available', async () => {
+    const findOne = jest.fn(async () => null);
+    const service = makeSlugService({ findOne });
+
     await expect(service.checkSlugAvailability('hero')).resolves.toEqual({
       slug: 'hero',
-      available: false,
-      reason: 'retired',
-      global: { available: false, reason: 'retired' },
+      available: true,
+      global: { available: true },
     });
+
+    // Один запрос: живой строки нет — и больше ничего не проверяется.
+    expect(findOne).toHaveBeenCalledTimes(1);
   });
 
   it('reports an unused slug as available', async () => {
@@ -839,30 +819,6 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     expect(manager.save).not.toHaveBeenCalled();
   });
 
-  it('does not apply a global tombstone to a room slug', async () => {
-    const service = makeSlugService({
-      room: ownRoom,
-      retiredFindOne: jest.fn(async () => ({ slug: 'hero', packageId: 7 })),
-      save: jest.fn(async (value: unknown) => ({
-        ...(value as object),
-        id: 10,
-      })),
-    });
-
-    await expect(
-      service.create(
-        {
-          name: 'Hero',
-          version: '0.1.0',
-          slug: 'hero',
-          roomId: 5,
-          authorId: 1,
-        },
-        user,
-      ),
-    ).resolves.toBeDefined();
-  });
-
   it('creates a global record outside any room with normalized tags', async () => {
     const save = jest.fn(async (value: unknown) => ({
       ...(value as object),
@@ -900,30 +856,6 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     expect(saved.room).toBeUndefined();
   });
 
-  it('rejects a global record with a retired slug and an actionable message', async () => {
-    const service = makeSlugService({
-      retiredFindOne: jest.fn(async () => ({ slug: 'hero', packageId: 7 })),
-    });
-
-    const error = await service
-      .createGlobalRecord({
-        slug: 'hero',
-        name: 'Hero',
-        version: '0.1.0',
-        description: '',
-        tags: [],
-        author: { id: 1 } as never,
-      })
-      .catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(ConflictException);
-    expect((error as ConflictException).getResponse()).toEqual({
-      code: 'slug_retired',
-      slug: 'hero',
-      message: 'Этот slug был удалён и не может быть использован снова',
-    });
-  });
-
   it('maps a unique violation to slug_taken with an actionable message', async () => {
     const service = makeSlugService({
       room: ownRoom,
@@ -951,36 +883,7 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     });
   });
 
-  it('tombstones a deleted global package', async () => {
-    const manager = makeTransactionManager();
-    const service = makeSlugService({
-      manager,
-      pkg: { id: 10, slug: 'hero', room: null },
-    });
-
-    await service.remove(10);
-
-    expect(manager.save).toHaveBeenCalledWith(RetiredPackageSlug, {
-      slug: 'hero',
-      packageId: 10,
-    });
-    expect(manager.delete).toHaveBeenCalledWith(ScriptingPackage, 10);
-  });
-
-  it('does not tombstone a rolled-back global package when asked not to', async () => {
-    const manager = makeTransactionManager();
-    const service = makeSlugService({
-      manager,
-      pkg: { id: 10, slug: 'hero', room: null },
-    });
-
-    await service.remove(10, { tombstone: false });
-
-    expect(manager.save).not.toHaveBeenCalled();
-    expect(manager.delete).toHaveBeenCalledWith(ScriptingPackage, 10);
-  });
-
-  it('does not tombstone a deleted room package', async () => {
+  it('locks the room slug scope before deleting', async () => {
     const manager = makeTransactionManager();
     const service = makeSlugService({
       manager,
@@ -989,7 +892,6 @@ describe('ScriptingPackagesService slug lifecycle', () => {
 
     await service.remove(10);
 
-    expect(manager.save).not.toHaveBeenCalled();
     expect(manager.query).toHaveBeenCalledWith(
       'SELECT pg_advisory_xact_lock(hashtext($1))',
       ['package_slug:room:5:hero'],
@@ -1022,7 +924,7 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     );
   });
 
-  it('locks the global slug scope before tombstoning it', async () => {
+  it('locks the global slug scope before deleting', async () => {
     const manager = makeTransactionManager();
     const service = makeSlugService({
       manager,
@@ -1086,7 +988,6 @@ describe('ScriptingPackagesService enable guard', () => {
     const service = new ScriptingPackagesService(
       packagesRepository as never,
       {} as never,
-      { findOne: jest.fn(async () => null) } as never,
       storage as never,
       undefined,
       undefined,

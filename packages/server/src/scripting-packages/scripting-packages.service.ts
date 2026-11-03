@@ -13,7 +13,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
-import { RetiredPackageSlug } from 'src/database/entities/retired-package-slug.entity';
 import { User } from 'src/database/entities/user.entity';
 import { Room } from 'src/database/entities/room.entity';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
@@ -35,8 +34,8 @@ const SLUG_MAX_LENGTH = 64;
 export type PackageSlugAvailability = {
   slug: string;
   available: boolean;
-  reason?: 'taken' | 'retired';
-  global: { available: boolean; reason?: 'taken' | 'retired' };
+  reason?: 'taken';
+  global: { available: boolean; reason?: 'taken' };
 };
 
 function isUniqueViolation(error: unknown): boolean {
@@ -56,8 +55,6 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     private readonly packagesRepository: Repository<ScriptingPackage>,
     @InjectRepository(Room)
     private readonly roomsRepository: Repository<Room>,
-    @InjectRepository(RetiredPackageSlug)
-    private readonly retiredSlugsRepository: Repository<RetiredPackageSlug>,
     @Optional()
     private readonly storage?: PackageStorageService,
     @Optional()
@@ -135,19 +132,9 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     const globalLive = await this.packagesRepository.findOne({
       where: { slug: normalized, room: IsNull() },
     });
-    const retired = globalLive
-      ? null
-      : await this.retiredSlugsRepository.findOne({
-          where: { slug: normalized },
-        });
-    let scope: PackageSlugAvailability['global'];
-    if (globalLive) {
-      scope = { available: false, reason: 'taken' };
-    } else if (retired) {
-      scope = { available: false, reason: 'retired' };
-    } else {
-      scope = { available: true };
-    }
+    const scope: PackageSlugAvailability['global'] = globalLive
+      ? { available: false, reason: 'taken' }
+      : { available: true };
 
     if (roomId === undefined) {
       return { slug: normalized, ...scope, global: scope };
@@ -331,7 +318,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
 
   /**
    * The workshop's own write path: no room, no authorship from a DTO, and the
-   * same slug/tombstone checks as a room create but in the global scope.
+   * same slug checks as a room create but in the global scope.
    */
   async createGlobalRecord(input: {
     slug: string;
@@ -357,7 +344,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
   /**
    * Inserts one package row under a slug scoped either to a room or to the
    * global workshop. Slugs are unique per scope only, so the advisory lock and
-   * the live check use the same scope; only global slugs are tombstoned.
+   * the live check use the same scope.
    */
   private async insertPackage(params: {
     slug: string;
@@ -391,18 +378,6 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
             slug,
             message: 'Slug уже занят',
           });
-        }
-        if (scope === 'global') {
-          const retired = await manager
-            .getRepository(RetiredPackageSlug)
-            .findOne({ where: { slug } });
-          if (retired) {
-            throw new ConflictException({
-              code: 'slug_retired',
-              slug,
-              message: 'Этот slug был удалён и не может быть использован снова',
-            });
-          }
         }
 
         const pkg = packages.create({
@@ -580,27 +555,19 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
    *
    * The row is authoritative, so a disk failure is logged instead of turning a
    * completed deletion into an error.
-   *
-   * `tombstone: false` deletes a global row without retiring its slug, which
-   * is only correct for a record a copy flow created and immediately rolled
-   * back — no user ever saw it in the workshop.
    */
-  async remove(
-    id: number,
-    options: { tombstone?: boolean } = {},
-  ): Promise<void> {
+  async remove(id: number): Promise<void> {
     await this.assertNoEnabledDependents(id);
     const pkg = await this.findOne(id);
     const roomId = pkg.room?.id ?? null;
-    // Room slugs are local and stay reusable; a workshop slug is reserved
-    // forever. The fallback only covers a row created before the startup
+    // A room slug is local and stays reusable; a workshop slug becomes free
+    // again as well. The fallback only covers a row created before the startup
     // backfill ran.
     const slug = pkg.slug ?? String(id);
     const scope = pkg.room ? `room:${pkg.room.id}` : 'global';
-    const tombstone = options.tombstone !== false;
     await this.packagesRepository.manager.transaction(async (manager) => {
-      // Serialize with `create()` so a slug cannot be tombstoned while another
-      // request is re-creating it.
+      // Serialize with `create()` so a slug cannot be re-created while the
+      // deletion is in flight.
       await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
         `package_slug:${scope}:${slug}`,
       ]);
@@ -610,9 +577,6 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
         'UPDATE scripting_package SET "parentPackageId" = NULL WHERE "parentPackageId" = $1',
         [id],
       );
-      if (scope === 'global' && tombstone) {
-        await manager.save(RetiredPackageSlug, { slug, packageId: id });
-      }
       const result = await manager.delete(ScriptingPackage, id);
       if (!result.affected) {
         // Another request won the race: the row is already gone.
