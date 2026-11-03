@@ -22,6 +22,7 @@ import path from 'path';
 import { AppConfigService } from 'src/config/config.service';
 import { sha256File, sha256Hex } from './package-hash';
 import { resolvePackagePath } from './package-path';
+import { errorMessage } from 'src/common/errors';
 
 const DRAFTS_DIR = 'drafts';
 const REVISIONS_DIR = 'revisions';
@@ -521,7 +522,7 @@ export class PackageStorageService {
         target.revision,
         target.kind,
       ).catch((cause) =>
-        this.logger.warn(`rewrite cleanup failed: ${String(cause)}`),
+        this.logger.warn(`rewrite cleanup failed: ${errorMessage(cause)}`),
       );
     }
   }
@@ -536,7 +537,7 @@ export class PackageStorageService {
         target.revision,
         target.kind,
       ).catch((cause) =>
-        this.logger.warn(`rewrite abort failed: ${String(cause)}`),
+        this.logger.warn(`rewrite abort failed: ${errorMessage(cause)}`),
       );
     }
   }

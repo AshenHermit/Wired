@@ -54,9 +54,9 @@ export const UserEditingPanel = React.forwardRef<
     });
 
   React.useImperativeHandle(ref, () => ({
-    edit: (room: User) => {
-      setUser(room);
-      reset({ ...room });
+    edit: (user: User) => {
+      setUser(user);
+      reset({ ...user });
       setOpen(true);
     },
     close: () => {

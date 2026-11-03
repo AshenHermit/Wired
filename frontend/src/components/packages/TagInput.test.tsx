@@ -23,6 +23,7 @@ beforeEach(() => {
       { tag: "2d", count: 1 },
     ],
     loading: false,
+    error: null,
   });
 });
 
@@ -173,7 +174,11 @@ describe("TagInput", () => {
   });
 
   it("shows loading text but still accepts free input", async () => {
-    vi.mocked(useWorkshopTags).mockReturnValue({ tags: [], loading: true });
+    vi.mocked(useWorkshopTags).mockReturnValue({
+      tags: [],
+      loading: true,
+      error: null,
+    });
     const { onChange, input } = renderInput();
     fireEvent.focus(input);
     expect(screen.getByText("Загружаем теги…")).toBeTruthy();

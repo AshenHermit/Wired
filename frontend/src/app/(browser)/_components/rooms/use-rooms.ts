@@ -10,7 +10,7 @@ import * as React from "react";
  * of one author. Filtering happens client-side because the endpoint already
  * returns only the rooms the caller may see.
  */
-export function useRooms(ofUserId?: number) {
+export function useRooms(authorId?: number) {
   const [rooms, setRooms] = React.useState<Room[]>([]);
   const [error, setError] = React.useState<AppMessage | null>(null);
   const load = React.useCallback(async () => {
@@ -23,8 +23,8 @@ export function useRooms(ofUserId?: number) {
     }
   }, []);
 
-  const items = ofUserId
-    ? rooms.filter((room) => room.author?.id === ofUserId)
+  const items = authorId
+    ? rooms.filter((room) => room.author?.id === authorId)
     : rooms;
   return { items, load, error };
 }

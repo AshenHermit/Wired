@@ -1,4 +1,5 @@
 import {
+  GODOT_PROJECT_ROUTE,
   GameRoomConnection,
   GameRoomRuntimeStatus,
   ProjectInfo,
@@ -8,9 +9,7 @@ import { withApiPrefix } from "@/utils/variables";
 import { apiClient } from "../api-client/api-client";
 
 export async function getGodotProjectInfo() {
-  const info = await apiClient.get<ProjectInfo>(
-    "godot-project-info/wired"
-  );
+  const info = await apiClient.get<ProjectInfo>(GODOT_PROJECT_ROUTE);
   // The backend answers with its own path; the browser fetches project files
   // through the Next rewrite.
   info.baseUrl = withApiPrefix(info.baseUrl);

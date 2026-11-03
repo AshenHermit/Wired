@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { errorMessage } from "@/utils/errors";
 import type { AppMessage } from "@/i18n/message";
 import type { GodotEditorInstance } from "./GodotEditorInstance";
 import {
@@ -54,10 +55,6 @@ export type EditorBridgeTransport = {
   /** Forgets the editor, the file system and any pending wait. */
   reset: () => void;
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /**
  * Owns the transport to the Wired editor plugin: the editor instance, the

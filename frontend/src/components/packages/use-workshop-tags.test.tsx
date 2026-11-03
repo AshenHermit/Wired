@@ -75,15 +75,18 @@ describe("useWorkshopTags", () => {
     );
   });
 
-  it("caches a failed request as an empty list", async () => {
+  it("reports a failed request and retries instead of caching an empty list", async () => {
     vi.mocked(listWorkshopTags).mockRejectedValue(new Error("offline"));
 
     const first = renderHook(() => useWorkshopTags());
     await waitFor(() => expect(first.result.current.loading).toBe(false));
     expect(first.result.current.tags).toEqual([]);
+    expect(first.result.current.error).not.toBeNull();
     first.unmount();
 
+    // A failed listing says nothing about the workshop, so the next mount has
+    // to ask again rather than serve the failure for the whole TTL.
     renderHook(() => useWorkshopTags());
-    await waitFor(() => expect(listWorkshopTags).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(listWorkshopTags).toHaveBeenCalledTimes(2));
   });
 });

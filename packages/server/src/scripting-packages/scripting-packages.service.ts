@@ -519,12 +519,15 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     } catch (error) {
       if (error instanceof HttpException) throw error;
       this.logger.error(
-        `Package ${pkg.id} slug rewrite failed: ${String(error)}`,
+        `Package ${pkg.id} slug rewrite failed: ${errorMessage(error)}`,
       );
-      throw new InternalServerErrorException({
-        code: 'slug_rewrite_failed',
-        message: 'Не удалось переписать ссылки на пакет',
-      });
+      throw new InternalServerErrorException(
+        {
+          code: 'slug_rewrite_failed',
+          message: 'Не удалось переписать ссылки на пакет',
+        },
+        { cause: error },
+      );
     }
 
     await outcome.rewrite?.commit();
@@ -532,7 +535,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       await this.delivery
         .invalidatePackage(packageId)
         .catch((cause) =>
-          this.logger.warn(`artifact invalidation failed: ${String(cause)}`),
+          this.logger.warn(`artifact invalidation failed: ${errorMessage(cause)}`),
         );
     }
     if (outcome.rewrittenIds.length > 0) {

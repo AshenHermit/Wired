@@ -284,6 +284,13 @@ export type GameRoomConnection = {
 };
 
 /**
+ * Path the backend serves the editor's base project from: the manifest itself,
+ * and every project file beneath it. Shared so a rename on one side breaks the
+ * build instead of leaving the client asking for a route nobody serves.
+ */
+export const GODOT_PROJECT_ROUTE = "godot-project/wired";
+
+/**
  * Codes the game-connection endpoint may put in an error body. Lives here so a
  * rename on either side breaks the build instead of the client's retry policy.
  */

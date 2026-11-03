@@ -1,5 +1,6 @@
 import { PackageFileEntry, PackageManifest } from "@wired-io/shared";
 import { sha256Hex } from "@/utils/sha256";
+import { errorMessage } from "@/utils/errors";
 import type { EditorBridgeClient } from "./editor-bridge";
 
 /**
@@ -361,8 +362,4 @@ export async function applyPackageRevision({
   }
 
   return files.replaceContents(manifest.slug, verified);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

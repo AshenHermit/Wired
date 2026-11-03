@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
 import request from 'supertest';
+import { GODOT_PROJECT_ROUTE } from '@wired-io/shared';
 import { AppConfigService } from 'src/config/config.service';
 import { GodotEditorProviderController } from './godot-editor-provider.controller';
 
@@ -87,7 +88,7 @@ describe('GodotEditorProviderController', () => {
   });
 
   describe('HTTP wildcard routing', () => {
-    it('binds the wildcard path parameter and serves the editor asset', async () => {
+    async function createApp() {
       const moduleRef = await Test.createTestingModule({
         controllers: [GodotEditorProviderController],
         providers: [
@@ -107,6 +108,11 @@ describe('GodotEditorProviderController', () => {
       }).compile();
       const app = moduleRef.createNestApplication();
       await app.init();
+      return app;
+    }
+
+    it('binds the wildcard path parameter and serves the editor asset', async () => {
+      const app = await createApp();
 
       try {
         await request(app.getHttpServer())
@@ -117,6 +123,31 @@ describe('GodotEditorProviderController', () => {
         await request(app.getHttpServer())
           .get('/godot-editor/..%2F..%2Fsecret.txt')
           .expect(400);
+      } finally {
+        await app.close();
+      }
+    });
+
+    // The client asks for this path by name, so the route is a cross-tier
+    // contract: if it moves, the editor reports a start failure instead of a
+    // missing manifest.
+    it('serves the project manifest from the shared route', async () => {
+      const app = await createApp();
+
+      try {
+        const response = await request(app.getHttpServer())
+          .get(`/${GODOT_PROJECT_ROUTE}`)
+          .expect(200);
+
+        expect(response.body).toMatchObject({
+          name: 'Wired',
+          baseUrl: `/${GODOT_PROJECT_ROUTE}/`,
+        });
+        expect(response.body.filepaths).toContain('project.godot');
+
+        await request(app.getHttpServer())
+          .get(`/${GODOT_PROJECT_ROUTE}/project.godot`)
+          .expect(200);
       } finally {
         await app.close();
       }

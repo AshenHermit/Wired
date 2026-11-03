@@ -2,6 +2,8 @@ import type { WorkshopPackageSummary } from "@wired-io/shared";
 import { apiErrorBody } from "@/i18n/api-error";
 import type { AppMessage } from "@/i18n/message";
 
+export { errorMessage } from "@/utils/errors";
+
 /**
  * Raised when an explicit package action would replace or delete local files.
  * The panel asks the user for confirmation and repeats the action with
@@ -30,10 +32,6 @@ export class NewerRevisionError extends Error {
     super(`newer_revision:${packageId}`);
     this.name = "NewerRevisionError";
   }
-}
-
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**

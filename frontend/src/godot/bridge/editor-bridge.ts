@@ -5,6 +5,8 @@
  * `request` takes a positive request id, an operation name and a JSON object
  * payload, and answers through `window.__wiredEditorBridgeResult`.
  */
+import { errorMessage } from "@/utils/errors";
+
 export type WiredEditorBridge = {
   rescan?: () => void;
   request?: (requestId: number, op: string, paramsJson: string) => void;
@@ -290,6 +292,3 @@ export function requestEditorRescan(): boolean {
   }
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}

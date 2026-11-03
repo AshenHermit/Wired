@@ -7,7 +7,7 @@ import {
   Res,
   StreamableFile,
 } from '@nestjs/common';
-import { ProjectInfo } from '@wired-io/shared';
+import { GODOT_PROJECT_ROUTE, ProjectInfo } from '@wired-io/shared';
 import { Request, Response } from 'express';
 import { glob, stat } from 'node:fs/promises';
 import path, { resolve } from 'node:path';
@@ -16,9 +16,6 @@ import { serveStaticAsset, wildcardPath } from 'src/common/static-assets';
 import { Public } from 'src/auth/auth-policy';
 
 const EXCLUDED_PROJECT_DIRS = new Set(['build', 'storage', '.godot']);
-
-/** Shared by the file route, the manifest and the baseUrl the editor fetches. */
-const GODOT_PROJECT_ROUTE = 'godot-project/wired';
 
 /**
  * Serves the WASM editor's own assets and the shared base project.
