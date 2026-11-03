@@ -98,14 +98,13 @@ export class GameRoomService {
     const runtimeRoomId = String(room.id);
     let connection: RoomConnection;
     try {
-      // `getConnection` starts or reuses the runtime and mints the only ticket
-      // of this call. Starting the process is what makes the room apply its
+      // Starting the process is what makes the room apply its
       // packages, so the mint happens before the readiness wait; re-minting
       // afterwards would discard the first ticket and can stop the runtime
       // through the handshake window. The ticket TTL (60s by default) is
       // comfortably larger than the bounded readiness wait (10s), so the
       // browser still receives a usable window.
-      connection = await this.runtime.getConnection(runtimeRoomId);
+      connection = await this.runtime.connectRoom(runtimeRoomId);
       await this.waitForInitialPackages(runtimeRoomId);
     } catch (error) {
       throw this.toHttpException(error, runtimeRoomId);

@@ -91,8 +91,8 @@ describeIntegration('RoomRuntimeService with real Godot', () => {
 
   it('shares one process, saves state on idle, and restarts for the next join', async () => {
     const [first, second] = await Promise.all([
-      service.getConnection(roomId),
-      service.getConnection(roomId),
+      service.connectRoom(roomId),
+      service.connectRoom(roomId),
     ]);
     expect(first.pid).toBe(second.pid);
     expect(first.port).toBe(port);
@@ -157,7 +157,7 @@ describeIntegration('RoomRuntimeService with real Godot', () => {
     expect(logs).toContain('WIRED_STATE_SAVED');
     expect(logs).not.toContain('forcing');
 
-    const restarted = await service.getConnection(roomId);
+    const restarted = await service.connectRoom(roomId);
     expect(restarted.state).toBe('running');
     expect(restarted.port).toBe(port);
     expect(restarted.pid).not.toBeNull();

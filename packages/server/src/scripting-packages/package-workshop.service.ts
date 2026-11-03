@@ -345,7 +345,7 @@ export class PackageWorkshopService {
   }
 
   /** Adds a workshop record to a room as an independent copy. */
-  async addToRoom(
+  async copyToRoom(
     workshopPackageId: number,
     roomId: number,
     user: User,

@@ -73,7 +73,7 @@ export function useRoomPackages(
   const loadedRef = React.useRef<Map<number, PackageBaseline>>(new Map());
   /**
    * Slugs of packages created by an action in this tick. The reducer state is
-   * only readable after React re-renders, but `addFromWorkshop` and
+   * only readable after React re-renders, but `copyFromWorkshop` and
    * `forkWorkshopPackage` download the copy immediately, so its slug must be
    * addressable before the state mirror catches up.
    */
@@ -164,8 +164,13 @@ export function useRoomPackages(
     return slug;
   }, []);
 
-  const load = React.useCallback(
-    async (local: boolean): Promise<void> => {
+  /**
+   * Reads the room's package list. `rehash` forces a fresh bridge snapshot for
+   * every package; without it the cached snapshots from the last rehash are
+   * reused, which is what the background poll wants.
+   */
+  const readPackages = React.useCallback(
+    async (rehash: boolean): Promise<void> => {
       const request = ++requestRef.current;
       const files = filesRef.current;
       try {
@@ -199,7 +204,7 @@ export function useRoomPackages(
         // CPU. Status polls reuse the last snapshots; local changes are
         // recomputed on open, focus, manual refresh and around explicit actions.
         let snapshots = snapshotsRef.current;
-        if (files && local) {
+        if (files && rehash) {
           const fresh = new Map<number, Record<string, string>>();
           for (const pkg of known.values()) {
             if (!pkg.slug) continue;
@@ -217,7 +222,7 @@ export function useRoomPackages(
         // Commit the caches only from the load that still owns the request: a
         // superseded response must not leak into later `buildEntries` calls.
         remoteRef.current = remote;
-        if (files && local) {
+        if (files && rehash) {
           snapshotsRef.current = snapshots;
         }
         dispatch({
@@ -247,9 +252,16 @@ export function useRoomPackages(
     [dropTransport, filesRef, roomId],
   );
 
+  /** Re-reads with a fresh hash of every package directory. */
   const refresh = React.useCallback(
-    (): Promise<void> => load(true),
-    [load],
+    (): Promise<void> => readPackages(true),
+    [readPackages],
+  );
+
+  /** Re-reads without re-hashing; the cached snapshots are close enough. */
+  const loadStatus = React.useCallback(
+    (): Promise<void> => readPackages(false),
+    [readPackages],
   );
 
   /**
@@ -302,7 +314,7 @@ export function useRoomPackages(
     if (!transport.fsReady) return;
     const tick = () => {
       if (document.visibilityState === "visible") {
-        void load(false);
+        void loadStatus();
       }
     };
     const focus = () => {
@@ -318,7 +330,7 @@ export function useRoomPackages(
       window.removeEventListener("focus", focus);
       document.removeEventListener("visibilitychange", focus);
     };
-  }, [transport.fsReady, load, refresh]);
+  }, [transport.fsReady, loadStatus, refresh]);
 
   const actions = usePackageActions({
     roomId,

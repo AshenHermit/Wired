@@ -12,7 +12,7 @@ import { PlayIcon, WrenchIcon } from "lucide-react";
 import Link from "next/link";
 import * as React from "react";
 import { encodeId } from "@/utils/hash-utils";
-import type { RoomEditingPanelAPI } from "./RoomEditingPanel";
+import type { RoomEditingPanelApi } from "./RoomEditingPanel";
 
 /** One room tile; the edit affordance only shows for the room's own author. */
 export function RoomCard({
@@ -20,7 +20,7 @@ export function RoomCard({
   editingApi,
 }: {
   room: Room;
-  editingApi?: React.RefObject<RoomEditingPanelAPI | null>;
+  editingApi?: React.RefObject<RoomEditingPanelApi | null>;
 }) {
   const authorized = useUserStore((state) => state.authorized);
   const userId = useUserStore((state) => state.id);

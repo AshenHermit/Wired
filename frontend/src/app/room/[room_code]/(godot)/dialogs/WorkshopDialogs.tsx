@@ -47,7 +47,7 @@ export function WorkshopBrowserDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Only the workshop copy action this dialog drives. */
-  packages: Pick<RoomPackagesController, "addFromWorkshop">;
+  packages: Pick<RoomPackagesController, "copyFromWorkshop">;
 }) {
   const t = useTranslations("Workshop");
   const format = useAppMessage();
@@ -64,13 +64,13 @@ export function WorkshopBrowserDialog({
     setPendingId(workshopPackage.id);
     setError(null);
     try {
-      await packages.addFromWorkshop(workshopPackage.id);
+      await packages.copyFromWorkshop(workshopPackage.id);
     } catch (cause) {
       console.error(cause);
       setError(
         cause instanceof WorkshopActionError
           ? cause.appMessage
-          : { key: "Packages.errors.addFromWorkshopFailed" },
+          : { key: "Packages.errors.copyFromWorkshopFailed" },
       );
     } finally {
       setPendingId(null);

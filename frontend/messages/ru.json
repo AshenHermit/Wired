@@ -267,7 +267,7 @@
       "emitPublished": "Опубликована ревизия {revision}: {uploaded} файл(ов)."
     },
     "errors": {
-      "notRoomMember": "������ ������ ������� ����� ������ � ����� � ���������.",
+      "notRoomMember": "������ ������ ������� ����� ������ � ����� � ���������.",
     "loginRequired": "Войдите в аккаунт, чтобы создавать пакеты.",
       "nameRequired": "Укажите имя пакета",
       "slugRequired": "Укажите слаг пакета",
@@ -279,7 +279,7 @@
       "workshopLookupFailed": "Не удалось проверить запись в workshop",
       "updateMetadataFailed": "Не удалось изменить данные пакета",
       "downloadFailed": "Не удалось скачать пакет",
-      "addFromWorkshopFailed": "Не удалось добавить пакет из workshop",
+      "copyFromWorkshopFailed": "Не удалось добавить пакет из workshop",
       "publishFailed": "Не удалось опубликовать пакет в workshop",
       "forkFailed": "Не удалось создать форк",
       "removeFailed": "Не удалось убрать пакет",

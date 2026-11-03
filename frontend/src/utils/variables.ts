@@ -7,7 +7,7 @@ export const BACKEND_URL = String(
  *
  * Browser-facing URLs that must stay on the frontend origin (the WASM editor
  * assets, project files, the game export, the API root handed to the exported
- * Godot build) go through it. Axios is the exception: `client-api.ts` talks to
+ * Godot build) go through it. Axios is the exception: `api-client.ts` talks to
  * `BACKEND_URL` directly, because API calls are made from the browser to the
  * backend itself and only need the prefix when they are relative to the page.
  */

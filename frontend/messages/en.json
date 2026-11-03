@@ -279,7 +279,7 @@
       "workshopLookupFailed": "Failed to check the workshop record",
       "updateMetadataFailed": "Failed to update the package metadata",
       "downloadFailed": "Failed to download the package",
-      "addFromWorkshopFailed": "Failed to add the package from the workshop",
+      "copyFromWorkshopFailed": "Failed to add the package from the workshop",
       "publishFailed": "Failed to publish the package to the workshop",
       "forkFailed": "Failed to create the fork",
       "removeFailed": "Failed to remove the package",

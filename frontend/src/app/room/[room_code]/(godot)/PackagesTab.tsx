@@ -592,7 +592,7 @@ export function PackagesTab({
   const handleDownload = (entry: RoomPackageEntry) => {
     void runConfirmed(
       entry,
-      packages.downloadPackage,
+      packages.applyPublishedRevision,
       (error) =>
         error instanceof LocalChangesError
           ? confirmation(
@@ -608,7 +608,7 @@ export function PackagesTab({
   const handleRemove = (entry: RoomPackageEntry) => {
     void runConfirmed(
       entry,
-      packages.removePackage,
+      packages.removePackageDirectory,
       (error) =>
         error instanceof LocalChangesError
           ? confirmation(
@@ -665,7 +665,7 @@ export function PackagesTab({
     });
     if (!accepted) return;
     try {
-      await packages.deletePackage(entry.packageId);
+      await packages.deletePackageRecord(entry.packageId);
     } catch {
       // The panel already shows the error of the failed action.
     }

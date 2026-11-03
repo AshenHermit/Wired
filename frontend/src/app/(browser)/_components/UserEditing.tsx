@@ -25,7 +25,7 @@ import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import z from "zod";
 
-export type UserEditingPanelAPI = {
+export type UserEditingPanelApi = {
   edit: (user: User) => void;
   close: () => void;
 };
@@ -39,7 +39,7 @@ export const UserEditingFields = z.object({
 export type UserEditingFieldsInfer = z.infer<typeof UserEditingFields>;
 
 export const UserEditingPanel = React.forwardRef<
-  UserEditingPanelAPI,
+  UserEditingPanelApi,
   UserEditingProps
 >(({ onChange }, ref) => {
   const [user, setUser] = React.useState<User | null>(null);
@@ -104,7 +104,7 @@ export const UserEditingPanel = React.forwardRef<
 
 export function CurrentUserEditingButton() {
   const user = useUserStore((state) => state);
-  const editingApi = React.useRef<UserEditingPanelAPI>(null);
+  const editingApi = React.useRef<UserEditingPanelApi>(null);
 
   return (
     <>

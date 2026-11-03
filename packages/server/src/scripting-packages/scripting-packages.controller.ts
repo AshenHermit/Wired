@@ -44,7 +44,7 @@ import {
   WorkshopForkDto,
   WorkshopPublishDto,
 } from './dto/workshop.dto';
-import { RoomCopyDto } from './dto/room-copy.dto';
+import { CopyToRoomDto } from './dto/copy-to-room.dto';
 import { UseAuthGuard, SilentAuth, Public } from 'src/auth/auth-policy';
 import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 import { MAX_PACKAGE_FILE_SIZE } from './package-manifest';
@@ -167,9 +167,9 @@ export class ScriptingPackagesController {
   copyToRoom(
     @Req() req: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: RoomCopyDto,
+    @Body() dto: CopyToRoomDto,
   ) {
-    return this.workshopService.addToRoom(id, dto.roomId, req.user);
+    return this.workshopService.copyToRoom(id, dto.roomId, req.user);
   }
 
   @SilentAuth()

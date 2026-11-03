@@ -107,25 +107,25 @@ export type RoomPackagesController = {
     fromSlug: string,
     toSlug: string,
   ) => Promise<void>;
-  downloadPackage: (
+  applyPublishedRevision: (
     packageId: number,
     options?: { force?: boolean },
   ) => Promise<void>;
-  removePackage: (
+  removePackageDirectory: (
     packageId: number,
     options?: { force?: boolean },
   ) => Promise<void>;
   /** Activates or deactivates the package in the room without deleting it. */
   setPackageEnabled: (packageId: number, enabled: boolean) => Promise<void>;
   /** Deletes the package from the room and the backend, permanently. */
-  deletePackage: (packageId: number) => Promise<void>;
+  deletePackageRecord: (packageId: number) => Promise<void>;
   adoptPackage: (packageId: number) => Promise<void>;
   emitPackage: (
     packageId: number,
     options?: { force?: boolean },
   ) => Promise<void>;
   /** Copies a workshop record into the room and downloads the copy. */
-  addFromWorkshop: (workshopPackageId: number) => Promise<ScriptingPackage>;
+  copyFromWorkshop: (workshopPackageId: number) => Promise<ScriptingPackage>;
   /** Publishes the latest published revision into the global workshop record. */
   publishToWorkshop: (
     packageId: number,

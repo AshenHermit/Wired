@@ -5,7 +5,7 @@ import {
   RoomPackagesStatus,
 } from "@wired-io/shared";
 import { withApiPrefix } from "@/utils/variables";
-import { apiClient } from "../api-client/client-api";
+import { apiClient } from "../api-client/api-client";
 
 export async function getGodotProjectInfo() {
   const info = await apiClient.get<ProjectInfo>(

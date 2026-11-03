@@ -91,13 +91,13 @@ function controller(
     updatePackageMetadata: vi.fn().mockResolvedValue({} as never),
     isPackageDirOccupied: vi.fn().mockResolvedValue(false),
     renamePackageDir: vi.fn().mockResolvedValue(undefined),
-    downloadPackage: vi.fn().mockResolvedValue(undefined),
-    removePackage: vi.fn().mockResolvedValue(undefined),
+    applyPublishedRevision: vi.fn().mockResolvedValue(undefined),
+    removePackageDirectory: vi.fn().mockResolvedValue(undefined),
     setPackageEnabled: vi.fn().mockResolvedValue(undefined),
-    deletePackage: vi.fn().mockResolvedValue(undefined),
+    deletePackageRecord: vi.fn().mockResolvedValue(undefined),
     adoptPackage: vi.fn().mockResolvedValue(undefined),
     emitPackage: vi.fn().mockResolvedValue(undefined),
-    addFromWorkshop: vi.fn().mockResolvedValue({ id: 9 }),
+    copyFromWorkshop: vi.fn().mockResolvedValue({ id: 9 }),
     publishToWorkshop: vi
       .fn()
       .mockResolvedValue({ mode: "created", package: workshopPackage() }),
@@ -315,7 +315,7 @@ describe("PackagesTab", () => {
   });
 
   it("asks before replacing local changes and repeats the download", async () => {
-    const downloadPackage = vi
+    const applyPublishedRevision = vi
       .fn()
       .mockRejectedValueOnce(
         new LocalChangesError(5, ["scripts/hero.gd"]),
@@ -325,7 +325,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab roomId={1}
         canManagePackages viewerId={42}
-        packages={controller({ downloadPackage })}
+        packages={controller({ applyPublishedRevision })}
       />,
     );
 
@@ -336,12 +336,12 @@ describe("PackagesTab", () => {
     expect(within(dialog).getByText(/локальные изменения/i)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Продолжить" }));
 
-    await waitFor(() => expect(downloadPackage).toHaveBeenCalledTimes(2));
-    expect(downloadPackage).toHaveBeenLastCalledWith(5, { force: true });
+    await waitFor(() => expect(applyPublishedRevision).toHaveBeenCalledTimes(2));
+    expect(applyPublishedRevision).toHaveBeenLastCalledWith(5, { force: true });
   });
 
   it("keeps local changes when the confirmation is declined", async () => {
-    const downloadPackage = vi
+    const applyPublishedRevision = vi
       .fn()
       .mockRejectedValueOnce(
         new LocalChangesError(5, ["scripts/hero.gd"]),
@@ -350,7 +350,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab roomId={1}
         canManagePackages viewerId={42}
-        packages={controller({ downloadPackage })}
+        packages={controller({ applyPublishedRevision })}
       />,
     );
 
@@ -360,11 +360,11 @@ describe("PackagesTab", () => {
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "Отмена" }));
 
-    await waitFor(() => expect(downloadPackage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(applyPublishedRevision).toHaveBeenCalledTimes(1));
   });
 
   it("asks before removing a package with local changes", async () => {
-    const removePackage = vi
+    const removePackageDirectory = vi
       .fn()
       .mockRejectedValueOnce(new LocalChangesError(5, ["scripts/hero.gd"]))
       .mockResolvedValueOnce(undefined);
@@ -372,7 +372,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab roomId={1}
         canManagePackages viewerId={42}
-        packages={controller({ removePackage })}
+        packages={controller({ removePackageDirectory })}
       />,
     );
 
@@ -383,8 +383,8 @@ describe("PackagesTab", () => {
     expect(within(dialog).getByText(/Удалить каталог пакета/)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Продолжить" }));
 
-    await waitFor(() => expect(removePackage).toHaveBeenCalledTimes(2));
-    expect(removePackage).toHaveBeenLastCalledWith(5, { force: true });
+    await waitFor(() => expect(removePackageDirectory).toHaveBeenCalledTimes(2));
+    expect(removePackageDirectory).toHaveBeenLastCalledWith(5, { force: true });
   });
 
   it("creates a package for the current user", async () => {
@@ -535,13 +535,13 @@ describe("PackagesTab", () => {
   });
 
   it("confirms permanent deletion in a dialog", async () => {
-    const deletePackage = vi.fn().mockResolvedValue(undefined);
+    const deletePackageRecord = vi.fn().mockResolvedValue(undefined);
     render(
       <PackagesTab roomId={1}
         canManagePackages viewerId={42}
         packages={controller({
           entries: [entry({ packageId: 42 })],
-          deletePackage,
+          deletePackageRecord,
         })}
       />,
     );
@@ -551,13 +551,13 @@ describe("PackagesTab", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/#demo/)).toBeTruthy();
-    expect(deletePackage).not.toHaveBeenCalled();
+    expect(deletePackageRecord).not.toHaveBeenCalled();
 
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Удалить навсегда" }),
     );
 
-    await waitFor(() => expect(deletePackage).toHaveBeenCalledWith(42));
+    await waitFor(() => expect(deletePackageRecord).toHaveBeenCalledWith(42));
   });
 
   it("opens the creation modal from the header button", () => {
@@ -1097,11 +1097,11 @@ describe("PackagesTab", () => {
       items: [workshopPackage()],
       total: 1,
     });
-    const addFromWorkshop = vi.fn().mockResolvedValue({ id: 9 } as never);
+    const copyFromWorkshop = vi.fn().mockResolvedValue({ id: 9 } as never);
     render(
       <PackagesTab
         roomId={1}
-        packages={controller({ addFromWorkshop })}
+        packages={controller({ copyFromWorkshop })}
         canManagePackages viewerId={42}
       />,
     );
@@ -1112,7 +1112,7 @@ describe("PackagesTab", () => {
       await within(dialog).findByRole("button", { name: "Добавить" }),
     );
 
-    await waitFor(() => expect(addFromWorkshop).toHaveBeenCalledWith(100));
+    await waitFor(() => expect(copyFromWorkshop).toHaveBeenCalledWith(100));
   });
 
   it("disables publishing a package without a published revision", async () => {

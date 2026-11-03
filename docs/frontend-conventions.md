@@ -19,7 +19,7 @@ disagree, rename the file — searching for `RoomCard` must not land on
 
 Next.js reserves lowercase names for route files (`page.tsx`, `layout.tsx`,
 `route.ts`). A client shell that lives beside them follows the component rule
-instead, so `page.tsx` renders `RoomPageClient` from `RoomPageClient.tsx`.
+instead, so `page.tsx` renders `RoomRouteGate` from `RoomRouteGate.tsx`, which hands the tab shell to `(godot)/RoomWorkspace.tsx`.
 
 ## Test files sit next to their subject
 

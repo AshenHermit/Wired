@@ -130,7 +130,7 @@ describe('RoomRuntimeService', () => {
   };
 
   const startRoom = async (roomId: string) => {
-    const connection = service.getConnection(roomId);
+    const connection = service.connectRoom(roomId);
     await flushAsync();
     const process = factory.last;
     process.emitLine(
@@ -158,8 +158,8 @@ describe('RoomRuntimeService', () => {
   });
 
   it('spawns exactly one runtime for concurrent requests to an idle room', async () => {
-    const first = service.getConnection('room-1');
-    const second = service.getConnection('room-1');
+    const first = service.connectRoom('room-1');
+    const second = service.connectRoom('room-1');
     await flushAsync();
 
     expect(factory.processes).toHaveLength(1);
@@ -176,7 +176,7 @@ describe('RoomRuntimeService', () => {
   });
 
   it('reports starting until the ready line arrives and uses distinct ports per room', async () => {
-    const first = service.getConnection('room-1');
+    const first = service.connectRoom('room-1');
     await flushAsync();
     expect(service.getRuntime('room-1')?.state).toBe('starting');
     factory.processes[0].emitLine(
@@ -184,7 +184,7 @@ describe('RoomRuntimeService', () => {
     );
     await first;
 
-    const second = service.getConnection('room-2');
+    const second = service.connectRoom('room-2');
     await flushAsync();
     factory.processes[1].emitLine(
       'WIRED_SERVER_READY room=room-2 port=19101 bind=127.0.0.1',
@@ -197,21 +197,21 @@ describe('RoomRuntimeService', () => {
   it('fails explicitly when WIRED_GAME_TICKET_SECRET is not configured', async () => {
     service = createService({ ticketSecret: '' });
 
-    await expect(service.getConnection('room-1')).rejects.toMatchObject({
+    await expect(service.connectRoom('room-1')).rejects.toMatchObject({
       code: 'ticket_secret_missing',
     });
     expect(factory.processes).toHaveLength(0);
   });
 
   it('maps exit code 2 to an explicit start failure and releases the port', async () => {
-    const connection = service.getConnection('room-1');
+    const connection = service.connectRoom('room-1');
     await flushAsync();
     factory.last.exit(2);
 
     await expect(connection).rejects.toThrow(/WIRED_GAME_TICKET_SECRET/);
     expect(service.getRuntime('room-1')?.state).toBe('failed');
 
-    const retry = service.getConnection('room-1');
+    const retry = service.connectRoom('room-1');
     await flushAsync();
     expect(factory.processes).toHaveLength(2);
     expect(service.getRuntime('room-1')?.port).toBe(19100);
@@ -222,7 +222,7 @@ describe('RoomRuntimeService', () => {
   });
 
   it('maps exit code 3 to an explicit port binding failure', async () => {
-    const connection = service.getConnection('room-1');
+    const connection = service.connectRoom('room-1');
     await flushAsync();
     factory.last.exit(3);
 
@@ -237,7 +237,7 @@ describe('RoomRuntimeService', () => {
     expect(service.getRuntime('room-1')?.state).toBe('failed');
     expect(service.getRuntime('room-1')?.exitCode).toBe(1);
 
-    const next = service.getConnection('room-1');
+    const next = service.connectRoom('room-1');
     await flushAsync();
     expect(factory.processes).toHaveLength(2);
     factory.last.emitLine(
@@ -250,7 +250,7 @@ describe('RoomRuntimeService', () => {
     await startRoom('room-1');
     const stopping = service.stopRoom('room-1');
 
-    await expect(service.getConnection('room-1')).rejects.toMatchObject({
+    await expect(service.connectRoom('room-1')).rejects.toMatchObject({
       code: 'room_stopping',
     });
 
@@ -310,7 +310,7 @@ describe('RoomRuntimeService', () => {
 
     expect(service.getRuntime('room-1')?.state).toBe('failed');
 
-    const second = service.getConnection('room-2');
+    const second = service.connectRoom('room-2');
     await flushAsync();
     expect(service.getRuntime('room-2')?.port).toBe(19101);
 
@@ -350,7 +350,7 @@ describe('RoomRuntimeService', () => {
 
     expect(service.getRuntime('room-1')).toBeNull();
 
-    const next = service.getConnection('room-2');
+    const next = service.connectRoom('room-2');
     await flushAsync();
     expect(service.getRuntime('room-2')?.port).toBe(19100);
     factory.last.emitLine(
@@ -368,7 +368,7 @@ describe('RoomRuntimeService', () => {
 
     expect(service.getRuntime('room-1')).toBeNull();
 
-    const next = service.getConnection('room-2');
+    const next = service.connectRoom('room-2');
     await flushAsync();
     expect(service.getRuntime('room-2')?.port).toBe(19100);
     factory.last.emitLine(
@@ -426,7 +426,7 @@ describe('RoomRuntimeService', () => {
   it('refuses to start when production has no public WebSocket endpoint', async () => {
     service = createService({ publicWsBaseUrl: '' }, true);
 
-    await expect(service.getConnection('room-1')).rejects.toBeInstanceOf(
+    await expect(service.connectRoom('room-1')).rejects.toBeInstanceOf(
       RoomRuntimeError,
     );
     expect(factory.processes).toHaveLength(0);
@@ -438,7 +438,7 @@ describe('RoomRuntimeService', () => {
       true,
     );
 
-    const connection = service.getConnection('room-1');
+    const connection = service.connectRoom('room-1');
     await flushAsync();
     factory.last.emitLine(
       'WIRED_SERVER_READY room=room-1 port=19100 bind=127.0.0.1',
@@ -452,7 +452,7 @@ describe('RoomRuntimeService', () => {
 
   it('fails the start when readiness never arrives', async () => {
     jest.useFakeTimers();
-    const connection = service.getConnection('room-1');
+    const connection = service.connectRoom('room-1');
     await flushAsync();
 
     jest.advanceTimersByTime(config.startTimeoutMs);
@@ -464,7 +464,7 @@ describe('RoomRuntimeService', () => {
   });
 
   it('rejects waiting callers when the room is stopped while starting', async () => {
-    const connection = service.getConnection('room-1');
+    const connection = service.connectRoom('room-1');
     await flushAsync();
 
     const stopping = service.stopRoom('room-1');
@@ -489,7 +489,7 @@ describe('RoomRuntimeService', () => {
 
   it('keeps a failed start port reserved until the process exits', async () => {
     jest.useFakeTimers();
-    const connection = service.getConnection('room-1');
+    const connection = service.connectRoom('room-1');
     await flushAsync();
     const first = factory.last;
     first.killExits = false;
@@ -500,7 +500,7 @@ describe('RoomRuntimeService', () => {
     await expect(connection).rejects.toThrow(/WIRED_SERVER_READY/);
     expect(first.killed).toBe(true);
 
-    const retry = service.getConnection('room-1');
+    const retry = service.connectRoom('room-1');
     await flushAsync();
     expect(factory.processes).toHaveLength(2);
     expect(service.getRuntime('room-1')?.port).toBe(19101);
@@ -513,12 +513,12 @@ describe('RoomRuntimeService', () => {
   });
 
   it('skips a port that failed to bind on the next start', async () => {
-    const first = service.getConnection('room-1');
+    const first = service.connectRoom('room-1');
     await flushAsync();
     factory.last.exit(3);
     await expect(first).rejects.toThrow(/port 19100/);
 
-    const second = service.getConnection('room-2');
+    const second = service.connectRoom('room-2');
     await flushAsync();
     expect(service.getRuntime('room-2')?.port).toBe(19101);
     factory.last.emitLine(
@@ -529,7 +529,7 @@ describe('RoomRuntimeService', () => {
 
   it('passes an absolute state directory to Godot for relative config', async () => {
     service = createService({ stateDir: relative(process.cwd(), stateDir) });
-    const connection = service.getConnection('room-1');
+    const connection = service.connectRoom('room-1');
     await flushAsync();
 
     const options = factory.spawnOptions.at(-1);
@@ -561,7 +561,7 @@ describe('RoomRuntimeService', () => {
     const { process } = await startRoom('room-1');
 
     jest.advanceTimersByTime(40_000);
-    await expect(service.getConnection('room-1')).resolves.toMatchObject({
+    await expect(service.connectRoom('room-1')).resolves.toMatchObject({
       state: 'running',
     });
 
@@ -579,7 +579,7 @@ describe('RoomRuntimeService', () => {
     await startRoom('room-1');
 
     jest.advanceTimersByTime(40_000);
-    const connection = await service.getConnection('room-1');
+    const connection = await service.connectRoom('room-1');
     const leaseEndMs = Date.now() + 20_000;
 
     expect(connection.ticketExpiresAt * 1_000).toBeLessThanOrEqual(leaseEndMs);
@@ -594,7 +594,7 @@ describe('RoomRuntimeService', () => {
 
     jest.advanceTimersByTime(55_000);
 
-    await expect(service.getConnection('room-1')).rejects.toMatchObject({
+    await expect(service.connectRoom('room-1')).rejects.toMatchObject({
       code: 'handshake_window_expired',
     });
     expect(service.getRuntime('room-1')?.state).toBe('stopping');
@@ -633,7 +633,7 @@ describe('RoomRuntimeService', () => {
   });
 
   it('rejects a room id that is unsafe as a path segment', async () => {
-    await expect(service.getConnection('..')).rejects.toMatchObject({
+    await expect(service.connectRoom('..')).rejects.toMatchObject({
       code: 'invalid_room',
     });
     expect(factory.processes).toHaveLength(0);
@@ -658,7 +658,7 @@ describe('RoomRuntimeService', () => {
 
   it('rejects invalid lifecycle timeouts instead of starting', async () => {
     service = createService({ ticketTtlSec: 0 });
-    const connection = service.getConnection('room-1');
+    const connection = service.connectRoom('room-1');
     await flushAsync();
     if (factory.processes.length > 0) {
       factory.last.emitLine(

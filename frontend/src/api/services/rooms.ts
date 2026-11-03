@@ -1,5 +1,5 @@
 import { CreateRoomPayload, Room, UpdateRoomPayload } from "@wired-io/shared";
-import { apiClient } from "../api-client/client-api";
+import { apiClient } from "../api-client/api-client";
 
 export function listRooms() {
   return apiClient.get<Room[]>("rooms");

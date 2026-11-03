@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import { useTranslations } from "next-intl";
-import { GodotRoomPageClient } from "./(godot)/GodotRoomPageClient";
+import { RoomWorkspace } from "./(godot)/RoomWorkspace";
 import { Room } from "@wired-io/shared";
 import { getRoom } from "@/api/services/rooms";
 import { decodeId } from "@/utils/hash-utils";
@@ -9,7 +9,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { LocaleSwitcher } from "@/components/i18n/LocaleSwitcher";
 import { useAppMessage, type AppMessage } from "@/i18n/message";
 
-export function RoomPageClient({ roomCode }: { roomCode: string }) {
+export function RoomRouteGate({ roomCode }: { roomCode: string }) {
   const t = useTranslations("Room");
   const format = useAppMessage();
   const [room, setRoom] = React.useState<Room | null>(null);
@@ -62,5 +62,5 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
       </div>
     );
   }
-  return <GodotRoomPageClient room={room} />;
+  return <RoomWorkspace room={room} />;
 }

@@ -13,7 +13,7 @@ import * as React from "react";
 import { RoomCard } from "./RoomCard";
 import {
   RoomEditingPanel,
-  type RoomEditingPanelAPI,
+  type RoomEditingPanelApi,
 } from "./RoomEditingPanel";
 import { useRooms } from "./use-rooms";
 
@@ -22,7 +22,7 @@ export function RoomsList({ forCurrentUser = false }: { forCurrentUser?: boolean
   const userId = useUserStore((state) => state.id);
   const authorized = useUserStore((state) => state.authorized);
   const { items, load, error } = useRooms(forCurrentUser ? userId : undefined);
-  const editingApi = React.useRef<RoomEditingPanelAPI>(null);
+  const editingApi = React.useRef<RoomEditingPanelApi>(null);
   const t = useTranslations("Rooms");
   const format = useAppMessage();
 

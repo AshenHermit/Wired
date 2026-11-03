@@ -27,7 +27,7 @@ import {
   useDraggablePanel,
 } from "./use-draggable-panel";
 
-export function GodotRoomPageClient({ room }: { room: Room }) {
+export function RoomWorkspace({ room }: { room: Room }) {
   const t = useTranslations("Room");
   const [activeTab, setActiveTab] = React.useState("editor");
   const [gameMounted, setGameMounted] = React.useState(false);

@@ -91,22 +91,22 @@ export interface PackageActions {
     fromSlug: string,
     toSlug: string,
   ) => Promise<void>;
-  downloadPackage: (
+  applyPublishedRevision: (
     packageId: number,
     options?: { force?: boolean },
   ) => Promise<void>;
-  removePackage: (
+  removePackageDirectory: (
     packageId: number,
     options?: { force?: boolean },
   ) => Promise<void>;
   setPackageEnabled: (packageId: number, enabled: boolean) => Promise<void>;
-  deletePackage: (packageId: number) => Promise<void>;
+  deletePackageRecord: (packageId: number) => Promise<void>;
   adoptPackage: (packageId: number) => Promise<void>;
   emitPackage: (
     packageId: number,
     options?: { force?: boolean },
   ) => Promise<void>;
-  addFromWorkshop: (workshopPackageId: number) => Promise<ScriptingPackage>;
+  copyFromWorkshop: (workshopPackageId: number) => Promise<ScriptingPackage>;
   publishToWorkshop: (
     packageId: number,
     metadata?: WorkshopPackageMetadata,
@@ -387,7 +387,7 @@ export function usePackageActions({
     [setAction],
   );
 
-  const downloadPackage = React.useCallback(
+  const applyPublishedRevision = React.useCallback(
     (
       packageId: number,
       options: { force?: boolean } = {},
@@ -455,7 +455,7 @@ export function usePackageActions({
    * published revision, and is downloaded into the editor like any other
    * package. A failed download leaves the copy created and reports why.
    */
-  const addFromWorkshop = React.useCallback(
+  const copyFromWorkshop = React.useCallback(
     (workshopPackageId: number): Promise<ScriptingPackage> =>
       guarded(async () => {
         let created: ScriptingPackage;
@@ -464,14 +464,14 @@ export function usePackageActions({
         } catch (cause) {
           throw workshopFailure(
             cause,
-            { key: "Packages.errors.addFromWorkshopFailed" },
+            { key: "Packages.errors.copyFromWorkshopFailed" },
             "workshop_add_failed",
           );
         }
         dispatch({ type: "created", package: created });
         createdSlugsRef.current.set(created.id, created.slug);
         await refresh();
-        await downloadPackage(created.id).catch(() => undefined);
+        await applyPublishedRevision(created.id).catch(() => undefined);
         // The download writes its own notice, so the reason of the copy is set
         // last to stay visible on the card.
         setAction(created.id, {
@@ -479,7 +479,7 @@ export function usePackageActions({
         });
         return created;
       }),
-    [downloadPackage, guarded, refresh, roomId, setAction],
+    [applyPublishedRevision, guarded, refresh, roomId, setAction],
   );
 
   /**
@@ -551,7 +551,7 @@ export function usePackageActions({
         dispatch({ type: "created", package: created });
         createdSlugsRef.current.set(created.id, created.slug);
         await refresh();
-        await downloadPackage(created.id).catch(() => undefined);
+        await applyPublishedRevision(created.id).catch(() => undefined);
         setAction(created.id, {
           notice: {
             key: "Packages.notices.forked",
@@ -560,10 +560,10 @@ export function usePackageActions({
         });
         return created;
       }),
-    [downloadPackage, guarded, refresh, setAction],
+    [applyPublishedRevision, guarded, refresh, setAction],
   );
 
-  const removePackage = React.useCallback(
+  const removePackageDirectory = React.useCallback(
     (
       packageId: number,
       options: { force?: boolean } = {},
@@ -642,7 +642,7 @@ export function usePackageActions({
     [beginAction, endAction, guarded, refresh, setAction],
   );
 
-  const deletePackage = React.useCallback(
+  const deletePackageRecord = React.useCallback(
     (packageId: number): Promise<void> =>
       guarded(async () => {
         const slug = slugOf(packageId);
@@ -786,13 +786,13 @@ export function usePackageActions({
     checkSlugAvailability,
     updatePackageMetadata,
     renamePackageDir,
-    downloadPackage,
-    removePackage,
+    applyPublishedRevision,
+    removePackageDirectory,
     setPackageEnabled,
-    deletePackage,
+    deletePackageRecord,
     adoptPackage,
     emitPackage,
-    addFromWorkshop,
+    copyFromWorkshop,
     publishToWorkshop,
     forkWorkshopPackage,
   };

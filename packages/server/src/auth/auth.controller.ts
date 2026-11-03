@@ -16,7 +16,7 @@ import { GoogleAuthenticatedRequest } from './google/auth-google.strategy';
 import { AppConfigService } from 'src/config/config.service';
 import { ApiOkResponse } from '@nestjs/swagger';
 import { UsersService } from 'src/users/users.service';
-import { CreateUserDto } from './create-user.dto';
+import { CreateUserDto } from 'src/users/dto/create-user.dto';
 import { AuthTokenDto } from './auth-token.dto';
 import { AuthUserDto } from './auth-user.dto';
 import { Public, UseAuthGuard } from './auth-policy';

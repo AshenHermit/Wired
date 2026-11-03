@@ -671,7 +671,7 @@ describe('PackageWorkshopService copies', () => {
     flow.revisionsRepository.findOne.mockResolvedValue({ revision: 3 });
     flow.packagesService.create.mockResolvedValue({ id: 31, slug: 'hero' });
 
-    const result = await flow.service.addToRoom(20, 9, user);
+    const result = await flow.service.copyToRoom(20, 9, user);
 
     expect(flow.packagesService.create).toHaveBeenCalledWith(
       {
@@ -696,7 +696,7 @@ describe('PackageWorkshopService copies', () => {
     const flow = makeFlow();
     flow.packagesService.findOne.mockResolvedValueOnce(roomPackage());
 
-    const error = await rejection(flow.service.addToRoom(5, 9, user));
+    const error = await rejection(flow.service.copyToRoom(5, 9, user));
 
     expect(error).toBeInstanceOf(BadRequestException);
     expect(error.getResponse()).toMatchObject({
@@ -778,7 +778,7 @@ describe('PackageWorkshopService copies', () => {
       code: '23505',
     });
 
-    const error = await rejection(flow.service.addToRoom(20, 9, user));
+    const error = await rejection(flow.service.copyToRoom(20, 9, user));
 
     expect(error).toBeInstanceOf(ConflictException);
     expect(error.getResponse()).toMatchObject({ code: 'publish_conflict' });

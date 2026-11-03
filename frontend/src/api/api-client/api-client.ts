@@ -1,6 +1,9 @@
 import axios, { AxiosError, AxiosInstance, AxiosResponse } from "axios";
+import { BACKEND_URL } from "@/utils/variables";
+import { readAccessToken } from "@/utils/auth-cookie";
 
-export class APIError extends AxiosError {}
+/** Every request failure, carrying the response so callers can read the code. */
+export class ApiError extends AxiosError {}
 
 function extractMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
@@ -35,7 +38,7 @@ export class ApiClient {
       if (axios.isAxiosError(error)) {
         // Keep the response: callers need the HTTP status and the structured
         // `code` (for example `packages_pending` is a wait, not a failure).
-        throw new APIError(
+        throw new ApiError(
           extractMessage(error),
           error.code,
           error.config,
@@ -43,7 +46,7 @@ export class ApiClient {
           error.response,
         );
       }
-      throw new APIError(
+      throw new ApiError(
         error instanceof Error ? error.message : "Request failed",
       );
     }
@@ -81,3 +84,20 @@ export class ApiClient {
     );
   }
 }
+
+function createAxiosClient(): AxiosInstance {
+  const axiosClient = axios.create({ baseURL: BACKEND_URL });
+  axiosClient.interceptors.request.use((config) => {
+    if (typeof window !== "undefined") {
+      const token = readAccessToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    }
+    return config;
+  });
+  return axiosClient;
+}
+
+/** The configured client every service talks through. */
+export const apiClient = new ApiClient(createAxiosClient());

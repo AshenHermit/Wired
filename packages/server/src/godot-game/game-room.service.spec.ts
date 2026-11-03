@@ -89,7 +89,7 @@ const status = (overrides: StatusOverrides = {}): PackageSyncStatus => {
 describe('GameRoomService', () => {
   let rooms: { findOne: jest.Mock };
   let runtime: {
-    getConnection: jest.Mock;
+    connectRoom: jest.Mock;
     stopRoom: jest.Mock;
     getRuntime: jest.Mock;
   };
@@ -99,7 +99,7 @@ describe('GameRoomService', () => {
   const create = (limit = 20) => {
     rooms = { findOne: jest.fn() };
     runtime = {
-      getConnection: jest.fn(),
+      connectRoom: jest.fn(),
       stopRoom: jest.fn(),
       getRuntime: jest.fn(),
     };
@@ -114,7 +114,7 @@ describe('GameRoomService', () => {
       packageSync as unknown as PackageSyncService,
     );
     rooms.findOne.mockResolvedValue(room());
-    runtime.getConnection.mockResolvedValue(connection());
+    runtime.connectRoom.mockResolvedValue(connection());
   };
 
   beforeEach(() => {
@@ -138,7 +138,7 @@ describe('GameRoomService', () => {
     const result = await service.connect(user(7), 42);
 
     expect(rooms.findOne).toHaveBeenCalledWith(42);
-    expect(runtime.getConnection).toHaveBeenCalledWith('42');
+    expect(runtime.connectRoom).toHaveBeenCalledWith('42');
     expect(result).toEqual({
       roomId: 42,
       endpoint: 'ws://127.0.0.1:19100',
@@ -165,14 +165,14 @@ describe('GameRoomService', () => {
       roomId: 42,
     });
     await expect(statusOf(service.connect(user(3), 42))).resolves.toBe(403);
-    expect(runtime.getConnection).toHaveBeenCalledTimes(2);
+    expect(runtime.connectRoom).toHaveBeenCalledTimes(2);
   });
 
   it('rejects rooms that are not Godot rooms before touching the runtime', async () => {
     rooms.findOne.mockResolvedValue(room({ type: 'ts-game' }));
 
     await expect(statusOf(service.connect(user(1), 42))).resolves.toBe(400);
-    expect(runtime.getConnection).not.toHaveBeenCalled();
+    expect(runtime.connectRoom).not.toHaveBeenCalled();
   });
 
   it('propagates a missing room as 404', async () => {
@@ -189,12 +189,12 @@ describe('GameRoomService', () => {
     const blocked = service.connect(user(1), 42);
 
     await expect(statusOf(blocked)).resolves.toBe(429);
-    expect(runtime.getConnection).toHaveBeenCalledTimes(2);
+    expect(runtime.connectRoom).toHaveBeenCalledTimes(2);
     await expect(service.connect(user(2), 42)).resolves.toBeDefined();
   });
 
   it('maps a runtime start failure to an explicit error without process internals', async () => {
-    runtime.getConnection.mockRejectedValue(
+    runtime.connectRoom.mockRejectedValue(
       new RoomRuntimeError(
         'start_failed',
         'Godot runtime exited with code 3: port 19100 is already in use',
@@ -234,7 +234,7 @@ describe('GameRoomService', () => {
 
     const result = await service.connect(user(1), 42);
 
-    expect(runtime.getConnection).toHaveBeenCalledTimes(1);
+    expect(runtime.connectRoom).toHaveBeenCalledTimes(1);
     expect(runtime.stopRoom).not.toHaveBeenCalled();
     expect(result.ticket).toBe('ticket-value');
     expect(result.ticketExpiresAt).toBe(1_800_000_000);
@@ -251,7 +251,7 @@ describe('GameRoomService', () => {
     await jest.advanceTimersByTimeAsync(10_100);
     await rejection;
 
-    expect(runtime.getConnection).toHaveBeenCalledTimes(1);
+    expect(runtime.connectRoom).toHaveBeenCalledTimes(1);
   });
 
   it('does not wait for clients', async () => {
@@ -329,7 +329,7 @@ describe('GameRoomService', () => {
       activePlayers: 0,
       error: null,
     });
-    expect(runtime.getConnection).not.toHaveBeenCalled();
+    expect(runtime.connectRoom).not.toHaveBeenCalled();
   });
 
   it('reports the live runtime status and confirmed player count', async () => {
@@ -343,7 +343,7 @@ describe('GameRoomService', () => {
       error: null,
     });
     expect(runtime.getRuntime).toHaveBeenCalledWith('42');
-    expect(runtime.getConnection).not.toHaveBeenCalled();
+    expect(runtime.connectRoom).not.toHaveBeenCalled();
   });
 
   it('applies the same access rules to the status endpoint', async () => {
@@ -376,7 +376,7 @@ describe('GameRoomService', () => {
       packages: [{ packageId: 3, state: 'applied' }],
     });
     expect(packageSync.getStatuses).toHaveBeenCalledWith('42');
-    expect(runtime.getConnection).not.toHaveBeenCalled();
+    expect(runtime.connectRoom).not.toHaveBeenCalled();
   });
 
   it('applies the same access rules to package status', async () => {

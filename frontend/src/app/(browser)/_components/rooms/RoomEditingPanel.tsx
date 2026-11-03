@@ -26,7 +26,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 
-export type RoomEditingPanelAPI = {
+export type RoomEditingPanelApi = {
   create: () => void;
   edit: (room: Room) => void;
   close: () => void;
@@ -47,7 +47,7 @@ type RoomEditingFieldsInfer = z.infer<typeof RoomEditingFields>;
  * so the dialog itself owns no selection state.
  */
 export const RoomEditingPanel = React.forwardRef<
-  RoomEditingPanelAPI,
+  RoomEditingPanelApi,
   RoomEditingProps
 >(({ onChange }, ref) => {
   const [room, setRoom] = React.useState<Room | null>(null);

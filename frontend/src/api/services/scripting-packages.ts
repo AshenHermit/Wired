@@ -15,7 +15,7 @@ import {
   WorkshopPublishResult,
   WorkshopTagListing,
 } from "@wired-io/shared";
-import { apiClient } from "../api-client/client-api";
+import { apiClient } from "../api-client/api-client";
 import { uint8ArrayToFile } from "@/utils/file-utils";
 
 export function createScriptingPackage(

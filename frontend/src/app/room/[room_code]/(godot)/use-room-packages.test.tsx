@@ -509,7 +509,7 @@ describe("useRoomPackages", () => {
 
     expect(result.current.fsReady).toBe(false);
     expect(result.current.error).toEqual({ key: "Errors.bridgeUnavailable" });
-    await expect(result.current.removePackage(5)).rejects.toThrow(
+    await expect(result.current.removePackageDirectory(5)).rejects.toThrow(
       /package_fs_not_ready/,
     );
     unmount();
@@ -523,7 +523,7 @@ describe("useRoomPackages", () => {
 
     await act(async () => {
       await expect(
-        result.current.downloadPackage(5),
+        result.current.applyPublishedRevision(5),
       ).rejects.toBeInstanceOf(EditorBridgeError);
     });
 
@@ -595,8 +595,8 @@ describe("useRoomPackages", () => {
       // Two actions fail in the same tick: the second loss must reuse the loop
       // the first one started instead of stacking another interval.
       await act(async () => {
-        const first = result.current.downloadPackage(5);
-        const second = result.current.downloadPackage(6);
+        const first = result.current.applyPublishedRevision(5);
+        const second = result.current.applyPublishedRevision(6);
         await expect(first).rejects.toBeInstanceOf(EditorBridgeError);
         await expect(second).rejects.toBeInstanceOf(EditorBridgeError);
       });
@@ -640,7 +640,7 @@ describe("useRoomPackages", () => {
           rejectSnapshot = reject;
         }),
       );
-      const action = result.current.removePackage(5);
+      const action = result.current.removePackageDirectory(5);
       await act(async () => {});
       const probes = fs.sync.mock.calls.length;
       const connections = vi.mocked(createPackageFileSystem).mock.calls.length;
@@ -758,7 +758,7 @@ describe("useRoomPackages", () => {
     );
 
     await act(async () => {
-      await expect(result.current.removePackage(5)).rejects.toThrow(
+      await expect(result.current.removePackageDirectory(5)).rejects.toThrow(
         /package_remove_failed/,
       );
     });
@@ -787,7 +787,7 @@ describe("useRoomPackages", () => {
     );
 
     await act(async () => {
-      await result.current.removePackage(5);
+      await result.current.removePackageDirectory(5);
     });
     expect(fs.deletePackage).not.toHaveBeenCalled();
 
@@ -910,7 +910,7 @@ describe("useRoomPackages", () => {
       packages: [roomPackage(5, "Demo", "")],
     });
 
-    await expect(result.current.downloadPackage(5)).rejects.toThrow(
+    await expect(result.current.applyPublishedRevision(5)).rejects.toThrow(
       /package_slug_missing:5/,
     );
     // No `str(id)` fallback: the invalid slug never reaches the editor.
@@ -927,7 +927,7 @@ describe("useRoomPackages", () => {
     const { result, unmount } = await startHook();
 
     await act(async () => {
-      await result.current.downloadPackage(5);
+      await result.current.applyPublishedRevision(5);
     });
 
     expect(fs.read("demo", HERO)).toBe("extends Node");
@@ -951,13 +951,13 @@ describe("useRoomPackages", () => {
       localChanges: [HERO],
     });
 
-    await expect(result.current.downloadPackage(5)).rejects.toBeInstanceOf(
+    await expect(result.current.applyPublishedRevision(5)).rejects.toBeInstanceOf(
       LocalChangesError,
     );
     expect(fs.read("demo", HERO)).toBe("local edit");
 
     await act(async () => {
-      await result.current.downloadPackage(5, { force: true });
+      await result.current.applyPublishedRevision(5, { force: true });
     });
     expect(fs.read("demo", HERO)).toBe("extends Node");
     unmount();
@@ -973,18 +973,18 @@ describe("useRoomPackages", () => {
     fs.put("other", OTHER, "keep me");
 
     await act(async () => {
-      await result.current.downloadPackage(5);
+      await result.current.applyPublishedRevision(5);
     });
     expect(fs.has("demo", HERO)).toBe(true);
 
     fs.put("demo", HERO, "local edit");
-    await expect(result.current.removePackage(5)).rejects.toBeInstanceOf(
+    await expect(result.current.removePackageDirectory(5)).rejects.toBeInstanceOf(
       LocalChangesError,
     );
     expect(fs.has("demo", HERO)).toBe(true);
 
     await act(async () => {
-      await result.current.removePackage(5, { force: true });
+      await result.current.removePackageDirectory(5, { force: true });
     });
 
     expect(fs.has("demo", HERO)).toBe(false);
@@ -1002,7 +1002,7 @@ describe("useRoomPackages", () => {
     const { result, unmount } = await startHook();
 
     await act(async () => {
-      await result.current.downloadPackage(5);
+      await result.current.applyPublishedRevision(5);
     });
 
     fs.put("demo", HERO, "extends Node2D");
@@ -1036,7 +1036,7 @@ describe("useRoomPackages", () => {
     const { result, unmount } = await startHook();
 
     await act(async () => {
-      await result.current.downloadPackage(5);
+      await result.current.applyPublishedRevision(5);
     });
     const downloads = vi.mocked(packagesApi.getRevisionFile).mock.calls.length;
 
@@ -1075,14 +1075,14 @@ describe("useRoomPackages", () => {
       ).toBe("local-changes");
     });
 
-    await expect(result.current.downloadPackage(5)).rejects.toMatchObject({
+    await expect(result.current.applyPublishedRevision(5)).rejects.toMatchObject({
       name: "LocalChangesError",
       files: [HERO],
     });
     expect(fs.read("demo", HERO)).toBe("stale draft");
 
     await act(async () => {
-      await result.current.downloadPackage(5, { force: true });
+      await result.current.applyPublishedRevision(5, { force: true });
     });
     expect(fs.read("demo", HERO)).toBe("extends Node");
     unmount();
@@ -1127,7 +1127,7 @@ describe("useRoomPackages", () => {
     const { result, unmount } = await startHook();
 
     await act(async () => {
-      await result.current.downloadPackage(5);
+      await result.current.applyPublishedRevision(5);
     });
 
     vi.mocked(gameApi.getRoomPackages).mockResolvedValue(
@@ -1158,8 +1158,8 @@ describe("useRoomPackages", () => {
     );
     const { result, unmount } = await startHook();
 
-    const first = result.current.downloadPackage(5);
-    await expect(result.current.downloadPackage(5)).rejects.toThrow(
+    const first = result.current.applyPublishedRevision(5);
+    await expect(result.current.applyPublishedRevision(5)).rejects.toThrow(
       /package_action_in_progress:5/,
     );
 
@@ -1257,12 +1257,12 @@ describe("useRoomPackages", () => {
     expect(rescan).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      await result.current.downloadPackage(5);
+      await result.current.applyPublishedRevision(5);
     });
     expect(rescan).toHaveBeenCalledTimes(2);
 
     await act(async () => {
-      await result.current.removePackage(5, { force: true });
+      await result.current.removePackageDirectory(5, { force: true });
     });
     expect(rescan).toHaveBeenCalledTimes(3);
     unmount();
@@ -1346,7 +1346,7 @@ describe("useRoomPackages", () => {
     const { result, unmount } = await startHook();
 
     await act(async () => {
-      await result.current.downloadPackage(5);
+      await result.current.applyPublishedRevision(5);
     });
     fs.put("demo", HERO, "local edit");
     await act(async () => {
@@ -1471,7 +1471,7 @@ describe("useRoomPackages", () => {
     const { result, unmount } = await startHook();
 
     await act(async () => {
-      await result.current.downloadPackage(5);
+      await result.current.applyPublishedRevision(5);
     });
     expect(result.current.entries[0]).toMatchObject({
       loaded: true,
@@ -1591,7 +1591,7 @@ describe("useRoomPackages", () => {
     fs.put("demo", HERO, "extends Node");
 
     await act(async () => {
-      await result.current.deletePackage(5);
+      await result.current.deletePackageRecord(5);
     });
 
     expect(packagesApi.deleteScriptingPackage).toHaveBeenCalledWith(5);
@@ -1616,7 +1616,7 @@ describe("useRoomPackages", () => {
     });
     await waitFor(() => expect(result.current.fsReady).toBe(true));
     await act(async () => {
-      await result.current.deletePackage(5);
+      await result.current.deletePackageRecord(5);
     });
 
     // A stale room snapshot (a new array with the deleted package) arrives.
@@ -1680,7 +1680,7 @@ describe("useRoomPackages", () => {
     const loads = vi.mocked(gameApi.getRoomPackages).mock.calls.length;
 
     await act(async () => {
-      await result.current.addFromWorkshop(100);
+      await result.current.copyFromWorkshop(100);
     });
 
     expect(packagesApi.copyWorkshopPackageToRoom).toHaveBeenCalledWith(100, 1);

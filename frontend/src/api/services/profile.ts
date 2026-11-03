@@ -1,5 +1,5 @@
 import { User } from "@wired-io/shared";
-import { apiClient } from "../api-client/client-api";
+import { apiClient } from "../api-client/api-client";
 
 /**
  * The signed-in user, or null when the caller has no session.
