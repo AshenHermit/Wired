@@ -1,4 +1,4 @@
-import type { PackageSlugIndex } from './package-slug-index';
+import type { PackageSlugIndex } from '../storage/package-slug-index';
 import {
   assertUniquePackageSlugs,
   buildSceneDependencies,

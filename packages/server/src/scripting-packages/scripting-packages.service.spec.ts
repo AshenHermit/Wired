@@ -7,7 +7,7 @@ import {
 import { IsNull, Not } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackagesService } from './scripting-packages.service';
-import { PackagePublishLockService } from './package-publish-lock.service';
+import { PackagePublishLockService } from './publish/package-publish-lock.service';
 
 /**
  * Collaborators the service refuses to run without.

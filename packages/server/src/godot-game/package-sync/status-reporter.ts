@@ -1,6 +1,6 @@
 import { PackageRevisionSyncState, PackageSyncStatus } from '@wired-io/shared';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
-import { requirePackageSlug } from 'src/scripting-packages/package-slug-index';
+import { requirePackageSlug } from 'src/scripting-packages/storage/package-slug-index';
 import type { SyncRecord, SyncRecordStore } from './sync-record-store';
 
 /**

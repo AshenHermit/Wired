@@ -5,7 +5,7 @@ import {
   IsString,
   MinLength,
 } from 'class-validator';
-import { IsPackageSlug } from './package-slug.decorator';
+import { IsPackageSlug } from '../dto/package-slug.decorator';
 
 export class WorkshopPublishDto {
   @ApiProperty({

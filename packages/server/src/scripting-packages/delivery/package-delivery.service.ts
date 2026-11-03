@@ -29,19 +29,22 @@ import {
   DependentRoomPackage,
   PackageClosureResolver,
   ResolvedClosure,
-} from './package-closure-resolver';
-import { PinnedPackage, walkPinnedClosure } from './package-dependency-graph';
-import { sha256Hex } from './package-hash';
-import { resolvePackagePath } from './package-path';
+} from '../publish/package-closure-resolver';
+import {
+  PinnedPackage,
+  walkPinnedClosure,
+} from '../publish/package-dependency-graph';
+import { sha256Hex } from '../storage/package-hash';
+import { resolvePackagePath } from '../storage/package-path';
 import {
   assertUniquePackageSlugs,
   buildSceneDependencies,
   rewritePackageReferences,
   stripExtResourceUids,
-} from './package-runtime-references';
+} from '../publish/package-runtime-references';
 import { PackageReadUrlService } from './package-read-url.service';
-import type { PackageSlugIndex } from './package-slug-index';
-import { PackageStorageService } from './package-storage.service';
+import type { PackageSlugIndex } from '../storage/package-slug-index';
+import { PackageStorageService } from '../storage/package-storage.service';
 
 export type { DependentRoomPackage };
 

@@ -7,10 +7,10 @@ import path from 'path';
 import { AppConfigService } from 'src/config/config.service';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
-import { sha256Hex } from './package-hash';
+import { sha256Hex } from '../storage/package-hash';
 import { PackageDeliveryService } from './package-delivery.service';
 import { PackageReadUrlService } from './package-read-url.service';
-import { PackageStorageService } from './package-storage.service';
+import { PackageStorageService } from '../storage/package-storage.service';
 
 type PackageFixture = {
   id: number;

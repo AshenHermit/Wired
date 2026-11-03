@@ -25,12 +25,12 @@ import {
   PackageStorageService,
   RevisionRewrite,
   RevisionTarget,
-} from './package-storage.service';
-import { PinnedPackage, walkPinnedClosure } from './package-dependency-graph';
-import { PackageDeliveryService } from './package-delivery.service';
-import { PackagePublishLockService } from './package-publish-lock.service';
-import { rewriteSlugReferences } from './package-slug-rewrite';
-import { normalizeTags } from './package-tags';
+} from './storage/package-storage.service';
+import { PinnedPackage, walkPinnedClosure } from './publish/package-dependency-graph';
+import { PackageDeliveryService } from './delivery/package-delivery.service';
+import { PackagePublishLockService } from './publish/package-publish-lock.service';
+import { rewriteSlugReferences } from './storage/package-slug-rewrite';
+import { normalizeTags } from './storage/package-tags';
 import {
   PACKAGE_REVISION_DISPATCHER,
   PackageRevisionDispatcher,

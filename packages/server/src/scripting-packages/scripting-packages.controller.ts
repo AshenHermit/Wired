@@ -4,67 +4,42 @@ import {
   Controller,
   Delete,
   Get,
-  Header,
   HttpCode,
   HttpStatus,
-  NotFoundException,
-  Optional,
   Param,
   ParseIntPipe,
   Patch,
   Post,
   Query,
   Req,
-  Res,
   StreamableFile,
   UnauthorizedException,
   UploadedFile,
-  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { createReadStream } from 'fs';
-import { once } from 'events';
-import { Response } from 'express';
 import {
   CreatePackageRevisionPayload,
   PackageRevision,
-  PackageRuntimeManifest,
 } from '@wired-io/shared';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackagesService } from './scripting-packages.service';
-import { PackageRevisionsService } from './package-revisions.service';
-import { PackageDeliveryService } from './package-delivery.service';
-import { PackageReadUrlService } from './package-read-url.service';
-import { PackageWorkshopService } from './package-workshop.service';
+import { PackageRevisionsService } from './publish/package-revisions.service';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
-import {
-  WorkshopForkDto,
-  WorkshopPublishDto,
-} from './dto/workshop.dto';
-import { CopyToRoomDto } from './dto/copy-to-room.dto';
 import { UseAuthGuard, SilentAuth, Public } from 'src/auth/auth-policy';
 import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
-import { MAX_PACKAGE_FILE_SIZE } from './package-manifest';
-import { ArtifactBuildRateLimiter } from './artifact-build.rate-limiter';
-import { RoomMembershipGuard } from './guards/room-membership.guard';
-import { RuntimeAuthGuard } from './guards/runtime-auth.guard';
+import { MAX_PACKAGE_FILE_SIZE } from './storage/package-manifest';
 
 /**
- * `?limit=` (blank) reaches the handler as an empty string and `Number('')` is
- * `0`, which would silently become page size 1 instead of the documented
- * default. A repeated parameter (`?limit=1&limit=2`) arrives as an array; both
- * are treated as "not given".
- */
-function parseOptionalNumber(value: unknown): number | undefined {
-  if (typeof value !== 'string' || value.trim() === '') return undefined;
-  return Number(value.trim());
-}
-
-/**
- * Package authoring, revisions, workshop copies and runtime delivery.
+ * Package authoring: the record itself, its draft and published revisions, and
+ * the published files anyone can read.
+ *
+ * The other two capabilities that live under this prefix have their own
+ * controllers — `WorkshopController` for browsing and copying, and
+ * `PackageDeliveryController` for the signed runtime artifacts.
  *
  * Path parameters: `:id` is always the package, `:roomId` would be a room path
  * segment (none here). Room scope arrives as `?room=` on the runtime routes and
@@ -77,12 +52,6 @@ export class ScriptingPackagesController {
   constructor(
     private readonly packagesService: ScriptingPackagesService,
     private readonly revisionsService: PackageRevisionsService,
-    private readonly delivery: PackageDeliveryService,
-    private readonly readUrls: PackageReadUrlService,
-    private readonly workshopService: PackageWorkshopService,
-    // Registered by ScriptingPackagesModule; a missing provider must fail at
-    // boot rather than silently fall back to a second, unconfigured limiter.
-    private readonly buildLimiter: ArtifactBuildRateLimiter,
   ) {}
 
   // Declared before `:id` so `slug-availability` is not parsed as an id.
@@ -96,80 +65,6 @@ export class ScriptingPackagesController {
     excludeId?: number,
   ) {
     return this.packagesService.checkSlugAvailability(slug, roomId, excludeId);
-  }
-
-  @Public()
-  @ApiOkResponse({ description: 'Workshop packages' })
-  @Get('workshop')
-  workshop(
-    @Query('q') q?: string,
-    @Query('limit') limit?: string,
-    @Query('offset') offset?: string,
-  ) {
-    return this.workshopService.list({
-      q,
-      limit: parseOptionalNumber(limit),
-      offset: parseOptionalNumber(offset),
-    });
-  }
-
-  @Public()
-  @ApiOkResponse({ description: 'Workshop package by slug' })
-  @Get('workshop/lookup')
-  workshopLookup(@Query('slug') slug: string) {
-    return this.workshopService.lookup(slug);
-  }
-
-  @Public()
-  @ApiOkResponse({ description: 'Workshop tag usage' })
-  @Get('workshop/tags')
-  workshopTags(
-    @Query('q') q?: string,
-    @Query('limit') limit?: string,
-    @Query('offset') offset?: string,
-  ) {
-    return this.workshopService.tags({
-      q,
-      limit: parseOptionalNumber(limit),
-      offset: parseOptionalNumber(offset),
-    });
-  }
-
-  // --- Workshop copies -----------------------------------------------------
-  // All three copy a published revision server-side; the source package is
-  // never modified.
-
-  @UseAuthGuard()
-  @ApiOkResponse({ description: 'Published or updated workshop record' })
-  @Post(':id/workshop')
-  publishToWorkshop(
-    @Req() req: AuthenticatedRequest,
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: WorkshopPublishDto,
-  ) {
-    return this.workshopService.publishToWorkshop(id, req.user, dto);
-  }
-
-  @UseAuthGuard()
-  @ApiOkResponse({ type: ScriptingPackage })
-  @Post(':id/workshop-fork')
-  forkToWorkshop(
-    @Req() req: AuthenticatedRequest,
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: WorkshopForkDto,
-  ) {
-    return this.workshopService.forkToWorkshop(id, req.user, dto.slug);
-  }
-
-  @UseAuthGuard()
-  @ApiOkResponse({ type: ScriptingPackage })
-  @Post(':id/room-copy')
-  copyToRoom(
-    @Req() req: AuthenticatedRequest,
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: CopyToRoomDto,
-  ) {
-    return this.workshopService.copyToRoom(id, dto.roomId, req.user);
   }
 
   @SilentAuth()
@@ -310,94 +205,6 @@ export class ScriptingPackagesController {
       type: 'application/octet-stream',
       length: file.size,
     });
-  }
-
-  @Public()
-  @ApiOkResponse({ description: 'Signed runtime manifest for a room' })
-  // `no-transform` keeps the Next.js dev proxy (and production proxies) from
-  // gzipping this JSON. Godot's Web HTTPRequest receives an already-decoded
-  // body but still sees `Content-Encoding: gzip` and fails to decompress it.
-  @Header('Cache-Control', 'no-store, no-transform')
-  // The membership guard is listed above the auth guard on purpose: decorators
-  // apply bottom-up, so RuntimeAuthGuard is registered (and therefore runs)
-  // first and `req.user` is populated before the membership lookup. The runtime
-  // authenticates with a room-scoped service token, users with their JWT.
-  @UseGuards(RoomMembershipGuard)
-  @UseGuards(RuntimeAuthGuard)
-  @ApiBearerAuth()
-  @Get(':id/revisions/:revision/runtime-manifest')
-  async runtimeManifest(
-    @Param('id', ParseIntPipe) id: number,
-    @Param('revision', ParseIntPipe) revision: number,
-    @Query('room', ParseIntPipe) room: number,
-  ): Promise<PackageRuntimeManifest> {
-    // A manifest miss builds a whole artifact on disk, so throttle it per
-    // (package, revision, room) before the service is allowed to build.
-    this.buildLimiter.assertAllowed(id, revision, room);
-    return this.delivery.getRuntimeManifest(id, revision, room);
-  }
-
-  @Public()
-  @ApiOkResponse({
-    description: 'Raw contents of a runtime artifact file',
-    schema: { type: 'string', format: 'binary' },
-  })
-  @UseGuards(RoomMembershipGuard)
-  @UseGuards(RuntimeAuthGuard)
-  @ApiBearerAuth()
-  @Get(':id/revisions/:revision/runtime-files/*path')
-  async runtimeFile(
-    @Param('id', ParseIntPipe) id: number,
-    @Param('revision', ParseIntPipe) revision: number,
-    @Param('path') path: string | string[],
-    @Query('room', ParseIntPipe) room: number,
-    @Query('key') artifactKey: string,
-    @Query('token') token: string,
-    @Res() res: Response,
-  ): Promise<void> {
-    if (
-      !token ||
-      !this.readUrls.verifyToken(token, {
-        roomId: room,
-        packageId: id,
-        revision,
-      })
-    ) {
-      throw new UnauthorizedException('package_read_token_invalid');
-    }
-    if (!artifactKey) {
-      throw new BadRequestException('package_artifact_key_missing');
-    }
-
-    const filepath = Array.isArray(path) ? path.join('/') : path;
-    const file = await this.delivery.resolveRuntimeFile(
-      id,
-      revision,
-      room,
-      artifactKey,
-      filepath,
-    );
-
-    // `resolveRuntimeFile` stats the file, but pruning can delete it before the
-    // stream opens. Wait for 'open' so that race is a controlled 404 instead of
-    // an unhandled 'error' on a response that was never sent.
-    const stream = createReadStream(file.path);
-    try {
-      await once(stream, 'open');
-    } catch {
-      stream.destroy();
-      throw new NotFoundException('package_artifact_file_missing');
-    }
-
-    res.set({
-      'Content-Type': 'application/octet-stream',
-      'Content-Length': String(file.size),
-      'Cache-Control': 'no-store',
-    });
-    // The file can still disappear mid-stream; destroying the response is the
-    // only correct answer once headers are on the wire.
-    stream.on('error', () => res.destroy());
-    stream.pipe(res);
   }
 
   @UseAuthGuard()

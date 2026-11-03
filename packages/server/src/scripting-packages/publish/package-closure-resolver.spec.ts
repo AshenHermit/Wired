@@ -7,8 +7,8 @@ import { AppConfigService } from 'src/config/config.service';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { PackageClosureResolver } from './package-closure-resolver';
-import { sha256Hex } from './package-hash';
-import { PackageStorageService } from './package-storage.service';
+import { sha256Hex } from '../storage/package-hash';
+import { PackageStorageService } from '../storage/package-storage.service';
 
 type PackageFixture = {
   id: number;

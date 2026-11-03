@@ -20,11 +20,11 @@ import { ScriptingPackage } from 'src/database/entities/scripting-package.entity
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { User } from 'src/database/entities/user.entity';
 import { isRoomMember } from 'src/rooms/room-access';
-import { normalizeTags } from './package-tags';
-import { requirePackageSlug } from './package-slug-index';
-import { rewriteSlugReferences } from './package-slug-rewrite';
-import { PackageRevisionsService } from './package-revisions.service';
-import { ScriptingPackagesService } from './scripting-packages.service';
+import { normalizeTags } from '../storage/package-tags';
+import { requirePackageSlug } from '../storage/package-slug-index';
+import { rewriteSlugReferences } from '../storage/package-slug-rewrite';
+import { PackageRevisionsService } from '../publish/package-revisions.service';
+import { ScriptingPackagesService } from '../scripting-packages.service';
 
 const WORKSHOP_SELECT = `SELECT p.id, p.slug, p.name, p.version, p.description, p.tags,
        a.id AS "authorId", a.name AS "authorName", a.email AS "authorEmail",

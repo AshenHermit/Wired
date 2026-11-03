@@ -4,8 +4,8 @@ import { Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { errorMessage } from 'src/common/errors';
-import { MAX_PACKAGE_FILE_SIZE } from './package-manifest';
-import { packageDependencyError } from './package-errors';
+import { MAX_PACKAGE_FILE_SIZE } from '../storage/package-manifest';
+import { packageDependencyError } from '../package-errors';
 import {
   collectRawPackageReferences,
   decodePackageText,
@@ -18,9 +18,9 @@ import {
   loadPackageSlugIndex,
   PackageSlugIndex,
   requirePackageSlug,
-} from './package-slug-index';
-import { sha256Hex } from './package-hash';
-import { PackageStorageService } from './package-storage.service';
+} from '../storage/package-slug-index';
+import { sha256Hex } from '../storage/package-hash';
+import { PackageStorageService } from '../storage/package-storage.service';
 
 /** One element of the result of `findDependentRoomPackages`. */
 export type DependentRoomPackage = {

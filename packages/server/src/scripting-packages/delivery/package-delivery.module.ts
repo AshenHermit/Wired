@@ -6,7 +6,7 @@ import { ScriptingPackageRevision } from 'src/database/entities/scripting-packag
 import { Room } from 'src/database/entities/room.entity';
 import { PackageDeliveryService } from './package-delivery.service';
 import { PackageReadUrlService } from './package-read-url.service';
-import { PackageStorageService } from './package-storage.service';
+import { PackageStorageService } from '../storage/package-storage.service';
 
 @Module({
   imports: [

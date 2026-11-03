@@ -7,11 +7,11 @@ import { PackageFileEntry, PackageRevision } from '@wired-io/shared';
 import { DataSource } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
-import { sha256Hex } from './package-hash';
+import { sha256Hex } from '../storage/package-hash';
 import { PackageRevisionsService } from './package-revisions.service';
 import { PackagePublishLockService } from './package-publish-lock.service';
-import { PackageStorageService } from './package-storage.service';
-import { ScriptingPackagesService } from './scripting-packages.service';
+import { PackageStorageService } from '../storage/package-storage.service';
+import { ScriptingPackagesService } from '../scripting-packages.service';
 import type { PackageRevisionDispatcher } from 'src/common/runtime-contracts';
 
 /**

@@ -4,7 +4,7 @@ import { AppConfigModule } from 'src/config/config.module';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { RoomsModule } from 'src/rooms/rooms.module';
-import { PackageDeliveryModule } from 'src/scripting-packages/package-delivery.module';
+import { PackageDeliveryModule } from 'src/scripting-packages/delivery/package-delivery.module';
 import { GameExportController } from './export/game-export.controller';
 import { GameRoomController } from './game-room/game-room.controller';
 import { GameSocketProxyService } from './socket-proxy/game-socket-proxy.service';

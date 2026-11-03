@@ -2,7 +2,7 @@ import { Logger } from '@nestjs/common';
 import { FindOperator, Repository } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
-import { PackageDeliveryService } from 'src/scripting-packages/package-delivery.service';
+import { PackageDeliveryService } from 'src/scripting-packages/delivery/package-delivery.service';
 import { PackageSyncService } from './package-sync.service';
 import { RoomRuntimeService } from '../runtime/room-runtime.service';
 import { SyncRecordStore } from './sync-record-store';

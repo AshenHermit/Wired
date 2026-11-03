@@ -21,10 +21,10 @@ import { ScriptingPackage } from 'src/database/entities/scripting-package.entity
 import {
   SavedDraftFile,
   PackageStorageService,
-} from './package-storage.service';
+} from '../storage/package-storage.service';
 import { PinnedPackage, walkPinnedClosure } from './package-dependency-graph';
-import { sha256Hex } from './package-hash';
-import { validatePackageRevisionFiles } from './package-manifest';
+import { sha256Hex } from '../storage/package-hash';
+import { validatePackageRevisionFiles } from '../storage/package-manifest';
 import { PackagePublishLockService } from './package-publish-lock.service';
 import {
   collectRawPackageReferences,
@@ -37,9 +37,9 @@ import {
   loadPackageSlugIndex,
   PackageSlugIndex,
   requirePackageSlug,
-} from './package-slug-index';
-import { packageDependencyError } from './package-errors';
-import { ScriptingPackagesService } from './scripting-packages.service';
+} from '../storage/package-slug-index';
+import { packageDependencyError } from '../package-errors';
+import { ScriptingPackagesService } from '../scripting-packages.service';
 import {
   PACKAGE_REVISION_DISPATCHER,
   PackageRevisionDispatcher,

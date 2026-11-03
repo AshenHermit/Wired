@@ -12,7 +12,7 @@ import { ScriptingPackageRevision } from 'src/database/entities/scripting-packag
 import {
   DependentRoomPackage,
   PackageDeliveryService,
-} from 'src/scripting-packages/package-delivery.service';
+} from 'src/scripting-packages/delivery/package-delivery.service';
 import { In, Repository } from 'typeorm';
 import { DispatchScheduler, RETRY_TICK_MS } from './dispatch-scheduler';
 import { RoomRuntimeService } from '../runtime/room-runtime.service';

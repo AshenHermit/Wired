@@ -10,8 +10,8 @@ import { Room } from 'src/database/entities/room.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { User } from 'src/database/entities/user.entity';
-import { PackageRevisionsService } from './package-revisions.service';
-import { ScriptingPackagesService } from './scripting-packages.service';
+import { PackageRevisionsService } from '../publish/package-revisions.service';
+import { ScriptingPackagesService } from '../scripting-packages.service';
 import {
   PackageWorkshopService,
   rewriteForkSlug,

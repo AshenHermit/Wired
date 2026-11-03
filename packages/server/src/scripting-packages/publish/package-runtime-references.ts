@@ -1,5 +1,5 @@
 import path from 'path';
-import { PackageSlugIndex, resolvePackageTarget } from './package-slug-index';
+import { PackageSlugIndex, resolvePackageTarget } from '../storage/package-slug-index';
 
 /** A text file decoded from a package revision, keyed by its package-relative path. */
 export interface PackageTextFile {
