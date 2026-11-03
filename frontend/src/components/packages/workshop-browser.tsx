@@ -2,6 +2,7 @@
 
 import type { WorkshopPackageSummary } from "@wired-io/shared";
 import { Loader2Icon, SearchIcon, XIcon } from "lucide-react";
+import { useLocale, useTranslations } from "next-intl";
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +34,8 @@ export function WorkshopBrowser({
     loadMore,
     hasMore,
   } = useWorkshopPackages();
+  const t = useTranslations("Workshop");
+  const common = useTranslations("Common");
   const trimmedQuery = query.trim();
 
   return (
@@ -40,15 +43,15 @@ export function WorkshopBrowser({
       <div className="relative">
         <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
-          aria-label="Поиск пакетов"
+          aria-label={t("searchLabel")}
           className="pr-9 pl-9"
-          placeholder="Поиск по названию, slug или тегу"
+          placeholder={t("searchPlaceholder")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
         {query ? (
           <Button
-            aria-label="Очистить поиск"
+            aria-label={t("clearSearch")}
             className="absolute top-1/2 right-1 -translate-y-1/2"
             size="icon-sm"
             type="button"
@@ -69,19 +72,19 @@ export function WorkshopBrowser({
             variant="outline"
             onClick={() => void reload()}
           >
-            Повторить
+            {common("retry")}
           </Button>
         </div>
       ) : loading && items.length === 0 ? (
         <div className="flex items-center gap-2 rounded-lg border border-border bg-card p-4 text-muted-foreground">
           <Loader2Icon className="size-4 animate-spin" />
-          <span>Загружаем пакеты…</span>
+          <span>{t("loading")}</span>
         </div>
       ) : items.length === 0 ? (
         <p className="rounded-lg border border-border bg-card p-4 text-muted-foreground">
           {trimmedQuery
-            ? `Ничего не найдено по запросу «${trimmedQuery}»`
-            : "В workshop пока нет пакетов"}
+            ? t("emptyQuery", { query: trimmedQuery })
+            : t("empty")}
         </p>
       ) : (
         <>
@@ -106,7 +109,7 @@ export function WorkshopBrowser({
               onClick={() => void loadMore()}
             >
               {loading ? <Loader2Icon className="animate-spin" /> : null}
-              Показать ещё
+              {t("loadMore")}
             </Button>
           ) : null}
         </>
@@ -126,6 +129,8 @@ function WorkshopPackageCard({
   selectLabel?: string;
   busy: boolean;
 }) {
+  const t = useTranslations("Workshop");
+  const locale = useLocale();
   return (
     <article className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-4">
@@ -139,8 +144,8 @@ function WorkshopPackageCard({
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
             <span className="font-mono">{item.version}</span>
             {item.author ? <span>{item.author.name}</span> : null}
-            <span>ревизия {item.revision}</span>
-            <span>{new Date(item.publishedAt).toLocaleDateString("ru-RU")}</span>
+            <span>{t("revision", { revision: item.revision })}</span>
+            <span>{new Date(item.publishedAt).toLocaleDateString(locale)}</span>
           </div>
           {item.description ? (
             <p className="mt-2 line-clamp-2 text-muted-foreground">
@@ -168,7 +173,7 @@ function WorkshopPackageCard({
             onClick={() => onSelect(item)}
           >
             {busy ? <Loader2Icon className="animate-spin" /> : null}
-            {selectLabel ?? "Добавить"}
+            {selectLabel ?? t("add")}
           </Button>
         ) : null}
       </div>

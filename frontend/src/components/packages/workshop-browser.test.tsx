@@ -1,6 +1,7 @@
 import type { WorkshopPackageSummary } from "@wired-io/shared";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithIntl as render } from "@/test/render-with-intl";
 
 vi.mock("@/api/services/scripting-packages", () => ({
   listWorkshopPackages: vi.fn(),
@@ -99,6 +100,19 @@ describe("WorkshopBrowser", () => {
     expect(onSelect).toHaveBeenCalledWith(
       expect.objectContaining({ id: 5, slug: "hero" }),
     );
+  });
+
+  it("renders the empty state in English", async () => {
+    vi.mocked(packagesApi.listWorkshopPackages).mockResolvedValue({
+      items: [],
+      total: 0,
+    });
+
+    render(<WorkshopBrowser />, { locale: "en" });
+
+    expect(
+      await screen.findByText("No packages in the workshop yet"),
+    ).toBeTruthy();
   });
 
   it("shows the empty and error states", async () => {

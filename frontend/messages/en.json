@@ -67,6 +67,26 @@
       "delete": "Failed to delete the room"
     }
   },
+  "Workshop": {
+    "searchLabel": "Search packages",
+    "searchPlaceholder": "Search by name, slug, or tag",
+    "clearSearch": "Clear search",
+    "loading": "Loading packages…",
+    "empty": "No packages in the workshop yet",
+    "emptyQuery": "Nothing found for “{query}”",
+    "loadMore": "Show more",
+    "revision": "revision {revision}",
+    "add": "Add"
+  },
+  "Tags": {
+    "placeholder": "gameplay, hero",
+    "remove": "Remove tag {tag}",
+    "loading": "Loading tags…",
+    "create": "Create “{tag}”",
+    "count": "{count, plural, one {# package} other {# packages}}",
+    "formatHint": "Latin letters, digits, _ and -, up to 32 characters.",
+    "limit": "You can add at most {max} tags."
+  },
   "Slug": {
     "invalid": "Lowercase Latin letters, digits and _, at least one letter",
     "checking": "Checking slug…",

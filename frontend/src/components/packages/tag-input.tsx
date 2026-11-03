@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import * as React from "react";
 import {
   Popover,
@@ -17,23 +18,13 @@ type Suggestion = {
   count: number | null;
 };
 
-function pluralizePackages(count: number): string {
-  const mod10 = count % 10;
-  const mod100 = count % 100;
-  if (mod10 === 1 && mod100 !== 11) return `${count} пакет`;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
-    return `${count} пакета`;
-  }
-  return `${count} пакетов`;
-}
-
 export function TagInput({
   id,
   value,
   onChange,
   disabled = false,
   max = MAX_TAGS,
-  placeholder = "gameplay, hero",
+  placeholder,
   onInvalidChange,
 }: {
   id?: string;
@@ -44,6 +35,7 @@ export function TagInput({
   placeholder?: string;
   onInvalidChange?: (invalid: boolean) => void;
 }) {
+  const t = useTranslations("Tags");
   const { tags: workshopTags, loading } = useWorkshopTags();
   const [draft, setDraft] = React.useState("");
   const [error, setError] = React.useState<"format" | "limit" | null>(null);
@@ -190,7 +182,7 @@ export function TagInput({
             {tag}
             <button
               type="button"
-              aria-label={`Удалить тег ${tag}`}
+              aria-label={t("remove", { tag })}
               disabled={disabled}
               onClick={() => onChange(value.filter((item) => item !== tag))}
               className="rounded-full text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed"
@@ -206,7 +198,7 @@ export function TagInput({
               id={id}
               value={draft}
               disabled={disabled}
-              placeholder={value.length === 0 ? placeholder : undefined}
+              placeholder={value.length === 0 ? (placeholder ?? t("placeholder")) : undefined}
               autoComplete="off"
               role="combobox"
               aria-expanded={showList}
@@ -252,7 +244,7 @@ export function TagInput({
           >
             {loading && (
               <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                Загружаем теги…
+                {t("loading")}
               </p>
             )}
             <div
@@ -276,12 +268,12 @@ export function TagInput({
                 >
                   <span>
                     {option.count === null
-                      ? `Создать „${option.tag}“`
+                      ? t("create", { tag: option.tag })
                       : option.tag}
                   </span>
                   {option.count !== null && (
                     <span className="text-xs text-muted-foreground">
-                      {pluralizePackages(option.count)}
+                      {t("count", { count: option.count })}
                     </span>
                   )}
                 </button>
@@ -291,13 +283,11 @@ export function TagInput({
         </Popover>
       </div>
       {error === "format" && (
-        <p className="text-xs text-destructive">
-          Латиница, цифры, _ и -, до 32 символов.
-        </p>
+        <p className="text-xs text-destructive">{t("formatHint")}</p>
       )}
       {error === "limit" && (
         <p className="text-xs text-destructive">
-          Можно добавить не больше {max} тегов.
+          {t("limit", { max })}
         </p>
       )}
     </div>

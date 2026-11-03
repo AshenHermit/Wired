@@ -67,6 +67,26 @@
       "delete": "Не удалось удалить комнату"
     }
   },
+  "Workshop": {
+    "searchLabel": "Поиск пакетов",
+    "searchPlaceholder": "Поиск по названию, slug или тегу",
+    "clearSearch": "Очистить поиск",
+    "loading": "Загружаем пакеты…",
+    "empty": "В workshop пока нет пакетов",
+    "emptyQuery": "Ничего не найдено по запросу «{query}»",
+    "loadMore": "Показать ещё",
+    "revision": "ревизия {revision}",
+    "add": "Добавить"
+  },
+  "Tags": {
+    "placeholder": "gameplay, hero",
+    "remove": "Удалить тег {tag}",
+    "loading": "Загружаем теги…",
+    "create": "Создать „{tag}“",
+    "count": "{count, plural, one {# пакет} few {# пакета} many {# пакетов} other {# пакета}}",
+    "formatHint": "Латиница, цифры, _ и -, до 32 символов.",
+    "limit": "Можно добавить не больше {max} тегов."
+  },
   "Slug": {
     "invalid": "Строчные латинские буквы, цифры и _, минимум одна буква",
     "checking": "Проверяем slug…",
