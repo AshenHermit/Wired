@@ -21,6 +21,7 @@ import {
   SavedDraftFile,
   PackageStorageService,
 } from './package-storage.service';
+import { sha256Hex } from './package-hash';
 import { validatePackageRevisionFiles } from './package-manifest';
 import {
   collectRawPackageReferences,
@@ -195,6 +196,182 @@ export class PackageRevisionsService {
     );
     await this.dispatchPublished(packageId, revision);
     return toRevision(row, packageId);
+  }
+
+  /**
+   * Copies the latest published revision of one package into another as its
+   * next revision.
+   *
+   * Used by every copy flow (workshop publish, fork, add to room): the bytes
+   * are re-read from the source revision, optionally transformed, and then
+   * published through the same manifest verification and lock as a regular
+   * publication. Changing only the slug of a package keeps self-references
+   * valid, so the copy owns its files instead of pointing at the source.
+   *
+   * The target's scope decides which references are allowed: a global
+   * (workshop) target must only depend on global packages and a room target
+   * must not depend on a package disabled in its own room.
+   */
+  async publishCopiedRevision(args: {
+    sourcePackageId: number;
+    targetPackageId: number;
+    transformFile?: (filepath: string, data: Buffer) => Buffer;
+  }): Promise<PackageRevision> {
+    const { sourcePackageId, targetPackageId, transformFile } = args;
+
+    const source = await this.revisionsRepository.findOne({
+      where: { package: { id: sourcePackageId }, status: 'published' },
+      order: { revision: 'DESC' },
+    });
+    if (!source) {
+      throw new ConflictException({ code: 'package_not_published' });
+    }
+
+    const target = await this.packagesService.findOne(targetPackageId);
+    const scopeRoomId = target.room?.id ?? null;
+
+    const files: PackageFileEntry[] = [];
+    const contents: Array<{ filepath: string; data: Buffer }> = [];
+    for (const sourceFile of source.files) {
+      const original = await this.storage.readPublishedFile(
+        sourcePackageId,
+        source.revision,
+        sourceFile.filepath,
+      );
+      const data = transformFile
+        ? transformFile(sourceFile.filepath, original)
+        : original;
+      files.push({
+        filepath: sourceFile.filepath,
+        size: data.byteLength,
+        sha256: sha256Hex(data),
+      });
+      contents.push({ filepath: sourceFile.filepath, data });
+    }
+
+    const revision =
+      ((await this.revisionsRepository.maximum('revision', {
+        package: { id: targetPackageId },
+      })) ?? 0) + 1;
+
+    const saved = await this.revisionsRepository.save(
+      this.revisionsRepository.create({
+        package: { id: targetPackageId },
+        revision,
+        status: 'draft',
+        files,
+        publishedAt: null,
+      }),
+    );
+
+    try {
+      for (const copied of contents) {
+        await this.storage.saveDraftFile(
+          targetPackageId,
+          revision,
+          copied.filepath,
+          copied.data,
+        );
+      }
+
+      if (scopeRoomId === null) {
+        await this.assertNoRoomDependency(targetPackageId, revision, files);
+      } else {
+        await this.assertNoDisabledRoomDependency(
+          targetPackageId,
+          revision,
+          files,
+        );
+      }
+
+      // Reject uploads for the target while its bytes are verified and moved.
+      const lock = await this.acquirePublishLock(targetPackageId);
+      this.publishing.add(targetPackageId);
+      try {
+        await this.storage.publishRevision(
+          targetPackageId,
+          revision,
+          files,
+          async () => {
+            saved.status = 'published';
+            saved.publishedAt = new Date();
+            await this.revisionsRepository.save(saved);
+          },
+        );
+      } finally {
+        this.publishing.delete(targetPackageId);
+        await this.releasePublishLock(lock, targetPackageId);
+      }
+    } catch (error) {
+      // The bytes are rolled back by the store, but the row is not: leaving a
+      // draft behind would shift every later revision number of the target.
+      await this.revisionsRepository.delete(saved.id);
+      throw error;
+    }
+
+    await this.recordPinnedDependencies(
+      targetPackageId,
+      revision,
+      files,
+      scopeRoomId,
+    );
+    await this.dispatchPublished(targetPackageId, revision);
+    return toRevision(saved, targetPackageId);
+  }
+
+  /**
+   * A global (workshop) revision is later copied into arbitrary rooms, so its
+   * pins must address global packages only: a room package id means nothing
+   * outside its own room. Slugs are scoped too, so a package of a room is
+   * reached here by its numeric id; the loaded row tells us its scope.
+   */
+  private async assertNoRoomDependency(
+    packageId: number,
+    revision: number,
+    files: PackageFileEntry[],
+  ): Promise<void> {
+    if (!this.packagesRepository) {
+      return;
+    }
+
+    const index = await this.slugIndex();
+    const referenced = new Set<number>();
+    for (const sourceFile of files) {
+      if (!isTextPackageFile(sourceFile.filepath)) {
+        continue;
+      }
+      let text: string;
+      try {
+        text = await this.storage.readDraftFile(
+          packageId,
+          revision,
+          sourceFile.filepath,
+        );
+      } catch {
+        // A missing upload is reported by publishRevision's own check.
+        continue;
+      }
+      for (const reference of this.resolveReferences(text, index, null)) {
+        referenced.add(reference.packageId);
+      }
+    }
+
+    if (referenced.size === 0) {
+      return;
+    }
+    const dependencies = await this.packagesRepository.find({
+      where: { id: In([...referenced]) },
+      relations: { room: true },
+    });
+    const roomScoped = dependencies.find(
+      (dependency) => dependency.room !== null && dependency.room !== undefined,
+    );
+    if (!roomScoped) {
+      return;
+    }
+    throw new BadRequestException(
+      `package_dependency_not_global:${roomScoped.slug}`,
+    );
   }
 
   /**

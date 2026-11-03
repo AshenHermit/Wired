@@ -38,6 +38,21 @@ const draftRow = (
     publishedAt: null,
   }) as ScriptingPackageRevision;
 
+const publishedRow = (
+  revision: number,
+  files: PackageFileEntry[],
+): ScriptingPackageRevision => ({
+  ...draftRow(revision, files),
+  status: 'published',
+  publishedAt: new Date('2026-10-29T11:00:00.000Z'),
+});
+
+const entry = (filepath: string, data: Buffer): PackageFileEntry => ({
+  filepath,
+  size: data.byteLength,
+  sha256: sha256Hex(data),
+});
+
 describe('PackageRevisionsService', () => {
   let repository: {
     maximum: jest.Mock;
@@ -708,6 +723,197 @@ describe('PackageRevisionsService', () => {
         status: 'published',
       });
       expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('publishCopiedRevision', () => {
+    it('copies the latest published revision as revision 1', async () => {
+      const sourcePackageId = 5;
+      const targetPackageId = 12;
+      const sourceRevision = 4;
+      const script = Buffer.from('extends Node\n');
+      const binary = Buffer.from([0, 1, 2, 3]);
+      const files = [entry('a.gd', script), entry('b.bin', binary)];
+      const contents = new Map([
+        ['a.gd', script],
+        ['b.bin', binary],
+      ]);
+
+      repository.findOne.mockResolvedValue(publishedRow(sourceRevision, files));
+      storage.readPublishedFile.mockImplementation(
+        (_id: number, _rev: number, filepath: string) =>
+          contents.get(filepath)!,
+      );
+      packagesService.findOne.mockResolvedValue({
+        id: targetPackageId,
+        slug: 'hero-copy',
+        room: { id: 3 },
+      });
+
+      const copied = await service.publishCopiedRevision({
+        sourcePackageId,
+        targetPackageId,
+      });
+
+      expect(repository.findOne).toHaveBeenCalledWith({
+        where: { package: { id: sourcePackageId }, status: 'published' },
+        order: { revision: 'DESC' },
+      });
+      expect(storage.readPublishedFile).toHaveBeenCalledWith(
+        sourcePackageId,
+        sourceRevision,
+        'a.gd',
+      );
+      expect(repository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ revision: 1, status: 'draft', files }),
+      );
+      expect(storage.saveDraftFile).toHaveBeenCalledWith(
+        targetPackageId,
+        1,
+        'a.gd',
+        script,
+      );
+      expect(storage.saveDraftFile).toHaveBeenCalledWith(
+        targetPackageId,
+        1,
+        'b.bin',
+        binary,
+      );
+      expect(storage.publishRevision).toHaveBeenCalledWith(
+        targetPackageId,
+        1,
+        files,
+        expect.any(Function),
+      );
+      expect(storage.writePinnedDependencies).toHaveBeenCalledWith(
+        targetPackageId,
+        1,
+        new Map(),
+      );
+      expect(dispatcher.revisionPublished).toHaveBeenCalledWith(
+        targetPackageId,
+        1,
+      );
+      expect(copied).toMatchObject({
+        packageId: targetPackageId,
+        revision: 1,
+        status: 'published',
+      });
+    });
+
+    it('applies transformFile and recomputes sha256', async () => {
+      const sourcePackageId = 5;
+      const targetPackageId = 12;
+      const original = Buffer.from('preload("res://packages/old/lib.gd")\n');
+      const transformFile = (filepath: string, data: Buffer): Buffer =>
+        filepath.endsWith('.gd')
+          ? Buffer.from(
+              data
+                .toString('utf8')
+                .split('res://packages/old/')
+                .join('res://packages/newer/'),
+            )
+          : data;
+      const rewritten = transformFile('main.gd', original);
+
+      repository.findOne.mockResolvedValue(
+        publishedRow(2, [entry('main.gd', original)]),
+      );
+      storage.readPublishedFile.mockImplementation((id: number) =>
+        id === sourcePackageId ? original : rewritten,
+      );
+      storage.readDraftFile.mockResolvedValue(rewritten.toString('utf8'));
+      packagesService.findOne.mockResolvedValue({
+        id: targetPackageId,
+        slug: 'newer',
+        room: { id: 3 },
+      });
+      packagesRepository.find.mockImplementation(
+        (opts?: { select?: unknown }) =>
+          opts?.select ? [{ id: targetPackageId, slug: 'newer' }] : [],
+      );
+
+      const copied = await service.publishCopiedRevision({
+        sourcePackageId,
+        targetPackageId,
+        transformFile,
+      });
+
+      expect(rewritten.byteLength).toBe(original.byteLength + 2);
+      expect(storage.saveDraftFile).toHaveBeenCalledWith(
+        targetPackageId,
+        1,
+        'main.gd',
+        rewritten,
+      );
+      const [, , declared] = storage.publishRevision.mock.calls[0] as [
+        number,
+        number,
+        PackageFileEntry[],
+        () => Promise<void>,
+      ];
+      expect(declared).toEqual([
+        {
+          filepath: 'main.gd',
+          size: rewritten.byteLength,
+          sha256: sha256Hex(rewritten),
+        },
+      ]);
+      expect(declared[0].sha256).not.toBe(sha256Hex(original));
+      expect(copied.files).toEqual(declared);
+    });
+
+    it('rejects a global target that references a room package', async () => {
+      const text = Buffer.from('preload("res://packages/6/lib.gd")\n');
+
+      repository.findOne.mockResolvedValue(
+        publishedRow(1, [entry('main.gd', text)]),
+      );
+      storage.readPublishedFile.mockResolvedValue(text);
+      storage.readDraftFile.mockResolvedValue(text.toString('utf8'));
+      packagesService.findOne.mockResolvedValue({
+        id: 12,
+        slug: 'hero-copy',
+        room: null,
+      });
+      packagesRepository.find.mockImplementation(
+        (opts?: { select?: unknown }) =>
+          opts?.select ? [] : [{ id: 6, slug: 'hero', room: { id: 3 } }],
+      );
+
+      await expect(
+        service.publishCopiedRevision({
+          sourcePackageId: 5,
+          targetPackageId: 12,
+        }),
+      ).rejects.toThrow(
+        new BadRequestException('package_dependency_not_global:hero'),
+      );
+      expect(storage.publishRevision).not.toHaveBeenCalled();
+      expect(repository.delete).toHaveBeenCalledWith(1);
+    });
+
+    it('removes the revision row when publishing the copied bytes fails', async () => {
+      const data = Buffer.from('extends Node\n');
+
+      repository.findOne.mockResolvedValue(
+        publishedRow(2, [entry('a.gd', data)]),
+      );
+      storage.readPublishedFile.mockResolvedValue(data);
+      packagesService.findOne.mockResolvedValue({
+        id: 12,
+        slug: 'hero-copy',
+        room: { id: 3 },
+      });
+      storage.publishRevision.mockRejectedValue(new Error('disk full'));
+
+      await expect(
+        service.publishCopiedRevision({
+          sourcePackageId: 5,
+          targetPackageId: 12,
+        }),
+      ).rejects.toThrow('disk full');
+      expect(repository.delete).toHaveBeenCalledWith(1);
     });
   });
 });
