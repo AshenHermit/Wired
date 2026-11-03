@@ -82,6 +82,24 @@ export function resolvePackageTarget(
 }
 
 /**
+ * The slug of a stored package, for payloads whose contract says `string`.
+ *
+ * `slug` is nullable in the database because rows written before slugs existed
+ * carry NULL until the startup backfill runs, and the app refuses to boot if
+ * one survives it. Throwing here keeps that guarantee visible at each wire
+ * boundary instead of letting `null` into a field typed as a string.
+ */
+export function requirePackageSlug(pkg: {
+  id: number;
+  slug: string | null;
+}): string {
+  if (pkg.slug === null || pkg.slug === '') {
+    throw new Error(`package_slug_missing:${pkg.id}`);
+  }
+  return pkg.slug;
+}
+
+/**
  * Returns the slug of a package. Throws instead of falling back to the numeric
  * id: a missing slug means the index was loaded before the backfill finished,
  * and a guessed path would point at a package that does not exist.

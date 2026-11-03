@@ -20,6 +20,7 @@ import { ScriptingPackage } from 'src/database/entities/scripting-package.entity
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { User } from 'src/database/entities/user.entity';
 import { normalizeTags } from './package-tags';
+import { requirePackageSlug } from './package-slug-index';
 import { rewriteSlugReferences } from './package-slug-rewrite';
 import { PackageRevisionsService } from './package-revisions.service';
 import { ScriptingPackagesService } from './scripting-packages.service';
@@ -102,7 +103,8 @@ export function rewriteForkSlug(
 
 type WorkshopRow = {
   id: number;
-  slug: string;
+  /** Null only for rows the startup slug backfill has not reached yet. */
+  slug: string | null;
   name: string;
   version: string;
   description: string;
@@ -222,13 +224,14 @@ export class PackageWorkshopService {
     metadata: WorkshopPackageMetadata = {},
   ): Promise<WorkshopPublishResult> {
     const pkg = await this.loadPublishablePackage(packageId, user);
+    const slug = requirePackageSlug(pkg);
     await this.latestPublishedRevision(packageId);
 
-    const existing = await this.findGlobalBySlug(pkg.slug);
+    const existing = await this.findGlobalBySlug(slug);
     if (existing && existing.author?.id !== user.id) {
       throw new ConflictException({
         code: 'workshop_slug_taken',
-        slug: pkg.slug,
+        slug,
         workshopPackage: await this.summaryById(existing.id),
       });
     }
@@ -245,7 +248,7 @@ export class PackageWorkshopService {
     if (!target) {
       try {
         created = await this.packagesService.createGlobalRecord({
-          slug: pkg.slug,
+          slug,
           ...values,
           author: user,
         });
@@ -255,11 +258,11 @@ export class PackageWorkshopService {
         // the same `workshop_slug_taken` contract applies as for a record that
         // was already there.
         if (!isConflictWithCode(error, 'slug_taken')) throw error;
-        const winner = await this.findGlobalBySlug(pkg.slug);
+        const winner = await this.findGlobalBySlug(slug);
         if (!winner) throw error;
         throw new ConflictException({
           code: 'workshop_slug_taken',
-          slug: pkg.slug,
+          slug,
           workshopPackage: await this.summaryById(winner.id),
         });
       }
@@ -300,6 +303,7 @@ export class PackageWorkshopService {
     newSlugRaw: string,
   ): Promise<ScriptingPackage> {
     const pkg = await this.loadPublishablePackage(packageId, user);
+    const sourceSlug = requirePackageSlug(pkg);
     await this.latestPublishedRevision(packageId);
 
     const newSlug = this.packagesService.normalizeSlug(newSlugRaw);
@@ -329,7 +333,7 @@ export class PackageWorkshopService {
         sourcePackageId: packageId,
         targetPackageId: created.id,
         transformFile: (filepath, data) =>
-          rewriteForkSlug(filepath, data, pkg.slug, newSlug),
+          rewriteForkSlug(filepath, data, sourceSlug, newSlug),
       });
     } catch (error) {
       await this.rollbackCreatedPackage(created.id);
@@ -357,7 +361,7 @@ export class PackageWorkshopService {
     // `create` checks the room rights and the room slug scope itself.
     const created = await this.packagesService.create(
       {
-        slug: source.slug,
+        slug: requirePackageSlug(source),
         name: source.name,
         version: source.version,
         description: source.description,
@@ -487,7 +491,7 @@ export class PackageWorkshopService {
   private toSummary(row: WorkshopRow): WorkshopPackageSummary {
     const summary: WorkshopPackageSummary = {
       id: row.id,
-      slug: row.slug,
+      slug: requirePackageSlug(row),
       name: row.name,
       version: row.version,
       description: row.description,

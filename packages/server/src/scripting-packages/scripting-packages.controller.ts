@@ -5,6 +5,8 @@ import {
   Delete,
   Get,
   Header,
+  HttpCode,
+  HttpStatus,
   NotFoundException,
   Optional,
   Param,
@@ -398,12 +400,13 @@ export class ScriptingPackagesController {
   }
 
   @UseAuthGuard()
+  @HttpCode(HttpStatus.NO_CONTENT)
   @Delete(':id')
   async remove(
     @Param('id', ParseIntPipe) id: number,
     @Req() req: AuthenticatedRequest,
-  ) {
+  ): Promise<void> {
     await this.packagesService.assertPackageEditing(req.user, id);
-    return await this.packagesService.remove(id);
+    await this.packagesService.remove(id);
   }
 }

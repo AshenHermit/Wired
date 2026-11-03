@@ -8,6 +8,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import {
+  GameConnectionErrorCode,
   GameRoomConnection,
   GameRoomRuntimeStatus,
   RoomPackagesStatus,
@@ -50,6 +51,19 @@ const MESSAGE_BY_ERROR: Record<RoomRuntimeErrorCode, string> = {
 const PACKAGE_READY_TIMEOUT_MS = 10_000;
 const PACKAGE_READY_POLL_MS = 100;
 
+/** One body shape for every connection failure, keyed by a shared wire code. */
+function connectionFailure(
+  status: HttpStatus,
+  code: GameConnectionErrorCode,
+  message: string,
+  extra: Record<string, unknown> = {},
+): HttpException {
+  return new HttpException(
+    { statusCode: status, code, message, ...extra },
+    status,
+  );
+}
+
 @Injectable()
 export class GameRoomService {
   private readonly logger = new Logger(GameRoomService.name);
@@ -72,14 +86,11 @@ export class GameRoomService {
     const { room, user: player } = await this.assertCanPlay(user, roomId);
     const limit = this.rateLimiter.consume(player.id, room.id);
     if (!limit.allowed) {
-      throw new HttpException(
-        {
-          statusCode: HttpStatus.TOO_MANY_REQUESTS,
-          code: 'rate_limited',
-          retryAfterSeconds: limit.retryAfterSeconds,
-          message: `Too many connection attempts; retry in ${limit.retryAfterSeconds}s`,
-        },
+      throw connectionFailure(
         HttpStatus.TOO_MANY_REQUESTS,
+        'rate_limited',
+        `Too many connection attempts; retry in ${limit.retryAfterSeconds}s`,
+        { retryAfterSeconds: limit.retryAfterSeconds },
       );
     }
 
@@ -147,24 +158,18 @@ export class GameRoomService {
         await this.packageSync.getStatuses(roomId)
       ).filter((status) => status.enabled && status.revision > 0);
       if (statuses.some((s) => s.runtime.state === 'failed')) {
-        throw new HttpException(
-          {
-            statusCode: 502,
-            code: 'packages_failed',
-            message: 'Room packages failed to apply',
-          },
+        throw connectionFailure(
           HttpStatus.BAD_GATEWAY,
+          'packages_failed',
+          'Room packages failed to apply',
         );
       }
       if (statuses.every((s) => s.runtime.state === 'applied')) return;
       if (Date.now() >= deadline) {
-        throw new HttpException(
-          {
-            statusCode: 409,
-            code: 'packages_pending',
-            message: 'Room packages are still applying; retry shortly',
-          },
+        throw connectionFailure(
           HttpStatus.CONFLICT,
+          'packages_pending',
+          'Room packages are still applying; retry shortly',
         );
       }
       await new Promise((resolve) =>
@@ -204,12 +209,17 @@ export class GameRoomService {
 
   private toHttpException(error: unknown, roomId: string): HttpException {
     if (!(error instanceof RoomRuntimeError)) {
-      return error instanceof HttpException
-        ? error
-        : new HttpException(
-            'Cannot start the room runtime',
-            HttpStatus.INTERNAL_SERVER_ERROR,
-          );
+      if (error instanceof HttpException) return error;
+      // Nothing else maps to a status, so the client only sees a generic 500.
+      // Log the original so the cause survives instead of being swallowed.
+      this.logger.error(
+        `Game room ${roomId} connection failed unexpectedly`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      return new HttpException(
+        'Cannot start the room runtime',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
     const status =
       STATUS_BY_ERROR[error.code] ?? HttpStatus.INTERNAL_SERVER_ERROR;

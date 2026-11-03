@@ -1,4 +1,8 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from 'src/database/entities/user.entity';
 import { Repository } from 'typeorm';
@@ -65,7 +69,7 @@ export class UsersService {
     return this.usersRepository.findOne({ where: { id } });
   }
 
-  async update(id: number, updateUserDto: UpdateUserDTO): Promise<void> {
+  async update(id: number, updateUserDto: UpdateUserDTO): Promise<User> {
     const { password, name, picture, ...other } = updateUserDto;
     const hashedPassword = password
       ? await bcrypt.hash(password, 10)
@@ -76,6 +80,11 @@ export class UsersService {
       ...(picture && { picture }),
       ...other,
     });
+    const updated = await this.getById(id);
+    if (!updated) {
+      throw new NotFoundException('User not found');
+    }
+    return updated;
   }
 
   async remove(id: number): Promise<void> {

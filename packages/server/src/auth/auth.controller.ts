@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Post,
   Req,
   Res,
@@ -48,11 +50,10 @@ export class AuthController {
     return token;
   }
   @Post('logout')
-  @ApiOkResponse({ schema: { type: 'boolean' } })
+  @HttpCode(HttpStatus.NO_CONTENT)
   @UseAuthGuard()
-  logout(@Res({ passthrough: true }) res: Response) {
+  logout(@Res({ passthrough: true }) res: Response): void {
     this.authService.clearCookie(res);
-    return true;
   }
 
   @Get('google')

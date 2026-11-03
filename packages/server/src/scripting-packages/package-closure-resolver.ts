@@ -14,7 +14,11 @@ import {
   PackageTextFile,
   resolvePackageReferences,
 } from './package-runtime-references';
-import { loadPackageSlugIndex, PackageSlugIndex } from './package-slug-index';
+import {
+  loadPackageSlugIndex,
+  PackageSlugIndex,
+  requirePackageSlug,
+} from './package-slug-index';
 import { sha256Hex } from './package-hash';
 import { PackageStorageService } from './package-storage.service';
 
@@ -545,7 +549,7 @@ export class PackageClosureResolver {
       files: row.files,
       publishedAt: row.publishedAt.toISOString(),
       name: row.package.name,
-      slug: row.package.slug,
+      slug: requirePackageSlug(row.package),
       room,
     };
   }

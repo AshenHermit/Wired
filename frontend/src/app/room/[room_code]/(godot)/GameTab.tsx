@@ -2,6 +2,8 @@
 
 import {
   Room,
+  isGameConnectionErrorCode,
+  type GameConnectionErrorCode,
   type GameRoomRuntimeStatus,
   type RoomPackagesStatus,
 } from "@wired-io/shared";
@@ -324,21 +326,25 @@ function gameReducer(state: GameState, action: GameAction): GameState {
  * Errors that mean "the runtime is still coming up": the next tick must poll
  * its state and retry instead of failing the whole Game tab.
  */
-const RETRYABLE_CONNECTION_CODES = new Set([
+const RETRYABLE_CONNECTION_CODES = new Set<GameConnectionErrorCode>([
   "packages_pending",
   "room_stopping",
   "room_not_running",
   "handshake_window_expired",
 ]);
 
-const CONNECTION_MESSAGE_BY_CODE: Record<string, AppMessage> = {
+const CONNECTION_MESSAGE_BY_CODE: Partial<
+  Record<GameConnectionErrorCode, AppMessage>
+> = {
   packages_pending: { key: "Game.applyingPackages" },
   room_stopping: { key: "Game.serverRestarting" },
   room_not_running: { key: "Game.serverStarting" },
   handshake_window_expired: { key: "Game.serverRestarting" },
 };
 
-const FATAL_CONNECTION_MESSAGE_BY_CODE: Record<string, AppMessage> = {
+const FATAL_CONNECTION_MESSAGE_BY_CODE: Partial<
+  Record<GameConnectionErrorCode, AppMessage>
+> = {
   packages_failed: { key: "Game.packagesFailed" },
   start_failed: { key: "Game.startFailed" },
   config: { key: "Game.notConfigured" },
@@ -357,7 +363,7 @@ function describeConnectionFailure(error: unknown): ConnectionFailure {
   const data = apiErrorBody<{ code?: unknown; retryAfterSeconds?: unknown }>(
     error,
   );
-  const code = typeof data?.code === "string" ? data.code : "";
+  const code = isGameConnectionErrorCode(data?.code) ? data.code : null;
 
   if (status === 429) {
     const retryAfterSeconds = Number(data?.retryAfterSeconds);
@@ -371,7 +377,7 @@ function describeConnectionFailure(error: unknown): ConnectionFailure {
       retryAfterMs: seconds * 1_000,
     };
   }
-  if (RETRYABLE_CONNECTION_CODES.has(code)) {
+  if (code !== null && RETRYABLE_CONNECTION_CODES.has(code)) {
     return {
       retryable: true,
       message: CONNECTION_MESSAGE_BY_CODE[code] ?? {
@@ -383,7 +389,7 @@ function describeConnectionFailure(error: unknown): ConnectionFailure {
   console.error(error);
   return {
     retryable: false,
-    message: FATAL_CONNECTION_MESSAGE_BY_CODE[code] ?? {
+    message: (code !== null && FATAL_CONNECTION_MESSAGE_BY_CODE[code]) || {
       key: "Game.connectFailed",
     },
     retryAfterMs: 0,

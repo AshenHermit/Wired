@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseIntPipe,
   Patch,
@@ -60,12 +62,13 @@ export class RoomsController {
   }
 
   @UseAuthGuard()
+  @HttpCode(HttpStatus.NO_CONTENT)
   @Delete(':id')
   async remove(
     @Param('id', ParseIntPipe) id: number,
     @Req() req: AuthenticatedRequest,
-  ) {
+  ): Promise<void> {
     await this.roomsService.assertRoomEditing(req.user, id);
-    return await this.roomsService.remove(id);
+    await this.roomsService.remove(id);
   }
 }

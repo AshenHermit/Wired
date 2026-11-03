@@ -32,7 +32,11 @@ import {
   PackageFileReference,
   resolvePackageReferences,
 } from './package-runtime-references';
-import { loadPackageSlugIndex, PackageSlugIndex } from './package-slug-index';
+import {
+  loadPackageSlugIndex,
+  PackageSlugIndex,
+  requirePackageSlug,
+} from './package-slug-index';
 import { packageDependencyError } from './package-errors';
 import { ScriptingPackagesService } from './scripting-packages.service';
 import {
@@ -367,8 +371,8 @@ export class PackageRevisionsService {
     }
     throw packageDependencyError(
       'package_dependency_not_global',
-      `Package "${roomScoped.slug}" belongs to a room, so it cannot be a dependency of a published package.`,
-      { slug: roomScoped.slug },
+      `Package "${requirePackageSlug(roomScoped)}" belongs to a room, so it cannot be a dependency of a published package.`,
+      { slug: requirePackageSlug(roomScoped) },
     );
   }
 
@@ -659,7 +663,7 @@ export class PackageRevisionsService {
       );
     }
 
-    return toManifest(row, packageId, pkg.name, pkg.slug);
+    return toManifest(row, packageId, pkg.name, requirePackageSlug(pkg));
   }
 
   async getManifestForRevision(
@@ -675,7 +679,7 @@ export class PackageRevisionsService {
       );
     }
 
-    return toManifest(row, packageId, pkg.name, pkg.slug);
+    return toManifest(row, packageId, pkg.name, requirePackageSlug(pkg));
   }
 
   async readPublishedFile(

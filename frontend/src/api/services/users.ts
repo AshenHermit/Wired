@@ -1,6 +1,7 @@
-import { UpdateUserPayload } from "@wired-io/shared";
+import { UpdateUserPayload, User } from "@wired-io/shared";
 import { apiClient } from "../api-client/client-api";
 
+/** Applies the patch and resolves with the stored user. */
 export function updateUser(id: number, data: UpdateUserPayload) {
-  return apiClient.patch<void>(`users/${id}`, data);
+  return apiClient.patch<User>(`users/${id}`, data);
 }

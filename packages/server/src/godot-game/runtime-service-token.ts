@@ -22,7 +22,7 @@ export function createRuntimeServiceToken(
     .digest('hex');
 }
 
-/** Accepts a raw token or an `Authorization: Bearer <token>` header value. */
+/** Accepts an `Authorization: Bearer <token>` header value. */
 export function verifyRuntimeServiceToken(
   secret: string,
   roomId: string | number,

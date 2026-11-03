@@ -16,8 +16,9 @@ export function encodeId(type: HashIdType, id: number) {
   return hashids.encode(id);
 }
 
-export function decodeId(type: HashIdType, encodedId: string): number {
+/** Decodes a URL id, or returns null when the code is not a valid hashid. */
+export function decodeId(type: HashIdType, encodedId: string): number | null {
   const hashids = getHashIds(type);
   const decoded = hashids.decode(encodedId);
-  return decoded.length > 0 ? Number(decoded[0]) : -1;
+  return decoded.length > 0 ? Number(decoded[0]) : null;
 }

@@ -29,7 +29,7 @@ export const useUserStore = create<UserState>()((set, get) => ({
   loadUser: () => {
     getProfile()
       .then((profile) => {
-        if (!profile) {
+        if (profile === null) {
           set((state) => ({ loaded: true, ...defaultUserObject }));
           return;
         }

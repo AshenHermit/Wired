@@ -44,8 +44,11 @@ export class ScriptingPackage {
     example: 'hero_controller',
     description: 'Stable package slug',
   })
+  // Nullable only for rows written before slugs existed: the startup backfill
+  // fills them before the app serves a request, and refuses to boot if it
+  // cannot. Wire payloads use requirePackageSlug() rather than this field.
   @Column({ type: 'varchar', length: 64, nullable: true })
-  slug: string;
+  slug: string | null;
 
   @ApiProperty({ example: 'Untitled', description: 'package title' })
   @Column({ default: 'Untitled' })

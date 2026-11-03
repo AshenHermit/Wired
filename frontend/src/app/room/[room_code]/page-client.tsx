@@ -19,7 +19,7 @@ export function RoomPageClient({ roomCode }: { roomCode: string }) {
     setError(null);
     try {
       const roomId = decodeId("room", roomCode);
-      if (roomId < 0) {
+      if (roomId === null) {
         throw new Error("Invalid room code");
       }
       setRoom(await getRoom(roomId));

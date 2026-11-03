@@ -30,7 +30,7 @@ export type UserEditingPanelAPI = {
   close: () => void;
 };
 export type UserEditingProps = {
-  onChange?: () => void;
+  onChange?: (user: User) => void;
 };
 
 export const UserEditingFields = z.object({
@@ -70,10 +70,10 @@ export const UserEditingPanel = React.forwardRef<
     async (data: UserEditingFieldsInfer) => {
       if (user) {
         handleRequest(async () => {
-          await updateUser(user.id, { ...data });
+          const updated = await updateUser(user.id, { ...data });
           toast.success(t("updated"));
           setOpen(false);
-          onChange?.();
+          onChange?.(updated);
         });
       }
     },
@@ -108,7 +108,10 @@ export function CurrentUserEditingButton() {
 
   return (
     <>
-      <UserEditingPanel ref={editingApi} onChange={user.loadUser} />
+      <UserEditingPanel
+        ref={editingApi}
+        onChange={(updated) => user.setUser({ authorized: true, ...updated })}
+      />
       <RippleButton
         size={"sm"}
         variant={"ghost"}

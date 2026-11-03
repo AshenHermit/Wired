@@ -296,6 +296,34 @@ export type GameRoomConnection = {
 };
 
 /**
+ * Codes the game-connection endpoint may put in an error body. Lives here so a
+ * rename on either side breaks the build instead of the client's retry policy.
+ */
+export const GAME_CONNECTION_ERROR_CODES = [
+  "config",
+  "room_not_running",
+  "room_stopping",
+  "start_failed",
+  "ticket_secret_missing",
+  "handshake_window_expired",
+  "invalid_room",
+  "rate_limited",
+  "packages_pending",
+  "packages_failed",
+] as const;
+
+export type GameConnectionErrorCode =
+  (typeof GAME_CONNECTION_ERROR_CODES)[number];
+
+export function isGameConnectionErrorCode(
+  value: unknown
+): value is GameConnectionErrorCode {
+  return GAME_CONNECTION_ERROR_CODES.includes(
+    value as GameConnectionErrorCode
+  );
+}
+
+/**
  * Application state of one published package revision on one target. The
  * manifest is the source of truth; these states are best-effort bookkeeping
  * that a receiver reconciles against the manifest after reconnects.
