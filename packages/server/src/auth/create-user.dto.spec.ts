@@ -1,11 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
 import { createValidationPipe } from 'src/common/validation';
-import { CreateUserDTO } from './create-user.dto';
+import { CreateUserDto } from './create-user.dto';
 
-describe('CreateUserDTO through the global validation pipe', () => {
+describe('CreateUserDto through the global validation pipe', () => {
   const pipe = createValidationPipe();
   const transform = (payload: Record<string, unknown>) =>
-    pipe.transform(payload, { type: 'body', metatype: CreateUserDTO });
+    pipe.transform(payload, { type: 'body', metatype: CreateUserDto });
 
   it('keeps name and picture defined by the DTO', async () => {
     const dto = await transform({
@@ -15,7 +15,7 @@ describe('CreateUserDTO through the global validation pipe', () => {
       picture: 'https://site.com/picture.webp',
     });
 
-    expect(dto).toBeInstanceOf(CreateUserDTO);
+    expect(dto).toBeInstanceOf(CreateUserDto);
     expect(dto).toMatchObject({
       email: 'user@example.com',
       name: 'Anna Lord',
@@ -30,7 +30,7 @@ describe('CreateUserDTO through the global validation pipe', () => {
         password: 'secret1',
         name: 'Anna Lord',
       }),
-    ).resolves.toBeInstanceOf(CreateUserDTO);
+    ).resolves.toBeInstanceOf(CreateUserDto);
   });
 
   it('rejects a missing name', async () => {

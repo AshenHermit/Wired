@@ -12,7 +12,7 @@ import { PackageRevisionsService } from './package-revisions.service';
 import { PackagePublishLockService } from './package-publish-lock.service';
 import { PackageStorageService } from './package-storage.service';
 import { ScriptingPackagesService } from './scripting-packages.service';
-import type { PackageRevisionDispatcher } from 'src/godot-game/package-sync.types';
+import type { PackageRevisionDispatcher } from 'src/common/runtime-contracts';
 
 const pkg = {
   id: 7,

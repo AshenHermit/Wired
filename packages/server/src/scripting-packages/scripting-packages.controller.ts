@@ -41,10 +41,10 @@ import { PackageWorkshopService } from './package-workshop.service';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
 import {
-  RoomCopyDto,
   WorkshopForkDto,
   WorkshopPublishDto,
 } from './dto/workshop.dto';
+import { RoomCopyDto } from './dto/room-copy.dto';
 import { UseAuthGuard, SilentAuth, Public } from 'src/auth/auth-policy';
 import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 import { MAX_PACKAGE_FILE_SIZE } from './package-manifest';

@@ -1,7 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
   IsArray,
-  IsInt,
   IsOptional,
   IsString,
   MinLength,
@@ -53,10 +52,4 @@ export class WorkshopForkDto {
   @IsString()
   @IsPackageSlug()
   slug: string;
-}
-
-export class RoomCopyDto {
-  @ApiProperty({ example: 1, description: 'Room to copy the package into' })
-  @IsInt()
-  roomId: number;
 }

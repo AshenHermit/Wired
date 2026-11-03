@@ -2,7 +2,7 @@ import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AUTH_POLICY_KEY } from './auth-policy';
 import { DefaultAuthGuard } from './default-auth.guard';
-import { JwtAuthGuard, JwtSilentAuthGuard } from './jwt-auth.guard';
+import { JwtAuthGuard, JwtSilentAuthGuard } from './jwt.guard';
 
 describe('DefaultAuthGuard', () => {
   const required = { canActivate: jest.fn() };

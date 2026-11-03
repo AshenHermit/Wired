@@ -1,7 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsNotEmpty, MinLength } from 'class-validator';
 
-export class GoogleAuthDTO {
+export class GoogleAuthDto {
   @ApiProperty({
     example: 'abcde123abcde123abcde123',
     description: 'google account id token',

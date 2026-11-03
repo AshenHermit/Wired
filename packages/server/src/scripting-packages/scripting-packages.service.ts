@@ -33,7 +33,7 @@ import { normalizeTags } from './package-tags';
 import {
   PACKAGE_REVISION_DISPATCHER,
   PackageRevisionDispatcher,
-} from 'src/godot-game/package-sync.types';
+} from 'src/common/runtime-contracts';
 import {
   PackageSlugAvailability,
   isValidPackageSlug,

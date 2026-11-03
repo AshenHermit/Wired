@@ -17,7 +17,7 @@ import { GameRoomService } from './game-room.service';
 import { GameTicketService } from './game-ticket.service';
 import { NodeRuntimeProcessFactory } from './node-runtime-process.factory';
 import { PackageSyncService } from './package-sync.service';
-import { PACKAGE_REVISION_DISPATCHER } from './package-sync.types';
+import { PACKAGE_REVISION_DISPATCHER } from 'src/common/runtime-contracts';
 import { RoomRuntimeService } from './room-runtime.service';
 import { RuntimeProcessFactory } from './room-runtime.types';
 

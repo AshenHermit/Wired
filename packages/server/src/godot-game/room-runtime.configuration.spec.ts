@@ -1,7 +1,7 @@
 import { AppConfigService } from 'src/config/config.service';
 import { GodotRuntimeConfig } from './room-runtime.types';
 import { RoomRuntimeConfiguration } from './room-runtime.configuration';
-import { verifyRuntimeServiceToken } from './runtime-service-token';
+import { verifyRuntimeServiceToken } from 'src/common/runtime-contracts';
 
 const config: GodotRuntimeConfig = {
   executablePath: 'C:/godot/godot.exe',

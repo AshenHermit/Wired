@@ -4,7 +4,7 @@ import {
   TICKET_RATE_LIMIT_STORE,
 } from './game-room.rate-limiter';
 import { PackageSyncService } from './package-sync.service';
-import { PACKAGE_REVISION_DISPATCHER } from './package-sync.types';
+import { PACKAGE_REVISION_DISPATCHER } from 'src/common/runtime-contracts';
 
 type ProviderBinding = { provide?: unknown; useClass?: unknown };
 

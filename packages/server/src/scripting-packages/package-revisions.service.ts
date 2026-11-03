@@ -42,7 +42,7 @@ import { ScriptingPackagesService } from './scripting-packages.service';
 import {
   PACKAGE_REVISION_DISPATCHER,
   PackageRevisionDispatcher,
-} from 'src/godot-game/package-sync.types';
+} from 'src/common/runtime-contracts';
 
 /**
  * Draft and published revisions of a scripting package.

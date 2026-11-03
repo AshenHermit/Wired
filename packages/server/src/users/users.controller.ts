@@ -10,7 +10,8 @@ import {
   Patch,
   Req,
 } from '@nestjs/common';
-import { UsersService, UpdateUserDTO } from './users.service';
+import { UsersService } from './users.service';
+import { UpdateUserDto } from './dto/update-user.dto';
 import { ApiOkResponse, ApiTags, getSchemaPath } from '@nestjs/swagger';
 import { UseAuthGuard, SilentAuth } from 'src/auth/auth-policy';
 import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
@@ -42,7 +43,7 @@ export class UsersController {
   @Patch(':userId')
   async updateUser(
     @Param('userId', ParseIntPipe) id: number,
-    @Body() dto: UpdateUserDTO,
+    @Body() dto: UpdateUserDto,
     @Req() req: AuthenticatedRequest,
   ): Promise<User> {
     await this.usersService.assertUserEditing(req.user, id);

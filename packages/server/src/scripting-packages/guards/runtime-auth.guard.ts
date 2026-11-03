@@ -6,7 +6,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { Request } from 'express';
 import { AppConfigService } from 'src/config/config.service';
-import { verifyRuntimeServiceToken } from 'src/godot-game/runtime-service-token';
+import { verifyRuntimeServiceToken } from 'src/common/runtime-contracts';
 import { readPositiveInt } from './request-ids';
 import { createRuntimeServiceUser } from './runtime-service-user';
 

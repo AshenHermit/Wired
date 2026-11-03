@@ -2,7 +2,7 @@ import { AppConfigService } from 'src/config/config.service';
 import { resolve, join } from 'node:path';
 import { RoomRuntimeError } from './room-runtime.errors';
 import { safeRoomName } from './room-runtime.names';
-import { createRuntimeServiceToken } from './runtime-service-token';
+import { createRuntimeServiceToken } from 'src/common/runtime-contracts';
 import { GodotRuntimeConfig, RuntimeSpawnOptions } from './room-runtime.types';
 
 const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;

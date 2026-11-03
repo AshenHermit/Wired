@@ -1,7 +1,7 @@
 import {
   createRuntimeServiceToken,
   verifyRuntimeServiceToken,
-} from './runtime-service-token';
+} from './runtime-contracts';
 
 describe('runtime service token', () => {
   const secret = 'ticket-secret';

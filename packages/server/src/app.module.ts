@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { AuthModule } from './auth/auth.module';
 import { DefaultAuthGuard } from './auth/default-auth.guard';
-import { JwtAuthGuard, JwtSilentAuthGuard } from './auth/jwt-auth.guard';
+import { JwtAuthGuard, JwtSilentAuthGuard } from './auth/jwt.guard';
 import { AppConfigModule } from './config/config.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppConfigService } from './config/config.service';

@@ -5,7 +5,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { AppConfigService } from 'src/config/config.service';
 import { User } from 'src/database/entities/user.entity';
-import { UsersService } from '../users/users.service';
+import { UsersService } from 'src/users/users.service';
 import { AuthService } from './auth.service';
 
 describe('AuthService', () => {

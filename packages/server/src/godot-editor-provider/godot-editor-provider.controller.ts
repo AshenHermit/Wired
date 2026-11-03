@@ -13,7 +13,7 @@ import { glob, stat } from 'fs/promises';
 import path, { resolve } from 'path';
 import { AppConfigService } from 'src/config/config.service';
 import { contentTypeFor } from 'src/common/content-types';
-import { resolvePackagePath } from 'src/scripting-packages/package-path';
+import { resolveWithin } from 'src/common/paths';
 import { Public } from 'src/auth/auth-policy';
 
 const EXCLUDED_PROJECT_DIRS = new Set(['build', 'storage', '.godot']);
@@ -52,7 +52,7 @@ export class GodotEditorProviderController {
   ): Promise<StreamableFile> {
     const relativeFilepath = toRelativePath(requestedPath);
     const file = await assertFile(
-      resolvePackagePath(
+      resolveWithin(
         resolve(this.configService.godot.editorPath),
         relativeFilepath,
       ),
@@ -110,7 +110,7 @@ export class GodotEditorProviderController {
       '_wired',
     );
     const file = await assertFile(
-      resolvePackagePath(projectDir, toRelativePath(filepath)),
+      resolveWithin(projectDir, toRelativePath(filepath)),
     );
     res?.set({
       'Content-Type': 'application/octet-stream',

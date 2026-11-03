@@ -1,7 +1,7 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AUTH_POLICY_KEY, AuthPolicy } from './auth-policy';
-import { JwtAuthGuard, JwtSilentAuthGuard } from './jwt-auth.guard';
+import { JwtAuthGuard, JwtSilentAuthGuard } from './jwt.guard';
 
 /**
  * Makes authentication the default for every route.
