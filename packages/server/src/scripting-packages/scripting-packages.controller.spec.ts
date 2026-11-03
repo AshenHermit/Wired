@@ -703,6 +703,18 @@ describe('ScriptingPackagesController slug route ordering', () => {
     expect(findOne).not.toHaveBeenCalled();
   });
 
+  it('treats blank limit and offset as absent', async () => {
+    await request(app.getHttpServer())
+      .get('/scripting-packages/workshop?limit=&offset=%20')
+      .expect(200);
+
+    expect(listWorkshop).toHaveBeenCalledWith({
+      q: undefined,
+      limit: undefined,
+      offset: undefined,
+    });
+  });
+
   it('rejects a slug field in PATCH through the global validation pipe', async () => {
     await request(app.getHttpServer())
       .patch('/scripting-packages/7')

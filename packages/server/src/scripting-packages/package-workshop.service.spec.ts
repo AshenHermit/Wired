@@ -49,6 +49,16 @@ function makeService(repository: { query: jest.Mock }) {
   );
 }
 
+/** The SQL text a mocked repository received on a given call. */
+function sqlOf(query: jest.Mock, call = 0): string {
+  return String((query.mock.calls[call] as [string, unknown[]])[0]);
+}
+
+/** The parameter array a mocked repository received on a given call. */
+function paramsOf(query: jest.Mock, call = 0): unknown[] {
+  return (query.mock.calls[call] as [string, unknown[]])[1];
+}
+
 describe('PackageWorkshopService', () => {
   it('normalizes the query and clamps pagination', async () => {
     const query = jest.fn(() => Promise.resolve([]));
@@ -100,6 +110,50 @@ describe('PackageWorkshopService', () => {
       1,
       0,
     ]);
+  });
+
+  it('truncates fractional pagination to integers', async () => {
+    const query = jest.fn(() => Promise.resolve([]));
+    const service = makeService({ query });
+
+    await service.list({ limit: 2.5, offset: 1.5 });
+
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('ILIKE'), [
+      '',
+      2,
+      1,
+    ]);
+    expect(paramsOf(query)).toEqual(['', 2, 1]);
+  });
+
+  it('treats a non-string query as absent', async () => {
+    const query = jest.fn(() => Promise.resolve([]));
+    const service = makeService({ query });
+
+    await expect(service.list({ q: ['a', 'b'] as never })).resolves.toEqual({
+      items: [],
+      total: 0,
+    });
+
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('ILIKE'), [
+      '',
+      50,
+      0,
+    ]);
+  });
+
+  it('lists only published global packages and keeps the pagination clause', async () => {
+    const query = jest.fn(() => Promise.resolve([]));
+    const service = makeService({ query });
+
+    await service.list({});
+
+    const sql = sqlOf(query);
+    expect(sql).toContain('p."roomId" IS NULL');
+    expect(sql).toContain("status = 'published'");
+    expect(sql).toContain('AND "publishedAt" IS NOT NULL');
+    expect(sql).toContain('jsonb_array_elements_text');
+    expect(sql.trimEnd().endsWith('LIMIT $2 OFFSET $3')).toBe(true);
   });
 
   it('maps a row into a workshop summary with a full author', async () => {
@@ -180,5 +234,13 @@ describe('PackageWorkshopService', () => {
     expect(query).toHaveBeenCalledWith(expect.stringContaining('p.slug = $1'), [
       'hero',
     ]);
+
+    const sql = sqlOf(query);
+    expect(sql).toContain('p."roomId" IS NULL');
+    expect(sql).toContain("status = 'published'");
+    expect(sql).toContain('AND "publishedAt" IS NOT NULL');
+    expect(sql).toContain('p.slug = $1');
+    expect(sql.trimEnd().endsWith('LIMIT 1')).toBe(true);
+    expect(paramsOf(query)).toEqual(['hero']);
   });
 });

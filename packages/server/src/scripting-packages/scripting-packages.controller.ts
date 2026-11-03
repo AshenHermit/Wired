@@ -45,6 +45,17 @@ import { ArtifactBuildRateLimiter } from './artifact-build.rate-limiter';
 import { RoomMembershipGuard } from './guards/room-membership.guard';
 import { RuntimeAuthGuard } from './guards/runtime-auth.guard';
 
+/**
+ * `?limit=` (blank) reaches the handler as an empty string and `Number('')` is
+ * `0`, which would silently become page size 1 instead of the documented
+ * default. A repeated parameter (`?limit=1&limit=2`) arrives as an array; both
+ * are treated as "not given".
+ */
+function parseOptionalNumber(value: unknown): number | undefined {
+  if (typeof value !== 'string' || value.trim() === '') return undefined;
+  return Number(value.trim());
+}
+
 @ApiTags('scripting-packages')
 @Controller('scripting-packages')
 export class ScriptingPackagesController {
@@ -86,8 +97,8 @@ export class ScriptingPackagesController {
   ) {
     return this.workshopService.list({
       q,
-      limit: limit === undefined ? undefined : Number(limit),
-      offset: offset === undefined ? undefined : Number(offset),
+      limit: parseOptionalNumber(limit),
+      offset: parseOptionalNumber(offset),
     });
   }
 

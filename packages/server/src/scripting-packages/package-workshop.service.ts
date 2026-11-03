@@ -15,6 +15,7 @@ LEFT JOIN "user" a ON a.id = p."authorId"
 JOIN LATERAL (
   SELECT revision, "publishedAt" FROM scripting_package_revision
   WHERE "packageId" = p.id AND status = 'published'
+    AND "publishedAt" IS NOT NULL
   ORDER BY revision DESC LIMIT 1
 ) r ON TRUE`;
 
@@ -60,15 +61,20 @@ export class PackageWorkshopService {
     limit?: number;
     offset?: number;
   }): Promise<WorkshopListing> {
-    const q = (query.q ?? '').trim().toLowerCase().slice(0, 64);
+    // Query-string input is unvalidated: `?q=a&q=b` arrives as an array and
+    // `?limit=abc` as `NaN`. A non-finite `LIMIT`/`OFFSET` is a Postgres error,
+    // and a fractional one (`?limit=2.5`) is rejected as `22P02`, so both are
+    // truncated/clamped before they reach the query.
+    const q = (typeof query.q === 'string' ? query.q : '')
+      .trim()
+      .toLowerCase()
+      .slice(0, 64);
     const pattern = q ? `%${q}%` : '';
-    // Query-string numbers arrive unvalidated, so `?limit=abc` is `NaN` here.
-    // A non-finite value would otherwise be sent to Postgres as `LIMIT NaN`.
     const limit = Number.isFinite(query.limit)
-      ? Math.min(100, Math.max(1, query.limit as number))
+      ? Math.min(100, Math.max(1, Math.trunc(query.limit as number)))
       : 50;
     const offset = Number.isFinite(query.offset)
-      ? Math.max(0, query.offset as number)
+      ? Math.max(0, Math.trunc(query.offset as number))
       : 0;
 
     const rows: WorkshopRow[] = await this.packagesRepository.query(LIST_SQL, [
