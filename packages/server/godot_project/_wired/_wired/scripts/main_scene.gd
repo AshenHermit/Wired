@@ -46,6 +46,12 @@ var _authenticated_once := false
 var _auth_error_reported := false
 var _packages: PackagesManager
 var _registry: WiredPackageRegistry
+## Корень, который сейчас стоит под `Main`: штатный Game или сцена пакета.
+var _game_root: Node
+## Штатный `Main/Game`, снятый с дерева, но сохранённый для fallback.
+var _default_game_root: Node
+## Идентичность установленной main-сцены; пусто для штатного Game.
+var _game_scene_key := ""
 ## Package apply/unload operations are serialized: two overlapping applies would
 ## interleave registry clears with entry loads and restores, and a removal that
 ## arrives during an apply would run against a half-applied registry.
@@ -171,6 +177,121 @@ func _setup_services() -> void:
 		static_world.setup(_registry)
 	if players_manager != null:
 		players_manager.setup(_registry, net, players_spawner)
+	_default_game_root = default_game_root
+	_game_root = default_game_root
+
+
+func _unbind_game_services() -> void:
+	for service: Node in [static_world, dynamic_world, players_manager]:
+		if service != null and service.get_parent() != null:
+			service.get_parent().remove_child(service)
+			# The services outlive the authored scene they came from. Clearing
+			# the serialization owner keeps Godot from warning that `Main` no
+			# longer owns a node living under a package scene.
+			service.owner = null
+
+
+func _bind_game_services(viewport: SubViewport) -> void:
+	for service: Node in [static_world, dynamic_world, players_manager]:
+		if service == null or service.get_parent() == viewport:
+			continue
+		if viewport.get_node_or_null(NodePath(service.name)) != null:
+			push_warning("WIRED_MAIN_SCENE_SERVICE_COLLISION name=%s" % service.name)
+		if service.get_parent() != null:
+			service.get_parent().remove_child(service)
+		viewport.add_child(service)
+
+
+func _desired_game_scene() -> Dictionary:
+	if _registry == null:
+		return {}
+	var descriptor := _registry.get_main_scene()
+	if descriptor.is_empty():
+		return {}
+	var registrations := _registry.get_main_scenes()
+	if registrations.size() > 1:
+		push_warning(
+			"WIRED_MAIN_SCENE_MULTIPLE package=%s ignored=%d"
+			% [descriptor.get("package_id", ""), registrations.size() - 1]
+		)
+	var package_id := str(descriptor.get("package_id", ""))
+	var path := str(descriptor.get(WiredProtocol.KEY_PATH, ""))
+	var context := _registry.get_context(package_id)
+	if context == null or path.is_empty():
+		return {}
+	return {
+		"package_id": package_id,
+		"path": path,
+		"context": context,
+		"key": "%s:%s:%d:%s"
+		% [package_id, path, context.revision, context.artifact_key],
+	}
+
+
+func _swap_game_scene(new_root: Node) -> bool:
+	var viewport := _world_viewport_of(new_root)
+	if viewport == null:
+		return false
+	if new_root == _game_root:
+		return true
+	_unbind_game_services()
+	var parent := _game_root.get_parent()
+	var index := _game_root.get_index()
+	# `add_child` warns when a node keeps an owner from its previous parent.
+	# Clear it for the move and restore the authored owner afterwards.
+	var new_root_owner := new_root.owner
+	new_root.owner = null
+	if parent != null:
+		parent.remove_child(_game_root)
+		parent.add_child(new_root)
+		parent.move_child(new_root, index)
+	else:
+		add_child(new_root)
+	new_root.owner = new_root_owner
+	if _game_root != _default_game_root:
+		_game_root.queue_free()
+	_game_root = new_root
+	_bind_game_services(viewport)
+	Global.register_scene_services(static_world, dynamic_world, players_manager, net)
+	return true
+
+
+func _rebuild_game_scene_if_needed() -> void:
+	var desired := _desired_game_scene()
+	var key := str(desired.get("key", ""))
+	if key == _game_scene_key:
+		return
+	if key.is_empty():
+		if _game_root != _default_game_root and _swap_game_scene(_default_game_root):
+			_game_scene_key = ""
+		return
+	var context := desired.get("context") as WiredPackageContext
+	var path := str(desired.get("path", ""))
+	var instance := context.instantiate(path) if context != null else null
+	if instance == null:
+		push_warning(
+			"WIRED_MAIN_SCENE_INSTANTIATE_FAILED package=%s path=%s"
+			% [desired.get("package_id", ""), path]
+		)
+		return
+	if not _is_wired_game_scene(instance):
+		push_warning(
+			"WIRED_MAIN_SCENE_INVALID package=%s path=%s reason=not_wired_game_scene"
+			% [desired.get("package_id", ""), path]
+		)
+		instance.free()
+		return
+	if _world_viewport_of(instance) == null:
+		push_warning(
+			"WIRED_MAIN_SCENE_INVALID package=%s path=%s reason=missing_world_viewport"
+			% [desired.get("package_id", ""), path]
+		)
+		instance.free()
+		return
+	if not _swap_game_scene(instance):
+		instance.free()
+		return
+	_game_scene_key = key
 
 
 ## Authored overlay controls already ignore the mouse, but `RichTextLabel`
@@ -229,6 +350,7 @@ func _apply_registered_package(package_id: int, revision: int) -> void:
 	# A package without `wired_package.gd` is valid: it just contributes no
 	# content. The old entries were already cleared above.
 	PackageEntryLoader.load_entry(context.package_id, revision, context, _registry)
+	_rebuild_game_scene_if_needed()
 	if static_world != null:
 		static_world.rebuild()
 	# Players already in the world keep running the previous revision's scripts
@@ -609,6 +731,7 @@ func _apply_package_removal(
 			dynamic_world.drop_package(package_id)
 	_registry.clear_package(str(package_id))
 	_packages.forget_package(package_id, purge)
+	_rebuild_game_scene_if_needed()
 	if static_world != null:
 		static_world.rebuild()
 	if players_manager != null:
