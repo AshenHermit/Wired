@@ -48,6 +48,7 @@ describe('ScriptingPackagesController revisions API', () => {
   let packagesService: {
     assertPackageEditing: jest.Mock;
     assertPackagePublishing: jest.Mock;
+    findVisibleOne: jest.Mock;
   };
   let revisionsService: Record<string, jest.Mock>;
   let controller: ScriptingPackagesController;
@@ -56,6 +57,7 @@ describe('ScriptingPackagesController revisions API', () => {
     packagesService = {
       assertPackageEditing: jest.fn(),
       assertPackagePublishing: jest.fn(),
+      findVisibleOne: jest.fn(),
     };
     revisionsService = {
       createDraft: jest.fn(async () => revision),
@@ -197,17 +199,18 @@ describe('ScriptingPackagesController revisions API', () => {
     };
     revisionsService.getManifest.mockResolvedValueOnce(manifest);
 
-    await expect(controller.getManifest(7)).resolves.toBe(manifest);
+    await expect(controller.getManifest({ user: null } as never, 7)).resolves.toBe(manifest);
     expect(revisionsService.getManifest).toHaveBeenCalledWith(7);
+    expect(packagesService.findVisibleOne).toHaveBeenCalledWith(7, null);
   });
 
   it('serves a manifest of an explicit revision', async () => {
-    await controller.getRevisionManifest(7, 2);
+    await controller.getRevisionManifest({ user: null } as never, 7, 2);
     expect(revisionsService.getManifestForRevision).toHaveBeenCalledWith(7, 2);
   });
 
   it('streams a published file as binary', async () => {
-    const result = await controller.getRevisionFile(7, 2, [
+    const result = await controller.getRevisionFile({ user: null } as never, 7, 2, [
       'scripts',
       'hero.gd',
     ]);

@@ -453,7 +453,7 @@ export class PackageStorageService {
    * when the revision directory does not exist — a draft that was never
    * uploaded has nothing to rewrite.
    */
-  async rewriteRevision(
+  private async rewriteRevision(
     packageId: number,
     revision: number,
     kind: RevisionKind,
@@ -488,7 +488,7 @@ export class PackageStorageService {
   }
 
   /** Phase two: the database now describes the rewritten bytes. */
-  async finishRewrite(
+  private async finishRewrite(
     packageId: number,
     revision: number,
     kind: RevisionKind,
@@ -499,7 +499,7 @@ export class PackageStorageService {
   }
 
   /** Phase three: put the original bytes back after a failed update. */
-  async abortRewrite(
+  private async abortRewrite(
     packageId: number,
     revision: number,
     kind: RevisionKind,

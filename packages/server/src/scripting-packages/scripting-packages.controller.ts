@@ -29,8 +29,9 @@ import { ScriptingPackagesService } from './scripting-packages.service';
 import { PackageRevisionsService } from './publish/package-revisions.service';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
-import { UseAuthGuard, SilentAuth, Public } from 'src/auth/auth-policy';
+import { UseAuthGuard, SilentAuth } from 'src/auth/auth-policy';
 import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
+import { User } from 'src/database/entities/user.entity';
 import { MAX_PACKAGE_FILE_SIZE } from './storage/package-manifest';
 
 /**
@@ -163,34 +164,42 @@ export class ScriptingPackagesController {
     return await this.revisionsService.publish(id, revision);
   }
 
-  @Public()
+  @SilentAuth()
   @ApiOkResponse({ description: 'Latest published manifest' })
   @Get(':id/manifest')
-  getManifest(@Param('id', ParseIntPipe) id: number) {
+  async getManifest(
+    @Req() req: SilentAuthRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    await this.assertVisible(id, req.user);
     return this.revisionsService.getManifest(id);
   }
 
-  @Public()
+  @SilentAuth()
   @ApiOkResponse({ description: 'Manifest of an explicit revision' })
   @Get(':id/revisions/:revision/manifest')
-  getRevisionManifest(
+  async getRevisionManifest(
+    @Req() req: SilentAuthRequest,
     @Param('id', ParseIntPipe) id: number,
     @Param('revision', ParseIntPipe) revision: number,
   ) {
+    await this.assertVisible(id, req.user);
     return this.revisionsService.getManifestForRevision(id, revision);
   }
 
-  @Public()
+  @SilentAuth()
   @ApiOkResponse({
     description: 'Raw contents of a published revision file',
     schema: { type: 'string', format: 'binary' },
   })
   @Get(':id/revisions/:revision/files/*path')
   async getRevisionFile(
+    @Req() req: SilentAuthRequest,
     @Param('id', ParseIntPipe) id: number,
     @Param('revision', ParseIntPipe) revision: number,
     @Param('path') path: string | string[],
   ): Promise<StreamableFile> {
+    await this.assertVisible(id, req.user);
     const file = await this.revisionsService.resolvePublishedFile(
       id,
       revision,
@@ -228,5 +237,20 @@ export class ScriptingPackagesController {
   ): Promise<void> {
     await this.packagesService.assertPackageEditing(req.user, id);
     await this.packagesService.remove(id);
+  }
+
+  /**
+   * Refuses a package the caller may not see.
+   *
+   * Published files used to be served to anyone holding the id, so a private
+   * room's package was readable while its metadata 404'd. Both now answer to
+   * the same rule: a workshop package is open, a room package follows the
+   * room's visibility.
+   */
+  private async assertVisible(
+    packageId: number,
+    user: User | null,
+  ): Promise<void> {
+    await this.packagesService.findVisibleOne(packageId, user);
   }
 }

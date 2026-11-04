@@ -557,18 +557,11 @@ class ClosureBuilder {
     id: number,
     exactRevision: number | null,
   ): Promise<void> {
-    const { rootId, roomId, slugIndex } = this.ports;
     if (this.revisionByPackage.has(id)) {
       return;
     }
 
-    const loaded = await this.ports.loadRevision(id, exactRevision, roomId);
-    this.revisionByPackage.set(id, loaded.revision);
-    this.visiting.push(id);
-    this.nameByPackage.set(id, loaded.name);
-    this.slugByPackage.set(id, loaded.slug);
-    this.publishedAtByPackage.set(id, loaded.publishedAt);
-    this.filesByPackage.set(id, loaded.files);
+    const loaded = await this.loadAndRecord(id, exactRevision);
     // Dependencies recorded when *this* revision was published. A pinned
     // closure keeps `(packageId, revision)` deterministic; an older revision
     // without pins falls back to the latest published dependency below.
@@ -576,17 +569,56 @@ class ClosureBuilder {
       id,
       loaded.revision,
     );
+    const { fileSet, references } = await this.readRevision(id, loaded);
 
-    const fileSet = new Set(loaded.files.map((file) => file.filepath));
+    for (const ref of references) {
+      await this.linkReference(id, ref, pinned, fileSet);
+    }
+
+    this.visiting.pop();
+  }
+
+  /** Loads a revision and records the facts every later phase reads. */
+  private async loadAndRecord(
+    id: number,
+    exactRevision: number | null,
+  ): Promise<LoadedRevision> {
+    const loaded = await this.ports.loadRevision(
+      id,
+      exactRevision,
+      this.ports.roomId,
+    );
+    this.revisionByPackage.set(id, loaded.revision);
+    this.visiting.push(id);
+    this.nameByPackage.set(id, loaded.name);
+    this.slugByPackage.set(id, loaded.slug);
+    this.publishedAtByPackage.set(id, loaded.publishedAt);
+    this.filesByPackage.set(id, loaded.files);
+    return loaded;
+  }
+
+  /**
+   * Reads a revision's files and turns their text into cross-package
+   * references.
+   *
+   * Only the root's bytes are kept: a dependency's binary file is served from
+   * that package's own artifact and is never rewritten here, so it never
+   * enters memory.
+   */
+  private async readRevision(
+    id: number,
+    loaded: LoadedRevision,
+  ): Promise<{
+    fileSet: Set<string>;
+    references: PackageFileReference[];
+  }> {
+    const isRoot = id === this.ports.rootId;
     const bytes = new Map<string, Buffer>();
     const textFiles: PackageTextFile[] = [];
-    const isRoot = id === rootId;
 
     for (const entry of loaded.files) {
       const wantsText = isTextPackageFile(entry.filepath);
       if (!isRoot && !wantsText) {
-        // A dependency's binary file is served from that package's own
-        // artifact and is never rewritten here: keep it out of memory.
         continue;
       }
       const data = await this.ports.readFileBytes(
@@ -598,114 +630,135 @@ class ClosureBuilder {
         bytes.set(entry.filepath, data);
       }
       if (wantsText) {
-        let text: string;
-        try {
-          text = decodePackageText(entry.filepath, data);
-        } catch (error) {
-          throw new BadRequestException(
-            {
-              code: 'package_file_not_text',
-              filepath: entry.filepath,
-              message: errorMessage(error),
-            },
-            { cause: error },
-          );
-        }
-        textFiles.push({ filepath: entry.filepath, text });
+        textFiles.push({
+          filepath: entry.filepath,
+          text: this.decodeText(entry.filepath, data),
+        });
       }
     }
+
     if (isRoot) {
       this.root = loaded;
       this.rootBytes = bytes;
     }
     this.textFilesByPackage.set(id, textFiles);
 
+    const references: PackageFileReference[] = [];
     for (const file of textFiles) {
-      let references: PackageFileReference[];
-      try {
-        const raw = collectRawPackageReferences(file.text);
-        const { resolved, unknown } = resolvePackageReferences(
-          raw,
-          slugIndex,
-          roomId,
-        );
-        if (unknown.length > 0) {
-          throw packageDependencyError(
-            'package_dependency_unknown_slug',
-            `Package "${unknown[0]}" is not available to this room.`,
-            { slug: unknown[0] },
-          );
-        }
-        references = resolved;
-      } catch (error) {
-        if (error instanceof BadRequestException) throw error;
-        throw new BadRequestException(
-          {
-            code: 'package_reference_unreadable',
-            filepath: file.filepath,
-            message: errorMessage(error),
-          },
-          { cause: error },
-        );
-      }
-      for (const ref of references) {
-        if (ref.packageId === id) {
-          if (!fileSet.has(ref.filepath)) {
-            throw packageDependencyError(
-              'package_dependency_missing_file',
-              `Package ${id} does not contain ${
-                ref.filepath
-              }, which its own sources reference.`,
-              { packageId: id, filepath: ref.filepath },
-            );
-          }
-          continue;
-        }
-
-        if (this.visiting.includes(ref.packageId)) {
-          throw packageDependencyError(
-            'package_dependency_cycle',
-            'Packages reference each other in a cycle.',
-            { cycle: [...this.visiting, ref.packageId].join('->') },
-          );
-        }
-
-        if (!this.revisionByPackage.has(ref.packageId)) {
-          await this.resolvePackage(
-            ref.packageId,
-            pinned?.get(ref.packageId) ?? null,
-          );
-        }
-
-        const dependencyFiles = this.filesByPackage.get(ref.packageId);
-        if (
-          !dependencyFiles ||
-          !dependencyFiles.some((f) => f.filepath === ref.filepath)
-        ) {
-          throw packageDependencyError(
-            'package_dependency_missing_file',
-            `Package ${ref.packageId} does not contain ${
-              ref.filepath
-            }, which its dependents reference.`,
-            { packageId: ref.packageId, filepath: ref.filepath },
-          );
-        }
-
-        const direct = this.referencesByPackage.get(id);
-        if (direct) {
-          direct.add(ref.packageId);
-        } else {
-          this.referencesByPackage.set(id, new Set([ref.packageId]));
-        }
-
-        if (id === rootId && !this.seenDirectDeps.has(ref.packageId)) {
-          this.seenDirectDeps.add(ref.packageId);
-          this.directDependencyIds.push(ref.packageId);
-        }
-      }
+      references.push(...this.resolveReferencesOf(id, file));
     }
 
-    this.visiting.pop();
+    return {
+      fileSet: new Set(loaded.files.map((file) => file.filepath)),
+      references,
+    };
+  }
+
+  /** Decodes one text file, naming the file when it is not valid text. */
+  private decodeText(filepath: string, data: Buffer): string {
+    try {
+      return decodePackageText(filepath, data);
+    } catch (error) {
+      throw new BadRequestException(
+        {
+          code: 'package_file_not_text',
+          filepath,
+          message: errorMessage(error),
+        },
+        { cause: error },
+      );
+    }
+  }
+
+  /** References declared by one text file, with unknown slugs refused. */
+  private resolveReferencesOf(
+    id: number,
+    file: PackageTextFile,
+  ): PackageFileReference[] {
+    const { roomId, slugIndex } = this.ports;
+    try {
+      const { resolved, unknown } = resolvePackageReferences(
+        collectRawPackageReferences(file.text),
+        slugIndex,
+        roomId,
+      );
+      if (unknown.length > 0) {
+        throw packageDependencyError(
+          'package_dependency_unknown_slug',
+          `Package "${unknown[0]}" is not available to this room.`,
+          { slug: unknown[0] },
+        );
+      }
+      return resolved;
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      throw new BadRequestException(
+        {
+          code: 'package_reference_unreadable',
+          filepath: file.filepath,
+          message: errorMessage(error),
+        },
+        { cause: error },
+      );
+    }
+  }
+
+  /** Records one resolved reference and pulls in the package behind it. */
+  private async linkReference(
+    id: number,
+    ref: PackageFileReference,
+    pinned: Map<number, number> | null,
+    fileSet: ReadonlySet<string>,
+  ): Promise<void> {
+    if (ref.packageId === id) {
+      if (!fileSet.has(ref.filepath)) {
+        throw packageDependencyError(
+          'package_dependency_missing_file',
+          `Package ${id} does not contain ${ref.filepath}, which its own sources reference.`,
+          { packageId: id, filepath: ref.filepath },
+        );
+      }
+      return;
+    }
+
+    if (this.visiting.includes(ref.packageId)) {
+      throw packageDependencyError(
+        'package_dependency_cycle',
+        'Packages reference each other in a cycle.',
+        { cycle: [...this.visiting, ref.packageId].join('->') },
+      );
+    }
+
+    if (!this.revisionByPackage.has(ref.packageId)) {
+      await this.resolvePackage(
+        ref.packageId,
+        pinned?.get(ref.packageId) ?? null,
+      );
+    }
+
+    const dependencyFiles = this.filesByPackage.get(ref.packageId);
+    if (
+      !dependencyFiles ||
+      !dependencyFiles.some((file) => file.filepath === ref.filepath)
+    ) {
+      throw packageDependencyError(
+        'package_dependency_missing_file',
+        `Package ${ref.packageId} does not contain ${ref.filepath}, which its dependents reference.`,
+        { packageId: ref.packageId, filepath: ref.filepath },
+      );
+    }
+
+    const direct = this.referencesByPackage.get(id);
+    if (direct) {
+      direct.add(ref.packageId);
+    } else {
+      this.referencesByPackage.set(id, new Set([ref.packageId]));
+    }
+
+    if (id === this.ports.rootId && !this.seenDirectDeps.has(ref.packageId)) {
+      this.seenDirectDeps.add(ref.packageId);
+      this.directDependencyIds.push(ref.packageId);
+    }
   }
 
   private dependencyTextFiles(): Map<number, PackageTextFile[]> {

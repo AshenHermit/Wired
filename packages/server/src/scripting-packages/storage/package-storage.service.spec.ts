@@ -268,21 +268,22 @@ describe('PackageStorageService', () => {
     });
   });
 
-  describe('rewriteRevision', () => {
-    it('rewrites a published revision and keeps a backup until finished', async () => {
+  describe('beginRewrite', () => {
+    it('rewrites a published revision and keeps a backup until committed', async () => {
       const original = Buffer.from('res://packages/old/a.gd');
       await storage.saveDraftFile(7, 1, 'a.gd', original);
       await storage.publishRevision(7, 1, [entry('a.gd', original)], commit);
 
-      const files = await storage.rewriteRevision(
-        7,
-        1,
-        'published',
+      const rewrite = await storage.beginRewrite(
+        [{ packageId: 7, revision: 1, kind: 'published' }],
         (filepath, data) => rewriteSlugReferences(filepath, data, 'old', 'new'),
       );
 
-      expect(files).toEqual([
-        entry('a.gd', Buffer.from('res://packages/new/a.gd')),
+      expect(rewrite.results).toEqual([
+        {
+          target: { packageId: 7, revision: 1, kind: 'published' },
+          files: [entry('a.gd', Buffer.from('res://packages/new/a.gd'))],
+        },
       ]);
       await expect(storage.readPublishedFile(7, 1, 'a.gd')).resolves.toEqual(
         Buffer.from('res://packages/new/a.gd'),
@@ -291,27 +292,31 @@ describe('PackageStorageService', () => {
         existsSync(path.join(storage.packageRootDir(7), 'revisions', '1.old')),
       ).toBe(true);
 
-      await storage.finishRewrite(7, 1, 'published');
+      await rewrite.commit();
 
       expect(
         existsSync(path.join(storage.packageRootDir(7), 'revisions', '1.old')),
       ).toBe(false);
     });
 
-    it('returns null for a draft directory that was never uploaded', async () => {
-      await expect(
-        storage.rewriteRevision(7, 2, 'draft', (filepath, data) => data),
-      ).resolves.toBeNull();
+    it('omits a draft directory that was never uploaded', async () => {
+      const rewrite = await storage.beginRewrite(
+        [{ packageId: 7, revision: 2, kind: 'draft' }],
+        (filepath, data) => data,
+      );
+
+      expect(rewrite.results).toEqual([]);
     });
 
     it('restores the original bytes when the rewrite is aborted', async () => {
       const original = Buffer.from('res://packages/old/a.gd');
       await storage.saveDraftFile(7, 3, 'a.gd', original);
 
-      await storage.rewriteRevision(7, 3, 'draft', (filepath, data) =>
-        rewriteSlugReferences(filepath, data, 'old', 'new'),
+      const rewrite = await storage.beginRewrite(
+        [{ packageId: 7, revision: 3, kind: 'draft' }],
+        (filepath, data) => rewriteSlugReferences(filepath, data, 'old', 'new'),
       );
-      await storage.abortRewrite(7, 3, 'draft');
+      await rewrite.abort();
 
       await expect(storage.readDraftFile(7, 3, 'a.gd')).resolves.toBe(
         'res://packages/old/a.gd',
@@ -324,15 +329,16 @@ describe('PackageStorageService', () => {
       const dir = storage.draftRevisionDir(7, 4);
       renameSync(dir, `${dir}.old`);
 
-      const files = await storage.rewriteRevision(
-        7,
-        4,
-        'draft',
+      const rewrite = await storage.beginRewrite(
+        [{ packageId: 7, revision: 4, kind: 'draft' }],
         (filepath, data) => rewriteSlugReferences(filepath, data, 'old', 'new'),
       );
 
-      expect(files).toEqual([
-        entry('a.gd', Buffer.from('res://packages/new/a.gd')),
+      expect(rewrite.results).toEqual([
+        {
+          target: { packageId: 7, revision: 4, kind: 'draft' },
+          files: [entry('a.gd', Buffer.from('res://packages/new/a.gd'))],
+        },
       ]);
     });
   });
