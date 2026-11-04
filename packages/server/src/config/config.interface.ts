@@ -1,5 +1,7 @@
 export interface AppConfig {
   nodeEnv: 'development' | 'production';
+  /** Port the HTTP server listens on. */
+  port: number;
   db: {
     host: string;
     port: number;
@@ -11,9 +13,20 @@ export interface AppConfig {
   };
   site: {
     commonDomain: string;
+    apiDomain: string;
     host: string;
+    /**
+     * Origin allowed to call the API with credentials, or `null` when
+     * `SITE_HOST` is unset and any origin may call it anonymously.
+     */
+    corsOrigin: string | null;
     authSecret: string;
     authCookieName: string;
+  };
+  auth: {
+    googleClientId: string;
+    googleClientSecret: string;
+    googleCallbackUrl?: string;
   };
   storage: {
     dir: string;
@@ -56,5 +69,8 @@ export interface AppConfig {
   packages: {
     readSecret: string;
     readTtlSec: number;
+    /** Artifact builds allowed per `(package, revision, room)` per window. */
+    artifactBuildRateLimit: number;
+    artifactBuildRateWindowMs: number;
   };
 }

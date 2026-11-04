@@ -1,5 +1,5 @@
 {
-  "name": "scriptio2",
+  "name": "wired",
   "version": "1.0.0",
   "private": true,
   "packageManager": "pnpm@10.12.1",
@@ -7,11 +7,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "pnpm run --parallel dev",
     "dev:server": "pnpm --filter server start:dev",
     "build:server": "pnpm --filter server build",
     "start:server": "pnpm --filter server start:prod",
-    "dev:frontend": "pnpm --filter frontend dev",
+    "dev:frontend": "pnpm --filter frontend dev -- -p 3001",
     "build:frontend": "pnpm --filter frontend build",
     "start:frontend": "pnpm --filter frontend start",
     "check-types:frontend": "pnpm --filter frontend check-types",

@@ -1,5 +1,4 @@
 import { ImageBackground } from "@/components/layout/ImageBackground";
-import { UserProvider } from "@/components/providers/UserProvider";
 import { LocaleSwitcher } from "@/components/i18n/LocaleSwitcher";
 import Image from "next/image";
 

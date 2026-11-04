@@ -268,6 +268,7 @@
     },
     "errors": {
       "loginRequired": "Sign in to create packages.",
+    "notRoomMember": "Only the room author and its contributors can change its packages.",
       "nameRequired": "Enter a package name",
       "slugRequired": "Enter a package slug",
       "dirOccupied": "The editor already has a directory with slug {slug}; rename or delete it",
@@ -278,7 +279,7 @@
       "workshopLookupFailed": "Failed to check the workshop record",
       "updateMetadataFailed": "Failed to update the package metadata",
       "downloadFailed": "Failed to download the package",
-      "addFromWorkshopFailed": "Failed to add the package from the workshop",
+      "copyFromWorkshopFailed": "Failed to add the package from the workshop",
       "publishFailed": "Failed to publish the package to the workshop",
       "forkFailed": "Failed to create the fork",
       "removeFailed": "Failed to remove the package",

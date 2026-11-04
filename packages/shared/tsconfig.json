@@ -10,8 +10,7 @@
     ],
     "moduleResolution": "bundler",
     "experimentalDecorators": true,
-    "strictNullChecks": true,
-    "noImplicitAny": false,
+    "strict": true,
     "skipLibCheck": true,
   },
   "include": [

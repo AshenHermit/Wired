@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Post,
   Req,
   Res,
@@ -13,11 +15,11 @@ import { Response } from 'express';
 import { GoogleAuthenticatedRequest } from './google/auth-google.strategy';
 import { AppConfigService } from 'src/config/config.service';
 import { ApiOkResponse } from '@nestjs/swagger';
-import { UsersService } from '../users/users.service';
-import { CreateUserDTO } from './create-user.dto';
-import { AuthTokenDTO } from './auth-token.dto';
-import { AuthUserDTO } from './auth-user.dto';
-import { UseAuthGuard } from './jwt-auth.guard';
+import { UsersService } from 'src/users/users.service';
+import { CreateUserDto } from 'src/users/dto/create-user.dto';
+import { AuthTokenDto } from './dto/auth-token.dto';
+import { AuthUserDto } from './dto/auth-user.dto';
+import { Public, UseAuthGuard } from './auth-policy';
 
 @Controller('auth')
 export class AuthController {
@@ -27,9 +29,10 @@ export class AuthController {
     private readonly config: AppConfigService,
   ) {}
 
+  @Public()
   @Post('register')
-  @ApiOkResponse({ type: AuthTokenDTO })
-  async register(@Body() createUserDto: CreateUserDTO) {
+  @ApiOkResponse({ type: AuthTokenDto })
+  async register(@Body() createUserDto: CreateUserDto) {
     await this.usersService.create(createUserDto);
     return await this.authService.login(
       createUserDto.email,
@@ -37,28 +40,30 @@ export class AuthController {
     );
   }
 
+  @Public()
   @Post('login')
-  @ApiOkResponse({ type: AuthTokenDTO })
+  @ApiOkResponse({ type: AuthTokenDto })
   async login(
     @Res({ passthrough: true }) res: Response,
-    @Body() body: AuthUserDTO,
+    @Body() body: AuthUserDto,
   ) {
     const token = await this.authService.login(body.email, body.password);
     this.authService.writeCookie(res, token);
     return token;
   }
   @Post('logout')
-  @ApiOkResponse({ schema: { type: 'boolean' } })
+  @HttpCode(HttpStatus.NO_CONTENT)
   @UseAuthGuard()
-  logout(@Res({ passthrough: true }) res: Response) {
+  logout(@Res({ passthrough: true }) res: Response): void {
     this.authService.clearCookie(res);
-    return true;
   }
 
+  @Public()
   @Get('google')
   @UseGuards(GoogleOauthGuard)
   async google() {}
 
+  @Public()
   @Get('callback/google')
   @UseGuards(GoogleOauthGuard)
   async googleCallback(

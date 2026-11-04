@@ -9,49 +9,50 @@ import {
   Logger,
   NotFoundException,
   OnApplicationBootstrap,
-  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Not, Repository } from 'typeorm';
+import { EntityManager, In, IsNull, Not, Repository } from 'typeorm';
 import { PackageFileEntry } from '@wired-io/shared';
+import { errorMessage } from 'src/common/errors';
+import { isUniqueViolation } from 'src/common/pg-errors';
+import { withPublicUsers } from 'src/common/public-user';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { User } from 'src/database/entities/user.entity';
 import { Room } from 'src/database/entities/room.entity';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
-import { canEditRoom } from 'src/rooms/room-access';
+import { canEditRoom, canViewRoom, isRoomMember } from 'src/rooms/room-access';
 import {
   PackageStorageService,
-  RevisionKind,
-} from './package-storage.service';
-import { PackageDeliveryService } from './package-delivery.service';
-import { PackagePublishLockService } from './package-publish-lock.service';
-import { rewriteSlugReferences } from './package-slug-rewrite';
-import { normalizeTags } from './package-tags';
+  RevisionRewrite,
+  RevisionTarget,
+} from './storage/package-storage.service';
+import {
+  PinnedPackage,
+  pinnedPackageLoader,
+  walkPinnedClosure,
+} from './publish/package-dependency-graph';
+import { PackageDeliveryService } from './delivery/package-delivery.service';
+import { PackagePublishLockService } from './publish/package-publish-lock.service';
+import { packageSlugTaken } from './package-errors';
+import { rewriteSlugReferences } from './storage/package-slug-rewrite';
+import { normalizeTags } from './storage/package-tags';
 import {
   PACKAGE_REVISION_DISPATCHER,
   PackageRevisionDispatcher,
-} from 'src/godot-game/package-sync.types';
+} from 'src/common/runtime-contracts';
+import {
+  PackageSlugAvailability,
+  isValidPackageSlug,
+} from '@wired-io/shared';
 
-/** Same rule as `CreateScriptingPackageDto`: lowercase, digits, `_`, 1-64. */
-const SLUG_PATTERN = /^(?=.*[a-z])[a-z0-9_]+$/;
-const SLUG_MAX_LENGTH = 64;
-
-/** Availability of a slug in the requested scope plus the global scope. */
-export type PackageSlugAvailability = {
-  slug: string;
-  available: boolean;
-  reason?: 'taken';
-  global: { available: boolean; reason?: 'taken' };
-};
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    (error as { code?: string }).code === '23505'
-  );
+/** What a slug rename had to touch, reported once the transaction commits. */
+interface SlugRenameOutcome {
+  /** Present only when a revision directory actually moved. */
+  rewrite: RevisionRewrite | null;
+  rewrittenIds: number[];
+  enabledChanged: boolean;
 }
 
 @Injectable()
@@ -63,18 +64,13 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     private readonly packagesRepository: Repository<ScriptingPackage>,
     @InjectRepository(Room)
     private readonly roomsRepository: Repository<Room>,
-    @Optional()
-    private readonly storage?: PackageStorageService,
-    @Optional()
+    private readonly storage: PackageStorageService,
     @Inject(PACKAGE_REVISION_DISPATCHER)
-    private readonly dispatcher?: PackageRevisionDispatcher,
-    @Optional()
-    private readonly delivery?: PackageDeliveryService,
-    @Optional()
+    private readonly dispatcher: PackageRevisionDispatcher,
+    private readonly delivery: PackageDeliveryService,
     @InjectRepository(ScriptingPackageRevision)
-    private readonly revisionsRepository?: Repository<ScriptingPackageRevision>,
-    @Optional()
-    private readonly locks: PackagePublishLockService = new PackagePublishLockService(),
+    private readonly revisionsRepository: Repository<ScriptingPackageRevision>,
+    private readonly locks: PackagePublishLockService,
   ) {}
 
   /**
@@ -113,11 +109,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
 
   normalizeSlug(slug: string): string {
     const normalized = typeof slug === 'string' ? slug.trim() : '';
-    if (
-      normalized.length === 0 ||
-      normalized.length > SLUG_MAX_LENGTH ||
-      !SLUG_PATTERN.test(normalized)
-    ) {
+    if (!isValidPackageSlug(normalized)) {
       throw new BadRequestException({
         code: 'invalid_slug',
         message:
@@ -162,41 +154,14 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       : { slug: normalized, available: true, global: scope };
   }
 
-  assertPackageCreation(user: User, dto: CreateScriptingPackageDto): void {
-    if (dto.authorId !== user.id) {
-      throw new ForbiddenException(
-        'You are not allowed to create this package',
-      );
-    }
-  }
-  async assertPackageEditing(user: User, packageId: number): Promise<void> {
-    const pkg = await this.packagesRepository.findOne({
-      where: { id: packageId },
-      relations: ['author', 'contributors', 'room', 'room.author'],
-    });
-    if (!pkg) {
-      throw new NotFoundException(
-        `ScriptingPackage with id=${packageId} not found`,
-      );
-    }
-
-    const isAuthor = pkg.author?.id === user.id;
-    const isContributor = pkg.contributors?.some(
-      (contributor) => contributor.id === user.id,
-    );
-    const isRoomAuthor = pkg.room ? canEditRoom(pkg.room, user.id) : false;
-
-    if (!isAuthor && !isContributor && !isRoomAuthor) {
-      throw new ForbiddenException('You are not allowed to edit this package');
-    }
-  }
-
   /**
-   * Publishing is broader than editing: a room contributor may emit revisions.
-   * Workshop packages (`room = null`) never receive revisions over HTTP, so
-   * they are rejected even for their own author.
+   * Loads the package with everything the access checks need.
+   *
+   * Editing and publishing ask different questions of the same row, so the
+   * query, its relations and the not-found answer live here instead of being
+   * restated in each and drifting apart.
    */
-  async assertPackagePublishing(user: User, packageId: number): Promise<void> {
+  private async loadForAccess(packageId: number): Promise<ScriptingPackage> {
     const pkg = await this.packagesRepository.findOne({
       where: { id: packageId },
       relations: [
@@ -212,20 +177,37 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
         `ScriptingPackage with id=${packageId} not found`,
       );
     }
+    return pkg;
+  }
 
-    const isAuthor = pkg.author?.id === user.id;
-    const isContributor = pkg.contributors?.some(
-      (contributor) => contributor.id === user.id,
+  /** Whether the user wrote the package or was added to it directly. */
+  private static ownsPackage(pkg: ScriptingPackage, user: User): boolean {
+    return (
+      pkg.author?.id === user.id ||
+      Boolean(pkg.contributors?.some((contributor) => contributor.id === user.id))
     );
-    const isRoomMember =
-      Boolean(pkg.room) &&
-      (pkg.room!.author?.id === user.id ||
-        (pkg.room!.contributors?.some(
-          (contributor) => contributor.id === user.id,
-        ) ??
-          false));
+  }
 
-    if (!isAuthor && !isContributor && !isRoomMember) {
+  async assertPackageEditing(user: User, packageId: number): Promise<void> {
+    const pkg = await this.loadForAccess(packageId);
+    const isRoomAuthor = pkg.room ? canEditRoom(pkg.room, user.id) : false;
+
+    if (!ScriptingPackagesService.ownsPackage(pkg, user) && !isRoomAuthor) {
+      throw new ForbiddenException('You are not allowed to edit this package');
+    }
+  }
+
+  /**
+   * Publishing is broader than editing: a room contributor may emit revisions.
+   * Workshop packages (`room = null`) never receive revisions over HTTP, so
+   * they are rejected even for their own author.
+   */
+  async assertPackagePublishing(user: User, packageId: number): Promise<void> {
+    const pkg = await this.loadForAccess(packageId);
+
+    const isRoomMemberOfRoom = Boolean(pkg.room) && isRoomMember(pkg.room!, user.id);
+
+    if (!ScriptingPackagesService.ownsPackage(pkg, user) && !isRoomMemberOfRoom) {
       throw new ForbiddenException(
         'You are not allowed to publish this package',
       );
@@ -238,40 +220,64 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     }
   }
 
-  findAll(): Promise<ScriptingPackage[]> {
-    return this.packagesRepository.find({
-      relations: [
-        'author',
-        'contributors',
-        'room',
-        'parentPackage',
-        'childrenPackages',
-      ],
-    });
+  findOne(id: number): Promise<ScriptingPackage> {
+    return this.packagesRepository
+      .findOne({
+        where: { id },
+        relations: [
+          'author',
+          'contributors',
+          'room',
+          'parentPackage',
+          'childrenPackages',
+        ],
+      })
+      .then((pkg) => {
+        if (!pkg) {
+          throw new NotFoundException(`ScriptingPackage with id=${id} not found`);
+        }
+        return pkg;
+      });
   }
 
-  async findOne(id: number): Promise<ScriptingPackage> {
+  /**
+   * A package as seen by `viewer`: workshop packages are catalogue entries,
+   * room packages follow the room's own visibility.
+   *
+   * A package in a room the viewer cannot see answers like a missing one, so
+   * probing ids cannot distinguish private packages from nonexistent ones.
+   */
+  async findVisibleOne(
+    id: number,
+    viewer: User | null,
+  ): Promise<ScriptingPackage> {
     const pkg = await this.packagesRepository.findOne({
       where: { id },
       relations: [
         'author',
         'contributors',
         'room',
+        'room.author',
+        'room.contributors',
         'parentPackage',
         'childrenPackages',
       ],
     });
-    if (!pkg) {
+    if (!pkg || (pkg.room && !canViewRoom(pkg.room, viewer?.id))) {
       throw new NotFoundException(`ScriptingPackage with id=${id} not found`);
     }
-    return pkg;
+    // Anonymous callers read this package, so its users lose their email.
+    return withPublicUsers({
+      ...pkg,
+      ...(pkg.room ? { room: withPublicUsers(pkg.room) } : {}),
+    });
   }
 
   async create(
     dto: CreateScriptingPackageDto,
     user: User,
   ): Promise<ScriptingPackage> {
-    const { authorId, roomId, parentPackageId, ...data } = dto;
+    const { roomId, parentPackageId, ...data } = dto;
 
     // Public creation always belongs to a room; the global workshop scope is
     // written only through `createGlobalRecord`.
@@ -285,12 +291,6 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     const slug = this.normalizeSlug(dto.slug);
     data.tags = normalizeTags(dto.tags ?? []);
 
-    if (authorId !== undefined && authorId !== user.id) {
-      throw new ForbiddenException(
-        'You are not allowed to create a package for another author',
-      );
-    }
-
     const foundRoom = await this.roomsRepository.findOne({
       where: { id: roomId },
       relations: ['author', 'contributors'],
@@ -298,9 +298,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     if (!foundRoom) {
       throw new NotFoundException(`Room with id=${roomId} not found`);
     }
-    const canEdit =
-      foundRoom.author?.id === user.id ||
-      foundRoom.contributors?.some((contributor) => contributor.id === user.id);
+    const canEdit = isRoomMember(foundRoom, user.id);
     if (!canEdit) {
       throw new ForbiddenException(
         'You are not allowed to attach a package to this room',
@@ -387,11 +385,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
               : { slug, room: { id: scope.roomId } },
         });
         if (live) {
-          throw new ConflictException({
-            code: 'slug_taken',
-            slug,
-            message: 'Slug уже занят',
-          });
+          throw packageSlugTaken(slug);
         }
 
         const pkg = packages.create({
@@ -407,11 +401,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
           return saved.id;
         } catch (error) {
           if (isUniqueViolation(error)) {
-            throw new ConflictException({
-              code: 'slug_taken',
-              slug,
-              message: 'Slug уже занят',
-            });
+            throw packageSlugTaken(slug);
           }
           throw error;
         }
@@ -476,8 +466,6 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     if (dto.description !== undefined) pkg.description = dto.description;
     if (dto.dependencies !== undefined) pkg.dependencies = dto.dependencies;
     if (dto.tags !== undefined) pkg.tags = normalizeTags(dto.tags);
-    if (dto.scripts !== undefined) pkg.scripts = dto.scripts;
-    if (dto.physicalFiles !== undefined) pkg.physicalFiles = dto.physicalFiles;
 
     const previousEnabled = pkg.enabled !== false;
     if (dto.enabled === true && previousEnabled === false) {
@@ -490,11 +478,11 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
 
   private async notifyEnabledChanged(packageId: number): Promise<void> {
     try {
-      await this.dispatcher?.packageEnabledChanged(packageId);
+      await this.dispatcher.packageEnabledChanged(packageId);
     } catch (error) {
       this.logger.warn(
         `Package ${packageId} was saved but its room was not notified: ${
-          error instanceof Error ? error.message : String(error)
+          errorMessage(error)
         }`,
       );
     }
@@ -520,186 +508,37 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       });
     }
     const roomId = pkg.room.id;
-    const scope = `room:${roomId}`;
-    const prepared: Array<{
-      packageId: number;
-      revision: number;
-      kind: RevisionKind;
-    }> = [];
-    let rewrittenIds: number[] = [];
-    let enabledChanged = false;
 
+    let outcome: SlugRenameOutcome;
     try {
-      await this.packagesRepository.manager.transaction(async (manager) => {
-        const packages = manager.getRepository(ScriptingPackage);
-        // Another client may have renamed this package between the outer read
-        // and this lock. The row lock keeps the slug stable for the rewrite,
-        // and the rewrite source must be the slug the bytes actually use.
-        const current = await packages.findOne({
-          where: { id: pkg.id },
-          lock: { mode: 'pessimistic_write' },
-        });
-        if (!current) {
-          throw new NotFoundException(`Package ${pkg.id} not found`);
-        }
-        const oldSlug = current.slug ?? String(pkg.id);
-        if (oldSlug === nextSlug) {
-          // The target slug is already in place: only the other fields apply.
-          enabledChanged = await this.preparePackageUpdate(current, dto);
-          await packages.save(current);
-          return;
-        }
-        const lockKeys = [
-          `package_slug:${scope}:${oldSlug}`,
-          `package_slug:${scope}:${nextSlug}`,
-        ].sort();
-        for (const key of lockKeys) {
-          await manager.query(
-            'SELECT pg_advisory_xact_lock(hashtext($1))',
-            [key],
-          );
-        }
-        const live = await packages.findOne({
-          where: { slug: nextSlug, room: { id: roomId } },
-        });
-        if (live && live.id !== pkg.id) {
-          throw new ConflictException({
-            code: 'slug_taken',
-            slug: nextSlug,
-            message: 'Slug уже занят',
-          });
-        }
-        const dependents =
-          (await this.delivery?.findDependentRoomPackages(pkg.id)) ?? [];
-        if (dependents.length > 0 && dto.confirmSlugRename !== true) {
-          const rows = await manager.getRepository(ScriptingPackage).find({
-            where: { id: In(dependents.map((row) => row.packageId)) },
-          });
-          throw new ConflictException({
-            code: 'slug_in_use_by_dependents',
-            reason: 'dependents',
-            message: 'На пакет ссылаются другие пакеты',
-            dependents: rows
-              .map((row) => ({ packageId: row.id, name: row.name }))
-              .sort((a, b) => a.packageId - b.packageId),
-          });
-        }
-
-        await this.locks.runWithPublishLocks(
-          [pkg.id, ...dependents.map((row) => row.packageId)],
-          async () => {
-            const revisions = manager.getRepository(ScriptingPackageRevision);
-            const targets: Array<{
-              packageId: number;
-              revision: number;
-              kind: RevisionKind;
-            }> = [];
-            for (const row of await revisions.find({
-              where: { package: { id: pkg.id } },
-            })) {
-              if (row.status === 'published' || row.status === 'draft') {
-                targets.push({
-                  packageId: pkg.id,
-                  revision: row.revision,
-                  kind: row.status,
-                });
-              }
-            }
-            for (const dependent of dependents) {
-              for (const row of await revisions.find({
-                where: {
-                  package: { id: dependent.packageId },
-                  status: 'published',
-                },
-              })) {
-                targets.push({
-                  packageId: dependent.packageId,
-                  revision: row.revision,
-                  kind: 'published',
-                });
-              }
-            }
-
-            const transform = (filepath: string, data: Buffer) =>
-              rewriteSlugReferences(filepath, data, oldSlug, nextSlug);
-            const rewritten: Array<{
-              id: number;
-              files: PackageFileEntry[];
-            }> = [];
-            for (const target of targets) {
-              prepared.push(target);
-              const files = await this.storage!.rewriteRevision(
-                target.packageId,
-                target.revision,
-                target.kind,
-                transform,
-              );
-              if (!files) continue;
-              const row = await revisions.findOneOrFail({
-                where: {
-                  package: { id: target.packageId },
-                  revision: target.revision,
-                },
-              });
-              // A draft declares only the files uploaded so far: keep that
-              // set and refresh the hashes of the files that are on disk.
-              const nextFiles =
-                target.kind === 'published'
-                  ? files
-                  : this.mergeRevisionFiles(row.files ?? [], files);
-              rewritten.push({ id: row.id, files: nextFiles });
-            }
-
-            const changedEnabled = await this.preparePackageUpdate(pkg, dto);
-            pkg.slug = nextSlug;
-            await manager.getRepository(ScriptingPackage).save(pkg);
-            for (const row of rewritten) {
-              await manager
-                .getRepository(ScriptingPackageRevision)
-                .update({ id: row.id }, { files: row.files });
-            }
-            rewrittenIds = [
-              ...new Set(targets.map((target) => target.packageId)),
-            ].sort((a, b) => a - b);
-            enabledChanged = changedEnabled;
-          },
-        );
-      });
+      outcome = await this.packagesRepository.manager.transaction((manager) =>
+        this.rewriteRevisionsAndSwapSlug(manager, pkg, nextSlug, dto, roomId),
+      );
     } catch (error) {
-      for (const target of prepared.reverse()) {
-        await this.storage
-          ?.abortRewrite(target.packageId, target.revision, target.kind)
-          .catch((cause) =>
-            this.logger.warn(`rewrite abort failed: ${String(cause)}`),
-          );
-      }
       if (error instanceof HttpException) throw error;
       this.logger.error(
-        `Package ${pkg.id} slug rewrite failed: ${String(error)}`,
+        `Package ${pkg.id} slug rewrite failed: ${errorMessage(error)}`,
       );
-      throw new InternalServerErrorException({
-        code: 'slug_rewrite_failed',
-        message: 'Не удалось переписать ссылки на пакет',
-      });
+      throw new InternalServerErrorException(
+        {
+          code: 'slug_rewrite_failed',
+          message: 'Не удалось переписать ссылки на пакет',
+        },
+        { cause: error },
+      );
     }
 
-    for (const target of prepared) {
-      await this.storage
-        ?.finishRewrite(target.packageId, target.revision, target.kind)
-        .catch((cause) =>
-          this.logger.warn(`rewrite cleanup failed: ${String(cause)}`),
-        );
-    }
-    for (const packageId of rewrittenIds) {
+    await outcome.rewrite?.commit();
+    for (const packageId of outcome.rewrittenIds) {
       await this.delivery
-        ?.invalidatePackage(packageId)
+        .invalidatePackage(packageId)
         .catch((cause) =>
-          this.logger.warn(`artifact invalidation failed: ${String(cause)}`),
+          this.logger.warn(`artifact invalidation failed: ${errorMessage(cause)}`),
         );
     }
-    if (rewrittenIds.length > 0) {
+    if (outcome.rewrittenIds.length > 0) {
       try {
-        await this.dispatcher?.packagesChanged(rewrittenIds);
+        await this.dispatcher.packagesChanged(outcome.rewrittenIds);
       } catch (cause) {
         this.logger.warn(
           `Package ${pkg.id} was renamed but its room was not notified: ${String(
@@ -708,10 +547,148 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
         );
       }
     }
-    if (enabledChanged) {
+    if (outcome.enabledChanged) {
       await this.notifyEnabledChanged(pkg.id);
     }
     return this.findOne(pkg.id);
+  }
+
+  /**
+   * Swaps the slug and rewrites every revision whose bytes reference it.
+   *
+   * Runs inside the caller's transaction: the row lock, the advisory slug locks
+   * and the publish locks all have to be held while the bytes move, or a
+   * concurrent publish could write a revision that still points at the old
+   * directory. The rewrite handle goes back to the caller so the backups are
+   * only dropped once the transaction commits; a failure after the rewrite
+   * restores them here instead of leaving that bookkeeping to the caller.
+   */
+  private async rewriteRevisionsAndSwapSlug(
+    manager: EntityManager,
+    pkg: ScriptingPackage,
+    nextSlug: string,
+    dto: UpdateScriptingPackageDto,
+    roomId: number,
+  ): Promise<SlugRenameOutcome> {
+    const packages = manager.getRepository(ScriptingPackage);
+    // Another client may have renamed this package between the outer read
+    // and this lock. The row lock keeps the slug stable for the rewrite,
+    // and the rewrite source must be the slug the bytes actually use.
+    const current = await packages.findOne({
+      where: { id: pkg.id },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!current) {
+      throw new NotFoundException(`Package ${pkg.id} not found`);
+    }
+    const oldSlug = current.slug ?? String(pkg.id);
+    if (oldSlug === nextSlug) {
+      // The target slug is already in place: only the other fields apply.
+      const enabledChanged = await this.preparePackageUpdate(current, dto);
+      await packages.save(current);
+      return { rewrite: null, rewrittenIds: [], enabledChanged };
+    }
+    const lockKeys = [
+      `package_slug:room:${roomId}:${oldSlug}`,
+      `package_slug:room:${roomId}:${nextSlug}`,
+    ].sort();
+    for (const key of lockKeys) {
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
+    }
+    const live = await packages.findOne({
+      where: { slug: nextSlug, room: { id: roomId } },
+    });
+    if (live && live.id !== pkg.id) {
+      throw packageSlugTaken(nextSlug);
+    }
+    const dependents =
+      (await this.delivery.findDependentRoomPackages(pkg.id)) ?? [];
+    if (dependents.length > 0 && dto.confirmSlugRename !== true) {
+      const rows = await packages.find({
+        where: { id: In(dependents.map((row) => row.packageId)) },
+      });
+      throw new ConflictException({
+        code: 'slug_in_use_by_dependents',
+        reason: 'dependents',
+        message: 'На пакет ссылаются другие пакеты',
+        dependents: rows
+          .map((row) => ({ packageId: row.id, name: row.name }))
+          .sort((a, b) => a.packageId - b.packageId),
+      });
+    }
+
+    return this.locks.runWithPublishLocks(
+      [pkg.id, ...dependents.map((row) => row.packageId)],
+      async () => {
+        const revisions = manager.getRepository(ScriptingPackageRevision);
+        const targets: RevisionTarget[] = [];
+        for (const row of await revisions.find({
+          where: { package: { id: pkg.id } },
+        })) {
+          if (row.status === 'published' || row.status === 'draft') {
+            targets.push({
+              packageId: pkg.id,
+              revision: row.revision,
+              kind: row.status,
+            });
+          }
+        }
+        for (const dependent of dependents) {
+          for (const row of await revisions.find({
+            where: {
+              package: { id: dependent.packageId },
+              status: 'published',
+            },
+          })) {
+            targets.push({
+              packageId: dependent.packageId,
+              revision: row.revision,
+              kind: 'published',
+            });
+          }
+        }
+
+        const rewrite = await this.storage.beginRewrite(targets, (filepath, data) =>
+          rewriteSlugReferences(filepath, data, oldSlug, nextSlug),
+        );
+        try {
+          const rewritten = new Map<number, PackageFileEntry[]>();
+          for (const { target, files } of rewrite.results) {
+            const row = await revisions.findOneOrFail({
+              where: {
+                package: { id: target.packageId },
+                revision: target.revision,
+              },
+            });
+            // A draft declares only the files uploaded so far: keep that
+            // set and refresh the hashes of the files that are on disk.
+            rewritten.set(
+              row.id,
+              target.kind === 'published'
+                ? files
+                : this.mergeRevisionFiles(row.files ?? [], files),
+            );
+          }
+
+          const enabledChanged = await this.preparePackageUpdate(pkg, dto);
+          pkg.slug = nextSlug;
+          await packages.save(pkg);
+          for (const [id, files] of rewritten) {
+            await revisions.update({ id }, { files });
+          }
+          return {
+            rewrite,
+            rewrittenIds: [
+              ...new Set(targets.map((target) => target.packageId)),
+            ].sort((a, b) => a - b),
+            enabledChanged,
+          };
+        } catch (error) {
+          await rewrite.abort();
+          throw error;
+        }
+      },
+    );
   }
 
   /** Refreshes the declared size and hash of the files that were rewritten. */
@@ -726,13 +703,6 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
   }
 
   /**
-   * A room package may reference files of another package by absolute path
-   * (`res://packages/<id>/...`), and the runtime keeps those references
-   * pointing into the referenced package's own directory. Deleting a package
-   * whose files are still referenced would therefore break every enabled
-   * dependent on its next reload, so the delete is refused while one exists.
-   */
-  /**
    * Enabling is the fourth invariant point: a package may have been disabled
    * while one of its dependencies was deleted, and dispatching it then would
    * fail every later game connection for the room.
@@ -743,27 +713,10 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       relations: { room: true },
     });
     if (!pkg?.room) return;
-    if (!this.revisionsRepository || !this.storage) return;
     const roomId = pkg.room.id;
-    const visited = new Set<number>();
-    const queue: number[] = [packageId];
-    while (queue.length > 0) {
-      const currentId = queue.pop() as number;
-      if (visited.has(currentId)) continue;
-      visited.add(currentId);
-      const latest = await this.revisionsRepository.findOne({
-        where: { package: { id: currentId }, status: 'published' },
-        relations: { package: true },
-        order: { revision: 'DESC' },
-      });
-      if (!latest) continue;
-      const pins = await this.storage.readPinnedDependencies(
-        currentId,
-        latest.revision,
-      );
-      if (!pins) continue;
-      for (const dependencyId of pins.keys()) {
-        if (visited.has(dependencyId)) continue;
+    await walkPinnedClosure([packageId], {
+      load: pinnedPackageLoader(this.revisionsRepository, this.storage),
+      onDiscover: async (dependencyId) => {
         const dependency = await this.packagesRepository.findOne({
           where: { id: dependencyId },
           relations: { room: true },
@@ -785,15 +738,19 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
             name: dependency.name,
           });
         }
-        queue.push(dependencyId);
-      }
-    }
+        return true;
+      },
+    });
   }
 
+  /**
+   * A room package may reference files of another package by absolute path
+   * (`res://packages/<id>/...`), and the runtime keeps those references
+   * pointing into the referenced package's own directory. Deleting a package
+   * whose files are still referenced would therefore break every enabled
+   * dependent on its next reload, so the delete is refused while one exists.
+   */
   private async assertNoEnabledDependents(packageId: number): Promise<void> {
-    if (!this.delivery) {
-      return;
-    }
     const dependents = await this.delivery.findDependentRoomPackages(packageId);
     if (dependents.length === 0) {
       return;
@@ -853,21 +810,21 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       }
     });
     try {
-      await this.storage?.removePackage(id);
+      await this.storage.removePackage(id);
     } catch (error) {
       this.logger.warn(
         `ScriptingPackage ${id} was deleted but its files were not removed: ${
-          error instanceof Error ? error.message : String(error)
+          errorMessage(error)
         }`,
       );
     }
     if (roomId !== null) {
       try {
-        this.dispatcher?.packageRemoved(id, roomId);
+        this.dispatcher.packageRemoved(id, roomId);
       } catch (error) {
         this.logger.warn(
           `Package ${id} was deleted but its room was not notified: ${
-            error instanceof Error ? error.message : String(error)
+            errorMessage(error)
           }`,
         );
       }

@@ -1,11 +1,7 @@
 import {
   BadRequestException,
-  HttpException,
-  HttpStatus,
   INestApplication,
-  NotFoundException,
   StreamableFile,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -14,25 +10,22 @@ import {
   PackageManifest,
   PackageRevision,
 } from '@wired-io/shared';
-import { PassThrough } from 'stream';
 import { Response } from 'express';
-import { randomUUID } from 'crypto';
-import { tmpdir } from 'os';
-import path from 'path';
 import request from 'supertest';
-import { RuntimeAuthGuard } from './guards/runtime-auth.guard';
-import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
+import { APP_GUARD } from '@nestjs/core';
 import { createValidationPipe } from 'src/common/validation';
 import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
 import { Room } from 'src/database/entities/room.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { User } from 'src/database/entities/user.entity';
 import { ScriptingPackagesController } from './scripting-packages.controller';
-import { ArtifactBuildRateLimiter } from './artifact-build.rate-limiter';
-import { PackageDeliveryService } from './package-delivery.service';
-import { PackageReadUrlService } from './package-read-url.service';
-import { PackageRevisionsService } from './package-revisions.service';
-import { PackageWorkshopService } from './package-workshop.service';
+import { WorkshopController } from './workshop/workshop.controller';
+import { PackageDeliveryController } from './delivery/package-delivery.controller';
+import { ArtifactBuildRateLimiter } from './delivery/artifact-build.rate-limiter';
+import { PackageDeliveryService } from './delivery/package-delivery.service';
+import { PackageReadUrlService } from './delivery/package-read-url.service';
+import { PackageRevisionsService } from './publish/package-revisions.service';
+import { PackageWorkshopService } from './workshop/package-workshop.service';
 import { ScriptingPackagesService } from './scripting-packages.service';
 
 describe('ScriptingPackagesController revisions API', () => {
@@ -55,19 +48,16 @@ describe('ScriptingPackagesController revisions API', () => {
   let packagesService: {
     assertPackageEditing: jest.Mock;
     assertPackagePublishing: jest.Mock;
+    findVisibleOne: jest.Mock;
   };
   let revisionsService: Record<string, jest.Mock>;
-  let delivery: Record<string, jest.Mock>;
-  let readUrls: { verifyToken: jest.Mock };
-  let workshop: { list: jest.Mock; lookup: jest.Mock };
-  let buildLimiter: { assertAllowed: jest.Mock };
-  let response: Response & { set: jest.Mock };
   let controller: ScriptingPackagesController;
 
   beforeEach(() => {
     packagesService = {
       assertPackageEditing: jest.fn(),
       assertPackagePublishing: jest.fn(),
+      findVisibleOne: jest.fn(),
     };
     revisionsService = {
       createDraft: jest.fn(async () => revision),
@@ -82,28 +72,9 @@ describe('ScriptingPackagesController revisions API', () => {
         size: 3,
       })),
     };
-    delivery = {
-      getRuntimeManifest: jest.fn(),
-      resolveRuntimeFile: jest.fn(() =>
-        Promise.resolve({ path: __filename, size: 3 }),
-      ),
-    };
-    readUrls = { verifyToken: jest.fn(() => true) };
-    workshop = {
-      list: jest.fn(() => Promise.resolve({ items: [], total: 0 })),
-      lookup: jest.fn(() => Promise.resolve({ package: null })),
-    };
-    buildLimiter = { assertAllowed: jest.fn() };
-    response = Object.assign(new PassThrough(), {
-      set: jest.fn(),
-    }) as unknown as Response & { set: jest.Mock };
     controller = new ScriptingPackagesController(
       packagesService as unknown as ScriptingPackagesService,
       revisionsService as unknown as PackageRevisionsService,
-      delivery as unknown as PackageDeliveryService,
-      readUrls as unknown as PackageReadUrlService,
-      workshop as unknown as PackageWorkshopService,
-      buildLimiter as unknown as ArtifactBuildRateLimiter,
     );
   });
 
@@ -228,17 +199,18 @@ describe('ScriptingPackagesController revisions API', () => {
     };
     revisionsService.getManifest.mockResolvedValueOnce(manifest);
 
-    await expect(controller.getManifest(7)).resolves.toBe(manifest);
+    await expect(controller.getManifest({ user: null } as never, 7)).resolves.toBe(manifest);
     expect(revisionsService.getManifest).toHaveBeenCalledWith(7);
+    expect(packagesService.findVisibleOne).toHaveBeenCalledWith(7, null);
   });
 
   it('serves a manifest of an explicit revision', async () => {
-    await controller.getRevisionManifest(7, 2);
+    await controller.getRevisionManifest({ user: null } as never, 7, 2);
     expect(revisionsService.getManifestForRevision).toHaveBeenCalledWith(7, 2);
   });
 
   it('streams a published file as binary', async () => {
-    const result = await controller.getRevisionFile(7, 2, [
+    const result = await controller.getRevisionFile({ user: null } as never, 7, 2, [
       'scripts',
       'hero.gd',
     ]);
@@ -253,289 +225,6 @@ describe('ScriptingPackagesController revisions API', () => {
       type: 'application/octet-stream',
       length: 3,
     });
-  });
-
-  it('returns a signed runtime manifest for a published revision and room', async () => {
-    delivery.getRuntimeManifest.mockResolvedValue({
-      packageId: 5,
-      revision: 3,
-    });
-
-    await expect(controller.runtimeManifest(5, 3, 7)).resolves.toMatchObject({
-      packageId: 5,
-    });
-    expect(delivery.getRuntimeManifest).toHaveBeenCalledWith(5, 3, 7);
-  });
-
-  it('rejects a runtime file with a token for another room', async () => {
-    readUrls.verifyToken.mockReturnValue(false);
-
-    await expect(
-      controller.runtimeFile(
-        5,
-        3,
-        ['a.gd'],
-        8,
-        'k'.repeat(64),
-        'bad',
-        response,
-      ),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
-    expect(delivery.resolveRuntimeFile).not.toHaveBeenCalled();
-  });
-
-  it('rejects a runtime file without a token', async () => {
-    await expect(
-      controller.runtimeFile(
-        5,
-        3,
-        ['a.gd'],
-        7,
-        'k'.repeat(64),
-        undefined as never,
-        response,
-      ),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
-    expect(readUrls.verifyToken).not.toHaveBeenCalled();
-    expect(delivery.resolveRuntimeFile).not.toHaveBeenCalled();
-  });
-
-  it('rejects a runtime file without an artifact key', async () => {
-    await expect(
-      controller.runtimeFile(5, 3, ['a.gd'], 7, '', 'good', response),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    expect(delivery.resolveRuntimeFile).not.toHaveBeenCalled();
-  });
-
-  it('streams a runtime file for a valid token', async () => {
-    await controller.runtimeFile(
-      5,
-      3,
-      ['a.gd'],
-      7,
-      'k'.repeat(64),
-      'good',
-      response,
-    );
-
-    expect(readUrls.verifyToken).toHaveBeenCalledWith('good', {
-      roomId: 7,
-      packageId: 5,
-      revision: 3,
-    });
-    expect(delivery.resolveRuntimeFile).toHaveBeenCalledWith(
-      5,
-      3,
-      7,
-      'k'.repeat(64),
-      'a.gd',
-    );
-    expect(response.set).toHaveBeenCalledWith({
-      'Content-Type': 'application/octet-stream',
-      'Content-Length': '3',
-      'Cache-Control': 'no-store',
-    });
-  });
-
-  it('rate-limits artifact builds before touching the delivery service', async () => {
-    buildLimiter.assertAllowed.mockImplementation(() => {
-      throw new HttpException(
-        'artifact_build_rate_limited',
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    });
-
-    await expect(controller.runtimeManifest(5, 3, 7)).rejects.toBeInstanceOf(
-      HttpException,
-    );
-    expect(buildLimiter.assertAllowed).toHaveBeenCalledWith(5, 3, 7);
-    expect(delivery.getRuntimeManifest).not.toHaveBeenCalled();
-  });
-
-  it('passes the artifact identity to the rate limiter', async () => {
-    delivery.getRuntimeManifest.mockResolvedValue({ packageId: 5 });
-
-    await controller.runtimeManifest(5, 3, 7);
-
-    expect(buildLimiter.assertAllowed).toHaveBeenCalledWith(5, 3, 7);
-    expect(delivery.getRuntimeManifest).toHaveBeenCalledWith(5, 3, 7);
-  });
-
-  it('returns a controlled 404 when the runtime file vanished before streaming', async () => {
-    delivery.resolveRuntimeFile.mockResolvedValueOnce({
-      path: path.join(tmpdir(), `wired-missing-${randomUUID()}.bin`),
-      size: 3,
-    });
-
-    await expect(
-      controller.runtimeFile(
-        5,
-        3,
-        ['a.gd'],
-        7,
-        'k'.repeat(64),
-        'good',
-        response,
-      ),
-    ).rejects.toBeInstanceOf(NotFoundException);
-  });
-});
-
-describe('ScriptingPackagesController runtime endpoint authorization', () => {
-  const roomId = 7;
-  const packageId = 5;
-  const revision = 3;
-  const artifactKey = 'k'.repeat(64);
-
-  let app: INestApplication;
-  let authenticatedUser: { id: number } | null;
-  let delivery: {
-    getRuntimeManifest: jest.Mock;
-    resolveRuntimeFile: jest.Mock;
-  };
-  let rooms: { findOne: jest.Mock };
-  let packages: { findOne: jest.Mock };
-
-  beforeAll(async () => {
-    delivery = {
-      getRuntimeManifest: jest.fn(() =>
-        Promise.resolve({
-          packageId,
-          revision,
-          roomId,
-        }),
-      ),
-      resolveRuntimeFile: jest.fn(() =>
-        Promise.resolve({
-          path: __filename,
-          size: 3,
-        }),
-      ),
-    };
-    rooms = {
-      findOne: jest.fn((options: { where: { id: number } }) =>
-        Promise.resolve(
-          options.where.id === roomId
-            ? { id: roomId, author: { id: 42 }, contributors: [] }
-            : null,
-        ),
-      ),
-    };
-    packages = {
-      findOne: jest.fn((options: { where: { id: number } }) =>
-        Promise.resolve(
-          options.where.id === packageId
-            ? { id: packageId, room: { id: roomId } }
-            : null,
-        ),
-      ),
-    };
-
-    const moduleRef = await Test.createTestingModule({
-      controllers: [ScriptingPackagesController],
-      providers: [
-        {
-          provide: ScriptingPackagesService,
-          useValue: { assertPackageEditing: jest.fn() },
-        },
-        {
-          provide: PackageRevisionsService,
-          useValue: {
-            getManifest: jest.fn(),
-            getManifestForRevision: jest.fn(),
-          },
-        },
-        { provide: PackageDeliveryService, useValue: delivery },
-        {
-          provide: PackageReadUrlService,
-          useValue: { verifyToken: () => true },
-        },
-        {
-          provide: PackageWorkshopService,
-          useValue: { list: jest.fn(), lookup: jest.fn() },
-        },
-        { provide: getRepositoryToken(Room), useValue: rooms },
-        { provide: getRepositoryToken(ScriptingPackage), useValue: packages },
-      ],
-    })
-      .overrideGuard(RuntimeAuthGuard)
-      .useValue({
-        canActivate: (context: {
-          switchToHttp: () => {
-            getRequest: () => { user?: unknown };
-          };
-        }) => {
-          if (!authenticatedUser) {
-            throw new UnauthorizedException();
-          }
-          context.switchToHttp().getRequest().user = authenticatedUser;
-          return true;
-        },
-      })
-      .compile();
-
-    app = moduleRef.createNestApplication();
-    await app.init();
-  });
-
-  afterAll(async () => {
-    await app?.close();
-  });
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-    authenticatedUser = { id: 42 };
-  });
-
-  const manifestUrl = `/scripting-packages/${packageId}/revisions/${revision}/runtime-manifest?room=${roomId}`;
-  const fileUrl = `/scripting-packages/${packageId}/revisions/${revision}/runtime-files/a.gd?room=${roomId}&key=${artifactKey}&token=good`;
-
-  it('rejects an anonymous runtime manifest with 401', async () => {
-    authenticatedUser = null;
-
-    await request(app.getHttpServer()).get(manifestUrl).expect(401);
-    expect(delivery.getRuntimeManifest).not.toHaveBeenCalled();
-  });
-
-  it('rejects an anonymous runtime file with 401', async () => {
-    authenticatedUser = null;
-
-    await request(app.getHttpServer()).get(fileUrl).expect(401);
-    expect(delivery.resolveRuntimeFile).not.toHaveBeenCalled();
-  });
-
-  it('rejects a non-member runtime manifest with 403', async () => {
-    authenticatedUser = { id: 99 };
-
-    await request(app.getHttpServer()).get(manifestUrl).expect(403);
-    expect(delivery.getRuntimeManifest).not.toHaveBeenCalled();
-  });
-
-  it('rejects a non-member runtime file with 403', async () => {
-    authenticatedUser = { id: 99 };
-
-    await request(app.getHttpServer()).get(fileUrl).expect(403);
-    expect(delivery.resolveRuntimeFile).not.toHaveBeenCalled();
-  });
-
-  it('rejects a package that is not attached to the requested room', async () => {
-    packages.findOne.mockResolvedValueOnce({
-      id: packageId,
-      room: { id: roomId + 1 },
-    });
-
-    await request(app.getHttpServer()).get(manifestUrl).expect(403);
-    expect(delivery.getRuntimeManifest).not.toHaveBeenCalled();
-  });
-
-  it('serves the runtime manifest to a room member', async () => {
-    await request(app.getHttpServer()).get(manifestUrl).expect(200);
-
-    expect(delivery.getRuntimeManifest).toHaveBeenCalledWith(
-      packageId,
-      revision,
-      roomId,
-    );
   });
 });
 
@@ -562,9 +251,6 @@ describe('ScriptingPackagesController lifecycle routes', () => {
     };
     controller = new ScriptingPackagesController(
       packagesService as unknown as ScriptingPackagesService,
-      {} as never,
-      {} as never,
-      {} as never,
       {} as never,
     );
   });
@@ -618,7 +304,7 @@ describe('ScriptingPackagesController lifecycle routes', () => {
 
 describe('ScriptingPackagesController slug route ordering', () => {
   let app: INestApplication;
-  let findOne: jest.Mock;
+  let findVisibleOne: jest.Mock;
   let update: jest.Mock;
   let checkSlugAvailability: jest.Mock;
   let listWorkshop: jest.Mock;
@@ -626,7 +312,9 @@ describe('ScriptingPackagesController slug route ordering', () => {
   let tagsWorkshop: jest.Mock;
 
   beforeAll(async () => {
-    findOne = jest.fn((id: number) => Promise.resolve({ id, slug: 'hero' }));
+    findVisibleOne = jest.fn((id: number) =>
+      Promise.resolve({ id, slug: 'hero' }),
+    );
     update = jest.fn((id: number) => Promise.resolve({ id, slug: 'hero' }));
     checkSlugAvailability = jest.fn((slug: string) =>
       Promise.resolve({ slug, available: true }),
@@ -636,13 +324,19 @@ describe('ScriptingPackagesController slug route ordering', () => {
     tagsWorkshop = jest.fn(() => Promise.resolve({ items: [], total: 0 }));
 
     const moduleRef = await Test.createTestingModule({
-      controllers: [ScriptingPackagesController],
+      // The workshop routes live in their own controller, and this module test
+      // exists to prove the registration order keeps them out of `:id`.
+      controllers: [
+        WorkshopController,
+        PackageDeliveryController,
+        ScriptingPackagesController,
+      ],
       providers: [
         {
           provide: ScriptingPackagesService,
           useValue: {
             assertPackageEditing: jest.fn(),
-            findOne,
+            findVisibleOne,
             update,
             checkSlugAvailability,
           },
@@ -655,18 +349,29 @@ describe('ScriptingPackagesController slug route ordering', () => {
         },
         {
           provide: PackageWorkshopService,
-          useValue: { list: listWorkshop, lookup: lookupWorkshop, tags: tagsWorkshop },
+          useValue: {
+            list: listWorkshop,
+            lookup: lookupWorkshop,
+            tags: tagsWorkshop,
+          },
         },
         { provide: getRepositoryToken(Room), useValue: { findOne: jest.fn() } },
         {
           provide: getRepositoryToken(ScriptingPackage),
           useValue: { findOne: jest.fn() },
         },
+        {
+          provide: ArtifactBuildRateLimiter,
+          useValue: { assertAllowed: jest.fn() },
+        },
+        {
+          // The app authenticates through APP_GUARD; this module test only
+          // exercises handler wiring, so the guard is stubbed open.
+          provide: APP_GUARD,
+          useValue: { canActivate: () => true },
+        },
       ],
-    })
-      .overrideGuard(JwtAuthGuard)
-      .useValue({ canActivate: () => true })
-      .compile();
+    }).compile();
 
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(createValidationPipe());
@@ -691,7 +396,7 @@ describe('ScriptingPackagesController slug route ordering', () => {
       undefined,
       undefined,
     );
-    expect(findOne).not.toHaveBeenCalled();
+    expect(findVisibleOne).not.toHaveBeenCalled();
   });
 
   it('passes the requested room to the availability check', async () => {
@@ -704,16 +409,22 @@ describe('ScriptingPackagesController slug route ordering', () => {
 
   it('passes the excluded package to the availability check', async () => {
     await request(app.getHttpServer())
-      .get('/scripting-packages/slug-availability?slug=hero&roomId=5&excludeId=7')
+      .get(
+        '/scripting-packages/slug-availability?slug=hero&roomId=5&excludeId=7',
+      )
       .expect(200);
 
     expect(checkSlugAvailability).toHaveBeenCalledWith('hero', 5, 7);
   });
 
+  it('no longer serves the unauthenticated package collection', async () => {
+    await request(app.getHttpServer()).get('/scripting-packages').expect(404);
+  });
+
   it('still parses numeric ids for the :id route', async () => {
     await request(app.getHttpServer()).get('/scripting-packages/7').expect(200);
 
-    expect(findOne).toHaveBeenCalledWith(7);
+    expect(findVisibleOne).toHaveBeenCalledWith(7, undefined);
   });
 
   it('serves the workshop listing instead of falling through to :id', async () => {
@@ -726,7 +437,7 @@ describe('ScriptingPackagesController slug route ordering', () => {
       limit: 5,
       offset: 10,
     });
-    expect(findOne).not.toHaveBeenCalled();
+    expect(findVisibleOne).not.toHaveBeenCalled();
   });
 
   it('serves the workshop lookup instead of falling through to :id', async () => {
@@ -735,7 +446,7 @@ describe('ScriptingPackagesController slug route ordering', () => {
       .expect(200);
 
     expect(lookupWorkshop).toHaveBeenCalledWith('hero');
-    expect(findOne).not.toHaveBeenCalled();
+    expect(findVisibleOne).not.toHaveBeenCalled();
   });
 
   it('serves workshop tags instead of falling through to :id', async () => {
@@ -748,7 +459,7 @@ describe('ScriptingPackagesController slug route ordering', () => {
       limit: 5,
       offset: undefined,
     });
-    expect(findOne).not.toHaveBeenCalled();
+    expect(findVisibleOne).not.toHaveBeenCalled();
   });
 
   it('treats blank limit and offset as absent', async () => {

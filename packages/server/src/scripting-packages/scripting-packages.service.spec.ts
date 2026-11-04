@@ -7,7 +7,35 @@ import {
 import { IsNull, Not } from 'typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackagesService } from './scripting-packages.service';
-import { PackagePublishLockService } from './package-publish-lock.service';
+import { PackagePublishLockService } from './publish/package-publish-lock.service';
+
+/**
+ * Collaborators the service refuses to run without.
+ *
+ * Specs that only care about one of them still have to pass the rest, because
+ * the service treats an unregistered collaborator as a wiring error rather than
+ * silently skipping the work it would have done.
+ */
+function collaborators(
+  overrides: {
+    storage?: unknown;
+    dispatcher?: unknown;
+    delivery?: unknown;
+    revisions?: unknown;
+    locks?: unknown;
+  } = {},
+): [never, never, never, never, never] {
+  return [
+    (overrides.storage ?? {}) as never,
+    (overrides.dispatcher ?? {}) as never,
+    (overrides.delivery ?? {
+      findDependentRoomPackages: jest.fn(async () => []),
+      invalidatePackage: jest.fn(async () => undefined),
+    }) as never,
+    (overrides.revisions ?? {}) as never,
+    (overrides.locks ?? new PackagePublishLockService()) as never,
+  ];
+}
 
 type FakeManager = {
   query: jest.Mock;
@@ -68,6 +96,71 @@ function attachTransactionManager(
 }
 
 describe('ScriptingPackagesService', () => {
+  describe('findVisibleOne', () => {
+    const author = { id: 1 };
+    const contributor = { id: 2 };
+    const stranger = { id: 4 };
+
+    function makeService(pkg: unknown) {
+      const packagesRepository = { findOne: jest.fn(async () => pkg) };
+      return new ScriptingPackagesService(
+        packagesRepository as never,
+        {} as never,
+        ...collaborators(),
+      );
+    }
+
+    it('serves a workshop package to an anonymous viewer', async () => {
+      const service = makeService({ id: 10, room: null });
+
+      await expect(service.findVisibleOne(10, null)).resolves.toEqual({
+        id: 10,
+        room: null,
+      });
+    });
+
+    it('serves a package of a public room to anyone', async () => {
+      const service = makeService({
+        id: 10,
+        room: { id: 5, isPublic: true, author, contributors: [] },
+      });
+
+      await expect(service.findVisibleOne(10, null)).resolves.toMatchObject({
+        id: 10,
+      });
+    });
+
+    it('hides a private-room package from a stranger', async () => {
+      const service = makeService({
+        id: 10,
+        room: { id: 5, isPublic: false, author, contributors: [contributor] },
+      });
+
+      await expect(
+        service.findVisibleOne(10, stranger as never),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('serves a private-room package to a contributor', async () => {
+      const service = makeService({
+        id: 10,
+        room: { id: 5, isPublic: false, author, contributors: [contributor] },
+      });
+
+      await expect(
+        service.findVisibleOne(10, contributor as never),
+      ).resolves.toMatchObject({ id: 10 });
+    });
+
+    it('answers 404 for a missing package', async () => {
+      const service = makeService(null);
+
+      await expect(service.findVisibleOne(10, null)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
   describe('assertPackageEditing', () => {
     const author = { id: 1 };
     const contributor = { id: 2 };
@@ -79,6 +172,7 @@ describe('ScriptingPackagesService', () => {
       return new ScriptingPackagesService(
         packagesRepository as never,
         {} as never,
+        ...collaborators(),
       );
     }
 
@@ -168,6 +262,7 @@ describe('ScriptingPackagesService', () => {
       return new ScriptingPackagesService(
         packagesRepository as never,
         {} as never,
+        ...collaborators(),
       );
     }
 
@@ -217,6 +312,7 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           roomsRepository as never,
+          ...collaborators(),
         ),
       };
     }
@@ -316,6 +412,7 @@ describe('ScriptingPackagesService', () => {
       const service = new ScriptingPackagesService(
         packagesRepository as never,
         roomsRepository as never,
+        ...collaborators(),
       );
 
       await service.update(10, {
@@ -338,6 +435,7 @@ describe('ScriptingPackagesService', () => {
       const service = new ScriptingPackagesService(
         packagesRepository as never,
         {} as never,
+        ...collaborators(),
       );
       return { service, packagesRepository };
     }
@@ -403,7 +501,7 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           {} as never,
-          storage as never,
+          ...collaborators({ storage }),
         ),
       };
     }
@@ -472,8 +570,7 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           {} as never,
-          undefined,
-          dispatcher as never,
+          ...collaborators({ dispatcher }),
         ),
       };
     }
@@ -563,9 +660,11 @@ describe('ScriptingPackagesService', () => {
         service: new ScriptingPackagesService(
           packagesRepository as never,
           {} as never,
-          undefined,
-          undefined,
+          {} as never,
+          {} as never,
           delivery as never,
+          {} as never,
+          new PackagePublishLockService(),
         ),
       };
     }
@@ -624,13 +723,16 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     const roomsRepository = {
       findOne: jest.fn(async () => options.room ?? null),
     };
+    // The slug lifecycle only needs the packages repository; the collaborators
+    // are present because the service refuses to boot without them.
     return new ScriptingPackagesService(
       packagesRepository as never,
       roomsRepository as never,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+      {} as never,
+      {} as never,
+      { findDependentRoomPackages: jest.fn(async () => []) } as never,
+      {} as never,
+      new PackagePublishLockService(),
     );
   }
 
@@ -771,7 +873,6 @@ describe('ScriptingPackagesService slug lifecycle', () => {
           version: '0.1.0',
           slug: 'hero',
           roomId: 5,
-          authorId: 1,
         },
         user,
       )
@@ -807,7 +908,6 @@ describe('ScriptingPackagesService slug lifecycle', () => {
           version: '0.1.0',
           slug: 'hero',
           roomId: 6,
-          authorId: 1,
         },
         user,
       ),
@@ -891,7 +991,6 @@ describe('ScriptingPackagesService slug lifecycle', () => {
           version: '0.1.0',
           slug: 'hero',
           roomId: 5,
-          authorId: 1,
         },
         user,
       )
@@ -1010,9 +1109,10 @@ describe('ScriptingPackagesService enable guard', () => {
       packagesRepository as never,
       {} as never,
       storage as never,
-      undefined,
-      undefined,
+      {} as never,
+      {} as never,
       revisionsRepository as never,
+      new PackagePublishLockService(),
     );
     return { service, packagesRepository };
   }
@@ -1133,12 +1233,69 @@ describe('ScriptingPackagesService slug rename', () => {
       save: packages.save,
       manager,
     };
+    const rewriteFiles =
+      options.rewrite ??
+      jest.fn(async () => [{ filepath: 'a.gd', size: 1, sha256: 'x' }]);
+    const finishRewrite = jest.fn(
+      async (_packageId: number, _revision: number, _kind: string) => undefined,
+    );
+    const abortRewrite = jest.fn(
+      async (_packageId: number, _revision: number, _kind: string) => undefined,
+    );
+    // Mirrors PackageStorageService.beginRewrite: it prepares every target,
+    // restores what it already moved when one fails, and only exposes commit
+    // and abort to the caller.
+    const beginRewrite = jest.fn(
+      async (
+        targets: Array<{
+          packageId: number;
+          revision: number;
+          kind: 'published' | 'draft';
+        }>,
+        transform: unknown,
+      ) => {
+        const attempted: typeof targets = [];
+        const results: Array<{
+          target: (typeof targets)[number];
+          files: Array<{ filepath: string; size: number; sha256: string }>;
+        }> = [];
+        try {
+          for (const target of targets) {
+            attempted.push(target);
+            const files = await rewriteFiles(
+              target.packageId,
+              target.revision,
+              target.kind,
+              transform,
+            );
+            if (files) results.push({ target, files });
+          }
+        } catch (error) {
+          for (const target of [...attempted].reverse()) {
+            await abortRewrite(target.packageId, target.revision, target.kind);
+          }
+          throw error;
+        }
+        return {
+          results,
+          commit: async () => {
+            for (const target of attempted) {
+              await finishRewrite(target.packageId, target.revision, target.kind);
+            }
+          },
+          abort: async () => {
+            for (const target of [...attempted].reverse()) {
+              await abortRewrite(target.packageId, target.revision, target.kind);
+            }
+          },
+        };
+      },
+    );
     const storage = {
-      rewriteRevision:
-        options.rewrite ??
-        jest.fn(async () => [{ filepath: 'a.gd', size: 1, sha256: 'x' }]),
-      finishRewrite: jest.fn(async () => undefined),
-      abortRewrite: jest.fn(async () => undefined),
+      beginRewrite,
+      rewriteRevision: rewriteFiles,
+      finishRewrite,
+      abortRewrite,
     };
     const delivery = {
       findDependentRoomPackages: jest.fn(async () => options.dependents ?? []),

@@ -4,18 +4,22 @@ import { AppConfigModule } from 'src/config/config.module';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { RoomsModule } from 'src/rooms/rooms.module';
-import { PackageDeliveryModule } from 'src/scripting-packages/package-delivery.module';
-import { GameExportController } from './game-export.controller';
-import { GameRoomController } from './game-room.controller';
-import { GameSocketProxyService } from './game-socket-proxy.service';
-import { GameRoomTicketRateLimiter } from './game-room.rate-limiter';
-import { GameRoomService } from './game-room.service';
-import { GameTicketService } from './game-ticket.service';
-import { NodeRuntimeProcessFactory } from './node-runtime-process.factory';
-import { PackageSyncService } from './package-sync.service';
-import { PACKAGE_REVISION_DISPATCHER } from './package-sync.types';
-import { RoomRuntimeService } from './room-runtime.service';
-import { RuntimeProcessFactory } from './room-runtime.types';
+import { PackageDeliveryModule } from 'src/scripting-packages/delivery/package-delivery.module';
+import { GameExportController } from './export/game-export.controller';
+import { GameRoomController } from './game-room/game-room.controller';
+import { GameSocketProxyService } from './socket-proxy/game-socket-proxy.service';
+import {
+  GameRoomTicketRateLimiter,
+  InMemoryTicketRateLimitStore,
+  TICKET_RATE_LIMIT_STORE,
+} from './game-room/game-room.rate-limiter';
+import { GameRoomService } from './game-room/game-room.service';
+import { GameTicketService } from './game-room/game-ticket.service';
+import { GodotRuntimeProcessFactory } from './runtime/godot-runtime-process.factory';
+import { PackageSyncService } from './package-sync/package-sync.service';
+import { PACKAGE_REVISION_DISPATCHER } from 'src/common/runtime-contracts';
+import { RoomRuntimeService } from './runtime/room-runtime.service';
+import { RuntimeProcessFactory } from './runtime/room-runtime.types';
 
 @Module({
   imports: [
@@ -34,10 +38,16 @@ import { RuntimeProcessFactory } from './room-runtime.types';
     GameSocketProxyService,
     GameRoomService,
     GameRoomTicketRateLimiter,
+    {
+      // Default binding for the limiter's seam. A multi-instance deploy
+      // overrides it with a shared store.
+      provide: TICKET_RATE_LIMIT_STORE,
+      useClass: InMemoryTicketRateLimitStore,
+    },
     PackageSyncService,
     {
       provide: RuntimeProcessFactory,
-      useClass: NodeRuntimeProcessFactory,
+      useClass: GodotRuntimeProcessFactory,
     },
     {
       provide: PACKAGE_REVISION_DISPATCHER,

@@ -39,6 +39,8 @@ describe('config paths', () => {
     expect(config().packages).toEqual({
       readSecret: 'read-secret',
       readTtlSec: 120,
+      artifactBuildRateLimit: 10,
+      artifactBuildRateWindowMs: 60_000,
     });
   });
 

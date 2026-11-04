@@ -1,8 +1,8 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { UsersService } from '../users/users.service';
+import { UsersService } from 'src/users/users.service';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
-import { AuthTokenDTO } from './auth-token.dto';
+import { AuthTokenDto } from './dto/auth-token.dto';
 import { Response } from 'express';
 import { AppConfigService } from 'src/config/config.service';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -39,7 +39,7 @@ export class AuthService {
     return null;
   }
 
-  async login(email: string, password: string): Promise<AuthTokenDTO> {
+  async login(email: string, password: string): Promise<AuthTokenDto> {
     const user = await this.validateUser(email, password);
     if (!user) {
       throw new UnauthorizedException();
@@ -56,7 +56,7 @@ export class AuthService {
     name: string,
     picture: string,
     password: string,
-  ): Promise<AuthTokenDTO> {
+  ): Promise<AuthTokenDto> {
     let user = await this.usersService.findOneByEmail(email);
     if (!user) {
       user = await this.usersService.create({
@@ -72,7 +72,7 @@ export class AuthService {
     };
   }
 
-  writeCookie(res: Response, token: AuthTokenDTO) {
+  writeCookie(res: Response, token: AuthTokenDto) {
     res.cookie(this.config.site.authCookieName, token.access_token, {
       domain: this.config.site.commonDomain,
     });

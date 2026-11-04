@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Popover as PopoverPrimitive } from 'radix-ui';
+import * as PopoverPrimitive from '@radix-ui/react-popover';
 import { AnimatePresence, motion, type HTMLMotionProps } from 'motion/react';
 
 import { getStrictContext } from '@/lib/get-strict-context';

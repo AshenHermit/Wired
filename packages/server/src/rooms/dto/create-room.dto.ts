@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { AVAILABLE_GAME_ROOMS_TYPES, GameRoomsType } from '@wired-io/shared';
+import { AVAILABLE_GAME_ROOMS_TYPES, CreatableRoomType } from '@wired-io/shared';
 import {
   IsBoolean,
   IsEnum,
@@ -9,6 +9,11 @@ import {
   MinLength,
 } from 'class-validator';
 
+/**
+ * Room creation body. The author is never part of the payload: it always comes
+ * from the authenticated request, so a client cannot create a room for someone
+ * else by echoing another id.
+ */
 export class CreateRoomDto {
   @ApiProperty({ example: 'My room', description: 'Room title' })
   @IsString()
@@ -34,13 +39,6 @@ export class CreateRoomDto {
   description?: string;
 
   @ApiProperty({
-    example: 1,
-    description: 'Author user id',
-  })
-  @IsInt()
-  authorId: number;
-
-  @ApiProperty({
     example: 2,
     description: 'Parent room id',
     required: false,
@@ -55,5 +53,5 @@ export class CreateRoomDto {
     enum: AVAILABLE_GAME_ROOMS_TYPES,
   })
   @IsEnum(AVAILABLE_GAME_ROOMS_TYPES)
-  type: GameRoomsType;
+  type: CreatableRoomType;
 }

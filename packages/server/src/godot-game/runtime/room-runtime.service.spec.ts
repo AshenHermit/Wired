@@ -1,0 +1,818 @@
+import { PassThrough } from 'node:stream';
+import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join, relative } from 'node:path';
+import { AppConfigService } from 'src/config/config.service';
+import { RoomRuntimeError } from './room-runtime.errors';
+import { RoomRuntimeService } from './room-runtime.service';
+import {
+  GodotRuntimeConfig,
+  RuntimeProcess,
+  RuntimeProcessFactory,
+  RuntimeSpawnOptions,
+} from './room-runtime.types';
+import { GameTicketService } from '../game-room/game-ticket.service';
+
+class FakeRuntimeProcess implements RuntimeProcess {
+  readonly stdin = new PassThrough();
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+  readonly written: string[] = [];
+  killed = false;
+  killExits = true;
+  killSignal: NodeJS.Signals | undefined;
+  private exitCallback?: (
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ) => void;
+
+  constructor(readonly pid: number) {
+    this.stdin.on('data', (chunk: Buffer) =>
+      this.written.push(chunk.toString()),
+    );
+  }
+
+  onExit(
+    callback: (code: number | null, signal: NodeJS.Signals | null) => void,
+  ): void {
+    this.exitCallback = callback;
+  }
+
+  onError(): void {
+    // Spawn errors are simulated by throwing from the factory.
+  }
+
+  kill(signal?: NodeJS.Signals): void {
+    this.killed = true;
+    this.killSignal = signal;
+    if (this.killExits) {
+      this.exit(1, 'SIGKILL');
+    }
+  }
+
+  emitLine(line: string, stream: 'stdout' | 'stderr' = 'stdout'): void {
+    this[stream].write(`${line}\n`);
+  }
+
+  exit(code: number | null, signal: NodeJS.Signals | null = null): void {
+    this.exitCallback?.(code, signal);
+  }
+
+  get stdinText(): string {
+    return this.written.join('');
+  }
+}
+
+class FakeRuntimeProcessFactory implements RuntimeProcessFactory {
+  readonly processes: FakeRuntimeProcess[] = [];
+  readonly spawnOptions: RuntimeSpawnOptions[] = [];
+
+  spawn(options: RuntimeSpawnOptions): RuntimeProcess {
+    const process = new FakeRuntimeProcess(1000 + this.processes.length);
+    this.spawnOptions.push(options);
+    this.processes.push(process);
+    return process;
+  }
+
+  get last(): FakeRuntimeProcess {
+    const process = this.processes.at(-1);
+    if (!process) {
+      throw new Error('No runtime process was spawned');
+    }
+    return process;
+  }
+}
+
+const flushAsync = async (): Promise<void> => {
+  for (let i = 0; i < 10; i += 1) {
+    await Promise.resolve();
+  }
+};
+
+/**
+ * Waits until the code reaches a condition on its own.
+ *
+ * Sleeping for a guessed duration passes on a fast machine and fails on a slow
+ * one. Yielding with `setImmediate` keeps the loop out of wall-clock time while
+ * still letting pending I/O complete, and the deadline turns a hang into a
+ * readable failure instead of a Jest timeout.
+ */
+const waitFor = async (
+  condition: () => boolean,
+  description: string,
+): Promise<void> => {
+  const deadline = Date.now() + 5_000;
+  while (!condition()) {
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out waiting for ${description}`);
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+};
+
+describe('RoomRuntimeService', () => {
+  let stateDir: string;
+  let factory: FakeRuntimeProcessFactory;
+  let config: GodotRuntimeConfig;
+  let service: RoomRuntimeService;
+
+  const createService = (
+    overrides: Partial<GodotRuntimeConfig> = {},
+    isProduction = false,
+  ) => {
+    config = {
+      executablePath: 'C:/godot/godot.console.exe',
+      projectPath: 'C:/wired/godot_project/_wired',
+      portStart: 19100,
+      portEnd: 19102,
+      bindAddress: '127.0.0.1',
+      idleTimeoutMs: 60_000,
+      shutdownGraceMs: 5_000,
+      startTimeoutMs: 10_000,
+      ticketTtlSec: 60,
+      ticketSecret: 'test-secret',
+      ticketRateLimit: 20,
+      ticketRateLimitWindowMs: 60_000,
+      stateDir,
+      apiUrl: 'http://127.0.0.1:3000',
+      exportDir: 'C:/wired/game_export/web',
+      publicWsBaseUrl: '',
+      wsMaxClientsPerRoom: 32,
+      wsMaxTotal: 512,
+      logBufferLines: 50,
+      ...overrides,
+    };
+    const configService = {
+      godotRuntime: config,
+      isProduction,
+    } as unknown as AppConfigService;
+    const tickets = new GameTicketService(configService);
+    return new RoomRuntimeService(configService, factory, tickets);
+  };
+
+  const startRoom = async (roomId: string) => {
+    const connection = service.connectRoom(roomId);
+    await flushAsync();
+    const process = factory.last;
+    process.emitLine(
+      `WIRED_SERVER_READY room=${roomId} port=${connectionPort(process)} bind=127.0.0.1`,
+    );
+    return { connection: await connection, process };
+  };
+
+  const connectionPort = (process: FakeRuntimeProcess): number =>
+    19100 + factory.processes.indexOf(process);
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), 'wired-runtime-'));
+    factory = new FakeRuntimeProcessFactory();
+    service = createService();
+  });
+
+  afterEach(async () => {
+    jest.useRealTimers();
+    for (const process of factory.processes) {
+      process.exit(0);
+    }
+    await service.shutdownAll();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it('spawns exactly one runtime for concurrent requests to an idle room', async () => {
+    const first = service.connectRoom('room-1');
+    const second = service.connectRoom('room-1');
+    await flushAsync();
+
+    expect(factory.processes).toHaveLength(1);
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-1 port=19100 bind=127.0.0.1',
+    );
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.port).toBe(19100);
+    expect(b.port).toBe(19100);
+    expect(a.pid).toBe(b.pid);
+    expect(a.ticket).not.toBe(b.ticket);
+    expect(service.getRuntime('room-1')?.state).toBe('running');
+  });
+
+  it('reports starting until the ready line arrives and uses distinct ports per room', async () => {
+    const first = service.connectRoom('room-1');
+    await flushAsync();
+    expect(service.getRuntime('room-1')?.state).toBe('starting');
+    factory.processes[0].emitLine(
+      'WIRED_SERVER_READY room=room-1 port=19100 bind=127.0.0.1',
+    );
+    await first;
+
+    const second = service.connectRoom('room-2');
+    await flushAsync();
+    factory.processes[1].emitLine(
+      'WIRED_SERVER_READY room=room-2 port=19101 bind=127.0.0.1',
+    );
+
+    expect((await second).port).toBe(19101);
+    expect(factory.processes).toHaveLength(2);
+  });
+
+  it('fails explicitly when WIRED_GAME_TICKET_SECRET is not configured', async () => {
+    service = createService({ ticketSecret: '' });
+
+    await expect(service.connectRoom('room-1')).rejects.toMatchObject({
+      code: 'ticket_secret_missing',
+    });
+    expect(factory.processes).toHaveLength(0);
+  });
+
+  it('maps exit code 2 to an explicit start failure and releases the port', async () => {
+    const connection = service.connectRoom('room-1');
+    await flushAsync();
+    factory.last.exit(2);
+
+    await expect(connection).rejects.toThrow(/WIRED_GAME_TICKET_SECRET/);
+    expect(service.getRuntime('room-1')?.state).toBe('failed');
+
+    const retry = service.connectRoom('room-1');
+    await flushAsync();
+    expect(factory.processes).toHaveLength(2);
+    expect(service.getRuntime('room-1')?.port).toBe(19100);
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-1 port=19100 bind=127.0.0.1',
+    );
+    await retry;
+  });
+
+  it('maps exit code 3 to an explicit port binding failure', async () => {
+    const connection = service.connectRoom('room-1');
+    await flushAsync();
+    factory.last.exit(3);
+
+    await expect(connection).rejects.toThrow(/port 19100/);
+    expect(service.getRuntime('room-1')?.state).toBe('failed');
+  });
+
+  it('marks an unexpected exit as not running and restarts on the next request', async () => {
+    const { process } = await startRoom('room-1');
+    process.exit(1);
+
+    expect(service.getRuntime('room-1')?.state).toBe('failed');
+    expect(service.getRuntime('room-1')?.exitCode).toBe(1);
+
+    const next = service.connectRoom('room-1');
+    await flushAsync();
+    expect(factory.processes).toHaveLength(2);
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-1 port=19100 bind=127.0.0.1',
+    );
+    await expect(next).resolves.toMatchObject({ state: 'running' });
+  });
+
+  it('rejects a new connection while the room is stopping', async () => {
+    await startRoom('room-1');
+    const stopping = service.stopRoom('room-1');
+
+    await expect(service.connectRoom('room-1')).rejects.toMatchObject({
+      code: 'room_stopping',
+    });
+
+    factory.last.exit(0);
+    await stopping;
+  });
+
+  it('sends a graceful shutdown command and lets Godot exit on its own', async () => {
+    const { process } = await startRoom('room-1');
+
+    const stopping = service.stopRoom('room-1');
+    await flushAsync();
+    expect(process.stdinText).toContain('shutdown');
+    expect(process.killed).toBe(false);
+
+    process.exit(0);
+    await stopping;
+
+    expect(service.getRuntime('room-1')).toBeNull();
+    expect(process.killed).toBe(false);
+  });
+
+  it('force kills only after the grace period and logs it', async () => {
+    jest.useFakeTimers();
+    const { process } = await startRoom('room-1');
+    // Keep the record alive after the force kill, so its log is still readable.
+    process.killExits = false;
+
+    const stopping = service.stopRoom('room-1');
+    await flushAsync();
+    expect(process.stdinText).toContain('shutdown');
+    expect(process.killed).toBe(false);
+
+    jest.advanceTimersByTime(config.shutdownGraceMs);
+    await flushAsync();
+    expect(process.killed).toBe(true);
+    expect(service.getLogs('room-1').join('\n')).toMatch(/forc/i);
+
+    process.exit(0);
+    await stopping;
+
+    expect(service.getRuntime('room-1')).toBeNull();
+  });
+
+  it('keeps the port reserved when a force-killed process refuses to exit', async () => {
+    jest.useFakeTimers();
+    const { process } = await startRoom('room-1');
+    process.killExits = false;
+
+    const stopping = service.stopRoom('room-1');
+    await flushAsync();
+    jest.advanceTimersByTime(config.shutdownGraceMs);
+    await flushAsync();
+    jest.advanceTimersByTime(2_000);
+    await flushAsync();
+    await stopping;
+
+    expect(service.getRuntime('room-1')?.state).toBe('failed');
+
+    const second = service.connectRoom('room-2');
+    await flushAsync();
+    expect(service.getRuntime('room-2')?.port).toBe(19101);
+
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-2 port=19101 bind=127.0.0.1',
+    );
+    await second;
+  });
+
+  it('retries the force kill when the runtime survived a stop', async () => {
+    jest.useFakeTimers();
+    const { process } = await startRoom('room-1');
+    process.killExits = false;
+
+    const stopping = service.stopRoom('room-1');
+    await flushAsync();
+    jest.advanceTimersByTime(config.shutdownGraceMs);
+    await flushAsync();
+    jest.advanceTimersByTime(2_000);
+    await flushAsync();
+    await stopping;
+    expect(service.getRuntime('room-1')?.state).toBe('failed');
+
+    process.killExits = true;
+    await service.stopRoom('room-1');
+
+    expect(process.killed).toBe(true);
+    expect(service.getRuntime('room-1')).toBeNull();
+  });
+
+  it('frees the port of a stopped room for the next runtime', async () => {
+    const { process } = await startRoom('room-1');
+    const stopping = service.stopRoom('room-1');
+    await flushAsync();
+    process.exit(0);
+    await stopping;
+
+    expect(service.getRuntime('room-1')).toBeNull();
+
+    const next = service.connectRoom('room-2');
+    await flushAsync();
+    expect(service.getRuntime('room-2')?.port).toBe(19100);
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-2 port=19100 bind=127.0.0.1',
+    );
+    await next;
+  });
+
+  it('clears a failed session when the room is stopped explicitly', async () => {
+    const { process } = await startRoom('room-1');
+    process.exit(1);
+    expect(service.getRuntime('room-1')?.state).toBe('failed');
+
+    await service.stopRoom('room-1');
+
+    expect(service.getRuntime('room-1')).toBeNull();
+
+    const next = service.connectRoom('room-2');
+    await flushAsync();
+    expect(service.getRuntime('room-2')?.port).toBe(19100);
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-2 port=19100 bind=127.0.0.1',
+    );
+    await next;
+  });
+
+  it('starts the idle timer when the last player leaves and cancels it on rejoin', async () => {
+    jest.useFakeTimers();
+    const { process } = await startRoom('room-1');
+
+    process.emitLine('WIRED_AUTH_OK peer=2 player=1 room=room-1');
+    expect(service.getRuntime('room-1')?.activePlayers).toBe(1);
+
+    process.emitLine('WIRED_PLAYER_LEFT peer=2 player=1');
+    expect(service.getRuntime('room-1')?.activePlayers).toBe(0);
+
+    jest.advanceTimersByTime(config.idleTimeoutMs - 1_000);
+    process.emitLine('WIRED_AUTH_OK peer=3 player=2 room=room-1');
+
+    jest.advanceTimersByTime(config.idleTimeoutMs + 1_000);
+    await flushAsync();
+    expect(service.getRuntime('room-1')?.state).toBe('running');
+    expect(process.stdinText).toBe('');
+
+    process.emitLine('WIRED_PLAYER_LEFT peer=3 player=2');
+    jest.advanceTimersByTime(config.idleTimeoutMs);
+    await flushAsync();
+    expect(process.stdinText).toContain('shutdown');
+
+    process.exit(0);
+    await flushAsync();
+    expect(service.getRuntime('room-1')?.state).toBe('stopped');
+  });
+
+  it('does not report an exited runtime as running', async () => {
+    const { process } = await startRoom('room-1');
+    process.exit(0);
+
+    expect(service.getRuntime('room-1')).toMatchObject({
+      state: 'stopped',
+      exitCode: 0,
+    });
+  });
+
+  it('keeps runtime logs and persists them to the state directory', async () => {
+    const { process } = await startRoom('room-1');
+    process.emitLine('WIRED_LOG hello from godot', 'stderr');
+
+    expect(service.getLogs('room-1').join('\n')).toContain('hello from godot');
+    expect(factory.processes).toHaveLength(1);
+  });
+
+  it('refuses to start when production has no public WebSocket endpoint', async () => {
+    service = createService({ publicWsBaseUrl: '' }, true);
+
+    await expect(service.connectRoom('room-1')).rejects.toBeInstanceOf(
+      RoomRuntimeError,
+    );
+    expect(factory.processes).toHaveLength(0);
+  });
+
+  it('returns the configured public WebSocket endpoint in production', async () => {
+    service = createService(
+      { publicWsBaseUrl: 'wss://games.example/godot/{room}?port={port}' },
+      true,
+    );
+
+    const connection = service.connectRoom('room-1');
+    await flushAsync();
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-1 port=19100 bind=127.0.0.1',
+    );
+
+    await expect(connection).resolves.toMatchObject({
+      endpoint: 'wss://games.example/godot/room-1?port=19100',
+      port: 19100,
+    });
+  });
+
+  it('fails the start when readiness never arrives', async () => {
+    jest.useFakeTimers();
+    const connection = service.connectRoom('room-1');
+    await flushAsync();
+
+    jest.advanceTimersByTime(config.startTimeoutMs);
+    await flushAsync();
+
+    await expect(connection).rejects.toThrow(/WIRED_SERVER_READY/);
+    expect(factory.last.killed).toBe(true);
+    expect(service.getRuntime('room-1')?.state).toBe('failed');
+  });
+
+  it('rejects waiting callers when the room is stopped while starting', async () => {
+    const connection = service.connectRoom('room-1');
+    await flushAsync();
+
+    const stopping = service.stopRoom('room-1');
+    await expect(connection).rejects.toMatchObject({ code: 'room_stopping' });
+
+    factory.last.exit(0);
+    await stopping;
+    expect(service.getRuntime('room-1')).toBeNull();
+  });
+
+  it('writes runtime logs to the per-room file', async () => {
+    const { process } = await startRoom('room-1');
+    const logPath = join(stateDir, 'room-1-19100.log');
+    process.emitLine('WIRED_LOG persisted line');
+    process.exit(0);
+
+    // The log stream flushes asynchronously after the process exit is handled,
+    // so wait for the line itself rather than for a duration that happens to
+    // be long enough on this machine.
+    await waitFor(
+      () =>
+        existsSync(logPath) &&
+        readFileSync(logPath, 'utf8').includes('persisted line'),
+      'the runtime log file to contain the emitted line',
+    );
+
+    expect(readFileSync(logPath, 'utf8')).toContain('persisted line');
+  });
+
+  it('keeps a failed start port reserved until the process exits', async () => {
+    jest.useFakeTimers();
+    const connection = service.connectRoom('room-1');
+    await flushAsync();
+    const first = factory.last;
+    first.killExits = false;
+
+    jest.advanceTimersByTime(config.startTimeoutMs);
+    await flushAsync();
+
+    await expect(connection).rejects.toThrow(/WIRED_SERVER_READY/);
+    expect(first.killed).toBe(true);
+
+    const retry = service.connectRoom('room-1');
+    await flushAsync();
+    expect(factory.processes).toHaveLength(2);
+    expect(service.getRuntime('room-1')?.port).toBe(19101);
+
+    first.exit(1);
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-1 port=19101 bind=127.0.0.1',
+    );
+    await retry;
+  });
+
+  it('skips a port that failed to bind on the next start', async () => {
+    const first = service.connectRoom('room-1');
+    await flushAsync();
+    factory.last.exit(3);
+    await expect(first).rejects.toThrow(/port 19100/);
+
+    const second = service.connectRoom('room-2');
+    await flushAsync();
+    expect(service.getRuntime('room-2')?.port).toBe(19101);
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-2 port=19101 bind=127.0.0.1',
+    );
+    await second;
+  });
+
+  it('passes an absolute state directory to Godot for relative config', async () => {
+    service = createService({ stateDir: relative(process.cwd(), stateDir) });
+    const connection = service.connectRoom('room-1');
+    await flushAsync();
+
+    const options = factory.spawnOptions.at(-1);
+    const stateIndex = options?.args.indexOf('--state-dir') ?? -1;
+    expect(stateIndex).toBeGreaterThan(-1);
+    expect(isAbsolute(options?.args[stateIndex + 1] ?? '')).toBe(true);
+
+    factory.last.emitLine(
+      'WIRED_SERVER_READY room=room-1 port=19100 bind=127.0.0.1',
+    );
+    await connection;
+  });
+
+  it('idles out a room that never authenticated a player', async () => {
+    jest.useFakeTimers();
+    const { process } = await startRoom('room-1');
+
+    jest.advanceTimersByTime(config.idleTimeoutMs);
+    await flushAsync();
+
+    expect(process.stdinText).toContain('shutdown');
+    process.exit(0);
+    await flushAsync();
+    expect(service.getRuntime('room-1')?.state).toBe('stopped');
+  });
+
+  it('does not let repeated connection requests keep a peerless runtime alive', async () => {
+    jest.useFakeTimers();
+    const { process } = await startRoom('room-1');
+
+    jest.advanceTimersByTime(40_000);
+    await expect(service.connectRoom('room-1')).resolves.toMatchObject({
+      state: 'running',
+    });
+
+    jest.advanceTimersByTime(21_000);
+    await flushAsync();
+
+    expect(process.stdinText).toContain('shutdown');
+    process.exit(0);
+    await flushAsync();
+    expect(service.getRuntime('room-1')?.state).toBe('stopped');
+  });
+
+  it('never mints a ticket that outlives the handshake lease', async () => {
+    jest.useFakeTimers();
+    await startRoom('room-1');
+
+    jest.advanceTimersByTime(40_000);
+    const connection = await service.connectRoom('room-1');
+    const leaseEndMs = Date.now() + 20_000;
+
+    expect(connection.ticketExpiresAt * 1_000).toBeLessThanOrEqual(leaseEndMs);
+    expect(connection.ticketExpiresAt).toBeLessThanOrEqual(
+      Math.floor(Date.now() / 1_000) + config.ticketTtlSec,
+    );
+  });
+
+  it('refuses a ticket when too little handshake time remains', async () => {
+    jest.useFakeTimers();
+    await startRoom('room-1');
+
+    jest.advanceTimersByTime(55_000);
+
+    await expect(service.connectRoom('room-1')).rejects.toMatchObject({
+      code: 'handshake_window_expired',
+    });
+    expect(service.getRuntime('room-1')?.state).toBe('stopping');
+  });
+
+  it('counts each authenticated peer once and ignores unknown departures', async () => {
+    const { process } = await startRoom('room-1');
+
+    process.emitLine('WIRED_AUTH_OK peer=2 player=1 room=room-1');
+    process.emitLine('WIRED_AUTH_OK peer=2 player=1 room=room-1');
+    expect(service.getRuntime('room-1')?.activePlayers).toBe(1);
+
+    process.emitLine('WIRED_PLAYER_LEFT peer=9 player=9');
+    expect(service.getRuntime('room-1')?.activePlayers).toBe(1);
+
+    process.emitLine('WIRED_PLAYER_LEFT peer=2 player=1');
+    expect(service.getRuntime('room-1')?.activePlayers).toBe(0);
+  });
+
+  it('does not forward unrelated backend secrets to the runtime', async () => {
+    const previous = process.env.DB_PASSWORD;
+    process.env.DB_PASSWORD = 'backend-database-secret';
+    try {
+      await startRoom('room-1');
+      const env = factory.spawnOptions.at(-1)?.env ?? {};
+      expect(env.DB_PASSWORD).toBeUndefined();
+      expect(env.WIRED_GAME_TICKET_SECRET).toBe('test-secret');
+      expect(env.PATH ?? env.Path).toBeDefined();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.DB_PASSWORD;
+      } else {
+        process.env.DB_PASSWORD = previous;
+      }
+    }
+  });
+
+  it('rejects a room id that is unsafe as a path segment', async () => {
+    await expect(service.connectRoom('..')).rejects.toMatchObject({
+      code: 'invalid_room',
+    });
+    expect(factory.processes).toHaveLength(0);
+  });
+
+  it('waits for an in-flight stop during shutdown', async () => {
+    jest.useFakeTimers();
+    const { process } = await startRoom('room-1');
+    const stopping = service.stopRoom('room-1');
+    await flushAsync();
+
+    let shutdownDone = false;
+    const shutdown = service.shutdownAll().then(() => {
+      shutdownDone = true;
+    });
+    await flushAsync();
+    expect(shutdownDone).toBe(false);
+
+    process.exit(0);
+    await Promise.all([stopping, shutdown]);
+  });
+
+  it('rejects invalid lifecycle timeouts instead of starting', async () => {
+    service = createService({ ticketTtlSec: 0 });
+    const connection = service.connectRoom('room-1');
+    await flushAsync();
+    if (factory.processes.length > 0) {
+      factory.last.emitLine(
+        'WIRED_SERVER_READY room=room-1 port=19100 bind=127.0.0.1',
+      );
+    }
+
+    await expect(connection).rejects.toMatchObject({ code: 'config' });
+  });
+
+  it('sends a package command only to a running runtime', async () => {
+    const { process } = await startRoom('room-1');
+
+    expect(service.sendPackage('room-1', 42, 3)).toBe(true);
+    await flushAsync();
+    expect(process.stdinText).toContain('package 42 3\n');
+
+    expect(service.sendPackage('room-missing', 42, 3)).toBe(false);
+    expect(service.sendPackage('room-1', 0, 3)).toBe(false);
+    expect(process.stdinText).toBe('package 42 3\n');
+  });
+
+  it('sends unload with and without purge', async () => {
+    const { process } = await startRoom('room-1');
+
+    expect(service.sendPackageUnload('room-1', 42, false)).toBe(true);
+    expect(service.sendPackageUnload('room-1', 42, true)).toBe(true);
+    expect(service.sendPackageUnload('room-missing', 42, false)).toBe(false);
+    expect(service.sendPackageUnload('room-1', 0, false)).toBe(false);
+    await flushAsync();
+    expect(process.stdinText).toBe('unload 42\nunload 42 purge\n');
+  });
+
+  it('sends the full room package list and rejects invalid ids', async () => {
+    const { process } = await startRoom('room-1');
+
+    expect(service.sendRoomPackages('room-1', [3, 7, 3])).toBe(true);
+    expect(service.sendRoomPackages('room-1', [])).toBe(true);
+    expect(service.sendRoomPackages('room-1', [3, 0])).toBe(false);
+    expect(service.sendRoomPackages('room-missing', [3])).toBe(false);
+    await flushAsync();
+    expect(process.stdinText).toBe('room-packages 3,7\nroom-packages\n');
+  });
+
+  it('logs an EPIPE from the runtime stdin instead of crashing the backend', async () => {
+    const { process } = await startRoom('room-1');
+    expect(service.sendPackage('room-1', 42, 3)).toBe(true);
+
+    const epipe = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+
+    // An 'error' event without a listener is an uncaughtException.
+    expect(() => process.stdin.emit('error', epipe)).not.toThrow();
+    expect(service.getLogs('room-1').join('\n')).toContain('EPIPE');
+    expect(service.getRuntime('room-1')?.state).toBe('running');
+  });
+
+  it('refuses a control write after the runtime stdin ended', async () => {
+    const { process } = await startRoom('room-1');
+
+    process.stdin.end();
+    await new Promise((resolve) => process.stdin.once('finish', resolve));
+
+    expect(service.sendPackage('room-1', 42, 3)).toBe(false);
+    expect(process.stdinText).toBe('');
+  });
+
+  it('logs stdout and stderr read errors instead of crashing the backend', async () => {
+    const { process } = await startRoom('room-1');
+
+    expect(() => process.stdout.emit('error', new Error('read ECONNRESET'))) //
+      .not.toThrow();
+    expect(() => process.stderr.emit('error', new Error('read EPIPE'))) //
+      .not.toThrow();
+
+    const logs = service.getLogs('room-1').join('\n');
+    expect(logs).toContain('stdout stream error');
+    expect(logs).toContain('read ECONNRESET');
+    expect(logs).toContain('stderr stream error');
+  });
+
+  it('notifies the observer about lifecycle and package protocol events', async () => {
+    const events: unknown[] = [];
+    service.setObserver({
+      onRuntimeReady: (roomId) => events.push(['ready', roomId]),
+      onPeerAuthenticated: (roomId, peer) =>
+        events.push(['auth', roomId, peer]),
+      onPeerLeft: (roomId, peer) => events.push(['left', roomId, peer]),
+      onPackagesApplied: (roomId, packageId, revision, files) =>
+        events.push(['applied', roomId, packageId, revision, files]),
+      onPackagesFailed: (roomId, packageId, revision, error) =>
+        events.push(['failed', roomId, packageId, revision, error]),
+      onClientPackagesReady: (roomId, peer, packageId, revision) =>
+        events.push(['client-ready', roomId, peer, packageId, revision]),
+      onClientPackagesFailed: (roomId, peer, packageId, revision, error) =>
+        events.push([
+          'client-failed',
+          roomId,
+          peer,
+          packageId,
+          revision,
+          error,
+        ]),
+    });
+
+    const { process } = await startRoom('room-1');
+    process.emitLine('WIRED_AUTH_OK peer=2 player=1 room=room-1');
+    process.emitLine('WIRED_PACKAGES_APPLIED package=42 revision=3 files=7');
+    process.emitLine(
+      'WIRED_PACKAGES_SYNC_FAILED package=43 revision=1 error=hash mismatch',
+    );
+    process.emitLine(
+      'WIRED_CLIENT_PACKAGES_READY peer=2 package=42 revision=3',
+    );
+    process.emitLine(
+      'WIRED_CLIENT_PACKAGES_FAILED peer=2 package=43 revision=1 error=download failed',
+    );
+    process.emitLine('WIRED_PLAYER_LEFT peer=2 player=1');
+
+    expect(events).toEqual([
+      ['ready', 'room-1'],
+      ['auth', 'room-1', 2],
+      ['applied', 'room-1', 42, 3, 7],
+      ['failed', 'room-1', 43, 1, 'hash mismatch'],
+      ['client-ready', 'room-1', 2, 42, 3],
+      ['client-failed', 'room-1', 2, 43, 1, 'download failed'],
+      ['left', 'room-1', 2],
+    ]);
+  });
+});

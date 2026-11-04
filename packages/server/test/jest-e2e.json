@@ -1,0 +1,13 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": "../src",
+  "testRegex": ".*\\.e2e-spec\\.ts$",
+  "transform": {
+    "^.+\\.(t|j)s$": "ts-jest"
+  },
+  "moduleNameMapper": {
+    "^@wired-io/shared$": "<rootDir>/../../shared/src/index.ts",
+    "^src/(.*)$": "<rootDir>/$1"
+  },
+  "testEnvironment": "node"
+}

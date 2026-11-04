@@ -1,33 +1,14 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from 'src/database/entities/user.entity';
 import { Repository } from 'typeorm';
-import { CreateUserDTO } from '../auth/create-user.dto';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 import * as bcrypt from 'bcrypt';
-import { ApiProperty } from '@nestjs/swagger';
-import { IsDateString, IsOptional, IsString, MinLength } from 'class-validator';
-
-export class UpdateUserDTO {
-  @ApiProperty({ example: 'pass', description: 'password', required: false })
-  @IsOptional()
-  @IsString()
-  @MinLength(6)
-  password?: string;
-
-  @ApiProperty({ example: 'name', description: 'user name', required: false })
-  @IsOptional()
-  @IsString()
-  name?: string;
-
-  @ApiProperty({
-    example: 'https://site.com/picture.webp',
-    description: 'user avatar',
-    required: false,
-  })
-  @IsOptional()
-  @IsString()
-  picture?: string;
-}
 
 @Injectable()
 export class UsersService {
@@ -35,8 +16,8 @@ export class UsersService {
     @InjectRepository(User) private usersRepository: Repository<User>,
   ) {}
 
-  async assertUserEditing(User: User, subUserId: number): Promise<void> {
-    if (User.id !== subUserId) {
+  async assertUserEditing(editor: User, userId: number): Promise<void> {
+    if (editor.id !== userId) {
       throw new ForbiddenException('You are not allowed to edit this user');
     }
   }
@@ -45,7 +26,7 @@ export class UsersService {
     return this.usersRepository.find();
   }
 
-  async create(createUserDto: CreateUserDTO): Promise<User> {
+  async create(createUserDto: CreateUserDto): Promise<User> {
     const { email, password, name, picture } = createUserDto;
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = this.usersRepository.create({
@@ -61,11 +42,11 @@ export class UsersService {
     return this.usersRepository.findOne({ where: { email } });
   }
 
-  async getById(id: number): Promise<User | null> {
+  async findById(id: number): Promise<User | null> {
     return this.usersRepository.findOne({ where: { id } });
   }
 
-  async update(id: number, updateUserDto: UpdateUserDTO): Promise<void> {
+  async update(id: number, updateUserDto: UpdateUserDto): Promise<User> {
     const { password, name, picture, ...other } = updateUserDto;
     const hashedPassword = password
       ? await bcrypt.hash(password, 10)
@@ -76,6 +57,11 @@ export class UsersService {
       ...(picture && { picture }),
       ...other,
     });
+    const updated = await this.findById(id);
+    if (!updated) {
+      throw new NotFoundException('User not found');
+    }
+    return updated;
   }
 
   async remove(id: number): Promise<void> {

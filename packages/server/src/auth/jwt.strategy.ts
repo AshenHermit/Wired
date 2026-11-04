@@ -1,9 +1,10 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
-import { UsersService } from '../users/users.service';
+import { UsersService } from 'src/users/users.service';
 import { User } from 'src/database/entities/user.entity';
 import { AppConfigService } from 'src/config/config.service';
+import { RuntimeServiceUser } from 'src/auth/runtime-service-user';
 import { Request } from 'express';
 
 @Injectable()
@@ -56,6 +57,22 @@ export class JwtSilentStrategy extends PassportStrategy(
 export interface AuthenticatedRequest extends Request {
   user: User;
 }
-export interface SilentAuthRequest extends Request {
-  user: User | null;
-}
+/**
+ * `user` is `null` for an anonymous caller, so this cannot extend `Request`
+ * (whose `user` is optional and never null) without breaking the declaration
+ * merge from `@types/passport`.
+ */
+export type SilentAuthRequest = Request & { user: User | null };
+
+/**
+ * Whoever a guarded route may see: a signed-in user, or the room's own runtime
+ * presenting a service token. Runtime traffic must narrow with
+ * `isRuntimeServiceUser` before reading fields only a real user has.
+ */
+export type RequestPrincipal = User | RuntimeServiceUser;
+
+/**
+ * A request whose principal may be the synthetic runtime, used by guards that
+ * serve both the editor and the native Godot runtime.
+ */
+export type RuntimeAuthRequest = Request & { user: RequestPrincipal };

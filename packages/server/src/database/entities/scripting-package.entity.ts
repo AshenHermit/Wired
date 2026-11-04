@@ -12,11 +12,22 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { Room } from './room.entity';
-import { PhysicalFile } from '@wired-io/shared';
+
+/*
+ * The shapes below describe columns written by the retired Phaser-era package
+ * model. Package content now travels as revision files, so nothing writes them
+ * any more; they survive only because `DB_SYNC` cannot drop populated columns
+ * and older rows still carry values.
+ */
 
 export type ScriptFile = {
   filepath: string;
   script: string;
+};
+
+export type PhysicalFile = {
+  filepath: string;
+  hash?: string;
 };
 
 @Entity()
@@ -44,8 +55,11 @@ export class ScriptingPackage {
     example: 'hero_controller',
     description: 'Stable package slug',
   })
+  // Nullable only for rows written before slugs existed: the startup backfill
+  // fills them before the app serves a request, and refuses to boot if it
+  // cannot. Wire payloads use requirePackageSlug() rather than this field.
   @Column({ type: 'varchar', length: 64, nullable: true })
-  slug: string;
+  slug: string | null;
 
   @ApiProperty({ example: 'Untitled', description: 'package title' })
   @Column({ default: 'Untitled' })

@@ -1,12 +1,9 @@
-TODO:
+# Wired server
 
-- [x] проверка прав для users
-- [x] проверка прав для rooms
-- [x] проверка прав для scripting-packages
-- [ ] фронт: редактирование пользователя
-- [ ] каскадные удаления
-- [ ] настройки прав создания редактирования внутри комнат
-  - позволить добавлять и редактировать свои пакеты
-  - позволять редактировать все пакеты
-  - позволять создавать подкомнаты
-- [ ] пароль нулевой при авторизации через гугл, и это проблема еще и дневника
+NestJS API and asset server for Wired: rooms, users, scripting packages, the
+Godot editor assets, the room runtime and the game export.
+
+`AGENTS.md` at the repository root is the only maintained map of the repo. It
+covers the module layout, the environment knobs (all of them are read in
+`src/config/config.ts`), how to fetch the pinned Godot editor/runtime/templates,
+and how the Docker deploy works.

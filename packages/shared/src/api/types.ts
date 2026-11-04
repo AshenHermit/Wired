@@ -1,8 +1,3 @@
-export type TypeFile = {
-  filepath: string;
-  content: string;
-};
-
 export type User = {
   id: number;
   email: string;
@@ -15,15 +10,15 @@ export type User = {
   contributedPackages?: ScriptingPackage[];
 };
 
-export type ScriptFile = {
-  filepath: string;
-  script: string;
-};
-
-export type PhysicalFile = {
-  filepath: string;
-  hash?: string;
-};
+/**
+ * The part of a user a payload may carry.
+ *
+ * Rooms, packages and workshop listings embed their author and contributors,
+ * and those endpoints answer anonymous callers, so they project the record down
+ * to what every reader may see. The signed-in user's own record (`/users/profile`
+ * and login) keeps the full `User`.
+ */
+export type PublicUser = Pick<User, "id" | "name" | "picture">;
 
 /**
  * One file of a package revision. `filepath` is a relative POSIX path inside
@@ -104,8 +99,8 @@ export type Room = {
   parentRoomId: number | null;
   createdAt: string;
   updatedAt: string;
-  author?: User;
-  contributors?: User[];
+  author?: PublicUser;
+  contributors?: PublicUser[];
   scriptingPackages?: ScriptingPackage[];
 };
 
@@ -118,11 +113,10 @@ export type ScriptingPackage = {
   tags: string[];
   enabled: boolean;
   dependencies: string[];
-  scripts: ScriptFile[];
   createdAt: string;
   updatedAt: string;
-  author?: User;
-  contributors?: User[];
+  author?: PublicUser;
+  contributors?: PublicUser[];
   room?: Room;
   parentPackage?: ScriptingPackage;
   childrenPackages?: ScriptingPackage[];
@@ -131,14 +125,25 @@ export type ScriptingPackage = {
 // DTOs / payloads
 export type CreateRoomPayload = {
   name: string;
-  type: GameRoomsType;
+  /** Only the types a client may create; legacy `ts-game` rows stay readable. */
+  type: CreatableRoomType;
   isPublic?: boolean;
   description?: string;
-  authorId?: number;
   parentRoomId?: number;
 };
 
-export type UpdateRoomPayload = Partial<CreateRoomPayload>;
+/**
+ * The mutable room fields. `authorId` and `type` are deliberately absent: the
+ * author always comes from the authenticated request and the type is fixed at
+ * creation, so accepting them here would only advertise fields the server
+ * silently drops.
+ */
+export type UpdateRoomPayload = {
+  name?: string;
+  isPublic?: boolean;
+  description?: string;
+  parentRoomId?: number;
+};
 
 export type CreateScriptingPackagePayload = {
   slug: string;
@@ -147,8 +152,7 @@ export type CreateScriptingPackagePayload = {
   description?: string;
   tags?: string[];
   dependencies?: string[];
-  scripts?: ScriptFile[];
-  authorId?: number;
+  /** The author is always the authenticated caller, never a payload field. */
   roomId?: number;
   parentPackageId?: number;
 };
@@ -162,6 +166,34 @@ export type UpdateScriptingPackagePayload =
     confirmSlugRename?: boolean;
   };
 
+/**
+ * Authoring rule for package slugs, enforced by the server DTOs and mirrored by
+ * the editor dialogs: lowercase latin letters, digits or `_`, at least one
+ * letter, at most 64 characters.
+ */
+export const PACKAGE_SLUG_PATTERN = /^(?=.*[a-z])[a-z0-9_]+$/;
+export const PACKAGE_SLUG_MAX_LENGTH = 64;
+
+export function isValidPackageSlug(slug: string): boolean {
+  return (
+    slug.length > 0 &&
+    slug.length <= PACKAGE_SLUG_MAX_LENGTH &&
+    PACKAGE_SLUG_PATTERN.test(slug)
+  );
+}
+
+/**
+ * Response of `GET /scripting-packages/slug-availability`. Room slugs are only
+ * unique inside their room, so the global workshop scope is reported separately
+ * and always checked by the caller.
+ */
+export type PackageSlugAvailability = {
+  slug: string;
+  available: boolean;
+  reason?: "taken";
+  global: { available: boolean; reason?: "taken" };
+};
+
 export type WorkshopPackageSummary = {
   id: number;
   slug: string;
@@ -169,7 +201,7 @@ export type WorkshopPackageSummary = {
   version: string;
   description: string;
   tags: string[];
-  author?: User;
+  author?: PublicUser;
   revision: number;
   publishedAt: string;
   updatedAt: string;
@@ -199,20 +231,25 @@ export type WorkshopPublishResult = {
 export type WorkshopForkPayload = { slug: string };
 export type RoomCopyPayload = { roomId: number };
 
-export type CreateUserPayload = {
-  email: string;
-  password: string;
-  name: string;
+/**
+ * Update body for the current user. Declared explicitly instead of derived
+ * from a create payload, because the email and the password are not editable
+ * through the same route that creates an account.
+ */
+export type UpdateUserPayload = {
+  password?: string;
+  name?: string;
   picture?: string;
 };
-
-export type UpdateUserPayload = Partial<Omit<CreateUserPayload, "email">>;
 
 export type GameRoomsType = "godot" | "ts-game";
 export const GAME_ROOMS_TYPES: GameRoomsType[] = ["godot", "ts-game"];
 
 // ts-game оставлен только для чтения старых комнат.
 export const AVAILABLE_GAME_ROOMS_TYPES = ["godot"] as const;
+
+/** The room types a client may actually create. */
+export type CreatableRoomType = (typeof AVAILABLE_GAME_ROOMS_TYPES)[number];
 
 export type ProjectInfo = {
   name: string;
@@ -255,6 +292,41 @@ export type GameRoomConnection = {
   ticketExpiresAt: number;
   activePlayers: number;
 };
+
+/**
+ * Path the backend serves the editor's base project from: the manifest itself,
+ * and every project file beneath it. Shared so a rename on one side breaks the
+ * build instead of leaving the client asking for a route nobody serves.
+ */
+export const GODOT_PROJECT_ROUTE = "godot-project/wired";
+
+/**
+ * Codes the game-connection endpoint may put in an error body. Lives here so a
+ * rename on either side breaks the build instead of the client's retry policy.
+ */
+export const GAME_CONNECTION_ERROR_CODES = [
+  "config",
+  "room_not_running",
+  "room_stopping",
+  "start_failed",
+  "ticket_secret_missing",
+  "handshake_window_expired",
+  "invalid_room",
+  "rate_limited",
+  "packages_pending",
+  "packages_failed",
+] as const;
+
+export type GameConnectionErrorCode =
+  (typeof GAME_CONNECTION_ERROR_CODES)[number];
+
+export function isGameConnectionErrorCode(
+  value: unknown
+): value is GameConnectionErrorCode {
+  return GAME_CONNECTION_ERROR_CODES.includes(
+    value as GameConnectionErrorCode
+  );
+}
 
 /**
  * Application state of one published package revision on one target. The
@@ -314,3 +386,33 @@ export type RoomPackagesStatus = {
   roomId: number;
   packages: PackageSyncStatus[];
 };
+
+/**
+ * One package that takes part in a running game: an unpublished package has no
+ * revision to apply, and a disabled one is deliberately out of the room.
+ */
+export type ActivePackage = { packageId: number; revision: number };
+
+/** The packages the runtime is expected to have loaded. */
+export function activePackages(status: RoomPackagesStatus): ActivePackage[] {
+  return status.packages
+    .filter((entry) => entry.enabled && entry.revision > 0)
+    .map(({ packageId, revision }) => ({ packageId, revision }));
+}
+
+/**
+ * Whether the runtime has applied every active package at or beyond its
+ * published revision. Vacuously true when nothing is active.
+ */
+export function packagesApplied(status: RoomPackagesStatus): boolean {
+  return activePackages(status).every(({ packageId, revision }) => {
+    const entry = status.packages.find(
+      (candidate) => candidate.packageId === packageId,
+    );
+    return (
+      entry !== undefined &&
+      entry.runtime.state === "applied" &&
+      entry.runtime.revision >= revision
+    );
+  });
+}

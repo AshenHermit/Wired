@@ -7,7 +7,6 @@ import { CreateRoomDto } from './create-room.dto';
 async function typeErrors(type: string) {
   const dto = plainToInstance(CreateRoomDto, {
     name: 'Room',
-    authorId: 1,
     type,
   });
   const errors = await validate(dto);
@@ -31,19 +30,26 @@ describe('global validation pipe', () => {
 
   it('accepts a valid payload', async () => {
     await expect(
-      transform({ name: 'Room', authorId: 1, type: 'godot' }),
+      transform({ name: 'Room', type: 'godot' }),
     ).resolves.toBeInstanceOf(CreateRoomDto);
   });
 
   it('rejects unknown properties (mass assignment)', async () => {
     await expect(
-      transform({ name: 'Room', authorId: 1, type: 'godot', id: 999 }),
+      transform({ name: 'Room', type: 'godot', id: 999 }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects an echoed author id', async () => {
+    // The author always comes from the authenticated request.
+    await expect(
+      transform({ name: 'Room', type: 'godot', authorId: 1 }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('rejects legacy ts-game through the pipe', async () => {
     await expect(
-      transform({ name: 'Room', authorId: 1, type: 'ts-game' }),
+      transform({ name: 'Room', type: 'ts-game' }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

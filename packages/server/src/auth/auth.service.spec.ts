@@ -5,7 +5,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { AppConfigService } from 'src/config/config.service';
 import { User } from 'src/database/entities/user.entity';
-import { UsersService } from '../users/users.service';
+import { UsersService } from 'src/users/users.service';
 import { AuthService } from './auth.service';
 
 describe('AuthService', () => {
@@ -117,6 +117,72 @@ describe('AuthService', () => {
       email: 'user@example.com',
       sub: 7,
       name: 'User',
+    });
+  });
+
+  describe('forceLogin', () => {
+    it('signs in an existing account without touching the user store', async () => {
+      usersService.findOneByEmail.mockResolvedValue({
+        id: 3,
+        email: 'ann@wired.io',
+        name: 'Ann',
+      });
+
+      await expect(
+        service.forceLogin('ann@wired.io', 'Ann', 'p', ''),
+      ).resolves.toEqual({ access_token: 'signed-token' });
+      expect(usersService.create).not.toHaveBeenCalled();
+      expect(jwtService.sign).toHaveBeenCalledWith({
+        email: 'ann@wired.io',
+        sub: 3,
+        name: 'Ann',
+      });
+    });
+
+    it('creates the account on first login and signs the new id', async () => {
+      usersService.findOneByEmail.mockResolvedValue(null);
+      usersService.create.mockResolvedValue({
+        id: 11,
+        email: 'ann@wired.io',
+        name: 'Ann',
+      });
+
+      await expect(
+        service.forceLogin('ann@wired.io', 'Ann', 'p', ''),
+      ).resolves.toEqual({ access_token: 'signed-token' });
+      expect(usersService.create).toHaveBeenCalledWith({
+        email: 'ann@wired.io',
+        name: 'Ann',
+        picture: 'p',
+        password: '',
+      });
+      expect(jwtService.sign).toHaveBeenCalledWith({
+        email: 'ann@wired.io',
+        sub: 11,
+        name: 'Ann',
+      });
+    });
+  });
+
+  describe('cookie helpers', () => {
+    it('writes the token under the shared cookie name and domain', () => {
+      const res = { cookie: jest.fn() };
+
+      service.writeCookie(res as never, { access_token: 'signed-token' });
+
+      expect(res.cookie).toHaveBeenCalledWith('access_token', 'signed-token', {
+        domain: 'localhost',
+      });
+    });
+
+    it('clears the same cookie it wrote', () => {
+      const res = { clearCookie: jest.fn() };
+
+      service.clearCookie(res as never);
+
+      expect(res.clearCookie).toHaveBeenCalledWith('access_token', {
+        domain: 'localhost',
+      });
     });
   });
 });

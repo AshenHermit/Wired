@@ -1,6 +1,21 @@
-/** Mirrors the server: lowercase latin letters, digits or `_`, one letter. */
-export const SLUG_PATTERN = /^(?=.*[a-z])[a-z0-9_]+$/;
-export const SLUG_MAX_LENGTH = 64;
+import {
+  PACKAGE_SLUG_MAX_LENGTH,
+  PACKAGE_SLUG_PATTERN,
+  isValidPackageSlug,
+} from "@wired-io/shared";
+import type { MessageKey } from "@/i18n/message";
+
+/**
+ * The slug rule itself lives in `@wired-io/shared` so the server DTOs and the
+ * editor dialogs cannot drift apart. Re-exported here because every editor
+ * consumer imports its slug helpers from this module.
+ */
+export {
+  PACKAGE_SLUG_MAX_LENGTH,
+  PACKAGE_SLUG_PATTERN,
+  isValidPackageSlug,
+};
+
 /** How long the creation form waits before asking the backend about a slug. */
 export const SLUG_CHECK_DEBOUNCE_MS = 300;
 
@@ -12,8 +27,6 @@ export type SlugCheckState =
   | "taken"
   | "error";
 
-import type { MessageKey } from "@/i18n/message";
-
 export const SLUG_HINT_KEYS: Partial<Record<SlugCheckState, MessageKey>> = {
   invalid: "Slug.invalid",
   checking: "Slug.checking",
@@ -24,14 +37,6 @@ export const SLUG_HINT_KEYS: Partial<Record<SlugCheckState, MessageKey>> = {
 
 export function slugHintKey(state: SlugCheckState): MessageKey | undefined {
   return SLUG_HINT_KEYS[state];
-}
-
-export function isSlugValid(slug: string): boolean {
-  return (
-    slug.length > 0 &&
-    slug.length <= SLUG_MAX_LENGTH &&
-    SLUG_PATTERN.test(slug)
-  );
 }
 
 export function slugHintClass(state: SlugCheckState): string {

@@ -1,8 +1,8 @@
 import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { AppConfigService } from 'src/config/config.service';
-import { createRuntimeServiceToken } from 'src/godot-game/runtime-service-token';
+import { createRuntimeServiceToken } from 'src/common/runtime-contracts';
 import { RuntimeAuthGuard } from './runtime-auth.guard';
-import { isRuntimeServiceUser } from './runtime-service-user';
+import { isRuntimeServiceUser } from 'src/auth/runtime-service-user';
 
 function context(
   query: Record<string, string>,

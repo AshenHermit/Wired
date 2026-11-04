@@ -1,4 +1,5 @@
 import { Profile } from 'passport-google-oauth20';
+import { AppConfigService } from 'src/config/config.service';
 import { GoogleStrategy } from './auth-google.strategy';
 
 function profile(verified: boolean): Profile {
@@ -14,9 +15,13 @@ function profile(verified: boolean): Profile {
   } as Profile;
 }
 
+const config = {
+  auth: { googleClientId: 'id', googleClientSecret: 'secret' },
+} as unknown as AppConfigService;
+
 describe('GoogleStrategy', () => {
   it('accepts a verified email', async () => {
-    const strategy = new GoogleStrategy();
+    const strategy = new GoogleStrategy(config);
     const done = jest.fn();
 
     await strategy.validate('access', 'refresh', profile(true), done);
@@ -28,7 +33,7 @@ describe('GoogleStrategy', () => {
   });
 
   it('rejects an unverified email', async () => {
-    const strategy = new GoogleStrategy();
+    const strategy = new GoogleStrategy(config);
     const done = jest.fn();
 
     await strategy.validate('access', 'refresh', profile(false), done);

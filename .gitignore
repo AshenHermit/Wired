@@ -5,9 +5,9 @@ dist
 .env.prod.*
 !.env.prod.example
 .superpowers/
+.desloppify/
 packages/server/storage/
 packages/server/game_export/
 packages/server/godot_editor/
 packages/server/godot_runtime/
-.desloppify
 scorecard.png
