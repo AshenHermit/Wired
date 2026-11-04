@@ -436,7 +436,9 @@ class GameTabError extends Error {
  * the readiness gate so a package cannot count as applied here and failed there.
  */
 export function packagesFailed(packages: RoomPackagesStatus): boolean {
-  const active = new Set(activePackages(packages).map(({ packageId }) => packageId));
+  const active = new Set(
+    activePackages(packages).map(({ packageId }) => packageId),
+  );
   return packages.packages.some(
     (entry) => active.has(entry.packageId) && entry.runtime.state === "failed",
   );
@@ -619,9 +621,7 @@ export function GameTab({ room }: { room: Room }) {
           // package pass. Keep the overlay informative while it is in flight.
           const poller = window.setInterval(() => {
             void readRuntimeState(room.id)
-              .then(({ status, packages }) =>
-                describeRuntime(status, packages),
-              )
+              .then(({ status, packages }) => describeRuntime(status, packages))
               .catch(() => {
                 // The request itself owns the real error.
               });
@@ -905,7 +905,7 @@ export function GameTab({ room }: { room: Room }) {
         <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-md bg-black/60 px-3 py-1 text-xs">
           {t("players", { count: players })}
           {events.length > 0 && (
-            <span className="ml-2 opacity-70">В· {events.at(-1)}</span>
+            <span className="ml-2 opacity-70">{events.at(-1)}</span>
           )}
         </div>
       )}

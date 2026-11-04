@@ -153,11 +153,15 @@ class StubPlayers extends PlayersManager:
 		return 0
 	func purge_package(package_id: int) -> void:
 		purged.append(package_id)
+	func purge_missing_packages(_package_ids: PackedStringArray) -> void:
+		pass
 
 class StubDynamicWorld extends DynamicWorldContainer:
 	var parked: Array[int] = []
 	var dropped: Array[int] = []
 	var purged: Array[int] = []
+	var restore_calls := 0
+	var restore_settled := false
 	func park_package(package_id: int) -> int:
 		parked.append(package_id)
 		return 0
@@ -166,6 +170,12 @@ class StubDynamicWorld extends DynamicWorldContainer:
 		return 0
 	func purge_package(package_id: int) -> int:
 		purged.append(package_id)
+		return 0
+	func restore_pending() -> int:
+		if restore_settled:
+			return 0
+		restore_settled = true
+		restore_calls += 1
 		return 0
 
 func _ready() -> void:
@@ -230,6 +240,7 @@ func _run() -> void:
 	_test_save_and_load_round_trip()
 	_test_parked_dynamic_records_are_saved_and_reseeded()
 	_test_room_packages_purges_only_unlisted_ids()
+	_test_dynamic_restore_waits_for_the_package_chain()
 	await _test_package_ops_are_serialized()
 	await _test_world_snapshot_waits_for_a_running_package_op()
 	await _test_reconcile_unloads_a_package_missing_from_the_server()
@@ -429,6 +440,61 @@ func _test_room_packages_purges_only_unlisted_ids() -> void:
 		% [kept],
 	)
 	probe.free()
+
+
+## Dynamic records must not spawn between two packages of the same startup
+## chain. A crate restored right after its own package is applied would fall
+## through the ground that a later package authors, because that package is
+## still downloading. The restore therefore waits until the queue drains and
+## every announced room package is applied.
+func _test_dynamic_restore_waits_for_the_package_chain() -> void:
+	var probe: Variant = _make_entry_probe()
+	if probe == null:
+		return
+	probe._net.mode = "server"
+	var world: Variant = probe._dynamic_world
+	var packages: Variant = probe._packages
+	packages.applied = {"23": {"revision": 2, "artifact_key": "a"}}
+
+	probe._apply_room_packages("23,25")
+	_check(
+		world.restore_calls == 0,
+		"records must stay parked until every announced package is applied",
+	)
+	probe._package_ops_queue.append({"kind": "apply", "id": 25, "revision": 2})
+	probe._restore_dynamic_if_ready()
+	_check(
+		world.restore_calls == 0,
+		"a queued package must keep the records parked",
+	)
+
+	probe._package_ops_queue.clear()
+	packages.applied["25"] = {"revision": 2, "artifact_key": "b"}
+	probe._restore_dynamic_if_ready()
+	_check(
+		world.restore_calls == 1,
+		"the settled chain must restore the parked records exactly once",
+	)
+	probe._restore_dynamic_if_ready()
+	_check(
+		world.restore_calls == 1,
+		"a repeated restore attempt must not duplicate the entities",
+	)
+	_free_entry_probe(probe)
+
+	# A backend that never announces the list still restores once the queue
+	# drains: the fallback must not park saved entities forever.
+	var fallback: Variant = _make_entry_probe()
+	if fallback == null:
+		return
+	fallback._net.mode = "server"
+	fallback._packages.applied = {"23": {"revision": 2, "artifact_key": "a"}}
+	fallback._restore_dynamic_if_ready()
+	_check(
+		fallback._dynamic_world.restore_calls == 1,
+		"an unannounced package list must still restore after the queue drains",
+	)
+	_free_entry_probe(fallback)
 
 
 ## The queue is the only entry point that mutates packages, so a suspended apply

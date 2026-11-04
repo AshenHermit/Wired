@@ -39,6 +39,11 @@ var _players: PlayersManager
 ## arrives during an apply would run against a half-applied registry.
 var _package_ops_busy := false
 var _package_ops_queue: Array[Dictionary] = []
+## Server side: package ids the room still publishes, as announced by the
+## backend. Dynamic records are spawned only after this chain is fully applied:
+## a later package in the same chain may author the static world they stand on.
+var _room_package_ids: PackedStringArray = PackedStringArray()
+var _room_packages_known := false
 ## Client side: one package retry chain at a time. Every failed download must
 ## converge instead of stacking a timer per snapshot.
 var _package_retry_in_flight := false
@@ -190,11 +195,10 @@ func _apply_registered_package(package_id: int, revision: int) -> void:
 	# spawner's net id); only the components are replaced, with their state.
 	if _players != null:
 		_players.rebuild_live_components()
-	# Package order is not guaranteed: every applied revision retries the parked
-	# records, and the ones whose type is still unregistered stay pending.
+	# The chain is not necessarily complete yet (a ground package may still be
+	# queued), so the server only restores the parked records once it is.
 	if _net.mode == "server":
-		if _dynamic_world != null:
-			_dynamic_world.restore_pending()
+		_restore_dynamic_if_ready()
 	else:
 		# A snapshot deferred on a revision mismatch can now be checked again.
 		_retry_pending_world_snapshot()
@@ -525,7 +529,12 @@ func _enqueue_package_op(op: Dictionary) -> void:
 
 
 func _pump_package_ops() -> void:
-	if _package_ops_busy or _package_ops_queue.is_empty():
+	if _package_ops_busy:
+		return
+	if _package_ops_queue.is_empty():
+		# The chain is settled: static content of every applied package is in the
+		# tree, so parked dynamic records can finally be spawned on top of it.
+		_restore_dynamic_if_ready()
 		return
 	_package_ops_busy = true
 	var op: Dictionary = _package_ops_queue.pop_front()
@@ -538,6 +547,9 @@ func _pump_package_ops() -> void:
 		"unload":
 			_apply_package_removal(package_id, bool(op.get("purge", false)))
 	_package_ops_busy = false
+	# The mutex is free again: when nothing else is queued, this may have been
+	# the last package of the startup chain and the parked records can spawn.
+	_restore_dynamic_if_ready()
 	# A snapshot deferred while this operation held the mutex is replayed first:
 	# it may unload a package this operation just applied, or vice versa, and the
 	# two must never interleave. Its own apply schedules the pump again.
@@ -588,10 +600,41 @@ func _apply_room_packages(csv: String) -> void:
 		if not value.is_valid_int() or value.to_int() <= 0:
 			continue
 		ids.append(str(value.to_int()))
+	_room_package_ids = ids
+	_room_packages_known = true
 	if _dynamic_world != null:
 		_dynamic_world.purge_missing_packages(ids)
 	if _players != null:
 		_players.purge_missing_packages(ids)
+	# The announcement can also arrive after every package was applied already.
+	_restore_dynamic_if_ready()
+
+
+## Server side. Parked records are spawned only when no package operation is
+## queued and every package the room still publishes has been applied. Spawning
+## as soon as the entity's own package is applied is not enough: a later package
+## in the same startup chain may author the static world the body stands on, and
+## a body restored into an empty world free-falls through the missing ground
+## long before that package is downloaded and instantiated.
+func _restore_dynamic_if_ready() -> void:
+	if _net == null or _net.mode != "server" or _dynamic_world == null:
+		return
+	if _package_ops_busy or not _package_ops_queue.is_empty():
+		return
+	if _room_packages_known:
+		var applied: Dictionary = (
+			_packages.applied_packages() if _packages != null else {}
+		)
+		for package_id: String in _room_package_ids:
+			if not applied.has(package_id):
+				return
+	var restored := _dynamic_world.restore_pending()
+	# A peer that finished its package gate before the restore saw an empty
+	# world in its first snapshot. Resend it once the entities actually exist.
+	if restored > 0:
+		for peer_id: int in multiplayer.get_peers():
+			if _net.is_peer_packages_ready(peer_id):
+				_send_world_snapshot(peer_id)
 
 
 ## Server side: the backend asked for a published revision. The loader fetches
@@ -665,7 +708,7 @@ func _save_state(reason: String) -> void:
 ## Server side. Reads the previous `state.json` before the runtime starts.
 ## Dynamic records are not spawned here: their package entry may not be
 ## registered yet, so they are seeded into the world's parked list and
-## `restore_pending` is retried after every package apply.
+## `restore_pending` runs once the startup package chain has been applied.
 func _load_state() -> void:
 	var path := _state_path()
 	if not FileAccess.file_exists(path):
