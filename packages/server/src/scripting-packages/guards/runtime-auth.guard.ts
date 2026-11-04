@@ -3,6 +3,7 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { packageError } from '../package-errors';
 import { AuthGuard } from '@nestjs/passport';
 import { Request } from 'express';
 import { AppConfigService } from 'src/config/config.service';
@@ -56,6 +57,8 @@ export class RuntimeAuthGuard extends AuthGuard('jwt') {
       return createRuntimeServiceUser() as TUser;
     }
 
-    throw err ?? new UnauthorizedException('authentication_required');
+    throw (
+      err ?? packageError('authentication_required', 'The runtime token is invalid')
+    );
   }
 }

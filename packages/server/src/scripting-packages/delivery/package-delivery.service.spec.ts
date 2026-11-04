@@ -401,13 +401,13 @@ describe('PackageDeliveryService', () => {
     const oldDir = await writeOldV1ManifestFixture(7, 1, 3, 'b'.repeat(64));
 
     const manifest = await service.getRuntimeManifest(7, 1, 3);
-    const resolved = await service.resolveRuntimeFile(
-      7,
-      1,
-      3,
-      manifest.artifactKey,
-      'hero.gd',
-    );
+    const resolved = await service.resolveRuntimeFile({
+      packageId: 7,
+      revision: 1,
+      roomId: 3,
+      artifactKey: manifest.artifactKey,
+      filepath: 'hero.gd',
+    });
 
     expect(manifest.slug).toBe('hero');
     expect(manifest.artifactKey).not.toBe('b'.repeat(64));
@@ -556,13 +556,13 @@ describe('PackageDeliveryService', () => {
     it('resolves a file that is part of the artifact', async () => {
       await writePublished(5, 3, { 'hero.gd': 'extends Node' });
       const manifest = await service.getRuntimeManifest(5, 3, 7);
-      const resolved = await service.resolveRuntimeFile(
-        5,
-        3,
-        7,
-        manifest.artifactKey,
-        'hero.gd',
-      );
+      const resolved = await service.resolveRuntimeFile({
+        packageId: 5,
+        revision: 3,
+        roomId: 7,
+        artifactKey: manifest.artifactKey,
+        filepath: 'hero.gd',
+      });
 
       expect(resolved.size).toBe(Buffer.from('extends Node').byteLength);
       expect(resolved.path).toBe(
@@ -575,7 +575,7 @@ describe('PackageDeliveryService', () => {
       const manifest = await service.getRuntimeManifest(5, 3, 7);
 
       await expect(
-        service.resolveRuntimeFile(5, 3, 7, manifest.artifactKey, '../x'),
+        service.resolveRuntimeFile({ packageId: 5, revision: 3, roomId: 7, artifactKey: manifest.artifactKey, filepath: '../x' }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
@@ -584,7 +584,7 @@ describe('PackageDeliveryService', () => {
       const manifest = await service.getRuntimeManifest(5, 3, 7);
 
       await expect(
-        service.resolveRuntimeFile(5, 3, 7, 'f'.repeat(64), 'hero.gd'),
+        service.resolveRuntimeFile({ packageId: 5, revision: 3, roomId: 7, artifactKey: 'f'.repeat(64), filepath: 'hero.gd' }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
@@ -593,7 +593,7 @@ describe('PackageDeliveryService', () => {
       await service.getRuntimeManifest(5, 3, 7);
 
       await expect(
-        service.resolveRuntimeFile(5, 3, 7, '../5/3', 'hero.gd'),
+        service.resolveRuntimeFile({ packageId: 5, revision: 3, roomId: 7, artifactKey: '../5/3', filepath: 'hero.gd' }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
@@ -610,7 +610,7 @@ describe('PackageDeliveryService', () => {
           service.getRuntimeManifest(5, 3, roomId),
         ).rejects.toBeInstanceOf(BadRequestException);
         await expect(
-          service.resolveRuntimeFile(5, 3, roomId, 'a'.repeat(64), 'hero.gd'),
+          service.resolveRuntimeFile({ packageId: 5, revision: 3, roomId, artifactKey: 'a'.repeat(64), filepath: 'hero.gd' }),
         ).rejects.toBeInstanceOf(BadRequestException);
         expect(packagesRepository.findOne).not.toHaveBeenCalled();
       },
@@ -623,7 +623,7 @@ describe('PackageDeliveryService', () => {
         NotFoundException,
       );
       await expect(
-        service.resolveRuntimeFile(5, 3, 99, 'a'.repeat(64), 'hero.gd'),
+        service.resolveRuntimeFile({ packageId: 5, revision: 3, roomId: 99, artifactKey: 'a'.repeat(64), filepath: 'hero.gd' }),
       ).rejects.toBeInstanceOf(NotFoundException);
       await expect(artifactDirs(5, 3, 99)).rejects.toThrow();
       expect(packagesRepository.findOne).not.toHaveBeenCalled();
@@ -686,13 +686,13 @@ describe('PackageDeliveryService', () => {
       );
 
       // The pinned manifest resolves only the new artifact directory.
-      const resolved = await service.resolveRuntimeFile(
-        5,
-        3,
-        7,
-        second.artifactKey,
-        'main.gd',
-      );
+      const resolved = await service.resolveRuntimeFile({
+        packageId: 5,
+        revision: 3,
+        roomId: 7,
+        artifactKey: second.artifactKey,
+        filepath: 'main.gd',
+      });
       expect(resolved.path).toBe(path.join(secondDir, 'main.gd'));
     });
 

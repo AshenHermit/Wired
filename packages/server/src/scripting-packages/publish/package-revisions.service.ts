@@ -5,7 +5,6 @@ import {
   Injectable,
   Logger,
   NotFoundException,
-  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
@@ -16,13 +15,18 @@ import {
 } from '@wired-io/shared';
 import { In, Repository } from 'typeorm';
 import { errorMessage } from 'src/common/errors';
+import { isUniqueViolation } from 'src/common/pg-errors';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import {
   SavedDraftFile,
   PackageStorageService,
 } from '../storage/package-storage.service';
-import { PinnedPackage, walkPinnedClosure } from './package-dependency-graph';
+import {
+  PinnedPackage,
+  pinnedPackageLoader,
+  walkPinnedClosure,
+} from './package-dependency-graph';
 import { sha256Hex } from '../storage/package-hash';
 import { validatePackageRevisionFiles } from '../storage/package-manifest';
 import { PackagePublishLockService } from './package-publish-lock.service';
@@ -61,27 +65,12 @@ export class PackageRevisionsService {
     private readonly revisionsRepository: Repository<ScriptingPackageRevision>,
     private readonly packagesService: ScriptingPackagesService,
     private readonly storage: PackageStorageService,
-    @Optional()
-    private readonly locks?: PackagePublishLockService,
-    @Optional()
+    private readonly locks: PackagePublishLockService,
     @Inject(PACKAGE_REVISION_DISPATCHER)
-    private readonly dispatcher?: PackageRevisionDispatcher,
-    @Optional()
+    private readonly dispatcher: PackageRevisionDispatcher,
     @InjectRepository(ScriptingPackage)
-    private readonly packagesRepository?: Repository<ScriptingPackage>,
+    private readonly packagesRepository: Repository<ScriptingPackage>,
   ) {}
-
-  /**
-   * The publication guard is provided by `ScriptingPackagesModule`; it stays
-   * optional only so specs can build the service without a database. Missing
-   * it is a configuration error, not a reason to fall back to a private set.
-   */
-  private get publishLocks(): PackagePublishLockService {
-    if (!this.locks) {
-      throw new Error('package_publish_lock_missing');
-    }
-    return this.locks;
-  }
 
   /**
    * Starts a new draft revision. Any unfinished draft of the same package is
@@ -92,7 +81,7 @@ export class PackageRevisionsService {
     packageId: number,
     payload: CreatePackageRevisionPayload,
   ): Promise<PackageRevision> {
-    await this.publishLocks.assertNotPublishing(packageId);
+    await this.locks.assertNotPublishing(packageId);
 
     const pkg = await this.packagesService.findOne(packageId);
     const files = validatePackageRevisionFiles(payload?.files);
@@ -132,7 +121,7 @@ export class PackageRevisionsService {
     filepath: string,
     data: Buffer,
   ): Promise<SavedDraftFile> {
-    await this.publishLocks.assertNotPublishing(packageId);
+    await this.locks.assertNotPublishing(packageId);
 
     const row = await this.findRevision(packageId, revision);
 
@@ -182,7 +171,7 @@ export class PackageRevisionsService {
     const pkg = await this.packagesService.findOne(packageId);
 
     // Reject uploads for this package while its bytes are verified and moved.
-    await this.publishLocks.runWithPublishLocks([packageId], async () => {
+    await this.locks.runWithPublishLocks([packageId], async () => {
       await this.storage.publishRevision(
         packageId,
         revision,
@@ -292,7 +281,7 @@ export class PackageRevisionsService {
       }
 
       // Reject uploads for the target while its bytes are verified and moved.
-      await this.publishLocks.runWithPublishLocks([targetPackageId], async () => {
+      await this.locks.runWithPublishLocks([targetPackageId], async () => {
         await this.storage.publishRevision(
           targetPackageId,
           revision,
@@ -343,10 +332,6 @@ export class PackageRevisionsService {
     revision: number,
     files: PackageFileEntry[],
   ): Promise<void> {
-    if (!this.packagesRepository) {
-      return;
-    }
-
     const index = await this.slugIndex();
     const referenced = await this.loadReferencedPackageIds(
       files,
@@ -387,10 +372,6 @@ export class PackageRevisionsService {
     revision: number,
     files: PackageFileEntry[],
   ): Promise<void> {
-    if (!this.packagesRepository) {
-      return;
-    }
-
     const pkg = await this.packagesService.findOne(packageId);
     const scopeRoomId = pkg.room?.id ?? null;
     const index = await this.slugIndex();
@@ -409,7 +390,7 @@ export class PackageRevisionsService {
     const visited = new Set<number>(
       await walkPinnedClosure(
         [...referenced].filter((id) => id !== packageId),
-        { load: (id) => this.loadPinnedPackage(id) },
+        { load: pinnedPackageLoader(this.revisionsRepository, this.storage) },
       ),
     );
 
@@ -436,19 +417,8 @@ export class PackageRevisionsService {
     });
   }
 
-  /**
-   * Loads a fresh `slug <-> id` index for one publish operation. Without the
-   * repository (unit tests) only numeric references can be resolved, which is
-   * the legacy behaviour.
-   */
+  /** Loads a fresh `slug <-> id` index for one publish operation. */
   private async slugIndex(): Promise<PackageSlugIndex> {
-    if (!this.packagesRepository) {
-      return {
-        byId: new Map(),
-        byRoomSlug: new Map(),
-        byGlobalSlug: new Map(),
-      };
-    }
     return loadPackageSlugIndex(this.packagesRepository);
   }
 
@@ -476,22 +446,6 @@ export class PackageRevisionsService {
       );
     }
     return resolved;
-  }
-
-  /** The latest published revision of a package and the dependencies it pins. */
-  private async loadPinnedPackage(packageId: number): Promise<PinnedPackage> {
-    const latest = await this.revisionsRepository.findOne({
-      where: { package: { id: packageId }, status: 'published' },
-      order: { revision: 'DESC' },
-    });
-    if (!latest) {
-      return { revision: null, pins: null };
-    }
-    const pins = await this.storage.readPinnedDependencies(
-      packageId,
-      latest.revision,
-    );
-    return { revision: latest.revision, pins: pins ? [...pins.keys()] : null };
   }
 
   /**
@@ -795,14 +749,6 @@ function toRevision(
     createdAt: row.createdAt.toISOString(),
     publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
   };
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    (error as { code?: string }).code === '23505'
-  );
 }
 
 async function assertPublishedFile(

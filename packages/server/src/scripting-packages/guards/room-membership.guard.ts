@@ -5,6 +5,7 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { packageError } from '../package-errors';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Room } from 'src/database/entities/room.entity';
@@ -41,13 +42,16 @@ export class RoomMembershipGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<RuntimeAuthRequest>();
     const user = request?.user;
     if (!user) {
-      throw new UnauthorizedException('authentication_required');
+      throw packageError(
+        'authentication_required',
+        'Sign in to read this package',
+      );
     }
 
     const roomId = readPositiveInt(request.query?.room);
     const packageId = readPositiveInt(request.params?.id);
     if (roomId === null || packageId === null) {
-      throw new ForbiddenException('room_access_denied');
+      throw packageError('room_access_denied', 'You cannot read this room');
     }
 
     const room = await this.roomsRepository.findOne({
@@ -57,7 +61,7 @@ export class RoomMembershipGuard implements CanActivate {
     // The room's own runtime is not a user, so it has no membership row. It is
     // still confined to its room: the package binding below applies to it too.
     if (!room || (!isRuntimeServiceUser(user) && !isRoomMember(room, user.id))) {
-      throw new ForbiddenException('room_access_denied');
+      throw packageError('room_access_denied', 'You cannot read this room');
     }
 
     const pkg = await this.packagesRepository.findOne({
@@ -65,7 +69,10 @@ export class RoomMembershipGuard implements CanActivate {
       relations: ['room'],
     });
     if (!pkg || pkg.room?.id !== roomId) {
-      throw new ForbiddenException('package_not_attached_to_room');
+      throw packageError(
+        'package_not_attached_to_room',
+        'This package does not belong to the requested room',
+      );
     }
 
     return true;

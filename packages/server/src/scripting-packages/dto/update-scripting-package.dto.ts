@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsArray, IsBoolean, IsInt, IsOptional, IsString } from 'class-validator';
+import { IsPackageSlug } from './package-slug.decorator';
 
 export class UpdateScriptingPackageDto {
   @ApiPropertyOptional({ example: 'My package', description: 'Package title' })
@@ -53,7 +54,7 @@ export class UpdateScriptingPackageDto {
     description: 'New slug; the service rewrites package references',
   })
   @IsOptional()
-  @IsString()
+  @IsPackageSlug()
   slug?: string;
 
   @ApiPropertyOptional({

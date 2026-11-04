@@ -21,7 +21,7 @@ import { User } from 'src/database/entities/user.entity';
 import { ScriptingPackagesController } from './scripting-packages.controller';
 import { WorkshopController } from './workshop/workshop.controller';
 import { PackageDeliveryController } from './delivery/package-delivery.controller';
-import { ArtifactBuildRateLimiter } from './publish/artifact-build.rate-limiter';
+import { ArtifactBuildRateLimiter } from './delivery/artifact-build.rate-limiter';
 import { PackageDeliveryService } from './delivery/package-delivery.service';
 import { PackageReadUrlService } from './delivery/package-read-url.service';
 import { PackageRevisionsService } from './publish/package-revisions.service';

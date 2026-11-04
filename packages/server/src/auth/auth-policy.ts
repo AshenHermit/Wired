@@ -11,7 +11,7 @@ export const AUTH_POLICY_KEY = 'wired:auth-policy';
  * decorator. The two other values are the deliberate opt-outs, which makes the
  * public surface greppable instead of implicit.
  */
-export type AuthPolicy = 'public' | 'silent' | 'required';
+export type AuthPolicy = 'public' | 'silent' | 'required' | 'room-token';
 
 /**
  * No credentials at all: login, the workshop catalogue, static game assets.
@@ -32,6 +32,21 @@ export function Public() {
 export function SilentAuth() {
   return applyDecorators(
     SetMetadata(AUTH_POLICY_KEY, 'silent' satisfies AuthPolicy),
+    ApiBearerAuth(),
+  );
+}
+
+/**
+ * The route checks its own room-scoped credential instead of a session: either
+ * a user JWT or the room's own service token, verified by the handler's guards.
+ *
+ * The default guard steps aside the same way it does for `public`, but the route
+ * is not anonymous — a request without a valid credential is rejected — so it
+ * must not be documented as unauthenticated.
+ */
+export function RoomTokenAuth() {
+  return applyDecorators(
+    SetMetadata(AUTH_POLICY_KEY, 'room-token' satisfies AuthPolicy),
     ApiBearerAuth(),
   );
 }

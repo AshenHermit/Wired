@@ -6,6 +6,8 @@ import { ScriptingPackageRevision } from 'src/database/entities/scripting-packag
 import { Room } from 'src/database/entities/room.entity';
 import { PackageDeliveryService } from './package-delivery.service';
 import { PackageReadUrlService } from './package-read-url.service';
+import { PackageDeliveryController } from './package-delivery.controller';
+import { ArtifactBuildRateLimiter } from './artifact-build.rate-limiter';
 import { PackageStorageService } from '../storage/package-storage.service';
 
 @Module({
@@ -21,7 +23,11 @@ import { PackageStorageService } from '../storage/package-storage.service';
     PackageStorageService,
     PackageReadUrlService,
     PackageDeliveryService,
+    // Shared by the delivery controller so artifact builds are limited
+    // process-wide instead of per hand-built instance.
+    ArtifactBuildRateLimiter,
   ],
+  controllers: [PackageDeliveryController],
   exports: [
     PackageStorageService,
     PackageReadUrlService,

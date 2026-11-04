@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { packageError } from '../package-errors';
 import { AppConfigService } from 'src/config/config.service';
 
 export type PackageReadSubject = {
@@ -22,7 +23,10 @@ export class PackageReadUrlService {
   ): { token: string; expiresAt: number } {
     const { readSecret, readTtlSec } = this.configService.packages;
     if (!readSecret) {
-      throw new ServiceUnavailableException('package_read_secret_missing');
+      throw packageError(
+        'package_read_secret_missing',
+        'Package read URLs are not configured',
+      );
     }
 
     const expiresAt = nowSec + readTtlSec;

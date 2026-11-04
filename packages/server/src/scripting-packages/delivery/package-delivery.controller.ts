@@ -11,6 +11,7 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
+import { packageError } from '../package-errors';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { createReadStream } from 'fs';
 import { once } from 'events';
@@ -18,16 +19,16 @@ import { Response } from 'express';
 import { PackageRuntimeManifest } from '@wired-io/shared';
 import { PackageDeliveryService } from './package-delivery.service';
 import { PackageReadUrlService } from './package-read-url.service';
-import { ArtifactBuildRateLimiter } from '../publish/artifact-build.rate-limiter';
+import { ArtifactBuildRateLimiter } from './artifact-build.rate-limiter';
 import { RoomMembershipGuard } from '../guards/room-membership.guard';
 import { RuntimeAuthGuard } from '../guards/runtime-auth.guard';
-import { Public } from 'src/auth/auth-policy';
+import { RoomTokenAuth } from 'src/auth/auth-policy';
 
 /**
  * What the native Godot runtime and game clients read: one manifest per
  * (package, revision, room) plus the artifact files it names.
  *
- * Separate from the authoring controller because this half is public to any
+ * Separate from the authoring controller because this half is readable by any
  * room member (a user JWT or the room's own service token) and never mutates
  * anything, while authoring is authenticated per package.
  */
@@ -42,7 +43,7 @@ export class PackageDeliveryController {
     private readonly buildLimiter: ArtifactBuildRateLimiter,
   ) {}
 
-  @Public()
+  @RoomTokenAuth()
   @ApiOkResponse({ description: 'Signed runtime manifest for a room' })
   // `no-transform` keeps the Next.js dev proxy (and production proxies) from
   // gzipping this JSON. Godot's Web HTTPRequest receives an already-decoded
@@ -67,7 +68,7 @@ export class PackageDeliveryController {
     return this.delivery.getRuntimeManifest(id, revision, room);
   }
 
-  @Public()
+  @RoomTokenAuth()
   @ApiOkResponse({
     description: 'Raw contents of a runtime artifact file',
     schema: { type: 'string', format: 'binary' },
@@ -93,20 +94,26 @@ export class PackageDeliveryController {
         revision,
       })
     ) {
-      throw new UnauthorizedException('package_read_token_invalid');
+      throw packageError(
+        'package_read_token_invalid',
+        'Package read token is invalid',
+      );
     }
     if (!artifactKey) {
-      throw new BadRequestException('package_artifact_key_missing');
+      throw packageError(
+        'package_artifact_key_missing',
+        'The artifact key is missing from the resolved closure',
+      );
     }
 
     const filepath = Array.isArray(path) ? path.join('/') : path;
-    const file = await this.delivery.resolveRuntimeFile(
-      id,
+    const file = await this.delivery.resolveRuntimeFile({
+      packageId: id,
       revision,
-      room,
+      roomId: room,
       artifactKey,
       filepath,
-    );
+    });
 
     // `resolveRuntimeFile` stats the file, but pruning can delete it before the
     // stream opens. Wait for 'open' so that race is a controlled 404 instead of
@@ -116,7 +123,10 @@ export class PackageDeliveryController {
       await once(stream, 'open');
     } catch {
       stream.destroy();
-      throw new NotFoundException('package_artifact_file_missing');
+      throw packageError(
+        'package_artifact_file_missing',
+        'The runtime artifact does not contain this file',
+      );
     }
 
     res.set({

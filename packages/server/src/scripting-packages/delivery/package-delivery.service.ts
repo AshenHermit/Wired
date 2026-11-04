@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { packageError } from '../package-errors';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   PackageFileEntry,
@@ -32,6 +33,7 @@ import {
 } from '../publish/package-closure-resolver';
 import {
   PinnedPackage,
+  pinnedPackageLoader,
   walkPinnedClosure,
 } from '../publish/package-dependency-graph';
 import { sha256Hex } from '../storage/package-hash';
@@ -85,6 +87,21 @@ type RuntimeArtifact = {
 };
 
 /**
+ * One file of one already-built runtime artifact.
+ *
+ * The ids are named rather than positional: the read token, the artifact path
+ * and the HTTP route all carry `packageId`, `revision` and `roomId`, and a
+ * transposed pair would resolve a file out of the wrong artifact.
+ */
+export interface RuntimeFileRequest {
+  packageId: number;
+  revision: number;
+  roomId: number;
+  artifactKey: string;
+  filepath: string;
+}
+
+/**
  * Builds and caches per-room runtime artifacts from published raw package
  * files, rewrites package references to their runtime locations, verifies the
  * dependency closure (room, published state, referenced files, cycles) and
@@ -129,7 +146,7 @@ export class PackageDeliveryService {
     const ids = await walkPinnedClosure(
       roomPackages.map((pkg) => pkg.id),
       {
-        load: (packageId) => this.loadPinnedPackage(packageId),
+        load: pinnedPackageLoader(this.revisionsRepository, this.storage),
         // A dependency whose row was deleted keeps no runtime state to purge.
         onDiscover: async (dependencyId) =>
           (await this.packagesRepository.findOne({
@@ -138,23 +155,6 @@ export class PackageDeliveryService {
       },
     );
     return [...ids].sort((left, right) => left - right);
-  }
-
-  /** The latest published revision of a package and the dependencies it pins. */
-  private async loadPinnedPackage(packageId: number): Promise<PinnedPackage> {
-    const latest = await this.revisionsRepository.findOne({
-      where: { package: { id: packageId }, status: 'published' },
-      relations: { package: true },
-      order: { revision: 'DESC' },
-    });
-    if (!latest) {
-      return { revision: null, pins: null };
-    }
-    const pins = await this.storage.readPinnedDependencies(
-      packageId,
-      latest.revision,
-    );
-    return { revision: latest.revision, pins: pins ? [...pins.keys()] : null };
   }
 
   async getRuntimeManifest(
@@ -184,27 +184,36 @@ export class PackageDeliveryService {
    * Resolves a file of one exact artifact. The artifact key comes from the
    * manifest and is never re-resolved: a library publish between the manifest
    * and the last file must not silently switch to a different artifact.
+   *
+   * The request is an object because three of its five fields are numbers that
+   * used to sit next to each other in a different order here, in the read token
+   * and in the artifact path.
    */
-  async resolveRuntimeFile(
-    packageId: number,
-    revision: number,
-    roomId: number,
-    artifactKey: string,
-    filepath: string,
-  ): Promise<{ path: string; size: number }> {
+  async resolveRuntimeFile(request: RuntimeFileRequest): Promise<{
+    path: string;
+    size: number;
+  }> {
+    const { packageId, revision, roomId, artifactKey, filepath } = request;
     await this.assertValidRoom(roomId);
     if (!ARTIFACT_KEY_RE.test(artifactKey)) {
-      throw new NotFoundException('package_artifact_not_found');
+      throw packageError(
+        'package_artifact_not_found',
+        'No runtime artifact was built for this package revision',
+      );
     }
     const artifact = await this.readManifest(
       this.artifactDir(packageId, revision, roomId, artifactKey),
     );
     if (!artifact) {
-      throw new NotFoundException('package_artifact_not_found');
+      throw packageError(
+        'package_artifact_not_found',
+        'No runtime artifact was built for this package revision',
+      );
     }
     const entry = artifact.files.find((file) => file.filepath === filepath);
     if (!entry) {
-      throw new NotFoundException(
+      throw packageError(
+        'package_artifact_file_missing',
         `File ${filepath} is not part of the runtime artifact`,
       );
     }
@@ -221,11 +230,14 @@ export class PackageDeliveryService {
    */
   private async assertValidRoom(roomId: number): Promise<void> {
     if (!Number.isInteger(roomId) || roomId <= 0) {
-      throw new BadRequestException('room_invalid');
+      throw packageError(
+        'room_invalid',
+        'Room id must be a positive integer',
+      );
     }
     const exists = await this.roomsRepository.exist({ where: { id: roomId } });
     if (!exists) {
-      throw new NotFoundException(`Room ${roomId} not found`);
+      throw packageError('room_not_found', `Room ${roomId} not found`);
     }
   }
 
@@ -299,7 +311,10 @@ export class PackageDeliveryService {
     const artifactKey = resolved.artifactKeys.get(packageId);
     if (!artifactKey) {
       // The root is always part of its own closure; this is an invariant.
-      throw new BadRequestException('package_artifact_key_missing');
+      throw packageError(
+        'package_artifact_key_missing',
+        'The artifact key is missing from the resolved closure',
+      );
     }
     const dir = this.artifactDir(packageId, revision, roomId, artifactKey);
 

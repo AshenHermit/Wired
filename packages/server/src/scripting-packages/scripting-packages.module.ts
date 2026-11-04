@@ -10,9 +10,7 @@ import { PackageRevisionsService } from './publish/package-revisions.service';
 import { PackageWorkshopService } from './workshop/package-workshop.service';
 import { WorkshopController } from './workshop/workshop.controller';
 import { PackagePublishLockService } from './publish/package-publish-lock.service';
-import { ArtifactBuildRateLimiter } from './publish/artifact-build.rate-limiter';
 import { PackageDeliveryModule } from './delivery/package-delivery.module';
-import { PackageDeliveryController } from './delivery/package-delivery.controller';
 import { AppConfigModule } from 'src/config/config.module';
 import { GodotGameModule } from 'src/godot-game/godot-game.module';
 
@@ -33,18 +31,13 @@ import { GodotGameModule } from 'src/godot-game/godot-game.module';
     PackageRevisionsService,
     PackageWorkshopService,
     PackagePublishLockService,
-    // Shared by the delivery controller so artifact builds are limited
-    // process-wide instead of per hand-built instance.
-    ArtifactBuildRateLimiter,
   ],
   // `WorkshopController` must come first: `GET /scripting-packages/workshop`
   // would otherwise be matched by the authoring `GET /scripting-packages/:id`
-  // and rejected by its `ParseIntPipe`.
-  controllers: [
-    WorkshopController,
-    PackageDeliveryController,
-    ScriptingPackagesController,
-  ],
+  // and rejected by its `ParseIntPipe`. The delivery controller is declared by
+  // `PackageDeliveryModule`, whose routes are all under `:id/revisions/...`, so
+  // it cannot shadow a literal path.
+  controllers: [WorkshopController, ScriptingPackagesController],
   exports: [
     ScriptingPackagesService,
     PackageRevisionsService,

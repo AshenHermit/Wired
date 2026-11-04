@@ -17,7 +17,7 @@ import request from 'supertest';
 import { Room } from 'src/database/entities/room.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { RuntimeAuthGuard } from '../guards/runtime-auth.guard';
-import { ArtifactBuildRateLimiter } from '../publish/artifact-build.rate-limiter';
+import { ArtifactBuildRateLimiter } from './artifact-build.rate-limiter';
 import { PackageDeliveryController } from './package-delivery.controller';
 import { PackageDeliveryService } from './package-delivery.service';
 import { PackageReadUrlService } from './package-read-url.service';
@@ -116,13 +116,13 @@ describe('PackageDeliveryController runtime artifacts', () => {
       packageId: 5,
       revision: 3,
     });
-    expect(delivery.resolveRuntimeFile).toHaveBeenCalledWith(
-      5,
-      3,
-      7,
-      'k'.repeat(64),
-      'a.gd',
-    );
+    expect(delivery.resolveRuntimeFile).toHaveBeenCalledWith({
+      packageId: 5,
+      revision: 3,
+      roomId: 7,
+      artifactKey: 'k'.repeat(64),
+      filepath: 'a.gd',
+    });
     expect(response.set).toHaveBeenCalledWith({
       'Content-Type': 'application/octet-stream',
       'Content-Length': '3',

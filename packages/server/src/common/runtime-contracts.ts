@@ -5,9 +5,14 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  *
  * The package module hands revisions to the room runtime and the runtime reads
  * packages back over HTTP, so both directions are described here instead of in
- * either feature folder. Keeping them neutral is what stops a folder-level
- * dependency cycle: whoever owns one side can be moved without touching the
- * other.
+ * either feature folder. Keeping them neutral is what keeps the TypeScript
+ * import graph acyclic: whoever owns one side can be moved without touching
+ * the other.
+ *
+ * The Nest module graph still crosses both ways — `ScriptingPackagesModule`
+ * imports `GodotGameModule` to receive the dispatcher binding, and
+ * `GodotGameModule` imports `PackageDeliveryModule` — so the two module files
+ * are still edited together. Only the imports are neutral here, not the wiring.
  */
 
 /**

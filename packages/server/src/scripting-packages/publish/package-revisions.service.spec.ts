@@ -653,6 +653,7 @@ describe('PackageRevisionsService', () => {
         storage as unknown as PackageStorageService,
         new PackagePublishLockService(dataSource as unknown as DataSource),
         dispatcher as unknown as PackageRevisionDispatcher,
+        packagesRepository as never,
       );
     }
 

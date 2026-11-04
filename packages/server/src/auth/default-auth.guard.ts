@@ -7,8 +7,9 @@ import { JwtAuthGuard, JwtSilentAuthGuard } from './jwt.guard';
  * Makes authentication the default for every route.
  *
  * Registered as an `APP_GUARD`, so it runs before any handler-level guard and
- * covers controllers that declare nothing. Handlers opt out with `@Public()`
- * or soften it with `@SilentAuth()`; anything else is authenticated with the
+ * covers controllers that declare nothing. Handlers opt out with `@Public()`,
+ * soften it with `@SilentAuth()`, or hand the check to their own room-scoped
+ * guards with `@RoomTokenAuth()`; anything else is authenticated with the
  * regular JWT strategy.
  */
 @Injectable()
@@ -26,7 +27,7 @@ export class DefaultAuthGuard implements CanActivate {
         context.getClass(),
       ]) ?? 'required';
 
-    if (policy === 'public') {
+    if (policy === 'public' || policy === 'room-token') {
       return true;
     }
 

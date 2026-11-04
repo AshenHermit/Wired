@@ -14,6 +14,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, In, IsNull, Not, Repository } from 'typeorm';
 import { PackageFileEntry } from '@wired-io/shared';
 import { errorMessage } from 'src/common/errors';
+import { isUniqueViolation } from 'src/common/pg-errors';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { User } from 'src/database/entities/user.entity';
@@ -26,9 +27,14 @@ import {
   RevisionRewrite,
   RevisionTarget,
 } from './storage/package-storage.service';
-import { PinnedPackage, walkPinnedClosure } from './publish/package-dependency-graph';
+import {
+  PinnedPackage,
+  pinnedPackageLoader,
+  walkPinnedClosure,
+} from './publish/package-dependency-graph';
 import { PackageDeliveryService } from './delivery/package-delivery.service';
 import { PackagePublishLockService } from './publish/package-publish-lock.service';
+import { packageSlugTaken } from './package-errors';
 import { rewriteSlugReferences } from './storage/package-slug-rewrite';
 import { normalizeTags } from './storage/package-tags';
 import {
@@ -39,14 +45,6 @@ import {
   PackageSlugAvailability,
   isValidPackageSlug,
 } from '@wired-io/shared';
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    (error as { code?: string }).code === '23505'
-  );
-}
 
 /** What a slug rename had to touch, reported once the transaction commits. */
 interface SlugRenameOutcome {
@@ -155,34 +153,14 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       : { slug: normalized, available: true, global: scope };
   }
 
-  async assertPackageEditing(user: User, packageId: number): Promise<void> {
-    const pkg = await this.packagesRepository.findOne({
-      where: { id: packageId },
-      relations: ['author', 'contributors', 'room', 'room.author'],
-    });
-    if (!pkg) {
-      throw new NotFoundException(
-        `ScriptingPackage with id=${packageId} not found`,
-      );
-    }
-
-    const isAuthor = pkg.author?.id === user.id;
-    const isContributor = pkg.contributors?.some(
-      (contributor) => contributor.id === user.id,
-    );
-    const isRoomAuthor = pkg.room ? canEditRoom(pkg.room, user.id) : false;
-
-    if (!isAuthor && !isContributor && !isRoomAuthor) {
-      throw new ForbiddenException('You are not allowed to edit this package');
-    }
-  }
-
   /**
-   * Publishing is broader than editing: a room contributor may emit revisions.
-   * Workshop packages (`room = null`) never receive revisions over HTTP, so
-   * they are rejected even for their own author.
+   * Loads the package with everything the access checks need.
+   *
+   * Editing and publishing ask different questions of the same row, so the
+   * query, its relations and the not-found answer live here instead of being
+   * restated in each and drifting apart.
    */
-  async assertPackagePublishing(user: User, packageId: number): Promise<void> {
+  private async loadForAccess(packageId: number): Promise<ScriptingPackage> {
     const pkg = await this.packagesRepository.findOne({
       where: { id: packageId },
       relations: [
@@ -198,14 +176,37 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
         `ScriptingPackage with id=${packageId} not found`,
       );
     }
+    return pkg;
+  }
 
-    const isAuthor = pkg.author?.id === user.id;
-    const isContributor = pkg.contributors?.some(
-      (contributor) => contributor.id === user.id,
+  /** Whether the user wrote the package or was added to it directly. */
+  private static ownsPackage(pkg: ScriptingPackage, user: User): boolean {
+    return (
+      pkg.author?.id === user.id ||
+      Boolean(pkg.contributors?.some((contributor) => contributor.id === user.id))
     );
+  }
+
+  async assertPackageEditing(user: User, packageId: number): Promise<void> {
+    const pkg = await this.loadForAccess(packageId);
+    const isRoomAuthor = pkg.room ? canEditRoom(pkg.room, user.id) : false;
+
+    if (!ScriptingPackagesService.ownsPackage(pkg, user) && !isRoomAuthor) {
+      throw new ForbiddenException('You are not allowed to edit this package');
+    }
+  }
+
+  /**
+   * Publishing is broader than editing: a room contributor may emit revisions.
+   * Workshop packages (`room = null`) never receive revisions over HTTP, so
+   * they are rejected even for their own author.
+   */
+  async assertPackagePublishing(user: User, packageId: number): Promise<void> {
+    const pkg = await this.loadForAccess(packageId);
+
     const isRoomMemberOfRoom = Boolean(pkg.room) && isRoomMember(pkg.room!, user.id);
 
-    if (!isAuthor && !isContributor && !isRoomMemberOfRoom) {
+    if (!ScriptingPackagesService.ownsPackage(pkg, user) && !isRoomMemberOfRoom) {
       throw new ForbiddenException(
         'You are not allowed to publish this package',
       );
@@ -379,11 +380,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
               : { slug, room: { id: scope.roomId } },
         });
         if (live) {
-          throw new ConflictException({
-            code: 'slug_taken',
-            slug,
-            message: 'Slug уже занят',
-          });
+          throw packageSlugTaken(slug);
         }
 
         const pkg = packages.create({
@@ -399,11 +396,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
           return saved.id;
         } catch (error) {
           if (isUniqueViolation(error)) {
-            throw new ConflictException({
-              code: 'slug_taken',
-              slug,
-              message: 'Slug уже занят',
-            });
+            throw packageSlugTaken(slug);
           }
           throw error;
         }
@@ -601,11 +594,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       where: { slug: nextSlug, room: { id: roomId } },
     });
     if (live && live.id !== pkg.id) {
-      throw new ConflictException({
-        code: 'slug_taken',
-        slug: nextSlug,
-        message: 'Slug уже занят',
-      });
+      throw packageSlugTaken(nextSlug);
     }
     const dependents =
       (await this.delivery.findDependentRoomPackages(pkg.id)) ?? [];
@@ -721,7 +710,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     if (!pkg?.room) return;
     const roomId = pkg.room.id;
     await walkPinnedClosure([packageId], {
-      load: (currentId) => this.loadPinnedPackage(currentId),
+      load: pinnedPackageLoader(this.revisionsRepository, this.storage),
       onDiscover: async (dependencyId) => {
         const dependency = await this.packagesRepository.findOne({
           where: { id: dependencyId },
@@ -747,23 +736,6 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
         return true;
       },
     });
-  }
-
-  /** The latest published revision of a package and the dependencies it pins. */
-  private async loadPinnedPackage(packageId: number): Promise<PinnedPackage> {
-    const latest = await this.revisionsRepository.findOne({
-      where: { package: { id: packageId }, status: 'published' },
-      relations: { package: true },
-      order: { revision: 'DESC' },
-    });
-    if (!latest) {
-      return { revision: null, pins: null };
-    }
-    const pins = await this.storage.readPinnedDependencies(
-      packageId,
-      latest.revision,
-    );
-    return { revision: latest.revision, pins: pins ? [...pins.keys()] : null };
   }
 
   /**
