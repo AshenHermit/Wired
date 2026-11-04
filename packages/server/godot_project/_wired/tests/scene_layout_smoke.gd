@@ -34,6 +34,28 @@ func _test_main_scene_has_game_viewport() -> void:
 	if main == null:
 		return
 
+	var required_exports := [
+		"default_game_root",
+		"net",
+		"ui",
+		"status_label",
+		"log_label",
+		"static_world",
+		"dynamic_world",
+		"dynamic_spawner",
+		"players_manager",
+		"players_spawner",
+	]
+	for export_name: String in required_exports:
+		_check(
+			main.get(export_name) != null,
+			"Main.%s must be wired in main.tscn" % export_name,
+		)
+	_check(
+		main.has_method("_validate_exports") and bool(main.call("_validate_exports")),
+		"Main must validate its exported references",
+	)
+
 	var game := main.get_node_or_null("Game")
 	var game_viewport: Variant = null
 	_check(game is SubViewportContainer, "Main/Game must be a SubViewportContainer")

@@ -94,7 +94,7 @@ func _reconcile_client_packages(_remote: Dictionary) -> bool:
 ## NOT override them: the collaborators are replaced by stub subclasses instead.
 ##
 ## The stub classes are subclasses of the real ones because `main_scene.gd` types
-## its fields (`_packages: PackagesManager`, `_net: WiredNetwork`, ...): GDScript
+## its fields (`_packages: PackagesManager`, `net: WiredNetwork`, ...): GDScript
 ## rejects assigning a plain duck-typed object there. The probe overrides
 ## `_ready` (the startup path is not under test) and its `StubNetwork` overrides
 ## `_enter_tree` so the probe's child does not reconfigure `/root`'s multiplayer
@@ -180,12 +180,14 @@ func _apply_package_removal(
 
 ## Builds the stubs and the children the scene's `@onready` fields resolve.
 func make_stubs() -> void:
-	var net := StubNetwork.new()
-	net.name = "Net"
-	add_child(net)
-	var ui := Node.new()
-	ui.name = "UI"
-	add_child(ui)
+	var net_node := StubNetwork.new()
+	net_node.name = "Net"
+	add_child(net_node)
+	net = net_node
+	var ui_node := CanvasLayer.new()
+	ui_node.name = "UI"
+	add_child(ui_node)
+	ui = ui_node
 	var margin := Node.new()
 	margin.name = "Margin"
 	ui.add_child(margin)
@@ -195,14 +197,16 @@ func make_stubs() -> void:
 	var status := Label.new()
 	status.name = "Status"
 	vbox.add_child(status)
+	status_label = status
 	var log_view := RichTextLabel.new()
 	log_view.name = "Log"
 	vbox.add_child(log_view)
+	log_label = log_view
 	_registry = StubRegistry.new()
 	_packages = StubPackages.new()
-	_static_world = StubStaticWorld.new()
-	_players = StubPlayers.new()
-	_dynamic_world = StubDynamicWorld.new()
+	static_world = StubStaticWorld.new()
+	players_manager = StubPlayers.new()
+	dynamic_world = StubDynamicWorld.new()
 """
 
 
@@ -216,8 +220,8 @@ func _ready() -> void:
 	pass
 
 func make_stubs(world: DynamicWorldContainer, players: PlayersManager) -> void:
-	_dynamic_world = world
-	_players = players
+	dynamic_world = world
+	players_manager = players
 """
 
 
@@ -276,7 +280,7 @@ func _test_save_and_load_round_trip() -> void:
 	var main: Variant = _instantiate_main()
 	if main == null:
 		return
-	var dynamic_world := main._dynamic_world as DynamicWorldContainer
+	var dynamic_world := main.dynamic_world as DynamicWorldContainer
 	var entity := FakeDynamicEntity.new()
 	entity.entity_id = 77
 	entity.type_id = CRATE_TYPE
@@ -322,12 +326,12 @@ func _test_save_and_load_round_trip() -> void:
 	reloaded._state_dir = STATE_DIR
 	reloaded._load_state()
 	_check(
-		reloaded._dynamic_world.pending_records().size() == 1,
+		reloaded.dynamic_world.pending_records().size() == 1,
 		"_load_state must seed the dynamic records, got %d"
-		% reloaded._dynamic_world.pending_records().size(),
+		% reloaded.dynamic_world.pending_records().size(),
 	)
 	_check(
-		reloaded._dynamic_world._entities.is_empty(),
+		reloaded.dynamic_world._entities.is_empty(),
 		"_load_state must not spawn before the package is applied",
 	)
 	# Drop the record before teardown; nothing is replication-tracked here.
@@ -395,8 +399,8 @@ func _test_room_packages_purges_only_unlisted_ids() -> void:
 	var probe: Variant = _make_room_packages_probe()
 	if probe == null:
 		return
-	var world := probe._dynamic_world as DynamicWorldContainer
-	var players: Variant = probe._players
+	var world := probe.dynamic_world as DynamicWorldContainer
+	var players: Variant = probe.players_manager
 	world.seed_pending(_room_package_records(10))
 
 	probe._apply_room_packages("42,43")
@@ -527,7 +531,7 @@ func _test_reconcile_unloads_a_package_missing_from_the_server() -> void:
 	var probe: Variant = _make_entry_probe()
 	if probe == null:
 		return
-	var net: Variant = probe._net
+	var net: Variant = probe.net
 	var packages: Variant = probe._packages
 	net.mode = "client"
 	packages.applied = {
@@ -555,12 +559,12 @@ func _test_reconcile_unloads_a_package_missing_from_the_server() -> void:
 		% [probe._registry.cleared],
 	)
 	_check(
-		probe._dynamic_world.dropped == [43],
+		probe.dynamic_world.dropped == [43],
 		"a client must drop the removed package's entities, got %s"
-		% [probe._dynamic_world.dropped],
+		% [probe.dynamic_world.dropped],
 	)
 	_check(
-		probe._players.rebuilds == 1 and probe._static_world.rebuilds == 1,
+		probe.players_manager.rebuilds == 1 and probe.static_world.rebuilds == 1,
 		"the removal must rebuild players and static content exactly once",
 	)
 	_check(
@@ -578,7 +582,7 @@ func _test_reconcile_syncs_a_changed_revision() -> void:
 	var probe: Variant = _make_entry_probe()
 	if probe == null:
 		return
-	var net: Variant = probe._net
+	var net: Variant = probe.net
 	var packages: Variant = probe._packages
 	net.mode = "client"
 	packages.applied = {
@@ -614,7 +618,7 @@ func _test_reconcile_schedules_a_retry_when_a_download_fails() -> void:
 	var probe: Variant = _make_entry_probe()
 	if probe == null:
 		return
-	var net: Variant = probe._net
+	var net: Variant = probe.net
 	var packages: Variant = probe._packages
 	net.mode = "client"
 	packages.applied = {}
@@ -663,7 +667,7 @@ func _test_package_retry_is_single_flight() -> void:
 	var probe: Variant = _make_entry_probe()
 	if probe == null:
 		return
-	var net: Variant = probe._net
+	var net: Variant = probe.net
 	net.mode = "client"
 	var previous_scale := Engine.time_scale
 	Engine.time_scale = 10000.0
@@ -718,10 +722,10 @@ func _test_package_removal_announces_on_server_and_requests_on_client() -> void:
 	var probe: Variant = _make_entry_probe()
 	if probe == null:
 		return
-	var net: Variant = probe._net
+	var net: Variant = probe.net
 	var packages: Variant = probe._packages
-	var dynamic_world: Variant = probe._dynamic_world
-	var players: Variant = probe._players
+	var dynamic_world: Variant = probe.dynamic_world
+	var players: Variant = probe.players_manager
 
 	net.mode = "server"
 	probe._apply_package_removal(42, true)
@@ -755,7 +759,7 @@ func _test_package_removal_announces_on_server_and_requests_on_client() -> void:
 		% [packages.forgotten],
 	)
 	_check(
-		probe._static_world.rebuilds == 1 and players.rebuilds == 1,
+		probe.static_world.rebuilds == 1 and players.rebuilds == 1,
 		"the removal must rebuild static content and live players once",
 	)
 	_check(
@@ -868,9 +872,9 @@ func _free_entry_probe(probe: Variant) -> void:
 	for field: String in [
 		"_packages",
 		"_registry",
-		"_static_world",
-		"_players",
-		"_dynamic_world",
+		"static_world",
+		"players_manager",
+		"dynamic_world",
 	]:
 		var stub: Variant = probe.get(field)
 		if stub != null and is_instance_valid(stub):

@@ -22,6 +22,21 @@ const BRIDGE_CONFIG_TIMEOUT_SEC := 120.0
 ## cache until the editor imports it, and headless `--script` runs must not
 ## depend on that import step.
 const SnapshotRules := preload("res://_wired/scripts/network/world_snapshot.gd")
+## `default_game_root` is typed `Node` rather than `WiredGameScene`: a new
+## `class_name` is absent from the global class cache until the editor imports
+## it, and headless `--script` runs must not depend on that import step.
+const WiredGameSceneScript := preload("res://_wired/scripts/world/wired_game_scene.gd")
+
+@export var default_game_root: Node
+@export var net: WiredNetwork
+@export var ui: CanvasLayer
+@export var status_label: Label
+@export var log_label: RichTextLabel
+@export var static_world: StaticWorldContainer
+@export var dynamic_world: DynamicWorldContainer
+@export var dynamic_spawner: MultiplayerSpawner
+@export var players_manager: PlayersManager
+@export var players_spawner: MultiplayerSpawner
 
 var _server_port := 0
 var _state_dir := ""
@@ -31,9 +46,6 @@ var _authenticated_once := false
 var _auth_error_reported := false
 var _packages: PackagesManager
 var _registry: WiredPackageRegistry
-var _static_world: StaticWorldContainer
-var _dynamic_world: DynamicWorldContainer
-var _players: PlayersManager
 ## Package apply/unload operations are serialized: two overlapping applies would
 ## interleave registry clears with entry loads and restores, and a removal that
 ## arrives during an apply would run against a half-applied registry.
@@ -51,12 +63,61 @@ var _pending_world_snapshot: Dictionary = {}
 ## fresh request is sent only when the local applied map actually changes.
 var _snapshot_request_signature := ""
 
-@onready var _net: WiredNetwork = $Net
-@onready var _status: Label = $UI/Margin/VBox/Status
-@onready var _log: RichTextLabel = $UI/Margin/VBox/Log
+func _is_wired_game_scene(root: Node) -> bool:
+	return root != null and root is WiredGameSceneScript
+
+
+func _world_viewport_of(root: Node) -> SubViewport:
+	if not _is_wired_game_scene(root):
+		return null
+	var viewport: Variant = root.get("world_viewport")
+	return viewport as SubViewport
+
+
+func _validate_exports() -> bool:
+	var missing: PackedStringArray = []
+	if default_game_root == null:
+		missing.append("default_game_root")
+	if net == null:
+		missing.append("net")
+	if ui == null:
+		missing.append("ui")
+	if status_label == null:
+		missing.append("status_label")
+	if log_label == null:
+		missing.append("log_label")
+	if static_world == null:
+		missing.append("static_world")
+	if dynamic_world == null:
+		missing.append("dynamic_world")
+	if dynamic_spawner == null:
+		missing.append("dynamic_spawner")
+	if players_manager == null:
+		missing.append("players_manager")
+	if players_spawner == null:
+		missing.append("players_spawner")
+	for name: String in missing:
+		push_error("WIRED_MAIN_SCENE_MISSING_EXPORT name=%s" % name)
+	if not missing.is_empty():
+		return false
+	if not _is_wired_game_scene(default_game_root):
+		push_error(
+			"WIRED_MAIN_SCENE_INVALID package=<default> path=%s reason=not_wired_game_scene"
+			% default_game_root.scene_file_path
+		)
+		return false
+	if _world_viewport_of(default_game_root) == null:
+		push_error(
+			"WIRED_MAIN_SCENE_INVALID package=<default> path=%s reason=missing_world_viewport"
+			% default_game_root.scene_file_path
+		)
+		return false
+	return true
 
 
 func _ready() -> void:
+	if not _validate_exports():
+		return
 	var cfg := _read_config()
 	var room := str(cfg.get("room", DEFAULT_ROOM))
 	# The game services exist before a package can register anything.
@@ -66,20 +127,20 @@ func _ready() -> void:
 	# The room is part of the package directory, so it has to be known before
 	# the loader is configured.
 	_setup_packages(room)
-	_net.status_changed.connect(_on_status_changed)
-	_net.log_line.connect(_on_log_line)
-	_net.authenticated.connect(_on_authenticated)
-	_net.auth_failed.connect(_on_auth_failed)
-	_net.connection_failed.connect(_on_connection_failed)
-	_net.disconnected.connect(_on_server_disconnected)
-	_net.server_event.connect(_on_server_event)
+	net.status_changed.connect(_on_status_changed)
+	net.log_line.connect(_on_log_line)
+	net.authenticated.connect(_on_authenticated)
+	net.auth_failed.connect(_on_auth_failed)
+	net.connection_failed.connect(_on_connection_failed)
+	net.disconnected.connect(_on_server_disconnected)
+	net.server_event.connect(_on_server_event)
 	# Late join: the server repairs spawns that the transport replayed before
 	# the client had applied its packages, and answers retries after a revision
 	# mismatch. PlayersManager was connected earlier, so its own player exists
 	# by the time the snapshot is built.
-	_net.peer_packages_ready.connect(_on_peer_packages_ready)
-	_net.world_snapshot_requested.connect(_on_world_snapshot_requested)
-	_net.world_snapshot_received.connect(_on_world_snapshot_received)
+	net.peer_packages_ready.connect(_on_peer_packages_ready)
+	net.world_snapshot_requested.connect(_on_world_snapshot_requested)
+	net.world_snapshot_received.connect(_on_world_snapshot_received)
 	# The host waits for this before minting a ticket.
 	_bridge_call("notifyReady", [])
 	if str(cfg.get("mode", "")) == "server":
@@ -101,37 +162,22 @@ func _setup_services() -> void:
 	Global.package_registry = _registry
 	# Players are built from the same registry and spawned through the
 	# scene's MultiplayerSpawner once auth and package readiness both arrive.
-	_players = $Game/SubViewport/Players as PlayersManager
 	# The dynamic world reuses the spawner authored in `main.tscn`; `setup`
 	# only creates one when none is passed, so no second spawner appears.
-	var dynamic_world_node := $Game/SubViewport/DynamicWorld as Node
-	_dynamic_world = dynamic_world_node as DynamicWorldContainer
-	if _dynamic_world != null:
-		_dynamic_world.setup(
-			_registry,
-			dynamic_world_node.get_node_or_null("Spawner") as MultiplayerSpawner
-		)
-	Global.register_scene_services(
-		$Game/SubViewport/StaticWorld,
-		_dynamic_world,
-		_players,
-		_net
-	)
-	_static_world = $Game/SubViewport/StaticWorld
-	_static_world.setup(_registry)
-	if _players != null:
-		_players.setup(
-			_registry,
-			_net,
-			_players.get_node_or_null("Spawner") as MultiplayerSpawner
-		)
+	if dynamic_world != null:
+		dynamic_world.setup(_registry, dynamic_spawner)
+	Global.register_scene_services(static_world, dynamic_world, players_manager, net)
+	if static_world != null:
+		static_world.setup(_registry)
+	if players_manager != null:
+		players_manager.setup(_registry, net, players_spawner)
 
 
 ## Authored overlay controls already ignore the mouse, but `RichTextLabel`
 ## creates its scrollbar at runtime: enforce the rule for generated controls too,
 ## otherwise clicks over the log never reach the aim cursor.
 func _setup_ui_input_passthrough() -> void:
-	for child: Node in $UI.find_children("*", "Control", true, false):
+	for child: Node in ui.find_children("*", "Control", true, false):
 		(child as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
@@ -167,11 +213,11 @@ func _apply_registered_package(package_id: int, revision: int) -> void:
 	# Server: the running entities of the previous revision leave the tree and
 	# keep their state, so the new revision resumes them. Client: its copies are
 	# respawned by the server, so they are dropped without a record.
-	if _dynamic_world != null:
-		if _net.mode == "server":
-			_dynamic_world.park_package(package_id)
+	if dynamic_world != null:
+		if net.mode == "server":
+			dynamic_world.park_package(package_id)
 		else:
-			_dynamic_world.drop_package(package_id)
+			dynamic_world.drop_package(package_id)
 	var artifact_key := _packages.current_artifact_key(package_id)
 	var context := WiredPackageContext.new()
 	context.package_id = str(package_id)
@@ -183,18 +229,18 @@ func _apply_registered_package(package_id: int, revision: int) -> void:
 	# A package without `wired_package.gd` is valid: it just contributes no
 	# content. The old entries were already cleared above.
 	PackageEntryLoader.load_entry(context.package_id, revision, context, _registry)
-	if _static_world != null:
-		_static_world.rebuild()
+	if static_world != null:
+		static_world.rebuild()
 	# Players already in the world keep running the previous revision's scripts
 	# unless their components are rebuilt. The root stays (and keeps the
 	# spawner's net id); only the components are replaced, with their state.
-	if _players != null:
-		_players.rebuild_live_components()
+	if players_manager != null:
+		players_manager.rebuild_live_components()
 	# Package order is not guaranteed: every applied revision retries the parked
 	# records, and the ones whose type is still unregistered stay pending.
-	if _net.mode == "server":
-		if _dynamic_world != null:
-			_dynamic_world.restore_pending()
+	if net.mode == "server":
+		if dynamic_world != null:
+			dynamic_world.restore_pending()
 	else:
 		# A snapshot deferred on a revision mismatch can now be checked again.
 		_retry_pending_world_snapshot()
@@ -203,41 +249,41 @@ func _apply_registered_package(package_id: int, revision: int) -> void:
 ## Client side: asks the server for a fresh snapshot. Guarded so a package
 ## callback that also runs on a server (or before auth) never sends an RPC.
 func _request_world_snapshot() -> void:
-	if _net == null or _net.mode != "client":
+	if net == null or net.mode != "client":
 		return
-	_net.request_world_snapshot()
+	net.request_world_snapshot()
 
 
 ## Server side: sends the late-join snapshot after the peer's initial package
 ## gate opened. Deferred by one frame so the joining player's normal spawner
 ## packet is queued first; the receiver is idempotent anyway.
 func _on_peer_packages_ready(peer_id: int) -> void:
-	if _net.mode != "server" or _shutdown_in_progress:
+	if net.mode != "server" or _shutdown_in_progress:
 		return
 	_send_world_snapshot.call_deferred(peer_id)
 
 
 func _on_world_snapshot_requested(peer_id: int) -> void:
-	if _net.mode != "server" or _shutdown_in_progress:
+	if net.mode != "server" or _shutdown_in_progress:
 		return
 	_send_world_snapshot(peer_id)
 
 
 func _send_world_snapshot(peer_id: int) -> void:
-	if _net.mode != "server" or _packages == null:
+	if net.mode != "server" or _packages == null:
 		return
 	var snapshot := {
 		WiredProtocol.KEY_PACKAGES: _packages.applied_packages(),
 		WiredProtocol.KEY_PLAYERS:
-		_players.snapshot_players() if _players != null else [],
+		players_manager.snapshot_players() if players_manager != null else [],
 		WiredProtocol.KEY_DYNAMIC_WORLD:
-		_dynamic_world.snapshot_state() if _dynamic_world != null else [],
+		dynamic_world.snapshot_state() if dynamic_world != null else [],
 	}
-	_net.send_world_snapshot(peer_id, snapshot)
+	net.send_world_snapshot(peer_id, snapshot)
 
 
 func _on_world_snapshot_received(snapshot: Dictionary) -> void:
-	if _net.mode != "client":
+	if net.mode != "client":
 		return
 	_apply_world_snapshot(snapshot)
 
@@ -292,11 +338,11 @@ func _apply_world_snapshot_owned(snapshot: Dictionary) -> void:
 	_pending_world_snapshot = {}
 	_snapshot_request_signature = ""
 	var players: Variant = snapshot.get(WiredProtocol.KEY_PLAYERS, [])
-	if players is Array and _players != null:
-		_players.apply_snapshot(players)
+	if players is Array and players_manager != null:
+		players_manager.apply_snapshot(players)
 	var dynamic_records: Variant = snapshot.get(WiredProtocol.KEY_DYNAMIC_WORLD, [])
-	if dynamic_records is Array and _dynamic_world != null:
-		_dynamic_world.apply_snapshot(dynamic_records, packages)
+	if dynamic_records is Array and dynamic_world != null:
+		dynamic_world.apply_snapshot(dynamic_records, packages)
 	print(
 		"WIRED_WORLD_SNAPSHOT_APPLIED players=%d dynamic=%d"
 		% [
@@ -311,7 +357,7 @@ func _apply_world_snapshot_owned(snapshot: Dictionary) -> void:
 ## package whose revision or artifact key differs is synced over HTTP. Returns
 ## false when a download failed (the retry chain is already scheduled then).
 func _reconcile_client_packages(remote: Dictionary) -> bool:
-	if _net == null or _net.mode != "client":
+	if net == null or net.mode != "client":
 		return true
 	# Snapshot before mutating: `_apply_package_removal` erases entries from the
 	# applied map while it runs.
@@ -343,7 +389,7 @@ func _reconcile_client_packages(remote: Dictionary) -> bool:
 ## every 10 s. Each attempt re-requests a snapshot, which re-enters
 ## `_reconcile_client_packages` and retries the missing download.
 func _schedule_package_retry(package_id: int, error: String) -> void:
-	if _net == null or _net.mode != "client":
+	if net == null or net.mode != "client":
 		return
 	if _package_retry_in_flight:
 		return
@@ -433,7 +479,7 @@ func _run_server(cfg: Dictionary) -> void:
 		"WIRED_SERVER_STARTING room=%s port=%d bind=%s"
 		% [cfg.room, cfg.port, cfg.bind]
 	)
-	var err := _net.start_server(int(cfg.port), str(cfg.room), secret, str(cfg.bind))
+	var err := net.start_server(int(cfg.port), str(cfg.room), secret, str(cfg.bind))
 	if err != OK:
 		_fail("server start failed: %s" % error_string(err))
 		get_tree().quit(3)
@@ -556,24 +602,24 @@ func _apply_package_removal(
 ) -> void:
 	if package_id <= 0:
 		return
-	if _dynamic_world != null:
-		if _net.mode == "server":
-			_dynamic_world.park_package(package_id)
+	if dynamic_world != null:
+		if net.mode == "server":
+			dynamic_world.park_package(package_id)
 		else:
-			_dynamic_world.drop_package(package_id)
+			dynamic_world.drop_package(package_id)
 	_registry.clear_package(str(package_id))
 	_packages.forget_package(package_id, purge)
-	if _static_world != null:
-		_static_world.rebuild()
-	if _players != null:
-		_players.rebuild_live_components()
+	if static_world != null:
+		static_world.rebuild()
+	if players_manager != null:
+		players_manager.rebuild_live_components()
 	if purge:
-		if _dynamic_world != null:
-			_dynamic_world.purge_package(package_id)
-		if _players != null:
-			_players.purge_package(package_id)
-	if _net.mode == "server":
-		_net.remove_package_revision(package_id)
+		if dynamic_world != null:
+			dynamic_world.purge_package(package_id)
+		if players_manager != null:
+			players_manager.purge_package(package_id)
+	if net.mode == "server":
+		net.remove_package_revision(package_id)
 	elif request_snapshot:
 		_request_world_snapshot()
 
@@ -588,10 +634,10 @@ func _apply_room_packages(csv: String) -> void:
 		if not value.is_valid_int() or value.to_int() <= 0:
 			continue
 		ids.append(str(value.to_int()))
-	if _dynamic_world != null:
-		_dynamic_world.purge_missing_packages(ids)
-	if _players != null:
-		_players.purge_missing_packages(ids)
+	if dynamic_world != null:
+		dynamic_world.purge_missing_packages(ids)
+	if players_manager != null:
+		players_manager.purge_missing_packages(ids)
 
 
 ## Server side: the backend asked for a published revision. The loader fetches
@@ -608,7 +654,7 @@ func _apply_package_revision(package_id: int, revision: int) -> void:
 		# requested revision; the backend owns retries.
 		return
 	var applied := int(result.get("revision", revision))
-	_net.set_package_revision(package_id, applied)
+	net.set_package_revision(package_id, applied)
 
 
 func _request_shutdown(reason: String) -> void:
@@ -627,18 +673,18 @@ func _save_state(reason: String) -> void:
 	# Players and dynamic entities are server-owned; both keep their own
 	# persistence shape so a package only sees its `_wired_*_state` dictionary.
 	var players: Array = []
-	if _players != null:
-		players = _players.save_state().get(WiredProtocol.KEY_PLAYERS, [])
+	if players_manager != null:
+		players = players_manager.save_state().get(WiredProtocol.KEY_PLAYERS, [])
 	var state := {
-		"room": _net.room_code,
+		"room": net.room_code,
 		"port": _server_port,
 		"reason": reason,
-		"active_players": _net.get_active_player_count(),
-		"server_seq": _net.get_server_seq(),
+		"active_players": net.get_active_player_count(),
+		"server_seq": net.get_server_seq(),
 		"saved_at": Time.get_datetime_string_from_system(true),
 		WiredProtocol.KEY_PLAYERS: players,
 		WiredProtocol.KEY_DYNAMIC_WORLD:
-		_dynamic_world.save_state() if _dynamic_world != null else [],
+		dynamic_world.save_state() if dynamic_world != null else [],
 	}
 	var dir := _state_dir
 	if not dir.is_empty():
@@ -685,19 +731,19 @@ func _load_state() -> void:
 		return
 	var state: Dictionary = parsed
 	var dynamic_records: Variant = state.get(WiredProtocol.KEY_DYNAMIC_WORLD, [])
-	if dynamic_records is Array and _dynamic_world != null:
-		_dynamic_world.seed_pending(dynamic_records)
+	if dynamic_records is Array and dynamic_world != null:
+		dynamic_world.seed_pending(dynamic_records)
 	var player_records: Variant = state.get(WiredProtocol.KEY_PLAYERS, [])
-	if player_records is Array and _players != null:
+	if player_records is Array and players_manager != null:
 		# Applied immediately to live players, or on that player's next spawn.
-		_players.load_state({WiredProtocol.KEY_PLAYERS: player_records})
+		players_manager.load_state({WiredProtocol.KEY_PLAYERS: player_records})
 	print(
 		"WIRED_STATE_LOADED path=%s dynamic=%d players=%d"
 		% [
 			path,
 			(
-				_dynamic_world.pending_records().size()
-				if _dynamic_world != null
+				dynamic_world.pending_records().size()
+				if dynamic_world != null
 				else 0
 			),
 			player_records.size() if player_records is Array else 0,
@@ -793,7 +839,7 @@ func _run_client(cfg: Dictionary) -> void:
 			)
 	print("WIRED_CLIENT_STARTING room=%s url=%s" % [cfg.room, cfg.url])
 	_bridge_status("connecting", str(cfg.url))
-	var err := _net.start_client(
+	var err := net.start_client(
 		str(cfg.url),
 		str(cfg.ticket),
 		str(cfg.room),
@@ -857,8 +903,8 @@ func _bridge_error(message: String) -> void:
 
 func _fail(message: String) -> void:
 	print("WIRED_CLIENT_ERROR %s" % message)
-	_status.text = message
-	_status.modulate = Color(1.0, 0.45, 0.45)
+	status_label.text = message
+	status_label.modulate = Color(1.0, 0.45, 0.45)
 	_on_log_line(message)
 	_bridge_error(message)
 
@@ -908,8 +954,8 @@ func _on_server_event(event: Dictionary) -> void:
 	elif event_type == WiredNetwork.EVENT_PLAYER_LEFT:
 		# The despawn packet is matched by spawn net id, which a root built from
 		# the late-join snapshot does not have: release it by player id.
-		if _players != null:
-			_players.forget_player(int(event.get(WiredProtocol.KEY_PLAYER_ID, 0)))
+		if players_manager != null:
+			players_manager.forget_player(int(event.get(WiredProtocol.KEY_PLAYER_ID, 0)))
 
 
 ## Client side: download and verify the announced revision over HTTP, then tell
@@ -928,7 +974,7 @@ func _apply_client_package(package_id: int, revision: int) -> void:
 	if applied <= 0:
 		applied = revision
 	var error := "" if ok else str(result.get("error", ""))
-	_net.report_package_ready(package_id, applied, ok, error)
+	net.report_package_ready(package_id, applied, ok, error)
 	if not ok:
 		# The server keeps announcing the revision, but a transient download
 		# failure must not leave this client permanently behind: retry the
@@ -952,10 +998,10 @@ func _apply_client_package(package_id: int, revision: int) -> void:
 
 
 func _on_status_changed(text: String) -> void:
-	_status.text = text
+	status_label.text = text
 	print("WIRED_STATUS %s" % text)
 
 
 func _on_log_line(text: String) -> void:
-	_log.append_text(text + "\n")
+	log_label.append_text(text + "\n")
 	print("WIRED_LOG %s" % text)
