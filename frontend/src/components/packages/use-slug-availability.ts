@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import type { PackageSlugAvailability } from "@wired-io/shared";
 import {
   SLUG_CHECK_DEBOUNCE_MS,
   isValidPackageSlug,
@@ -10,7 +11,7 @@ import {
 /** Verdict the caller derives from one successful availability response. */
 export type SlugAvailabilityVerdict = "available" | "taken";
 
-export type UseSlugAvailability<T> = {
+export type UseSlugAvailability = {
   /** Current raw input value; trimmed internally. */
   slug: string;
   /** Whether the check may run at all (dialog open, form mounted). */
@@ -21,15 +22,15 @@ export type UseSlugAvailability<T> = {
    */
   unchanged?: string;
   /** Performs the request for the trimmed slug. */
-  check: (slug: string) => Promise<T>;
+  check: (slug: string) => Promise<PackageSlugAvailability>;
   /** Projects the response onto available/taken. */
-  verdict: (result: T) => SlugAvailabilityVerdict;
+  verdict: (result: PackageSlugAvailability) => SlugAvailabilityVerdict;
 };
 
-export type SlugAvailability<T> = {
+export type SlugAvailability = {
   state: SlugCheckState;
   /** Last successful response for the current slug, or `null`. */
-  result: T | null;
+  result: PackageSlugAvailability | null;
   /** Re-runs the check after a transport error. */
   retry: () => void;
 };
@@ -42,13 +43,13 @@ export type SlugAvailability<T> = {
  * The state is derived from the current input on every render, so a submit can
  * never read a stale `available` while a debounce is still pending.
  */
-export function useSlugAvailability<T>({
+export function useSlugAvailability({
   slug,
   enabled,
   unchanged,
   check,
   verdict,
-}: UseSlugAvailability<T>): SlugAvailability<T> {
+}: UseSlugAvailability): SlugAvailability {
   const trimmed = slug.trim();
   const base: SlugCheckState = !enabled
     ? "idle"
@@ -63,7 +64,7 @@ export function useSlugAvailability<T>({
   const [settled, setSettled] = React.useState<{
     slug: string;
     state: "available" | "taken" | "error";
-    result: T | null;
+    result: PackageSlugAvailability | null;
   } | null>(null);
   const [attempt, setAttempt] = React.useState(0);
 
