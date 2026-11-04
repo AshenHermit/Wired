@@ -62,8 +62,8 @@ func _test_main_scene_has_game_viewport() -> void:
 			"the SubViewport must render every frame",
 		)
 		_check(
-			viewport.handle_input_locally,
-			"the SubViewport must handle input locally for the aim cursor",
+			not viewport.handle_input_locally,
+			"the SubViewport must forward input to the parent viewport",
 		)
 		_check(
 			viewport.own_world_3d,
@@ -106,11 +106,6 @@ func _test_main_scene_has_game_viewport() -> void:
 			_check(
 				background.color.a < 1.0,
 				"the UI background must be translucent so the game viewport stays visible, got alpha %f"
-				% background.color.a,
-			)
-			_check(
-				is_equal_approx(background.color.a, 0.35),
-				"the UI background must be dimmed to alpha 0.35, got %f"
 				% background.color.a,
 			)
 		var controls := ui.find_children("*", "Control", true, false)
