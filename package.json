@@ -10,7 +10,7 @@
     "dev:server": "pnpm --filter server start:dev",
     "build:server": "pnpm --filter server build",
     "start:server": "pnpm --filter server start:prod",
-    "dev:frontend": "pnpm --filter frontend dev -- -p 3001",
+    "dev:frontend": "pnpm --filter frontend dev",
     "build:frontend": "pnpm --filter frontend build",
     "start:frontend": "pnpm --filter frontend start",
     "check-types:frontend": "pnpm --filter frontend check-types",

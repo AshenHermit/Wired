@@ -114,16 +114,21 @@ export class ProcessGroupWatchdog {
   }
 
   private handleSignal(signal: NodeJS.Signals): void {
-    // The backend is going down: take its Godot processes with it instead of
-    // leaving them bound to the room ports until the next deployment.
+    // Someone else runs the graceful path. Nest's shutdown hooks are the
+    // important case: they await onModuleDestroy, which writes `shutdown` to
+    // every runtime so Godot can persist `state.json` before exiting. Killing
+    // the groups here would preempt that save.
+    if (this.target.listenerCount(signal) > 1) {
+      return;
+    }
+    // The backend is going down with no graceful shutdown available: take its
+    // Godot processes with it instead of leaving them bound to the room ports
+    // until the next deployment.
     this.killAll('SIGTERM');
     this.uninstall();
     // A registered signal listener disables the default "terminate" action.
-    // Restore it, unless someone else (Nest's shutdown hooks) still listens;
-    // they re-raise the signal themselves once they are done closing.
-    if (this.target.listenerCount(signal) === 0) {
-      this.target.kill(this.target.pid, signal);
-    }
+    // Restore it; no other listener is left to do it.
+    this.target.kill(this.target.pid, signal);
   }
 
   private handleExit(): void {

@@ -96,7 +96,6 @@ export function RoomWorkspace({ room }: { room: Room }) {
               {t("tabs.game")}
             </TabsTrigger>
           </TabsList>
-          <LocaleSwitcher className="ml-auto" />
         </div>
         {isDragging && (
           <div

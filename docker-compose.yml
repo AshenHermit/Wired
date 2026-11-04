@@ -35,6 +35,9 @@ services:
       dockerfile: backend.Dockerfile
     container_name: wired_backend
     restart: always
+    # Godot gets up to GODOT_ROOM_SHUTDOWN_GRACE_MS (10s) per room to write
+    # state.json; Docker's default 10s grace could SIGKILL the backend first.
+    stop_grace_period: 30s
     environment:
       - DB_HOST=${DB_HOST}
       - DB_PORT=${DB_PORT}

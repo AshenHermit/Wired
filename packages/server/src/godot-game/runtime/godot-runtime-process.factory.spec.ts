@@ -200,6 +200,39 @@ describe('ProcessGroupWatchdog', () => {
     expect(parent.raised).toEqual([]);
   });
 
+  it('leaves the tracked groups to a graceful shutdown listener', async () => {
+    watchdog.track(1);
+    const saves: string[] = [];
+    parent.on('SIGTERM', async () => {
+      // Nest's shutdown hook: awaits onModuleDestroy, which writes
+      // `shutdown` to each runtime so Godot persists its state.
+      await Promise.resolve();
+      saves.push('state.json');
+    });
+
+    parent.emit('SIGTERM');
+
+    expect(parent.groupKills).toEqual([]);
+    await Promise.resolve();
+    expect(saves).toEqual(['state.json']);
+    expect(parent.groupKills).toEqual([]);
+  });
+
+  it('kills leftovers when the graceful listener re-raises the signal', () => {
+    watchdog.track(1);
+    const graceful = (): void => undefined;
+    parent.on('SIGTERM', graceful);
+    parent.emit('SIGTERM');
+    expect(parent.groupKills).toEqual([]);
+
+    // Nest removes its own listener before re-raising, so the watchdog is
+    // the only handler left for a runtime that never closed.
+    parent.removeListener('SIGTERM', graceful);
+    parent.emit('SIGTERM');
+
+    expect(parent.groupKills).toEqual([[1, 'SIGTERM']]);
+  });
+
   it('restores the default action when it was the only listener', () => {
     watchdog.track(1);
 
