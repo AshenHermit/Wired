@@ -13,6 +13,7 @@ extends SceneTree
 
 const MAIN_SCENE := "res://_wired/scenes/main.tscn"
 const STATIC_WORLD_SCRIPT := "static_world_container.gd"
+const GAME_SCENE_SCRIPT := preload("res://_wired/scripts/world/wired_game_scene.gd")
 
 var _failures: PackedStringArray = []
 var _checks := 0
@@ -34,9 +35,19 @@ func _test_main_scene_has_game_viewport() -> void:
 		return
 
 	var game := main.get_node_or_null("Game")
+	var game_viewport: Variant = null
 	_check(game is SubViewportContainer, "Main/Game must be a SubViewportContainer")
 	if game is SubViewportContainer:
 		_check(game.stretch, "Main/Game must stretch its SubViewport to the container")
+		_check(
+			game.get_script() == GAME_SCENE_SCRIPT,
+			"Main/Game must use the WiredGameScene script, got %s" % game.get_script(),
+		)
+		game_viewport = game.get("world_viewport")
+		_check(
+			game_viewport is SubViewport,
+			"Main/Game.world_viewport must be a SubViewport, got %s" % game_viewport,
+		)
 		_check(
 			game.mouse_filter == Control.MOUSE_FILTER_STOP,
 			"Main/Game must receive input explicitly (MOUSE_FILTER_STOP), got %d"
@@ -68,6 +79,10 @@ func _test_main_scene_has_game_viewport() -> void:
 		_check(
 			viewport.own_world_3d,
 			"the SubViewport must own its 3D world so package scenes stay isolated",
+		)
+		_check(
+			game_viewport == viewport,
+			"Main/Game.world_viewport must point at Game/SubViewport",
 		)
 
 	var static_world := main.get_node_or_null("Game/SubViewport/StaticWorld")

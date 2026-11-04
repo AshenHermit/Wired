@@ -5,6 +5,7 @@
 [ext_resource type="Script" uid="uid://dohknfcl25mvc" path="res://_wired/scripts/world/static_world_container.gd" id="3_static"]
 [ext_resource type="Script" uid="uid://clsfqh313y4pt" path="res://_wired/scripts/global/players_manager.gd" id="4_players"]
 [ext_resource type="Script" uid="uid://c6hxa3adohjw5" path="res://_wired/scripts/world/dynamic_world_container.gd" id="5_dynamic"]
+[ext_resource type="Script" uid="uid://dwt87pnw2ogtp" path="res://_wired/scripts/world/wired_game_scene.gd" id="6_game"]
 
 [node name="Main" type="Node" unique_id=1750532957]
 script = ExtResource("1_main")
@@ -12,7 +13,7 @@ script = ExtResource("1_main")
 [node name="Net" type="Node" parent="." unique_id=282065085]
 script = ExtResource("2_net")
 
-[node name="Game" type="SubViewportContainer" parent="." unique_id=1490011991]
+[node name="Game" type="SubViewportContainer" parent="." unique_id=1490011991 node_paths=PackedStringArray("world_viewport")]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -20,6 +21,8 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 0
 stretch = true
+script = ExtResource("6_game")
+world_viewport = NodePath("SubViewport")
 
 [node name="SubViewport" type="SubViewport" parent="Game" unique_id=1524947257]
 own_world_3d = true
