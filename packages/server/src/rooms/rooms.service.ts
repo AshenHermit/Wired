@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, Repository } from 'typeorm';
 import { Room } from 'src/database/entities/room.entity';
 import { User } from 'src/database/entities/user.entity';
+import { withPublicUsers } from 'src/common/public-user';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
 import { canEditRoom, canViewRoom } from './room-access';
@@ -33,7 +34,7 @@ export class RoomsService {
     }
   }
 
-  findAll(user?: User | null): Promise<Room[]> {
+  async findAll(user?: User | null): Promise<Room[]> {
     const where: FindOptionsWhere<Room> | FindOptionsWhere<Room>[] = user
       ? [
           { isPublic: true },
@@ -42,13 +43,15 @@ export class RoomsService {
         ]
       : { isPublic: true };
 
-    return this.roomsRepository.find({
+    const rooms = await this.roomsRepository.find({
       where,
       relations: ['author', 'contributors', 'scriptingPackages'],
       // A WHERE on a joined relation would otherwise drop the other
       // contributors of a private room from the hydrated array.
       relationLoadStrategy: 'query',
     });
+    // Anonymous callers read this list, so the embedded users lose their email.
+    return rooms.map(withPublicUsers);
   }
 
   async findVisibleOne(id: number, user?: User | null): Promise<Room> {
@@ -69,7 +72,8 @@ export class RoomsService {
     if (!room) {
       throw new NotFoundException(`Room with id=${id} not found`);
     }
-    return room;
+    // Anonymous callers read this room, so the embedded users lose their email.
+    return withPublicUsers(room);
   }
 
   async create(dto: CreateRoomDto, author: User): Promise<Room> {

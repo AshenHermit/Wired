@@ -11,6 +11,16 @@ export type User = {
 };
 
 /**
+ * The part of a user a payload may carry.
+ *
+ * Rooms, packages and workshop listings embed their author and contributors,
+ * and those endpoints answer anonymous callers, so they project the record down
+ * to what every reader may see. The signed-in user's own record (`/users/profile`
+ * and login) keeps the full `User`.
+ */
+export type PublicUser = Pick<User, "id" | "name" | "picture">;
+
+/**
  * One file of a package revision. `filepath` is a relative POSIX path inside
  * the package directory (no `..`, no drive letters, no leading slash).
  * `sha256` is the lowercase hex digest of the raw bytes.
@@ -89,8 +99,8 @@ export type Room = {
   parentRoomId: number | null;
   createdAt: string;
   updatedAt: string;
-  author?: User;
-  contributors?: User[];
+  author?: PublicUser;
+  contributors?: PublicUser[];
   scriptingPackages?: ScriptingPackage[];
 };
 
@@ -105,8 +115,8 @@ export type ScriptingPackage = {
   dependencies: string[];
   createdAt: string;
   updatedAt: string;
-  author?: User;
-  contributors?: User[];
+  author?: PublicUser;
+  contributors?: PublicUser[];
   room?: Room;
   parentPackage?: ScriptingPackage;
   childrenPackages?: ScriptingPackage[];
@@ -191,7 +201,7 @@ export type WorkshopPackageSummary = {
   version: string;
   description: string;
   tags: string[];
-  author?: User;
+  author?: PublicUser;
   revision: number;
   publishedAt: string;
   updatedAt: string;

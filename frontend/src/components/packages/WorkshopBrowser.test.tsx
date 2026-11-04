@@ -23,9 +23,7 @@ function workshopPackage(
     author: {
       id: 42,
       name: "Аня",
-      email: "anya@example.com",
       picture: "",
-      service: "google",
     },
     revision: 3,
     publishedAt: "2026-10-30T10:00:00.000Z",

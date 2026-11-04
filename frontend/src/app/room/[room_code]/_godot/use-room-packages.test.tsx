@@ -243,9 +243,7 @@ function workshopPackage(
     tags: [],
     author: {
       id: authorId,
-      email: "author@example.com",
       name: authorId === 42 ? "Автор" : "Чужой автор",
-      service: "google",
       picture: "",
     },
     revision: 1,

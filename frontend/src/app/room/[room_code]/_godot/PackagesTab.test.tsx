@@ -118,9 +118,7 @@ function workshopPackage(
     tags: [],
     author: {
       id: 42,
-      email: "author@example.com",
       name: "Автор",
-      service: "google",
       picture: "",
     },
     revision: 1,
@@ -1313,9 +1311,7 @@ describe("PackagesTab", () => {
       workshopPackage({
         author: {
           id: 7,
-          email: "other@example.com",
           name: "Чужой автор",
-          service: "google",
           picture: "",
         },
       }),
@@ -1361,9 +1357,7 @@ describe("PackagesTab", () => {
           workshopPackage({
             author: {
               id: 7,
-              email: "other@example.com",
               name: "Чужой автор",
-              service: "google",
               picture: "",
             },
           }),
@@ -1398,9 +1392,7 @@ describe("PackagesTab", () => {
       workshopPackage({
         author: {
           id: 7,
-          email: "other@example.com",
           name: "Чужой автор",
-          service: "google",
           picture: "",
         },
       }),
@@ -1454,9 +1446,7 @@ describe("PackagesTab", () => {
       workshopPackage({
         author: {
           id: 7,
-          email: "other@example.com",
           name: "Чужой автор",
-          service: "google",
           picture: "",
         },
       }),

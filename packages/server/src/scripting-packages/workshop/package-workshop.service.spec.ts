@@ -172,7 +172,7 @@ describe('PackageWorkshopService', () => {
     expect(sql.trimEnd().endsWith('LIMIT $2 OFFSET $3')).toBe(true);
   });
 
-  it('maps a row into a workshop summary with a full author', async () => {
+  it('projects the author down to what every reader may see', async () => {
     const query = jest.fn(() => Promise.resolve([row]));
 
     const result = await makeService({ query }).list({});
@@ -188,12 +188,11 @@ describe('PackageWorkshopService', () => {
       revision: 3,
       publishedAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-02T00:00:00.000Z',
+      // The listing answers anonymous callers: no email, no auth provider.
       author: {
         id: 7,
         name: 'Ann',
-        email: 'a@b.c',
         picture: 'p',
-        service: 'google',
       },
     });
   });
@@ -241,9 +240,7 @@ describe('PackageWorkshopService', () => {
         author: {
           id: 7,
           name: 'Ann',
-          email: 'a@b.c',
           picture: 'p',
-          service: 'google',
         },
       },
     });

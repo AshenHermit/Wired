@@ -15,6 +15,7 @@ import { EntityManager, In, IsNull, Not, Repository } from 'typeorm';
 import { PackageFileEntry } from '@wired-io/shared';
 import { errorMessage } from 'src/common/errors';
 import { isUniqueViolation } from 'src/common/pg-errors';
+import { withPublicUsers } from 'src/common/public-user';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { User } from 'src/database/entities/user.entity';
@@ -265,7 +266,11 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     if (!pkg || (pkg.room && !canViewRoom(pkg.room, viewer?.id))) {
       throw new NotFoundException(`ScriptingPackage with id=${id} not found`);
     }
-    return pkg;
+    // Anonymous callers read this package, so its users lose their email.
+    return withPublicUsers({
+      ...pkg,
+      ...(pkg.room ? { room: withPublicUsers(pkg.room) } : {}),
+    });
   }
 
   async create(

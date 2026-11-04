@@ -496,12 +496,12 @@ export class PackageWorkshopService {
       updatedAt: row.updatedAt.toISOString(),
     };
     if (row.authorId !== null) {
+      // The workshop listing answers anonymous callers, so the author is
+      // projected down to what every reader may see.
       summary.author = {
         id: row.authorId,
         name: row.authorName,
-        email: row.authorEmail,
         picture: row.authorPicture,
-        service: row.authorService,
       };
     }
     return summary;
