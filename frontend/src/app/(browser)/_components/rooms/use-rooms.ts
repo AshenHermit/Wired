@@ -2,7 +2,7 @@
 
 import { listRooms } from "@/api/services/rooms";
 import type { AppMessage } from "@/i18n/message";
-import type { Room } from "@wired-io/shared/api/types";
+import type { Room } from "@wired-io/shared";
 import * as React from "react";
 
 /**

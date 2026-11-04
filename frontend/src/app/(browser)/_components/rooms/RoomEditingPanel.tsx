@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
 import { useRequestHandler } from "@/hooks/use-request-handler";
-import type { Room } from "@wired-io/shared/api/types";
+import type { Room } from "@wired-io/shared";
 import { useTranslations } from "next-intl";
 import * as React from "react";
 import { useForm } from "react-hook-form";

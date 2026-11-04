@@ -76,7 +76,7 @@ describe("rooms service", () => {
 
   it("creates a room with the payload it was given", async () => {
     apiClient.post.mockResolvedValueOnce(room);
-    const payload = { name: "Hero room", isPublic: true } as const;
+    const payload = { name: "Hero room", isPublic: true, type: "godot" } as const;
 
     await expect(createRoom({ ...payload })).resolves.toEqual(room);
     expect(apiClient.post).toHaveBeenCalledWith("rooms", { ...payload });

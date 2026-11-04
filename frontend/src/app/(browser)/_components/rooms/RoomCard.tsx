@@ -1,6 +1,6 @@
 "use client";
 
-import type { Room } from "@wired-io/shared/api/types";
+import type { Room } from "@wired-io/shared";
 import { LiquidButton } from "@/components/animate-ui/components/buttons/liquid";
 import {
   RippleButton,

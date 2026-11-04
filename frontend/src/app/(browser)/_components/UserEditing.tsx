@@ -68,14 +68,16 @@ export const UserEditingPanel = React.forwardRef<
 
   const updateUserCb = React.useCallback(
     async (data: UserEditingFieldsInfer) => {
-      if (user) {
-        handleRequest(async () => {
-          const updated = await updateUser(user.id, { ...data });
-          toast.success(t("updated"));
-          setOpen(false);
-          onChange?.(updated);
-        });
-      }
+      if (!user) return;
+      // `handleRequest` owns the error toast and the loading flag, so the form
+      // has to wait for it; resolving first would let react-hook-form think the
+      // submit succeeded before the request finished.
+      await handleRequest(async () => {
+        const updated = await updateUser(user.id, { ...data });
+        toast.success(t("updated"));
+        setOpen(false);
+        onChange?.(updated);
+      });
     },
     [handleRequest, onChange, t, user]
   );
