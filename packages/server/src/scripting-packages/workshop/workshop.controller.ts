@@ -11,8 +11,8 @@ import {
 import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { PackageWorkshopService } from './package-workshop.service';
-import { WorkshopForkDto, WorkshopPublishDto } from './workshop.dto';
-import { CopyToRoomDto } from './copy-to-room.dto';
+import { WorkshopForkDto, WorkshopPublishDto } from './dto/workshop.dto';
+import { CopyToRoomDto } from './dto/copy-to-room.dto';
 import { Public, UseAuthGuard } from 'src/auth/auth-policy';
 import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
 

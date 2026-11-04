@@ -46,7 +46,7 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
 export interface GoogleAuthenticatedRequest extends Request {
   user: {
     provider: 'google';
-    providerId: number;
+    providerId: string;
     email: string;
     name: string;
     picture: string;
