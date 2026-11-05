@@ -28,6 +28,7 @@ func _initialize() -> void:
 	_test_invalid_root_keeps_current()
 	_test_missing_file_keeps_current()
 	_test_missing_viewport_keeps_current()
+	_test_reserved_service_node_rejected()
 	_test_multiple_subviewports()
 	_test_multiple_registrations()
 	_test_custom_ui_keeps_mouse_filter()
@@ -170,6 +171,46 @@ func _test_missing_viewport_keeps_current() -> void:
 	_check(
 		main._game_root == default_root,
 		"a WiredGameScene without world_viewport must not replace Game",
+	)
+	main.free()
+
+
+func _make_scene_with_reserved_node(reserved_name: String) -> PackedScene:
+	var packed := _make_package_scene("Reserved")
+	var root := packed.instantiate()
+	var viewport: SubViewport = root.get("world_viewport")
+	var reserved := Node.new()
+	reserved.name = reserved_name
+	viewport.add_child(reserved)
+	reserved.owner = root
+	var result := PackedScene.new()
+	result.pack(root)
+	root.free()
+	return result
+
+
+func _test_reserved_service_node_rejected() -> void:
+	var main = _make_main()
+	var default_root: Node = main.default_game_root
+	_register_main(
+		main,
+		"1",
+		"game/reserved.tscn",
+		_make_scene_with_reserved_node("StaticWorld"),
+	)
+	main.call("_rebuild_game_scene_if_needed")
+	_check(
+		main._game_root == default_root,
+		"a scene authoring a reserved service node must keep the default Game",
+	)
+	# The rejection is not permanent: fixing the scene and publishing a new
+	# revision must install it without restarting the room.
+	main._registry.clear_package("1")
+	_register_main(main, "1", "game/reserved.tscn", _make_package_scene("Fixed"))
+	main.call("_rebuild_game_scene_if_needed")
+	_check(
+		main._game_root.name == "Fixed",
+		"a valid scene must install after a reserved-node rejection",
 	)
 	main.free()
 

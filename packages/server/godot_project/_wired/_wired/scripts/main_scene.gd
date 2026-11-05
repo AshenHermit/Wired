@@ -52,6 +52,11 @@ var _game_root: Node
 var _default_game_root: Node
 ## Идентичность установленной main-сцены; пусто для штатного Game.
 var _game_scene_key := ""
+## Names owned by the core inside `world_viewport`. A package scene that
+## authors one of them would make Godot rename the live service to a
+## non-deterministic `@Node@N`, so the server and client would disagree on the
+## multiplayer node paths. Such a scene is rejected instead of installed.
+var _reserved_service_names: PackedStringArray = PackedStringArray()
 ## Package apply/unload operations are serialized: two overlapping applies would
 ## interleave registry clears with entry loads and restores, and a removal that
 ## arrives during an apply would run against a half-applied registry.
@@ -184,6 +189,10 @@ func _setup_services() -> void:
 		players_manager.setup(_registry, net, players_spawner)
 	_default_game_root = default_game_root
 	_game_root = default_game_root
+	_reserved_service_names = PackedStringArray()
+	for service: Node in [static_world, dynamic_world, players_manager]:
+		if service != null and not service.name.is_empty():
+			_reserved_service_names.append(str(service.name))
 
 
 func _unbind_game_services() -> void:
@@ -194,6 +203,15 @@ func _unbind_game_services() -> void:
 			# the serialization owner keeps Godot from warning that `Main` no
 			# longer owns a node living under a package scene.
 			service.owner = null
+
+
+## Returns the first reserved node the package scene already put into its
+## `world_viewport`, or an empty string when the scene follows the contract.
+func _reserved_service_conflict(viewport: SubViewport) -> String:
+	for reserved: String in _reserved_service_names:
+		if viewport.get_node_or_null(NodePath(reserved)) != null:
+			return reserved
+	return ""
 
 
 func _bind_game_services(viewport: SubViewport) -> void:
@@ -286,10 +304,19 @@ func _rebuild_game_scene_if_needed() -> void:
 		)
 		instance.free()
 		return
-	if _world_viewport_of(instance) == null:
+	var viewport := _world_viewport_of(instance)
+	if viewport == null:
 		push_warning(
 			"WIRED_MAIN_SCENE_INVALID package=%s path=%s reason=missing_world_viewport"
 			% [desired.get("package_id", ""), path]
+		)
+		instance.free()
+		return
+	var conflict := _reserved_service_conflict(viewport)
+	if not conflict.is_empty():
+		push_warning(
+			"WIRED_MAIN_SCENE_INVALID package=%s path=%s reason=reserved_node name=%s"
+			% [desired.get("package_id", ""), path, conflict]
 		)
 		instance.free()
 		return

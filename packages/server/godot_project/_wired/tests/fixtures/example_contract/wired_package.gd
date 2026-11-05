@@ -3,9 +3,10 @@ extends WiredPackageRegistration
 ## Fixture entry mirroring `examples/wired-platformer/wired_package.gd`.
 ##
 ## The example itself is outside the base `_wired` project, so the contract test
-## loads this copy with the same five registrations and empty `Node` scenes.
+## loads this copy with the same six registrations and empty `Node` scenes.
 
 func register(_registry: WiredPackageRegistry) -> void:
+	add_main_scene("ui/custom_main.tscn")
 	add_static_scene("static/platform.tscn", {"order": 10})
 	add_player_component("player/body.tscn", {"order": 10, "authority": "server"})
 	add_player_component(

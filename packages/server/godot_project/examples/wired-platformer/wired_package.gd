@@ -12,6 +12,7 @@ extends WiredPackageRegistration
 ## `res://packages/<id>` directory.
 
 func register(_registry: WiredPackageRegistry) -> void:
+	add_main_scene("ui/custom_main.tscn")
 	add_static_scene("static/platform.tscn", {"order": 10})
 	add_player_component("player/body.tscn", {"order": 10, "authority": "server"})
 	add_player_component(

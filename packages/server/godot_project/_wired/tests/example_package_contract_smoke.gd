@@ -5,7 +5,7 @@ extends SceneTree
 ## The example package lives in `godot_project/examples/wired-platformer`, which
 ## is intentionally outside the base `_wired` project (so it is not copied into
 ## every room's editor). This suite therefore loads a fixture entry with exactly
-## the same five registrations and empty `Node` scenes, and asserts the
+## the same six registrations and empty `Node` scenes, and asserts the
 ## declarative contract the example must follow: kinds, relative paths, order,
 ## authority, local-only flag and dynamic options.
 ##
@@ -14,6 +14,7 @@ extends SceneTree
 ##     --script res://tests/example_package_contract_smoke.gd --quit-after 2
 
 const FIXTURE_ROOT := "res://tests/fixtures/example_contract"
+const EXAMPLE_RELATIVE_DIR := "../examples/wired-platformer"
 const PACKAGE_ID := "pkg.example"
 const REVISION := 1
 const PLATFORM_PATH := "static/platform.tscn"
@@ -21,6 +22,12 @@ const BODY_PATH := "player/body.tscn"
 const CAMERA_PATH := "player/camera.tscn"
 const SPAWNER_PATH := "player/spawner.tscn"
 const CRATE_PATH := "dynamic/crate.tscn"
+const MAIN_PATH := "ui/custom_main.tscn"
+const WiredGameSceneScript := preload("res://_wired/scripts/world/wired_game_scene.gd")
+## The core owns these instances and moves its live ones into `world_viewport`.
+## Authoring them in the package scene makes Godot rename the live services to
+## non-deterministic names, which breaks multiplayer node paths.
+const RESERVED_SERVICE_NAMES := ["StaticWorld", "DynamicWorld", "Players"]
 
 var _failures: PackedStringArray = []
 var _checks := 0
@@ -32,6 +39,7 @@ func _initialize() -> void:
 
 func _run() -> void:
 	test_example_contract_registers_all_kinds()
+	test_example_main_scene_is_wired_game_scene()
 	_finish()
 
 
@@ -49,6 +57,19 @@ func test_example_contract_registers_all_kinds() -> void:
 	var scenes := registry.get_static_scenes()
 	var components := registry.get_player_components()
 	var entities := registry.get_dynamic_entities()
+	var main_scenes := registry.get_main_scenes()
+
+	_check(
+		main_scenes.size() == 1,
+		"the example must register exactly one main scene, got %d"
+		% main_scenes.size(),
+	)
+	if main_scenes.size() == 1:
+		_check(
+			str(main_scenes[0]["path"]) == MAIN_PATH,
+			"the main scene must be %s, got %s"
+			% [MAIN_PATH, main_scenes[0]["path"]],
+		)
 
 	_check(
 		scenes.size() == 1,
@@ -153,6 +174,50 @@ func test_example_contract_registers_all_kinds() -> void:
 		"the loader must store the applied revision context",
 	)
 	registry.free()
+
+
+## The registered path must exist and satisfy the `WiredGameScene` contract the
+## core enforces before it swaps the default `Game` out. A scene that merely
+## lists the right nodes but keeps the script on a child is rejected silently by
+## the runtime, so this guards the example itself, not only the registry strings.
+func test_example_main_scene_is_wired_game_scene() -> void:
+	var path := _example_path(MAIN_PATH)
+	var packed := load(path) as PackedScene
+	_check(packed != null, "the example main scene must load from %s" % path)
+	if packed == null:
+		return
+	var instance := packed.instantiate()
+	if instance == null:
+		_check(false, "the example main scene must instantiate")
+		return
+	_check(
+		instance is WiredGameSceneScript,
+		"the example main scene root must use WiredGameScene",
+	)
+	var world_viewport: Variant = instance.get("world_viewport")
+	_check(
+		world_viewport is SubViewport,
+		"the example main scene must export a SubViewport world_viewport",
+	)
+	if world_viewport is SubViewport:
+		for reserved: String in RESERVED_SERVICE_NAMES:
+			_check(
+				world_viewport.get_node_or_null(reserved) == null,
+				"the example main scene must not author reserved node %s; "
+				% reserved
+				+ "the core injects the live services",
+			)
+	instance.free()
+
+
+func _example_path(relative_path: String) -> String:
+	var project_dir := ProjectSettings.globalize_path("res://")
+	return (
+		project_dir
+		.path_join(EXAMPLE_RELATIVE_DIR)
+		.path_join(relative_path)
+		.simplify_path()
+	)
 
 
 # --- assertions -----------------------------------------------------------

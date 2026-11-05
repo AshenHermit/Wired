@@ -11,18 +11,20 @@
 
 ```
 wired-platformer/
-  wired_package.gd          # точка входа пакета, пять регистраций
+  wired_package.gd          # точка входа пакета, шесть регистраций
   static/platform.tscn      # StaticBody2D 640×32 + маркер спавна
   player/body.tscn          # CharacterBody2D, движение, прыжок, толкание
   player/camera.tscn        # Camera2D, следует только за своим игроком
   player/spawner.tscn       # ЛКМ → запрос на спавн ящика
   dynamic/crate.tscn        # RigidBody2D, импульс, сохранение состояния
+  ui/custom_main.tscn       # кастомная main-сцена с собственной UI-разметкой
 ```
 
 `wired_package.gd` регистрирует:
 
 | Что | Путь | order | authority | Примечание |
 |---|---|---|---|---|
+| main-сцена | `ui/custom_main.tscn` | — | — | корень `WiredGameScene`, `world_viewport` → `Game/SubViewport` |
 | статика | `static/platform.tscn` | 10 | server | платформа и маркер `wired_player_spawn` |
 | игрок | `player/body.tscn` | 10 | server | движение, прыжок, толкание |
 | игрок | `player/camera.tscn` | 20 | local | `local_only`, камера только у своего игрока |
@@ -35,34 +37,55 @@ wired-platformer/
 
 ## Своя main-сцена (необязательно)
 
-Пакет может заменить штатный `Main/Game` своей сценой. Регистрация:
+Пакет может заменить штатный `Main/Game` своей сценой. Этот пример уже содержит
+кастомную main scene в `ui/custom_main.tscn`, зарегистрированную в начале
+`wired_package.gd`:
 
 ```gdscript
 func register(_registry: WiredPackageRegistry) -> void:
-	add_main_scene("game/game.tscn")
+	add_main_scene("ui/custom_main.tscn")
+	# ... остальные регистрации
 ```
 
-Корень сцены должен использовать скрипт `WiredGameScene` (напрямую или через
-`extends "res://_wired/scripts/world/wired_game_scene.gd"`) и указать
+**Структура своей main-сцены:**
+
+Корень сцены должен использовать скрипт `WiredGameScene` и указать
 `world_viewport` — `SubViewport`, в который ядро переносит `StaticWorld`,
-`DynamicWorld` и `Players`:
+`DynamicWorld` и `Players`. В `custom_main.tscn`:
 
-```gdscript
-extends WiredGameScene
 ```
+CustomMain (Node) [script: WiredGameScene]
+  ├─ Game (SubViewportContainer)
+  │  └─ SubViewport [world_viewport]   # пустой: сервисы добавит ядро
+  └─ UI (CanvasLayer)
+     └─ Background, Margin, VBox, Status, Hint, Log
+```
+
+`world_viewport` намеренно пустой. Ядро само переносит в него живые
+`StaticWorld`, `DynamicWorld` и `Players` вместе со спавнерами. Не копируйте эти
+узлы из `main.tscn`: при совпадении имён Godot переименует живые сервисы в
+недетерминированные `@Node@N`, и сетевые пути игроков перестанут совпадать
+между сервером и клиентом (пропадает движение и обновление мира).
 
 Остальные `SubViewport` (миникарта, превью) свободны: ядро использует только
-`world_viewport`. Узлы `StaticWorld`, `DynamicWorld` и `Players` резервируются
-ядром — не создавайте свои с такими именами.
+`world_viewport`.
+
+**UI и интерактивность:**
 
 Кастомный UI сохраняет свой `mouse_filter`: кнопки и панели кликаются. Штатный
 `Main/UI` по-прежнему игнорирует мышь, чтобы клики доходили до игрового
 viewport.
 
+**Применение и замена:**
+
 Побеждает первая main-сцена в порядке реестра (package id, `order`, порядок
-регистраций). Если сцена битая или `world_viewport` не задан, комната остаётся
-на штатном `Game`. При новой ревизии пакета main-сцена пересобирается, поэтому
-её UI-состояние сбрасывается; живые игроки и динамические сущности сохраняются.
+регистраций). Если сцена битая, `world_viewport` не задан или внутри него уже
+есть зарезервированный узел (`StaticWorld`, `DynamicWorld`, `Players`), комната
+остаётся на штатном `Game`, а в лог пишется
+`WIRED_MAIN_SCENE_INVALID ... reason=...`. Ошибка не фатальна: после исправления
+сцены достаточно опубликовать новую ревизию. При новой ревизии пакета main-сцена
+пересобирается, поэтому её UI-состояние сбрасывается; живые игроки и
+динамические сущности сохраняются.
 
 ## Как опубликовать пакет в комнате
 
