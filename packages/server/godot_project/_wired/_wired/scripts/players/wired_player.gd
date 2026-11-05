@@ -59,6 +59,8 @@ var _action_window_count := 0
 ## Missing input actions are a package configuration error, not a per-frame
 ## event: warn once per action and then treat the input as zero.
 var _warned_missing_actions: Dictionary = {}
+## Web input fallback: track pressed keys by keycode for Web export compatibility.
+var _pressed_keys: Dictionary = {}
 
 
 ## Wires identity and transport. Called before the player enters the tree, so
@@ -295,6 +297,13 @@ func load_state(state: Dictionary) -> void:
 			component._wired_load_state(component_state)
 
 
+func _process(_delta: float) -> void:
+	# Web export: poll input directly on every frame
+	if not _is_local_client():
+		return
+	_poll_web_input()
+
+
 func _physics_process(_delta: float) -> void:
 	if not _is_local_client():
 		return
@@ -365,13 +374,35 @@ func _valid_input_seq(value: Variant) -> int:
 	return seq
 
 
+func _poll_web_input() -> void:
+	# Web export: update _pressed_keys by directly querying key state
+	# This bypasses the broken _input() callback on 4.8-beta2 Web export
+	var keycodes_to_check := [
+		65,  # A (wired_move_left)
+		68,  # D (wired_move_right)
+		87,  # W (wired_move_up)
+		83,  # S (wired_move_down)
+		32,  # Space (wired_jump)
+	]
+	for keycode in keycodes_to_check:
+		if Input.is_key_pressed(keycode):
+			_pressed_keys[keycode] = true
+		else:
+			_pressed_keys.erase(keycode)
+
+
 func _collect_input() -> Dictionary:
 	_input_seq += 1
+	var left := _action_pressed(MOVE_LEFT)
+	var right := _action_pressed(MOVE_RIGHT)
+	var up := _action_pressed(MOVE_UP)
+	var down := _action_pressed(MOVE_DOWN)
+	var jump := _action_pressed(JUMP)
 	return {
 		"move": Vector2(
-			_action_axis(MOVE_LEFT, MOVE_RIGHT), _action_axis(MOVE_UP, MOVE_DOWN)
+			(float(right) - float(left)), (float(down) - float(up))
 		).limit_length(MAX_INPUT_MOVE_LENGTH),
-		"jump": _action_pressed(JUMP),
+		"jump": jump,
 		"seq": _input_seq,
 	}
 
@@ -396,7 +427,23 @@ func _action_pressed(action: String) -> bool:
 				% action
 			)
 		return false
-	return Input.is_action_pressed(action)
+	
+	# Try InputMap first (works on native)
+	if Input.is_action_pressed(action):
+		return true
+	
+	# Web export fallback: check pressed_keys against action events
+	if not _is_local_client():
+		return false
+	
+	var events := InputMap.action_get_events(action)
+	for event in events:
+		if event is InputEventKey:
+			var key_event := event as InputEventKey
+			var key_code := key_event.physical_keycode if key_event.physical_keycode != 0 else key_event.keycode
+			if key_code != 0 and _pressed_keys.has(key_code):
+				return true
+	return false
 
 
 func _is_local_client() -> bool:
@@ -407,7 +454,6 @@ func _authority_peer(authority: String) -> int:
 	if authority == WiredPlayerComponent.AUTHORITY_SERVER:
 		return 1
 	return peer_id
-
 
 func _consume_action_budget() -> bool:
 	var now := Time.get_ticks_msec()
