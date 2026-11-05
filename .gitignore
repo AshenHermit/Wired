@@ -6,6 +6,7 @@ dist
 !.env.prod.example
 .superpowers/
 .desloppify/
+.opencode/index/
 packages/server/storage/
 packages/server/game_export/
 packages/server/godot_editor/
