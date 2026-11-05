@@ -1,6 +1,7 @@
 'use client';
 
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { parseMarkdownHeadings, slugify } from '@/lib/markdown-parser';
 import { highlightCode } from '@/lib/highlight-plugin';
 
@@ -14,6 +15,7 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
 
   return (
     <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
       components={{
         h2: ({ children }) => {
           const text = String(children);
@@ -55,6 +57,16 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
             {children}
           </a>
         ),
+        table: ({ children }) => (
+          <div className="overflow-x-auto mb-4">
+            <table className="min-w-full border border-foreground/10 rounded">{children}</table>
+          </div>
+        ),
+        thead: ({ children }) => <thead className="bg-foreground/5">{children}</thead>,
+        tbody: ({ children }) => <tbody>{children}</tbody>,
+        tr: ({ children }) => <tr className="border-b border-foreground/10">{children}</tr>,
+        th: ({ children }) => <th className="px-4 py-2 text-left font-semibold">{children}</th>,
+        td: ({ children }) => <td className="px-4 py-2">{children}</td>,
       }}
     >
       {content}
