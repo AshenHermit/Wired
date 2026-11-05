@@ -1,95 +1,117 @@
-# Multiplayer Guide
+# Сетевое руководство Wired
 
-Build multiplayer games with Wired.
+## Модель
 
-## Synchronizing State
+- **Сервер авторитетен.** Сервер симулирует физику и состояние; клиенты
+  только рендерят и отправляют намерения.
+- **Пакеты доставляются артефактом.** Runtime комнаты скачивает и проверяет
+  (размер + sha256) все файлы пакета и его зависимостей, затем применяет их.
+- **Каждый пир строит мир из реестра.** Статика не реплицируется: все
+  клиенты инстанцируют одни и те же сцены из одного и того же реестра.
+- **Динамика реплицируется** через `MultiplayerSpawner` + `MultiplayerSynchronizer`.
 
-Entities automatically sync their transform and properties to all connected clients:
+## Жизненный цикл игрока
 
-```gdscript
-extends Node3D
-class_name MultiplayerCharacter
+Игрок появляется только когда открыты оба шлюза:
 
-@export var speed = 5.0
+1. `peer_authenticated` (идентичность);
+2. `peer_packages_ready` (клиент применил те же ревизии пакетов).
 
-func _process(delta):
-    var input = Input.get_vector("ui_left", "ui_right", "ui_up", "ui_down")
-    position += Vector3(input.x, 0, input.y) * speed * delta
-    # Position is automatically synced to other players
-```
+Сервер спавнит игрока через `MultiplayerSpawner`, который вызывает
+`_spawn_player` на каждом пире — каждый строит игрока из своего реестра в
+одном порядке.
 
-## Handling Connections
+## Позднее подключение (late join)
 
-React to player join/leave events:
+`MultiplayerSpawner` переигрывает отслеженные спавны сразу после подключения
+транспорта. Клиент предзагружает пакеты до подключения, поэтому переигрывание
+обычно находит полный реестр. `apply_snapshot` — запасной путь для переигрывания,
+которое пир не смог собрать.
 
-```gdscript
-extends Node
-class_name ConnectionManager
+Сервер отправляет авторитетный снимок после готовности пакетов: игроки со всеми
+компонентами и текущие динамические сущности — ровно один раз. Ядро не
+полагается на один лишь spawn-replay.
 
-func _ready():
-    Wired.player_joined.connect(_on_player_joined)
-    Wired.player_left.connect(_on_player_left)
+## Снимки (snapshots)
 
-func _on_player_joined(player_id: String):
-    print("Player joined: ", player_id)
+- `DynamicWorldContainer.apply_snapshot(records, packages)` — клиентский ремонт
+  мира: воссоздаёт сущности, которые спавнер потерял, пересобирает устаревшие
+  (по ревизии/артефакту пакета), чистит удалённые.
+- `PlayersManager.apply_snapshot(records)` — ремонт игроков.
+- Снимок должен нести карту пакетов (`packages`), иначе каждая сущность
+  выглядит устаревшей.
 
-func _on_player_left(player_id: String):
-    print("Player left: ", player_id)
-```
+## Горячая замена пакета
 
-## Communication Between Clients
+При новой ревизии:
 
-Use channels to send custom messages:
+1. Статика пересобирается (`StaticWorldContainer.rebuild`).
+2. Игроки пересобирают компоненты (`rebuild_live_components`), состояние
+   компонентов сохраняется и применяется к новым экземплярам.
+3. Динамические сущности пакета паркуются (`park_package`), затем
+   восстанавливаются (`restore_pending`) на новой ревизии.
+4. `PackageReloader` не заменяет живых игроков и динамические сущности.
 
-```gdscript
-extends Node
-class_name Chat
+Ограничение: уже заспавненные игроки не получают новые компоненты на лету —
+нужен reconnect.
 
-func send_chat_message(text: String):
-    Wired.send_message("chat", {
-        "text": text,
-        "sender": get_tree().multiplayer.get_unique_id(),
-        "timestamp": Time.get_ticks_msec()
-    })
+## Сохранение состояния
 
-func _ready():
-    Wired.on_message("chat", _on_chat_message)
+- Сервер сохраняет мир в `state.json`: динамические сущности (только с
+  `persist: true`) и игроки с их компонентами.
+- При рестарте runtime `seed_pending` паркует сохранённые записи;
+  `restore_pending` восстанавливает их после применения пакетов.
+- Идентификаторы сущностей резервируются заранее, чтобы свежий спавн не
+  украл id ожидающей записи.
+- Состояние компонента ключуется как `<package_id>:<relative_path>`, а не
+  индексом массива — перестановка компонентов не сдвигает состояние.
 
-func _on_chat_message(data: Dictionary):
-    print("[%s] %s" % [data.sender, data.text])
-```
+## Авторитет и владельцы
 
-## Best Practices
+- Компонент с `authority: "server"` симулируется только сервером (peer 1);
+  с `"local"` — только владельцем.
+- `local_only: true` — компонент существует только на пире владельца
+  (например, камера).
+- Динамические сущности можно заспавнить только с `authority: "server"`.
 
-### Only Sync What You Need
+## Ввод и действия
 
-Register only entities that need network synchronization. Don't register UI-only nodes.
+- Ввод: локальный клиент семплирует `wired_move_*`/`wired_jump` ≤ 30 Гц,
+  отправляет `{move, jump, seq}`. Сервер принимает только от владельца,
+  клампит `move` до длины 1.
+- Действия: компонент регистрирует обработчик на сервере
+  (`register_action`), клиент отправляет намерение (`request_action`). Имя
+  квалифицируется как `<package_id>/<local_name>`. Лимит: 20 действий/сек
+  на игрока.
 
-### Use Entity Types
+## Репликация свойств
 
-Classify entities by type for easier filtering and debugging:
+- `WiredPlayerComponent._wired_replicated_properties()` возвращает пути
+  относительно компонента (например `Body:position`).
+- `WiredDynamicEntity._wired_replicated_properties()` — относительно корня
+  сущности.
+- Синхронизатор создаётся автоматически в `_ready`.
 
-```gdscript
-Wired.register_entity(player, "player")
-Wired.register_entity(npc, "npc")
-Wired.register_entity(bullet, "projectile")
-```
+## Лучшие практики
 
-### Handle Disconnections
+- Регистрируйте только сущности, которым нужна синхронизация.
+- Классифицируйте сущности по типу для фильтрации и отладки.
+- Используйте `persist: false` для временных объектов (снаряды, эффекты).
+- Ограничивайте количество одновременных сетевых сообщений.
+- Пакуйте обновления, используйте каналы эффективно.
+- Очищайте ресурсы при отключении игроков.
+- Не используйте RPC напрямую — вся сетевая логика через ядро.
 
-Always clean up resources when players disconnect:
+## Ограничения
 
-```gdscript
-func _on_player_left(player_id: String):
-    # Remove player character from scene
-    if player_id in players:
-        players[player_id].queue_free()
-        players.erase(player_id)
-```
+- `MultiplayerSpawner`/`MultiplayerSynchronizer` Godot 4.7 реплицируют данные
+  на транспортном уровне и не фильтруются ticket-аутентификацией.
+- Игровые RPC закрыты; окно до `cli_hello` ограничено таймаутом.
+- Горячая замена пересобирает статику, но не пересобирает заспавненных
+  игроков.
 
-### Performance Considerations
+## См. также
 
-- Limit the number of simultaneous network messages
-- Batch updates when possible
-- Use channels efficiently (one channel per message type)
-- Monitor sync latency and adjust update frequency accordingly
+- [Начало работы](getting-started.md)
+- [Регистрация сущностей](entity-registration.md)
+- [Справочник API](api-reference.md)

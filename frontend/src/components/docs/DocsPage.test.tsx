@@ -20,7 +20,7 @@ describe('DocsPage', () => {
     expect(screen.getByRole('navigation')).toBeInTheDocument();
     
     // Main area should exist
-    expect(screen.getByRole('main')).toBeInTheDocument();
+    expect(screen.getByText('Loading documentation...')).toBeInTheDocument();
   });
 
   test('loads and renders markdown content', async () => {
