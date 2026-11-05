@@ -14,6 +14,7 @@ class_name WiredPackageRegistry
 const KIND_STATIC := "static"
 const KIND_PLAYER := "player"
 const KIND_DYNAMIC := "dynamic"
+const KIND_MAIN := "main"
 
 # Full descriptors including the internal `kind` discriminator. Public getters
 # strip it so callers only see the documented descriptor shape.
@@ -76,6 +77,15 @@ func get_player_components() -> Array[Dictionary]:
 
 func get_dynamic_entities() -> Array[Dictionary]:
 	return _sorted_descriptors(KIND_DYNAMIC)
+
+
+func get_main_scenes() -> Array[Dictionary]:
+	return _sorted_descriptors(KIND_MAIN)
+
+
+func get_main_scene() -> Dictionary:
+	var scenes := get_main_scenes()
+	return scenes[0] if not scenes.is_empty() else {}
 
 
 ## Dynamic descriptor of a qualified type, or an empty dictionary.

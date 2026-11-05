@@ -33,6 +33,37 @@ wired-platformer/
 `res://packages/<slug>` без правок. Скрипты примера не объявляют `class_name` и не
 используют RPC: вся сетевая логика идёт через ядро `_wired`.
 
+## Своя main-сцена (необязательно)
+
+Пакет может заменить штатный `Main/Game` своей сценой. Регистрация:
+
+```gdscript
+func register(_registry: WiredPackageRegistry) -> void:
+	add_main_scene("game/game.tscn")
+```
+
+Корень сцены должен использовать скрипт `WiredGameScene` (напрямую или через
+`extends "res://_wired/scripts/world/wired_game_scene.gd"`) и указать
+`world_viewport` — `SubViewport`, в который ядро переносит `StaticWorld`,
+`DynamicWorld` и `Players`:
+
+```gdscript
+extends WiredGameScene
+```
+
+Остальные `SubViewport` (миникарта, превью) свободны: ядро использует только
+`world_viewport`. Узлы `StaticWorld`, `DynamicWorld` и `Players` резервируются
+ядром — не создавайте свои с такими именами.
+
+Кастомный UI сохраняет свой `mouse_filter`: кнопки и панели кликаются. Штатный
+`Main/UI` по-прежнему игнорирует мышь, чтобы клики доходили до игрового
+viewport.
+
+Побеждает первая main-сцена в порядке реестра (package id, `order`, порядок
+регистраций). Если сцена битая или `world_viewport` не задан, комната остаётся
+на штатном `Game`. При новой ревизии пакета main-сцена пересобирается, поэтому
+её UI-состояние сбрасывается; живые игроки и динамические сущности сохраняются.
+
 ## Как опубликовать пакет в комнате
 
 Для ручной проверки нужны собранный Web export (`pnpm export:game`), запущенные

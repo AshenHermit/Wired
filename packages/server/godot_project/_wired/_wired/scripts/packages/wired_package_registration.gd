@@ -12,6 +12,7 @@ const DEFAULT_AUTHORITY := "server"
 const KIND_STATIC := "static"
 const KIND_PLAYER := "player"
 const KIND_DYNAMIC := "dynamic"
+const KIND_MAIN := "main"
 
 ## Set by PackageEntryLoader before `register()` is called.
 var package_id: String = ""
@@ -34,6 +35,10 @@ func add_static_scene(relative_path: String, options: Dictionary = {}) -> void:
 
 func add_player_component(relative_path: String, options: Dictionary = {}) -> void:
 	_entries.append(_entry(KIND_PLAYER, relative_path, options))
+
+
+func add_main_scene(relative_path: String, options: Dictionary = {}) -> void:
+	_entries.append(_entry(KIND_MAIN, relative_path, options))
 
 
 func add_dynamic_entity(

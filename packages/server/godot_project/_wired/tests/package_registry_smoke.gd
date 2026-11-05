@@ -50,6 +50,7 @@ func _initialize() -> void:
 	_test_clear_package()
 	_test_dynamic_entities()
 	_test_static_scenes()
+	_test_main_scenes()
 	_test_context_paths()
 	_test_context_with_packages()
 	_finish()
@@ -250,6 +251,68 @@ func _test_static_scenes() -> void:
 		registry.get_player_components().is_empty()
 		and registry.get_dynamic_entities().is_empty(),
 		"a static scene must not leak into other descriptor lists",
+	)
+	registry.free()
+
+
+func _test_main_scenes() -> void:
+	var registry := WiredPackageRegistry.new()
+	_check(
+		registry.get_main_scene().is_empty(),
+		"a registry without main scenes must return an empty descriptor",
+	)
+	_check(
+		registry.get_main_scenes().is_empty(),
+		"a registry without main scenes must return an empty list",
+	)
+
+	var b := WiredPackageRegistration.new()
+	b.package_id = "pkg.b"
+	b.add_main_scene("game/b.tscn", {"order": 20})
+	registry.add_registration(b)
+
+	var a := WiredPackageRegistration.new()
+	a.package_id = "pkg.a"
+	a.add_main_scene("game/first.tscn", {"order": 10})
+	a.add_main_scene("game/second.tscn", {"order": 10})
+	registry.add_registration(a)
+
+	var scenes := registry.get_main_scenes()
+	_check(scenes.size() == 3, "three main scenes must be registered, got %d" % scenes.size())
+	if scenes.size() == 3:
+		_check(
+			scenes[0]["package_id"] == "pkg.a"
+			and scenes[0]["path"] == "game/first.tscn",
+			"the first main scene must be pkg.a/first.tscn, got %s/%s"
+			% [scenes[0]["package_id"], scenes[0]["path"]],
+		)
+		_check(
+			scenes[1]["path"] == "game/second.tscn",
+			"equal order must keep the registration index order, got %s" % scenes[1]["path"],
+		)
+		_check(
+			scenes[2]["package_id"] == "pkg.b",
+			"the last main scene must be pkg.b, got %s" % scenes[2]["package_id"],
+		)
+		_check(
+			not scenes[0].has("kind"),
+			"main descriptors must not expose the internal kind discriminator",
+		)
+	_check(
+		registry.get_main_scene()["path"] == "game/first.tscn",
+		"get_main_scene must return the first ordered descriptor",
+	)
+	_check(
+		registry.get_player_components().is_empty()
+		and registry.get_static_scenes().is_empty()
+		and registry.get_dynamic_entities().is_empty(),
+		"a main scene must not leak into other descriptor lists",
+	)
+	registry.clear_package("pkg.a")
+	var remaining := registry.get_main_scenes()
+	_check(
+		remaining.size() == 1 and remaining[0]["package_id"] == "pkg.b",
+		"clear_package must drop only that package's main scenes",
 	)
 	registry.free()
 
