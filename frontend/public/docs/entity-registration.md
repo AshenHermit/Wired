@@ -143,6 +143,6 @@ CustomMain (Node) [script: WiredGameScene]
 
 ## См. также
 
-- [Начало работы](getting-started.md)
-- [Справочник API](api-reference.md)
-- [Сетевое руководство](multiplayer-guide.md)
+- [Начало работы](/docs?doc=getting-started)
+- [Справочник API](/docs?doc=api-reference)
+- [Сетевое руководство](/docs?doc=multiplayer-guide)

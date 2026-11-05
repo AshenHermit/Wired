@@ -89,6 +89,6 @@ func register(_registry: WiredPackageRegistry) -> void:
 
 ## См. также
 
-- [Регистрация сущностей](entity-registration.md)
-- [Справочник API](api-reference.md)
-- [Сетевое руководство](multiplayer-guide.md)
+- [Регистрация сущностей](/docs?doc=entity-registration)
+- [Справочник API](/docs?doc=api-reference)
+- [Сетевое руководство](/docs?doc=multiplayer-guide)

@@ -112,6 +112,6 @@
 
 ## См. также
 
-- [Начало работы](getting-started.md)
-- [Регистрация сущностей](entity-registration.md)
-- [Справочник API](api-reference.md)
+- [Начало работы](/docs?doc=getting-started)
+- [Регистрация сущностей](/docs?doc=entity-registration)
+- [Справочник API](/docs?doc=api-reference)

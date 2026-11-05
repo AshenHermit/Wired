@@ -218,6 +218,6 @@ func _wired_unhandled_input(event) -> void:
 
 ## См. также
 
-- [Начало работы](getting-started.md)
-- [Регистрация сущностей](entity-registration.md)
-- [Сетевое руководство](multiplayer-guide.md)
+- [Начало работы](/docs?doc=getting-started)
+- [Регистрация сущностей](/docs?doc=entity-registration)
+- [Сетевое руководство](/docs?doc=multiplayer-guide)
