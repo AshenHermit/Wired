@@ -9,14 +9,14 @@ interface DocsNavProps {
 }
 
 const DOCS = [
-  { id: 'getting-started', label: 'docs.nav.gettingStarted' },
-  { id: 'api-reference', label: 'docs.nav.apiReference' },
-  { id: 'entity-registration', label: 'docs.nav.entityRegistration' },
-  { id: 'multiplayer-guide', label: 'docs.nav.multiplayerGuide' },
+  { id: 'getting-started', label: 'docs.nav.gettingStarted' as const },
+  { id: 'api-reference', label: 'docs.nav.apiReference' as const },
+  { id: 'entity-registration', label: 'docs.nav.entityRegistration' as const },
+  { id: 'multiplayer-guide', label: 'docs.nav.multiplayerGuide' as const },
 ];
 
 export function DocsNav({ activeDoc, onSelect }: DocsNavProps) {
-  const t = useTranslations();
+  const t = useTranslations('Home');
 
   return (
     <nav className="flex flex-col gap-2">

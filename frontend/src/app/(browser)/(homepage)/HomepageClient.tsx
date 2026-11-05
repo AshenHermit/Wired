@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
+import { useState } from "react";
 import { LoginForm } from "../_components/LoginForm";
 import { useUserStore } from "@/store/user-store";
 import {
@@ -23,10 +24,13 @@ import {
 import { RoomsList } from "../_components/rooms/RoomsList";
 import { CurrentUserEditingButton } from "../_components/UserEditing";
 import { WorkshopBrowser } from "@/components/packages/WorkshopBrowser";
+import { DocViewer } from "@/components/docs/DocViewer";
+import { DocsNav } from "@/components/docs/DocsNav";
 
 export function HomepageClient() {
   const user = useUserStore((state) => state);
   const t = useTranslations("Home");
+  const [activeDoc, setActiveDoc] = useState("getting-started");
 
   return (
     <div className="flex flex-col gap-6 items-center w-full">
@@ -78,7 +82,14 @@ export function HomepageClient() {
                 <CardTitle>{t("docs.title")}</CardTitle>
                 <CardDescription>{t("docs.description")}</CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-6"></CardContent>
+              <CardContent className="grid gap-6 grid-cols-4 gap-6">
+                <div className="flex flex-col gap-2">
+                  <DocsNav activeDoc={activeDoc} onSelect={setActiveDoc} />
+                </div>
+                <div className="col-span-3">
+                  <DocViewer docName={activeDoc} />
+                </div>
+              </CardContent>
             </TabsContent>
           </TabsContents>
         </Card>

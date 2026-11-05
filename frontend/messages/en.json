@@ -48,7 +48,13 @@
     },
     "docs": {
       "title": "Documentation",
-      "description": "The core wired-io API for writing scripts will be collected here, so you don't have to dig through the sources"
+      "description": "The core wired-io API for writing scripts will be collected here, so you don't have to dig through the sources",
+      "nav": {
+        "gettingStarted": "Getting Started",
+        "apiReference": "API Reference",
+        "entityRegistration": "Entity Registration",
+        "multiplayerGuide": "Multiplayer Guide"
+      }
     },
     "greeting": "> Hi, {name}!",
     "intro": "wired io isn't as cool as it could be yet, but the author is trying",
