@@ -24,13 +24,10 @@ import {
 import { RoomsList } from "../_components/rooms/RoomsList";
 import { CurrentUserEditingButton } from "../_components/UserEditing";
 import { WorkshopBrowser } from "@/components/packages/WorkshopBrowser";
-import { DocViewer } from "@/components/docs/DocViewer";
-import { DocsNav } from "@/components/docs/DocsNav";
 
 export function HomepageClient() {
   const user = useUserStore((state) => state);
   const t = useTranslations("Home");
-  const [activeDoc, setActiveDoc] = useState("getting-started");
 
   return (
     <div className="flex flex-col gap-6 items-center w-full">
@@ -82,12 +79,32 @@ export function HomepageClient() {
                 <CardTitle>{t("docs.title")}</CardTitle>
                 <CardDescription>{t("docs.description")}</CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-6 grid-cols-4 gap-6">
-                <div className="flex flex-col gap-2">
-                  <DocsNav activeDoc={activeDoc} onSelect={setActiveDoc} />
-                </div>
-                <div className="col-span-3">
-                  <DocViewer docName={activeDoc} />
+              <CardContent className="grid gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <Link
+                    href="/docs?doc=getting-started"
+                    className="p-4 rounded border border-foreground/10 hover:bg-foreground/5 transition"
+                  >
+                    <div className="font-semibold">{t("docs.nav.gettingStarted")}</div>
+                  </Link>
+                  <Link
+                    href="/docs?doc=api-reference"
+                    className="p-4 rounded border border-foreground/10 hover:bg-foreground/5 transition"
+                  >
+                    <div className="font-semibold">{t("docs.nav.apiReference")}</div>
+                  </Link>
+                  <Link
+                    href="/docs?doc=entity-registration"
+                    className="p-4 rounded border border-foreground/10 hover:bg-foreground/5 transition"
+                  >
+                    <div className="font-semibold">{t("docs.nav.entityRegistration")}</div>
+                  </Link>
+                  <Link
+                    href="/docs?doc=multiplayer-guide"
+                    className="p-4 rounded border border-foreground/10 hover:bg-foreground/5 transition"
+                  >
+                    <div className="font-semibold">{t("docs.nav.multiplayerGuide")}</div>
+                  </Link>
                 </div>
               </CardContent>
             </TabsContent>
