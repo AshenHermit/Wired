@@ -1,4 +1,9 @@
-import { CreateRoomPayload, Room, UpdateRoomPayload } from "@wired-io/shared";
+import {
+  CreateRoomPayload,
+  Room,
+  UpdateRoomAccessPayload,
+  UpdateRoomPayload,
+} from "@wired-io/shared";
 import { apiClient } from "../api-client/api-client";
 
 export function listRooms() {
@@ -15,6 +20,10 @@ export function createRoom(data: CreateRoomPayload) {
 
 export function updateRoom(id: number, data: UpdateRoomPayload) {
   return apiClient.patch<Room>(`rooms/${id}`, data);
+}
+
+export function updateRoomAccess(id: number, data: UpdateRoomAccessPayload) {
+  return apiClient.patch<Room>(`rooms/${id}/access`, data);
 }
 
 export function deleteRoom(id: number) {

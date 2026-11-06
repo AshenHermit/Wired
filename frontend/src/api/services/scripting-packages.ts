@@ -7,6 +7,7 @@ import {
   PackageSlugAvailability,
   RoomCopyPayload,
   ScriptingPackage,
+  UpdatePackageAccessPayload,
   UpdateScriptingPackagePayload,
   WorkshopForkPayload,
   WorkshopListing,
@@ -47,6 +48,16 @@ export function updateScriptingPackage(
 
 export function deleteScriptingPackage(id: number) {
   return apiClient.delete<void>(`scripting-packages/${id}`);
+}
+
+export function updatePackageAccess(
+  id: number,
+  data: UpdatePackageAccessPayload
+) {
+  return apiClient.patch<ScriptingPackage>(
+    `scripting-packages/${id}/access`,
+    data
+  );
 }
 
 /**
