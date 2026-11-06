@@ -22,7 +22,9 @@ import { User } from 'src/database/entities/user.entity';
 import { Room } from 'src/database/entities/room.entity';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
+import { UpdatePackageAccessDto } from './dto/update-package-access.dto';
 import { canEditRoom, canManageRoomPackages, canViewRoom, isRoomMember } from 'src/rooms/room-access';
+import { UsersService } from 'src/users/users.service';
 import {
   PackageStorageService,
   RevisionRewrite,
@@ -71,6 +73,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     @InjectRepository(ScriptingPackageRevision)
     private readonly revisionsRepository: Repository<ScriptingPackageRevision>,
     private readonly locks: PackagePublishLockService,
+    private readonly usersService: UsersService,
   ) {}
 
   /**
@@ -519,6 +522,49 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       }
     }
     return this.applyUpdate(pkg, dto);
+  }
+
+  async updateAccess(
+    id: number,
+    dto: UpdatePackageAccessDto,
+    user: User,
+  ): Promise<ScriptingPackage> {
+    const pkg = await this.findOne(id);
+
+    // Validate that all provided user IDs exist
+    const userIdsToValidate = new Set<number>();
+
+    if (dto.editingUserIds && dto.editingUserIds.length > 0) {
+      dto.editingUserIds.forEach((uid) => userIdsToValidate.add(uid));
+    }
+
+    if (userIdsToValidate.size > 0) {
+      const invalidIds: number[] = [];
+
+      for (const userId of userIdsToValidate) {
+        const userExists = await this.usersService.findById(userId);
+        if (!userExists) {
+          invalidIds.push(userId);
+        }
+      }
+
+      if (invalidIds.length > 0) {
+        throw new BadRequestException(
+          `The following user IDs do not exist: ${invalidIds.join(', ')}`,
+        );
+      }
+    }
+
+    // Update only the fields provided in the DTO
+    if (dto.editingAccess !== undefined) {
+      pkg.editingAccess = dto.editingAccess;
+    }
+    if (dto.editingUserIds !== undefined) {
+      pkg.editingUserIds = dto.editingUserIds;
+    }
+
+    const saved = await this.packagesRepository.save(pkg);
+    return this.findOne(saved.id);
   }
 
   /** Plain PATCH: everything except the slug, which only a rename sets. */

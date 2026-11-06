@@ -29,6 +29,7 @@ import { ScriptingPackagesService } from './scripting-packages.service';
 import { PackageRevisionsService } from './publish/package-revisions.service';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
+import { UpdatePackageAccessDto } from './dto/update-package-access.dto';
 import { UseAuthGuard, SilentAuth } from 'src/auth/auth-policy';
 import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 import { User } from 'src/database/entities/user.entity';
@@ -226,6 +227,18 @@ export class ScriptingPackagesController {
   ) {
     await this.packagesService.assertPackageEditing(req.user, id);
     return await this.packagesService.update(id, dto);
+  }
+
+  @UseAuthGuard()
+  @ApiOkResponse({ type: ScriptingPackage })
+  @Patch(':id/access')
+  async updateAccess(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdatePackageAccessDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    await this.packagesService.assertPackageAccessEditing(req.user, id);
+    return await this.packagesService.updateAccess(id, dto, req.user);
   }
 
   @UseAuthGuard()
