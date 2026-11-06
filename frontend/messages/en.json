@@ -249,7 +249,11 @@
       "retryDirectory": "Retry renaming the directory",
       "publishNote": "Publishing under a new slug creates a new workshop record; the old one stays until it is deleted.",
       "save": "Save",
-      "checkAgain": "Check again"
+      "checkAgain": "Check again",
+      "accessTitle": "Editing access",
+      "accessDescription": "Who may edit this package's scripts. The package author and room author always keep access.",
+      "saveAccess": "Save access",
+      "accessSaveFailed": "Failed to save the package access settings"
     },
     "deleteDialog": {
       "title": "Delete the package from the room?",

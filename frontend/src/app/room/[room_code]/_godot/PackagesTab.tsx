@@ -934,6 +934,8 @@ export function PackagesTab({
           open={editEntry !== null}
           entry={editEntry}
           packages={packages}
+          viewerId={viewerId}
+          room={room}
           onOpenChange={(open) => {
             if (!open) setEditEntry(null);
           }}

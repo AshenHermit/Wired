@@ -4,7 +4,7 @@ import { Loader2Icon } from "lucide-react";
 import { useTranslations } from "next-intl";
 import * as React from "react";
 import { useAppMessage, type AppMessage } from "@/i18n/message";
-import { getScriptingPackage } from "@/api/services/scripting-packages";
+import { getScriptingPackage, updatePackageAccess } from "@/api/services/scripting-packages";
 import {
   Dialog,
   DialogContent,
@@ -26,8 +26,16 @@ import {
   type RoomPackageEntry,
   type RoomPackagesController,
 } from "../use-room-packages";
+import type { Room, RoomAccessMode, ScriptingPackage } from "@wired-io/shared";
+import { UserPicker } from "@/components/access/UserPicker";
 
 type DetailsState = "loading" | "ready" | "error";
+
+const MODES: { value: RoomAccessMode; labelKey: "modeAll" | "modeAuthor" | "modeUsers" }[] = [
+  { value: "all", labelKey: "modeAll" },
+  { value: "author", labelKey: "modeAuthor" },
+  { value: "users", labelKey: "modeUsers" },
+];
 
 /**
  * The only place where package metadata is edited: name, version, slug,
@@ -44,6 +52,8 @@ export function PackageEditDialog({
   onOpenChange,
   entry,
   packages,
+  viewerId,
+  room,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -53,9 +63,14 @@ export function PackageEditDialog({
     RoomPackagesController,
     "checkSlugAvailability" | "updatePackageMetadata" | "renamePackageDir"
   >;
+  /** The signed-in user, for deciding whether they may administer this package's access. */
+  viewerId: number | null;
+  /** The full room, used to gate access edits on the room author. */
+  room: Room;
 }) {
   const [name, setName] = React.useState("");
   const t = useTranslations("Packages");
+  const settingsT = useTranslations("RoomAccess");
   const common = useTranslations("Common");
   const slugT = useTranslations();
   const format = useAppMessage();
@@ -68,12 +83,19 @@ export function PackageEditDialog({
   const [detailsState, setDetailsState] =
     React.useState<DetailsState>("loading");
   const [detailsAttempt, setDetailsAttempt] = React.useState(0);
+  /** The full package fetched by `getScriptingPackage`, including access fields. */
+  const [pkg, setPkg] = React.useState<ScriptingPackage | null>(null);
   const [dependents, setDependents] = React.useState<
     { packageId: number; name: string }[] | null
   >(null);
   const [dirError, setDirError] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<AppMessage | null>(null);
+  /** Editing access: mode + selected user ids. */
+  const [accessMode, setAccessMode] = React.useState<RoomAccessMode>("author");
+  const [accessUserIds, setAccessUserIds] = React.useState<number[]>([]);
+  const [accessSaving, setAccessSaving] = React.useState(false);
+  const [accessError, setAccessError] = React.useState<AppMessage | null>(null);
 
   const checkSlugAvailability = packages.checkSlugAvailability;
 
@@ -112,6 +134,7 @@ export function PackageEditDialog({
     void getScriptingPackage(entry.packageId)
       .then((pkg) => {
         if (cancelled) return;
+        setPkg(pkg);
         setDescription(pkg.description ?? "");
         setTags(pkg.tags ?? []);
         setDetailsState("ready");
@@ -124,6 +147,31 @@ export function PackageEditDialog({
       cancelled = true;
     };
   }, [open, entry, detailsAttempt]);
+
+  // Re-seed the access draft whenever the package details arrive, so a stale
+  // draft never survives a re-open or a refetch.
+  React.useEffect(() => {
+    if (!pkg) return;
+    setAccessMode(pkg.editingAccess ?? "author");
+    setAccessUserIds(pkg.editingUserIds ?? []);
+    setAccessError(null);
+  }, [pkg]);
+
+  const canAdministerAccess =
+    viewerId !== null &&
+    pkg !== null &&
+    (pkg.author?.id === viewerId || room.author?.id === viewerId);
+
+  // The package only carries already-resolved contributors, so these are the
+  // ids whose names the picker can seed; any other selected id renders as a
+  // numeric chip inside UserPicker (accepted v1 limitation: no batch fetch-by-id).
+  const contributors = React.useMemo(() => pkg?.contributors ?? [], [
+    pkg?.contributors,
+  ]);
+  const accessAvailable = React.useMemo(
+    () => contributors.filter((user) => accessUserIds.includes(user.id)),
+    [contributors, accessUserIds],
+  );
 
   const handleSlugChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setSlug(event.target.value.toLowerCase());
@@ -178,6 +226,24 @@ export function PackageEditDialog({
       setError({ key: "Packages.errors.directoryRenameFailed" });
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleSaveAccess = async () => {
+    if (!entry) return;
+    setAccessSaving(true);
+    setAccessError(null);
+    try {
+      await updatePackageAccess(entry.packageId, {
+        editingAccess: accessMode,
+        editingUserIds: accessUserIds,
+      });
+      onOpenChange(false);
+    } catch (failure) {
+      console.error(failure);
+      setAccessError({ key: "Packages.editDialog.accessSaveFailed" });
+    } finally {
+      setAccessSaving(false);
     }
   };
 
@@ -354,6 +420,59 @@ export function PackageEditDialog({
             <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive">
               {format(error)}
             </div>
+          )}
+
+          {canAdministerAccess && (
+            <section className="space-y-2.5 rounded-lg border border-border p-3">
+              <h3 className="text-sm font-medium">
+                {t("editDialog.accessTitle")}
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                {t("editDialog.accessDescription")}
+              </p>
+              <div className="space-y-1.5">
+                <Label htmlFor="package-edit-access-mode">
+                  {settingsT("modeLabel")}
+                </Label>
+                <div className="flex flex-wrap gap-1">
+                  {MODES.map(({ value, labelKey }) => (
+                    <Button
+                      key={value}
+                      type="button"
+                      size="sm"
+                      variant={accessMode === value ? "default" : "outline"}
+                      disabled={accessSaving}
+                      onClick={() => setAccessMode(value)}
+                    >
+                      {settingsT(labelKey)}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              {accessMode === "users" && (
+                <UserPicker
+                  selectedUserIds={accessUserIds}
+                  onChange={setAccessUserIds}
+                  selectedUsers={accessAvailable}
+                  disabled={accessSaving}
+                />
+              )}
+              <Button
+                type="button"
+                disabled={accessSaving}
+                onClick={() => void handleSaveAccess()}
+              >
+                {accessSaving ? (
+                  <Loader2Icon className="size-4 animate-spin" />
+                ) : null}
+                {t("editDialog.saveAccess")}
+              </Button>
+              {accessError && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive">
+                  {format(accessError)}
+                </div>
+              )}
+            </section>
           )}
 
           <p className="text-xs text-muted-foreground">
