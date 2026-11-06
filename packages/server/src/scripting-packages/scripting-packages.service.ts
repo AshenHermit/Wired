@@ -22,7 +22,7 @@ import { User } from 'src/database/entities/user.entity';
 import { Room } from 'src/database/entities/room.entity';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
-import { canEditRoom, canViewRoom, isRoomMember } from 'src/rooms/room-access';
+import { canEditRoom, canManageRoomPackages, canViewRoom, isRoomMember } from 'src/rooms/room-access';
 import {
   PackageStorageService,
   RevisionRewrite,
@@ -299,8 +299,9 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     const pkg = await this.loadForAccess(packageId);
 
     const isRoomMemberOfRoom = Boolean(pkg.room) && isRoomMember(pkg.room!, user.id);
+    const canManageRoom = Boolean(pkg.room) && canManageRoomPackages(pkg.room!, user.id);
 
-    if (!ScriptingPackagesService.ownsPackage(pkg, user) && !isRoomMemberOfRoom) {
+    if (!ScriptingPackagesService.ownsPackage(pkg, user) && !isRoomMemberOfRoom && !canManageRoom) {
       throw new ForbiddenException(
         'You are not allowed to publish this package',
       );

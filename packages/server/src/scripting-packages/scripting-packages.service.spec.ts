@@ -278,6 +278,23 @@ describe('ScriptingPackagesService', () => {
       ).resolves.toBeUndefined();
     });
 
+    it('lets a non-owner who can manage packages in the room publish a revision', async () => {
+      const service = makeService({
+        id: 10,
+        author: { id: 1 },
+        contributors: [],
+        room: {
+          id: 5,
+          author: { id: 3 },
+          contributors: [],
+          packageManagementAccess: 'all',
+        },
+      });
+      await expect(
+        service.assertPackagePublishing({ id: 2 } as never, 10),
+      ).resolves.toBeUndefined();
+    });
+
     it('rejects revision endpoints for a global package', async () => {
       const service = makeService({
         id: 10,
