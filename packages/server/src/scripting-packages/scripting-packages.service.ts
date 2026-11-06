@@ -23,7 +23,7 @@ import { Room } from 'src/database/entities/room.entity';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
 import { UpdatePackageAccessDto } from './dto/update-package-access.dto';
-import { canEditRoom, canManageRoomPackages, canViewRoom, isRoomMember } from 'src/rooms/room-access';
+import { canCreateRoomPackages, canEditRoom, canManageRoomPackages, canViewRoom, isRoomMember } from 'src/rooms/room-access';
 import { UsersService } from 'src/users/users.service';
 import {
   PackageStorageService,
@@ -395,8 +395,8 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     if (!foundRoom) {
       throw new NotFoundException(`Room with id=${roomId} not found`);
     }
-    const canEdit = isRoomMember(foundRoom, user.id);
-    if (!canEdit) {
+    const canCreate = canCreateRoomPackages(foundRoom, user.id);
+    if (!canCreate) {
       throw new ForbiddenException(
         'You are not allowed to attach a package to this room',
       );

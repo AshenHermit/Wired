@@ -23,8 +23,9 @@ function collaborators(
     delivery?: unknown;
     revisions?: unknown;
     locks?: unknown;
+    users?: unknown;
   } = {},
-): [never, never, never, never, never] {
+): [never, never, never, never, never, never] {
   return [
     (overrides.storage ?? {}) as never,
     (overrides.dispatcher ?? {}) as never,
@@ -34,6 +35,9 @@ function collaborators(
     }) as never,
     (overrides.revisions ?? {}) as never,
     (overrides.locks ?? new PackagePublishLockService()) as never,
+    (overrides.users ?? {
+      findById: jest.fn(async () => null),
+    }) as never,
   ];
 }
 
@@ -334,11 +338,12 @@ describe('ScriptingPackagesService', () => {
       };
     }
 
-    it('rejects attaching a package to a room the caller cannot edit', async () => {
+    it('rejects attaching a package to a room when the caller lacks package creation access', async () => {
       const { service, packagesRepository } = makeService({
         id: 5,
         author: roomAuthor,
         contributors: [],
+        packageCreationAccess: 'author', // Only room author can create packages
       });
 
       await expect(
@@ -410,6 +415,76 @@ describe('ScriptingPackagesService', () => {
         ),
       ).rejects.toMatchObject({ response: { code: 'invalid_tags' } });
       expect(packagesRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('allows package creation when packageCreationAccess is "all"', async () => {
+      const authenticatedUser = { id: 99 };
+      const { service, packagesRepository } = makeService({
+        id: 5,
+        author: roomAuthor,
+        contributors: [],
+        packageCreationAccess: 'all',
+      });
+
+      await service.create(
+        { name: 'pkg', version: '0.1.0', slug: 'pkg', roomId: 5 } as never,
+        authenticatedUser as never,
+      );
+
+      expect(packagesRepository.save).toHaveBeenCalled();
+    });
+
+    it('allows package creation when user is in packageCreationUserIds', async () => {
+      const allowedUser = { id: 10 };
+      const { service, packagesRepository } = makeService({
+        id: 5,
+        author: roomAuthor,
+        contributors: [],
+        packageCreationAccess: 'users',
+        packageCreationUserIds: [10, 20],
+      });
+
+      await service.create(
+        { name: 'pkg', version: '0.1.0', slug: 'pkg', roomId: 5 } as never,
+        allowedUser as never,
+      );
+
+      expect(packagesRepository.save).toHaveBeenCalled();
+    });
+
+    it('rejects package creation when user is not in packageCreationUserIds', async () => {
+      const notAllowedUser = { id: 99 };
+      const { service, packagesRepository } = makeService({
+        id: 5,
+        author: roomAuthor,
+        contributors: [],
+        packageCreationAccess: 'users',
+        packageCreationUserIds: [10, 20],
+      });
+
+      await expect(
+        service.create(
+          { name: 'pkg', version: '0.1.0', slug: 'pkg', roomId: 5 } as never,
+          notAllowedUser as never,
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(packagesRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('always allows room author to create packages regardless of policy', async () => {
+      const { service, packagesRepository } = makeService({
+        id: 5,
+        author: roomAuthor,
+        contributors: [],
+        packageCreationAccess: 'author',
+      });
+
+      await service.create(
+        { name: 'pkg', version: '0.1.0', slug: 'pkg', roomId: 5 } as never,
+        roomAuthor as never,
+      );
+
+      expect(packagesRepository.save).toHaveBeenCalled();
     });
   });
 
@@ -682,6 +757,7 @@ describe('ScriptingPackagesService', () => {
           delivery as never,
           {} as never,
           new PackagePublishLockService(),
+          { findById: jest.fn(async () => null) } as never,
         ),
       };
     }
@@ -750,6 +826,7 @@ describe('ScriptingPackagesService slug lifecycle', () => {
       { findDependentRoomPackages: jest.fn(async () => []) } as never,
       {} as never,
       new PackagePublishLockService(),
+      { findById: jest.fn(async () => null) } as never,
     );
   }
 
@@ -1181,6 +1258,7 @@ describe('ScriptingPackagesService enable guard', () => {
       {} as never,
       revisionsRepository as never,
       new PackagePublishLockService(),
+      { findById: jest.fn(async () => null) } as never,
     );
     return { service, packagesRepository };
   }
@@ -1468,6 +1546,7 @@ describe('ScriptingPackagesService slug rename', () => {
       delivery as never,
       revisions as never,
       new PackagePublishLockService(),
+      { findById: jest.fn(async () => null) } as never,
     );
 
     return {
