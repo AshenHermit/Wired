@@ -140,6 +140,13 @@
     "formatHint": "Latin letters, digits, _ and -, up to 32 characters.",
     "limit": "You can add at most {max} tags."
   },
+  "UserPicker": {
+    "searchLabel": "Search users",
+    "placeholder": "Search users…",
+    "loading": "Loading users…",
+    "noResults": "No users found",
+    "remove": "Remove {name}"
+  },
   "Slug": {
     "invalid": "Lowercase Latin letters, digits and _, at least one letter",
     "checking": "Checking slug…",
