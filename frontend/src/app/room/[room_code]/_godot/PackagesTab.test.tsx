@@ -193,7 +193,7 @@ describe("PackagesTab", () => {
   it("lists all room packages with their editor and backend states", () => {
     render(
       <PackagesTab room={roomFixture()} roomId={1}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [
             entry(),
@@ -246,7 +246,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab room={roomFixture()}
         roomId={1}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [
             entry({
@@ -266,7 +266,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab room={roomFixture()}
         roomId={1}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [
             entry({
@@ -296,6 +296,7 @@ describe("PackagesTab", () => {
     const props = {
       roomId: 1,
       canManagePackages: true,
+      canCreatePackages: true,
       viewerId: 42,
       room: roomFixture(),
       packages: controller({
@@ -321,7 +322,7 @@ describe("PackagesTab", () => {
   });
 
   it("explains that Godot needs a project reload to see written files", () => {
-    render(<PackagesTab room={roomFixture()} roomId={1}canManagePackages viewerId={42} packages={controller()} />);
+    render(<PackagesTab room={roomFixture()} roomId={1}canCreatePackages canManagePackages viewerId={42} packages={controller()} />);
 
     expect(
       screen.getByText(/Project → Reload Current Project/),
@@ -338,7 +339,7 @@ describe("PackagesTab", () => {
 
     render(
       <PackagesTab room={roomFixture()} roomId={1}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
         packages={controller({ applyPublishedRevision })}
       />,
     );
@@ -363,7 +364,7 @@ describe("PackagesTab", () => {
 
     render(
       <PackagesTab room={roomFixture()} roomId={1}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
         packages={controller({ applyPublishedRevision })}
       />,
     );
@@ -385,7 +386,7 @@ describe("PackagesTab", () => {
 
     render(
       <PackagesTab room={roomFixture()} roomId={1}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
         packages={controller({ removePackageDirectory })}
       />,
     );
@@ -407,7 +408,7 @@ describe("PackagesTab", () => {
       .mockResolvedValue({ id: 7, name: "New" } as never);
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}canManagePackages viewerId={42} packages={controller({ createPackage })} />,
+      <PackagesTab room={roomFixture()} roomId={1}canCreatePackages canManagePackages viewerId={42} packages={controller({ createPackage })} />,
     );
 
     fireEvent.click(
@@ -437,7 +438,7 @@ describe("PackagesTab", () => {
     const emitPackage = vi.fn().mockResolvedValue(undefined);
     render(
       <PackagesTab room={roomFixture()} roomId={1}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [
             entry(),
@@ -466,7 +467,7 @@ describe("PackagesTab", () => {
     const adoptPackage = vi.fn().mockResolvedValue(undefined);
     render(
       <PackagesTab room={roomFixture()} roomId={1}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [
             entry({
@@ -495,7 +496,7 @@ describe("PackagesTab", () => {
 
     render(
       <PackagesTab room={roomFixture()} roomId={1}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [
             entry({
@@ -522,7 +523,7 @@ describe("PackagesTab", () => {
   it("shows a disabled badge and hides Emit for a disabled package", () => {
     render(
       <PackagesTab room={roomFixture()} roomId={1}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [entry({ enabled: false, status: "disabled" })],
         })}
@@ -538,7 +539,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ entries: [entry({ loaded: false, localChanges: ["a.gd"] })] })}
-        canManagePackages viewerId={1}
+        canCreatePackages canManagePackages viewerId={1}
       />,
     );
     expect(screen.getByRole("button", { name: /emit/i })).toBeTruthy();
@@ -552,7 +553,7 @@ describe("PackagesTab", () => {
     const deletePackageRecord = vi.fn().mockResolvedValue(undefined);
     render(
       <PackagesTab room={roomFixture()} roomId={1}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [entry({ packageId: 42 })],
           deletePackageRecord,
@@ -575,7 +576,7 @@ describe("PackagesTab", () => {
   });
 
   it("opens the creation modal from the header button", () => {
-    render(<PackagesTab room={roomFixture()} roomId={1}packages={controller()} canManagePackages viewerId={42} />);
+    render(<PackagesTab room={roomFixture()} roomId={1}packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
 
@@ -584,7 +585,7 @@ describe("PackagesTab", () => {
   });
 
   it("lowercases the typed slug", () => {
-    render(<PackagesTab room={roomFixture()} roomId={1}packages={controller()} canManagePackages viewerId={42} />);
+    render(<PackagesTab room={roomFixture()} roomId={1}packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
     const slugInput = screen.getByLabelText("Slug");
@@ -604,7 +605,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ checkSlugAvailability })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -638,7 +639,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ checkSlugAvailability })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -676,7 +677,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ fsReady: false })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -704,6 +705,7 @@ describe("PackagesTab", () => {
           roomId={1}
           packages={controller()}
           canManagePackages={false}
+          canCreatePackages={false}
           viewerId={viewerId}
         />,
       );
@@ -730,7 +732,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ createPackage })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -760,7 +762,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ createPackage })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -796,7 +798,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ checkSlugAvailability })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -835,7 +837,7 @@ describe("PackagesTab", () => {
           ],
           updatePackageMetadata,
         })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -876,7 +878,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab room={roomFixture()}
         roomId={1}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero", name: "Hero" })],
           updatePackageMetadata,
@@ -917,7 +919,7 @@ describe("PackagesTab", () => {
           entries: [entry({ packageId: 7, slug: "hero", name: "Hero" })],
           updatePackageMetadata,
         })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -959,7 +961,7 @@ describe("PackagesTab", () => {
           updatePackageMetadata,
           renamePackageDir,
         })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -987,7 +989,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab room={roomFixture()}
         roomId={1}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero", name: "Hero" })],
           updatePackageMetadata,
@@ -1025,7 +1027,7 @@ describe("PackagesTab", () => {
             }),
           ],
         })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -1048,7 +1050,7 @@ describe("PackagesTab", () => {
     render(
       <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ checkSlugAvailability })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -1077,7 +1079,7 @@ describe("PackagesTab", () => {
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero" })],
         })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -1090,7 +1092,7 @@ describe("PackagesTab", () => {
       items: [workshopPackage()],
       total: 1,
     });
-    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canManagePackages viewerId={42} />);
+    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Workshop" }));
 
@@ -1116,7 +1118,7 @@ describe("PackagesTab", () => {
       <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({ copyFromWorkshop })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -1136,7 +1138,7 @@ describe("PackagesTab", () => {
         packages={controller({
           entries: [entry({ publishedRevision: null })],
         })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -1161,7 +1163,7 @@ describe("PackagesTab", () => {
       <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -1200,7 +1202,7 @@ describe("PackagesTab", () => {
       <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -1220,7 +1222,7 @@ describe("PackagesTab", () => {
   });
 
   it("shows the room package description and tags in the preview", async () => {
-    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canManagePackages viewerId={42} />);
+    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
 
     const menu = await openPackageActions();
     fireEvent.click(
@@ -1242,7 +1244,7 @@ describe("PackagesTab", () => {
         resolveRoomPackage = resolve;
       }),
     );
-    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canManagePackages viewerId={42} />);
+    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
 
     const menu = await openPackageActions();
     fireEvent.click(
@@ -1264,7 +1266,7 @@ describe("PackagesTab", () => {
     vi.mocked(packagesApi.lookupWorkshopPackage).mockRejectedValue(
       new Error("network down"),
     );
-    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canManagePackages viewerId={42} />);
+    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
 
     const menu = await openPackageActions();
     fireEvent.click(
@@ -1305,7 +1307,7 @@ describe("PackagesTab", () => {
       <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -1337,7 +1339,7 @@ describe("PackagesTab", () => {
       <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -1383,7 +1385,7 @@ describe("PackagesTab", () => {
       <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -1426,7 +1428,7 @@ describe("PackagesTab", () => {
           checkSlugAvailability,
           forkWorkshopPackage,
         })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 
@@ -1476,7 +1478,7 @@ describe("PackagesTab", () => {
       <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({ checkSlugAvailability })}
-        canManagePackages viewerId={42}
+        canCreatePackages canManagePackages viewerId={42}
       />,
     );
 

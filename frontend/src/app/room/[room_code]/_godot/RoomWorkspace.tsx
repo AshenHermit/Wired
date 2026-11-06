@@ -26,6 +26,10 @@ import {
   ROOM_TABS_POSITION_KEY,
   useDraggablePanel,
 } from "./use-draggable-panel";
+import {
+  canCreateRoomPackages,
+  canManageRoomPackages,
+} from "@/utils/room-access";
 
 export function RoomWorkspace({ room }: { room: Room }) {
   const t = useTranslations("Room");
@@ -37,15 +41,9 @@ export function RoomWorkspace({ room }: { room: Room }) {
   );
   const packages = useRoomPackages(room.id, roomPackages);
   const userId = useUserStore((state) => state.id);
-  // The room's own author and contributors may change its packages; the server
-  // enforces the same rule, so the panel must not offer what it would reject.
   const viewerId = userId > 0 ? userId : null;
-  const canManagePackages =
-    viewerId !== null &&
-    (room.author?.id === viewerId ||
-      (room.contributors ?? []).some(
-        (contributor) => contributor.id === viewerId,
-      ));
+  const canCreatePackages = canCreateRoomPackages(room, viewerId);
+  const canManagePackages = canManageRoomPackages(room, viewerId);
   const { panelRef, gripProps, style, isDragging } = useDraggablePanel({
     storageKey: ROOM_TABS_POSITION_KEY,
     initialPosition: (viewport) => ({
@@ -119,6 +117,7 @@ export function RoomWorkspace({ room }: { room: Room }) {
             <PackagesTab
               packages={packages}
               canManagePackages={canManagePackages}
+              canCreatePackages={canCreatePackages}
               viewerId={viewerId}
               roomId={room.id}
               room={room}

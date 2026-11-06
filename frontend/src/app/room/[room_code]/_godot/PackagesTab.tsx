@@ -515,6 +515,7 @@ function PackageCard({
 export function PackagesTab({
   packages,
   canManagePackages,
+  canCreatePackages,
   viewerId,
   roomId,
   room,
@@ -522,6 +523,8 @@ export function PackagesTab({
   packages: RoomPackagesController;
   /** The viewer may write to this room, so the API will accept the action. */
   canManagePackages: boolean;
+  /** The viewer may create packages in this room (creation policy). */
+  canCreatePackages: boolean;
   /** The signed-in user, for deciding whether a workshop record is theirs. */
   viewerId: number | null;
   roomId: number;
@@ -587,7 +590,7 @@ export function PackagesTab({
   };
 
   const canCreate =
-    canManagePackages &&
+    canCreatePackages &&
     packages.fsReady &&
     name.trim().length > 0 &&
     slugState === "available" &&
@@ -681,7 +684,7 @@ export function PackagesTab({
 
   const handleCreate = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!canManagePackages) {
+    if (!canCreatePackages) {
       setCreateError({
         key:
           viewerId === null
