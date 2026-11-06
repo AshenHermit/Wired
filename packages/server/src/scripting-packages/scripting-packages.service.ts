@@ -116,31 +116,34 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     }
 
     // Backfill null editingAccess to users mode with author + contributors +
-    // room author. Build the composite list of user IDs.
-    const accessBackfill = await this.packagesRepository.query(
-      `UPDATE scripting_package
-       SET "editingAccess" = 'users',
-           "editingUserIds" = (
-             SELECT jsonb_agg(DISTINCT id) FROM (
-               SELECT "authorId" as id FROM scripting_package sp
-               WHERE sp.id = scripting_package.id AND "authorId" IS NOT NULL
-               UNION
-               SELECT "userId" as id
-               FROM scripting_package_contributors sc
-               WHERE sc."scriptingPackageId" = scripting_package.id
-               UNION
-               SELECT r."authorId" as id
-               FROM room r
-               WHERE r.id = scripting_package."roomId" AND r."authorId" IS NOT NULL
-             ) ids
-           )
-       WHERE "editingAccess" IS NULL
-       RETURNING id`,
-    );
+    // room author. Use ORM to avoid raw SQL dependency on join table that
+    // may not exist yet during bootstrap.
+    const packagesToBackfill = await this.packagesRepository.find({
+      where: { editingAccess: IsNull() },
+      relations: ['author', 'contributors', 'room', 'room.author'],
+    });
+
+    for (const pkg of packagesToBackfill) {
+      const userIds = Array.from(
+        new Set(
+          [
+            pkg.author?.id,
+            ...(pkg.contributors ?? []).map((c) => c?.id),
+            pkg.room?.author?.id,
+          ].filter((id): id is number => typeof id === 'number'),
+        ),
+      );
+
+      pkg.editingAccess = 'users';
+      pkg.editingUserIds = userIds;
+    }
+
+    if (packagesToBackfill.length > 0) {
+      await this.packagesRepository.save(packagesToBackfill);
+    }
+
     this.logger.log(
-      `Package editing access backfill: ${
-        Array.isArray(accessBackfill) ? accessBackfill.length : 0
-      } row(s) updated`,
+      `Package editing access backfill: ${packagesToBackfill.length} row(s) updated`,
     );
   }
 

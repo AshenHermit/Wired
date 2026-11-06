@@ -833,6 +833,7 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     options: {
       query?: jest.Mock;
       findOne?: jest.Mock;
+      find?: jest.Mock;
       save?: jest.Mock;
       manager?: FakeManager;
       pkg?: unknown;
@@ -849,6 +850,8 @@ describe('ScriptingPackagesService slug lifecycle', () => {
       findOne:
         options.findOne ??
         jest.fn(async () => options.pkg ?? { id: 7, slug: 'hero' }),
+      find: options.find ?? jest.fn(async () => []),
+      save: options.save ?? jest.fn(async (value: unknown) => value),
       manager,
     };
     const roomsRepository = {
@@ -878,15 +881,51 @@ describe('ScriptingPackagesService slug lifecycle', () => {
   });
 
   it('backfills null editingAccess to users mode with author and contributors', async () => {
-    const query = jest
-      .fn()
-      .mockResolvedValueOnce([]) // slug backfill returns empty
-      .mockResolvedValueOnce([]); // no missing slugs
-    const service = makeSlugService({ query });
+    const find = jest.fn(async () => [
+      {
+        id: 7,
+        author: { id: 1 },
+        contributors: [{ id: 2 }, { id: 3 }],
+        room: { author: { id: 4 } },
+      },
+      {
+        id: 8,
+        author: null,
+        contributors: [],
+        room: null,
+      },
+    ]);
+    const save = jest.fn(async (value: unknown) => value);
+    const service = makeSlugService({ find, save });
+
     await service.onApplicationBootstrap();
-    expect(query).toHaveBeenCalledWith(
-      expect.stringContaining('editingAccess'),
-    );
+
+    expect(find).toHaveBeenCalledWith({
+      where: { editingAccess: IsNull() },
+      relations: ['author', 'contributors', 'room', 'room.author'],
+    });
+    expect(save).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: 7,
+        editingAccess: 'users',
+        editingUserIds: [1, 2, 3, 4],
+      }),
+      expect.objectContaining({
+        id: 8,
+        editingAccess: 'users',
+        editingUserIds: [],
+      }),
+    ]);
+  });
+
+  it('does not save when no packages need an editingAccess backfill', async () => {
+    const find = jest.fn(async () => []);
+    const save = jest.fn(async (value: unknown) => value);
+    const service = makeSlugService({ find, save });
+
+    await service.onApplicationBootstrap();
+
+    expect(save).not.toHaveBeenCalled();
   });
 
   it('creates packages with author mode and empty editing user list', async () => {
