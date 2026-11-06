@@ -6,6 +6,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   PackageSlugAvailability,
+  Room,
   ScriptingPackage,
   WorkshopPackageSummary,
 } from "@wired-io/shared";
@@ -147,6 +148,20 @@ function roomPackage(
   };
 }
 
+function roomFixture(overrides: Partial<Room> = {}): Room {
+  return {
+    id: 1,
+    name: "Room",
+    type: "godot",
+    description: "",
+    isPublic: false,
+    parentRoomId: null,
+    createdAt: "2026-10-30T10:00:00.000Z",
+    updatedAt: "2026-10-30T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
 async function openPackageActions() {
   fireEvent.pointerDown(
     screen.getByRole("button", { name: "Действия с пакетом" }),
@@ -177,7 +192,7 @@ afterEach(() => {
 describe("PackagesTab", () => {
   it("lists all room packages with their editor and backend states", () => {
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         canManagePackages viewerId={42}
         packages={controller({
           entries: [
@@ -229,7 +244,7 @@ describe("PackagesTab", () => {
 
   it("shows the backend runtime error verbatim", () => {
     render(
-      <PackagesTab
+      <PackagesTab room={roomFixture()}
         roomId={1}
         canManagePackages viewerId={42}
         packages={controller({
@@ -249,7 +264,7 @@ describe("PackagesTab", () => {
 
   it("renders package statuses in English", () => {
     render(
-      <PackagesTab
+      <PackagesTab room={roomFixture()}
         roomId={1}
         canManagePackages viewerId={42}
         packages={controller({
@@ -282,6 +297,7 @@ describe("PackagesTab", () => {
       roomId: 1,
       canManagePackages: true,
       viewerId: 42,
+      room: roomFixture(),
       packages: controller({
         actionFor: () => ({
           busy: false,
@@ -305,7 +321,7 @@ describe("PackagesTab", () => {
   });
 
   it("explains that Godot needs a project reload to see written files", () => {
-    render(<PackagesTab roomId={1}canManagePackages viewerId={42} packages={controller()} />);
+    render(<PackagesTab room={roomFixture()} roomId={1}canManagePackages viewerId={42} packages={controller()} />);
 
     expect(
       screen.getByText(/Project → Reload Current Project/),
@@ -321,7 +337,7 @@ describe("PackagesTab", () => {
       .mockResolvedValueOnce(undefined);
 
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         canManagePackages viewerId={42}
         packages={controller({ applyPublishedRevision })}
       />,
@@ -346,7 +362,7 @@ describe("PackagesTab", () => {
       );
 
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         canManagePackages viewerId={42}
         packages={controller({ applyPublishedRevision })}
       />,
@@ -368,7 +384,7 @@ describe("PackagesTab", () => {
       .mockResolvedValueOnce(undefined);
 
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         canManagePackages viewerId={42}
         packages={controller({ removePackageDirectory })}
       />,
@@ -391,7 +407,7 @@ describe("PackagesTab", () => {
       .mockResolvedValue({ id: 7, name: "New" } as never);
 
     render(
-      <PackagesTab roomId={1}canManagePackages viewerId={42} packages={controller({ createPackage })} />,
+      <PackagesTab room={roomFixture()} roomId={1}canManagePackages viewerId={42} packages={controller({ createPackage })} />,
     );
 
     fireEvent.click(
@@ -420,7 +436,7 @@ describe("PackagesTab", () => {
   it("allows Emit only for a package loaded into the editor", async () => {
     const emitPackage = vi.fn().mockResolvedValue(undefined);
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         canManagePackages viewerId={42}
         packages={controller({
           entries: [
@@ -449,7 +465,7 @@ describe("PackagesTab", () => {
   it("adopts a leftover directory so its files can be published", async () => {
     const adoptPackage = vi.fn().mockResolvedValue(undefined);
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         canManagePackages viewerId={42}
         packages={controller({
           entries: [
@@ -478,7 +494,7 @@ describe("PackagesTab", () => {
       .mockResolvedValueOnce(undefined);
 
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         canManagePackages viewerId={42}
         packages={controller({
           entries: [
@@ -505,7 +521,7 @@ describe("PackagesTab", () => {
 
   it("shows a disabled badge and hides Emit for a disabled package", () => {
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         canManagePackages viewerId={42}
         packages={controller({
           entries: [entry({ enabled: false, status: "disabled" })],
@@ -520,7 +536,7 @@ describe("PackagesTab", () => {
 
   it("keeps Emit and Использовать каталог outside the actions menu", () => {
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ entries: [entry({ loaded: false, localChanges: ["a.gd"] })] })}
         canManagePackages viewerId={1}
       />,
@@ -535,7 +551,7 @@ describe("PackagesTab", () => {
   it("confirms permanent deletion in a dialog", async () => {
     const deletePackageRecord = vi.fn().mockResolvedValue(undefined);
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         canManagePackages viewerId={42}
         packages={controller({
           entries: [entry({ packageId: 42 })],
@@ -559,7 +575,7 @@ describe("PackagesTab", () => {
   });
 
   it("opens the creation modal from the header button", () => {
-    render(<PackagesTab roomId={1}packages={controller()} canManagePackages viewerId={42} />);
+    render(<PackagesTab room={roomFixture()} roomId={1}packages={controller()} canManagePackages viewerId={42} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
 
@@ -568,7 +584,7 @@ describe("PackagesTab", () => {
   });
 
   it("lowercases the typed slug", () => {
-    render(<PackagesTab roomId={1}packages={controller()} canManagePackages viewerId={42} />);
+    render(<PackagesTab room={roomFixture()} roomId={1}packages={controller()} canManagePackages viewerId={42} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
     const slugInput = screen.getByLabelText("Slug");
@@ -586,7 +602,7 @@ describe("PackagesTab", () => {
     });
 
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ checkSlugAvailability })}
         canManagePackages viewerId={42}
       />,
@@ -620,7 +636,7 @@ describe("PackagesTab", () => {
     );
 
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ checkSlugAvailability })}
         canManagePackages viewerId={42}
       />,
@@ -658,7 +674,7 @@ describe("PackagesTab", () => {
 
   it("disables creation while the editor is not ready", async () => {
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ fsReady: false })}
         canManagePackages viewerId={42}
       />,
@@ -684,7 +700,7 @@ describe("PackagesTab", () => {
     "disables creation for %s",
     async (_label, viewerId) => {
       render(
-        <PackagesTab
+        <PackagesTab room={roomFixture()}
           roomId={1}
           packages={controller()}
           canManagePackages={false}
@@ -712,7 +728,7 @@ describe("PackagesTab", () => {
     const createPackage = vi.fn().mockRejectedValue(new Error("boom"));
 
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ createPackage })}
         canManagePackages viewerId={42}
       />,
@@ -742,7 +758,7 @@ describe("PackagesTab", () => {
       .mockRejectedValue(new Error("Slug уже занят"));
 
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ createPackage })}
         canManagePackages viewerId={42}
       />,
@@ -778,7 +794,7 @@ describe("PackagesTab", () => {
       });
 
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ checkSlugAvailability })}
         canManagePackages viewerId={42}
       />,
@@ -812,7 +828,7 @@ describe("PackagesTab", () => {
     );
 
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({
           entries: [
             entry({ packageId: 7, slug: "hero", name: "Hero", version: "1.0" }),
@@ -858,7 +874,7 @@ describe("PackagesTab", () => {
     });
     const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
     render(
-      <PackagesTab
+      <PackagesTab room={roomFixture()}
         roomId={1}
         canManagePackages viewerId={42}
         packages={controller({
@@ -896,7 +912,7 @@ describe("PackagesTab", () => {
       .mockResolvedValue({} as never);
 
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero", name: "Hero" })],
           updatePackageMetadata,
@@ -937,7 +953,7 @@ describe("PackagesTab", () => {
     const renamePackageDir = vi.fn().mockResolvedValue(undefined);
 
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero", name: "Hero" })],
           updatePackageMetadata,
@@ -969,7 +985,7 @@ describe("PackagesTab", () => {
     );
     const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
     render(
-      <PackagesTab
+      <PackagesTab room={roomFixture()}
         roomId={1}
         canManagePackages viewerId={42}
         packages={controller({
@@ -997,7 +1013,7 @@ describe("PackagesTab", () => {
 
   it("shows the card metadata read-only", () => {
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({
           entries: [
             entry({
@@ -1030,7 +1046,7 @@ describe("PackagesTab", () => {
     });
 
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({ checkSlugAvailability })}
         canManagePackages viewerId={42}
       />,
@@ -1057,7 +1073,7 @@ describe("PackagesTab", () => {
 
   it("renders the slug instead of the numeric id", () => {
     render(
-      <PackagesTab roomId={1}
+      <PackagesTab room={roomFixture()} roomId={1}
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero" })],
         })}
@@ -1074,7 +1090,7 @@ describe("PackagesTab", () => {
       items: [workshopPackage()],
       total: 1,
     });
-    render(<PackagesTab roomId={1} packages={controller()} canManagePackages viewerId={42} />);
+    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canManagePackages viewerId={42} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Workshop" }));
 
@@ -1097,7 +1113,7 @@ describe("PackagesTab", () => {
     });
     const copyFromWorkshop = vi.fn().mockResolvedValue({ id: 9 } as never);
     render(
-      <PackagesTab
+      <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({ copyFromWorkshop })}
         canManagePackages viewerId={42}
@@ -1115,7 +1131,7 @@ describe("PackagesTab", () => {
 
   it("disables publishing a package without a published revision", async () => {
     render(
-      <PackagesTab
+      <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({
           entries: [entry({ publishedRevision: null })],
@@ -1142,7 +1158,7 @@ describe("PackagesTab", () => {
       .fn()
       .mockResolvedValue({ mode: "created", package: workshopPackage() });
     render(
-      <PackagesTab
+      <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
         canManagePackages viewerId={42}
@@ -1181,7 +1197,7 @@ describe("PackagesTab", () => {
       ),
     );
     render(
-      <PackagesTab
+      <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
         canManagePackages viewerId={42}
@@ -1204,7 +1220,7 @@ describe("PackagesTab", () => {
   });
 
   it("shows the room package description and tags in the preview", async () => {
-    render(<PackagesTab roomId={1} packages={controller()} canManagePackages viewerId={42} />);
+    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canManagePackages viewerId={42} />);
 
     const menu = await openPackageActions();
     fireEvent.click(
@@ -1226,7 +1242,7 @@ describe("PackagesTab", () => {
         resolveRoomPackage = resolve;
       }),
     );
-    render(<PackagesTab roomId={1} packages={controller()} canManagePackages viewerId={42} />);
+    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canManagePackages viewerId={42} />);
 
     const menu = await openPackageActions();
     fireEvent.click(
@@ -1248,7 +1264,7 @@ describe("PackagesTab", () => {
     vi.mocked(packagesApi.lookupWorkshopPackage).mockRejectedValue(
       new Error("network down"),
     );
-    render(<PackagesTab roomId={1} packages={controller()} canManagePackages viewerId={42} />);
+    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canManagePackages viewerId={42} />);
 
     const menu = await openPackageActions();
     fireEvent.click(
@@ -1286,7 +1302,7 @@ describe("PackagesTab", () => {
       .fn()
       .mockResolvedValue({ mode: "updated", package: workshopPackage() });
     render(
-      <PackagesTab
+      <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
         canManagePackages viewerId={42}
@@ -1318,7 +1334,7 @@ describe("PackagesTab", () => {
     );
     const publishToWorkshop = vi.fn();
     render(
-      <PackagesTab
+      <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
         canManagePackages viewerId={42}
@@ -1364,7 +1380,7 @@ describe("PackagesTab", () => {
         ),
       );
     render(
-      <PackagesTab
+      <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
         canManagePackages viewerId={42}
@@ -1404,7 +1420,7 @@ describe("PackagesTab", () => {
     });
     const forkWorkshopPackage = vi.fn().mockResolvedValue({ id: 11 } as never);
     render(
-      <PackagesTab
+      <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({
           checkSlugAvailability,
@@ -1457,7 +1473,7 @@ describe("PackagesTab", () => {
       global: { available: false, reason: "taken" },
     });
     render(
-      <PackagesTab
+      <PackagesTab room={roomFixture()}
         roomId={1}
         packages={controller({ checkSlugAvailability })}
         canManagePackages viewerId={42}

@@ -121,6 +121,7 @@ export function RoomWorkspace({ room }: { room: Room }) {
               canManagePackages={canManagePackages}
               viewerId={viewerId}
               roomId={room.id}
+              room={room}
             />
           </TabsContent>
           <TabsContent value="game" className="w-full !h-full">

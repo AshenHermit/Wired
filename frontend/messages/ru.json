@@ -311,6 +311,19 @@
       "dependencyUnknownSlug": "Сначала опубликуйте зависимость #{slug} в workshop"
     }
   },
+  "RoomAccess": {
+    "title": "Доступ к комнате",
+    "description": "Кто может управлять пакетами комнаты и создавать новые. Автор комнаты всегда сохраняет доступ.",
+    "packageManagement": "Управление пакетами",
+    "packageCreation": "Создание пакетов",
+    "modeLabel": "Режим доступа",
+    "modeAll": "Все",
+    "modeAuthor": "Только автор",
+    "modeUsers": "Выбранные участники",
+    "save": "Сохранить",
+    "saveFailed": "Не удалось сохранить настройки доступа",
+    "openSettings": "Настройки доступа к комнате"
+  },
   "Game": {
     "checkingExport": "Проверяем сборку игры…",
     "loadingEngine": "Загружаем движок Godot…",

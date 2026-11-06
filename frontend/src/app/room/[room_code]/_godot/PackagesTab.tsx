@@ -13,11 +13,13 @@ import {
   PlusIcon,
   PowerIcon,
   RefreshCwIcon,
+  SettingsIcon,
   StoreIcon,
   Trash2Icon,
   TriangleAlertIcon,
   UploadIcon,
 } from "lucide-react";
+import type { Room } from "@wired-io/shared";
 import { Button } from "@/components/ui/button";
 import { useAppMessage, type AppMessage, type MessageKey } from "@/i18n/message";
 import {
@@ -57,6 +59,7 @@ import {
   WorkshopPublishDialog,
 } from "./dialogs/WorkshopDialogs";
 import { PackageEditDialog } from "./dialogs/PackageEditDialog";
+import { RoomAccessSettingsDialog } from "./dialogs/RoomAccessSettingsDialog";
 
 const STATUS_LABEL_KEYS: Record<RoomPackageStatus, MessageKey> = {
   "not-loaded": "Packages.status.notLoaded",
@@ -514,6 +517,7 @@ export function PackagesTab({
   canManagePackages,
   viewerId,
   roomId,
+  room,
 }: {
   packages: RoomPackagesController;
   /** The viewer may write to this room, so the API will accept the action. */
@@ -521,9 +525,12 @@ export function PackagesTab({
   /** The signed-in user, for deciding whether a workshop record is theirs. */
   viewerId: number | null;
   roomId: number;
+  /** The full room, for the access settings dialog. */
+  room: Room;
 }) {
   const [createOpen, setCreateOpen] = React.useState(false);
   const [workshopOpen, setWorkshopOpen] = React.useState(false);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [publishEntry, setPublishEntry] =
     React.useState<RoomPackageEntry | null>(null);
   const [forkEntry, setForkEntry] = React.useState<RoomPackageEntry | null>(
@@ -537,6 +544,7 @@ export function PackagesTab({
   const [version, setVersion] = React.useState("0.1.0");
   const t = useTranslations("Packages");
   const common = useTranslations("Common");
+  const settingsT = useTranslations("RoomAccess");
   const slugT = useTranslations();
   const format = useAppMessage();
   const [creating, setCreating] = React.useState(false);
@@ -720,6 +728,18 @@ export function PackagesTab({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {viewerId !== null && room.author?.id === viewerId && (
+              <Button
+                type="button"
+                size="icon"
+                variant="outline"
+                aria-label={settingsT("openSettings")}
+                title={settingsT("openSettings")}
+                onClick={() => setSettingsOpen(true)}
+              >
+                <SettingsIcon className="size-4" />
+              </Button>
+            )}
             <Button
               type="button"
               size="sm"
@@ -945,6 +965,12 @@ export function PackagesTab({
           entry={forkEntry}
           roomId={roomId}
           packages={packages}
+        />
+        <RoomAccessSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          room={room}
+          roomId={roomId}
         />
       </div>
     </div>
