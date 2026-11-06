@@ -745,6 +745,57 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     );
   });
 
+  it('backfills null editingAccess to users mode with author and contributors', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([]) // slug backfill returns empty
+      .mockResolvedValueOnce([]); // no missing slugs
+    const service = makeSlugService({ query });
+    await service.onApplicationBootstrap();
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('editingAccess'),
+    );
+  });
+
+  it('creates packages with author mode and empty editing user list', async () => {
+    const user = { id: 1 };
+    const room = { id: 5, author: user, contributors: [] };
+    const save = jest.fn(async (value: unknown) => ({
+      ...(value as object),
+      id: 10,
+    }));
+    const manager = makeTransactionManager({ save });
+    const packagesRepository = {
+      create: jest.fn((value: unknown) => value),
+      save,
+      findOne: jest.fn(async () => ({ id: 10 })),
+      manager,
+    };
+    const roomsRepository = { findOne: jest.fn(async () => room) };
+    const service = new ScriptingPackagesService(
+      packagesRepository as never,
+      roomsRepository as never,
+      ...collaborators(),
+    );
+
+    await service.create(
+      {
+        name: 'Hero',
+        version: '0.1.0',
+        slug: 'hero',
+        roomId: 5,
+      } as never,
+      user as never,
+    );
+
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        editingAccess: 'author',
+        editingUserIds: [],
+      }),
+    );
+  });
+
   it('fails fast when the backfill leaves packages without a slug', async () => {
     const query = jest
       .fn()

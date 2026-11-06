@@ -77,6 +77,10 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
    * Packages created before slugs existed get their numeric id as a slug.
    * Idempotent: rows that already have a slug are left alone, so this also
    * covers a rolling deploy where an old build writes NULL slugs.
+   *
+   * Backfill null editingAccess to users mode with author + contributors +
+   * room author. This preserves the existing behavior where all three groups
+   * could edit.
    */
   async onApplicationBootstrap(): Promise<void> {
     const updated = await this.packagesRepository.query(
@@ -105,6 +109,34 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       );
       throw new Error('package_slug_backfill_incomplete');
     }
+
+    // Backfill null editingAccess to users mode with author + contributors +
+    // room author. Build the composite list of user IDs.
+    const accessBackfill = await this.packagesRepository.query(
+      `UPDATE scripting_package
+       SET editingAccess = 'users',
+           editingUserIds = (
+             SELECT jsonb_agg(DISTINCT id) FROM (
+               SELECT "authorId" as id FROM scripting_package sp
+               WHERE sp.id = scripting_package.id AND "authorId" IS NOT NULL
+               UNION
+               SELECT contributor_id as id
+               FROM scripting_package_contributors_user sc
+               WHERE sc."scriptingPackageId" = scripting_package.id
+               UNION
+               SELECT r."authorId" as id
+               FROM room r
+               WHERE r.id = scripting_package."roomId" AND r."authorId" IS NOT NULL
+             ) ids
+           )
+       WHERE editingAccess IS NULL
+       RETURNING id`,
+    );
+    this.logger.log(
+      `Package editing access backfill: ${
+        Array.isArray(accessBackfill) ? accessBackfill.length : 0
+      } row(s) updated`,
+    );
   }
 
   normalizeSlug(slug: string): string {
@@ -394,6 +426,8 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
           author,
           room,
           parentPackage,
+          editingAccess: 'author',
+          editingUserIds: [],
         });
 
         try {
