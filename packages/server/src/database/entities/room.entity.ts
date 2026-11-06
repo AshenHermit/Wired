@@ -12,7 +12,7 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { ScriptingPackage } from './scripting-package.entity';
-import { GAME_ROOMS_TYPES, GameRoomsType } from '@wired-io/shared';
+import { GAME_ROOMS_TYPES, GameRoomsType, RoomAccessMode } from '@wired-io/shared';
 
 @Entity()
 export class Room {
@@ -96,7 +96,7 @@ export class Room {
     nullable: true,
   })
   @Column({ type: 'varchar', nullable: true, default: null })
-  packageManagementAccess: string | null;
+  packageManagementAccess: RoomAccessMode | null;
 
   @ApiProperty({
     description: 'user IDs with package management access',
@@ -111,7 +111,7 @@ export class Room {
     nullable: true,
   })
   @Column({ type: 'varchar', nullable: true, default: null })
-  packageCreationAccess: string | null;
+  packageCreationAccess: RoomAccessMode | null;
 
   @ApiProperty({
     description: 'user IDs with package creation access',

@@ -3,9 +3,10 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  OnApplicationBootstrap,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, Repository } from 'typeorm';
+import { FindOptionsWhere, IsNull, Repository } from 'typeorm';
 import { Room } from 'src/database/entities/room.entity';
 import { User } from 'src/database/entities/user.entity';
 import { withPublicUsers } from 'src/common/public-user';
@@ -14,7 +15,7 @@ import { UpdateRoomDto } from './dto/update-room.dto';
 import { canEditRoom, canViewRoom } from './room-access';
 
 @Injectable()
-export class RoomsService {
+export class RoomsService implements OnApplicationBootstrap {
   constructor(
     @InjectRepository(Room)
     private readonly roomsRepository: Repository<Room>,
@@ -28,6 +29,10 @@ export class RoomsService {
   }
 
   async assertRoomEditing(user: User, roomId: number): Promise<void> {
+    return this.assertRoomAccessEditing(user, roomId);
+  }
+
+  async assertRoomAccessEditing(user: User, roomId: number): Promise<void> {
     const room = await this.findOne(roomId);
     if (!canEditRoom(room, user.id)) {
       throw new ForbiddenException('You are not allowed to edit this room');
@@ -76,9 +81,54 @@ export class RoomsService {
     return withPublicUsers(room);
   }
 
+  async onApplicationBootstrap(): Promise<void> {
+    // Backfill rooms created before access policies existed. Only rows whose
+    // policy fields are still null are touched, so an explicitly configured
+    // policy is never overwritten.
+    const rooms = await this.roomsRepository.find({
+      where: [
+        { packageManagementAccess: IsNull() },
+        { packageCreationAccess: IsNull() },
+      ],
+      relations: ['author', 'contributors'],
+    });
+
+    for (const room of rooms) {
+      const userIds = Array.from(
+        new Set(
+          [room.author?.id, ...(room.contributors ?? []).map((c) => c?.id)]
+            .filter((id): id is number => typeof id === 'number'),
+        ),
+      );
+
+      let changed = false;
+      if (room.packageManagementAccess == null) {
+        room.packageManagementAccess = 'users';
+        room.packageManagementUserIds = userIds;
+        changed = true;
+      } else if (room.packageManagementUserIds == null) {
+        room.packageManagementUserIds = [];
+        changed = true;
+      }
+      if (room.packageCreationAccess == null) {
+        room.packageCreationAccess = 'users';
+        room.packageCreationUserIds = userIds;
+        changed = true;
+      } else if (room.packageCreationUserIds == null) {
+        room.packageCreationUserIds = [];
+        changed = true;
+      }
+
+      if (changed) {
+        await this.roomsRepository.save(room);
+      }
+    }
+  }
+
   async create(dto: CreateRoomDto, author: User): Promise<Room> {
     // Only whitelisted DTO fields are copied; the author always comes from the
     // authenticated request, never from the request body.
+    // New rooms start locked down to their author; access lists are empty.
     const room = this.roomsRepository.create({
       name: dto.name,
       isPublic: dto.isPublic,
@@ -86,6 +136,10 @@ export class RoomsService {
       type: dto.type,
       parentRoomId: dto.parentRoomId ?? null,
       author,
+      packageManagementAccess: 'author',
+      packageManagementUserIds: [],
+      packageCreationAccess: 'author',
+      packageCreationUserIds: [],
     });
 
     const saved = await this.roomsRepository.save(room);
