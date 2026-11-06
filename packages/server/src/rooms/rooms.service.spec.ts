@@ -1,6 +1,8 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { RoomsService } from './rooms.service';
+import { UsersService } from 'src/users/users.service';
+import { UpdateRoomAccessDto } from './dto/update-room-access.dto';
 
 describe('RoomsService', () => {
   describe('create', () => {
@@ -11,7 +13,8 @@ describe('RoomsService', () => {
         findOne: jest.fn(() => Promise.resolve({ id: 10 })),
         delete: jest.fn(),
       };
-      const service = new RoomsService(roomsRepository as never);
+      const usersService = {} as never;
+      const service = new RoomsService(roomsRepository as never, usersService);
       const author = { id: 7 } as never;
 
       await service.create(
@@ -41,7 +44,8 @@ describe('RoomsService', () => {
         ),
         delete: jest.fn(),
       };
-      const service = new RoomsService(roomsRepository as never);
+      const usersService = {} as never;
+      const service = new RoomsService(roomsRepository as never, usersService);
       const author = { id: 7 } as never;
 
       await service.create(
@@ -68,7 +72,8 @@ describe('RoomsService', () => {
         find: jest.fn(() => Promise.resolve(rooms)),
         findOne: jest.fn(() => Promise.resolve(rooms[0] ?? null)),
       };
-      const service = new RoomsService(roomsRepository as never);
+      const usersService = {} as never;
+      const service = new RoomsService(roomsRepository as never, usersService);
       return { service, roomsRepository };
     }
 
@@ -152,7 +157,8 @@ describe('RoomsService', () => {
         save: jest.fn(),
       };
 
-      const service = new RoomsService(roomsRepository as never);
+      const usersService = {} as never;
+      const service = new RoomsService(roomsRepository as never, usersService);
       await service.onApplicationBootstrap();
 
       expect(roomsRepository.save).toHaveBeenCalledWith(
@@ -180,7 +186,8 @@ describe('RoomsService', () => {
         save: jest.fn(),
       };
 
-      const service = new RoomsService(roomsRepository as never);
+      const usersService = {} as never;
+      const service = new RoomsService(roomsRepository as never, usersService);
       await service.onApplicationBootstrap();
 
       expect(roomsRepository.save).toHaveBeenCalledWith(
@@ -208,7 +215,8 @@ describe('RoomsService', () => {
         save: jest.fn(),
       };
 
-      const service = new RoomsService(roomsRepository as never);
+      const usersService = {} as never;
+      const service = new RoomsService(roomsRepository as never, usersService);
       await service.onApplicationBootstrap();
 
       expect(roomsRepository.save).toHaveBeenCalledWith(
@@ -236,7 +244,8 @@ describe('RoomsService', () => {
         save: jest.fn(),
       };
 
-      const service = new RoomsService(roomsRepository as never);
+      const usersService = {} as never;
+      const service = new RoomsService(roomsRepository as never, usersService);
       await service.onApplicationBootstrap();
 
       expect(roomsRepository.save).not.toHaveBeenCalled();
@@ -258,7 +267,8 @@ describe('RoomsService', () => {
         save: jest.fn(),
       };
 
-      const service = new RoomsService(roomsRepository as never);
+      const usersService = {} as never;
+      const service = new RoomsService(roomsRepository as never, usersService);
       await service.onApplicationBootstrap();
 
       const savedCall = (roomsRepository.save as jest.Mock).mock.calls[0][0];
@@ -281,7 +291,8 @@ describe('RoomsService', () => {
         ),
       };
 
-      const service = new RoomsService(roomsRepository as never);
+      const usersService = {} as never;
+      const service = new RoomsService(roomsRepository as never, usersService);
       const user = { id: 999 } as never;
 
       await expect(
@@ -300,7 +311,8 @@ describe('RoomsService', () => {
         ),
       };
 
-      const service = new RoomsService(roomsRepository as never);
+      const usersService = {} as never;
+      const service = new RoomsService(roomsRepository as never, usersService);
       const user = { id: 10 } as never;
 
       await expect(
@@ -319,7 +331,8 @@ describe('RoomsService', () => {
         ),
       };
 
-      const service = new RoomsService(roomsRepository as never);
+      const usersService = {} as never;
+      const service = new RoomsService(roomsRepository as never, usersService);
       const contributor = { id: 20 } as never;
 
       await expect(
@@ -332,12 +345,252 @@ describe('RoomsService', () => {
         findOne: jest.fn(() => Promise.reject(new NotFoundException())),
       };
 
-      const service = new RoomsService(roomsRepository as never);
+      const service = new RoomsService(roomsRepository as never, {} as never);
       const user = { id: 10 } as never;
 
       await expect(
         service.assertRoomAccessEditing(user, 999),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('updateAccess', () => {
+    it('validates that all provided user IDs exist before updating', async () => {
+      const usersService = {
+        findById: jest
+          .fn((id) => Promise.resolve(id === 5 ? { id: 5 } : null)),
+      };
+
+      const roomsRepository = {
+        findOne: jest.fn(() =>
+          Promise.resolve({
+            id: 1,
+            author: { id: 10 },
+            contributors: [],
+            packageManagementAccess: 'author',
+            packageManagementUserIds: [],
+            packageCreationAccess: 'author',
+            packageCreationUserIds: [],
+          }),
+        ),
+        save: jest.fn(),
+      };
+
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService as never,
+      );
+      const user = { id: 10 } as never;
+      const dto: UpdateRoomAccessDto = {
+        packageManagementAccess: 'users',
+        packageManagementUserIds: [5, 999],
+      };
+
+      await expect(
+        service.updateAccess(1, dto, user),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(
+        service.updateAccess(1, dto, user),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining('999'),
+      });
+    });
+
+    it('rejects with a list of all invalid user IDs', async () => {
+      const usersService = {
+        findById: jest
+          .fn((id) => Promise.resolve(id === 5 ? { id: 5 } : null)),
+      };
+
+      const roomsRepository = {
+        findOne: jest.fn(() =>
+          Promise.resolve({
+            id: 1,
+            author: { id: 10 },
+            contributors: [],
+            packageManagementAccess: 'author',
+            packageManagementUserIds: [],
+            packageCreationAccess: 'author',
+            packageCreationUserIds: [],
+          }),
+        ),
+        save: jest.fn(),
+      };
+
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService as never,
+      );
+      const user = { id: 10 } as never;
+      const dto: UpdateRoomAccessDto = {
+        packageManagementUserIds: [999, 888],
+        packageCreationUserIds: [777],
+      };
+
+      await expect(
+        service.updateAccess(1, dto, user),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      try {
+        await service.updateAccess(1, dto, user);
+      } catch (error) {
+        expect((error as BadRequestException).message).toContain('999');
+        expect((error as BadRequestException).message).toContain('888');
+        expect((error as BadRequestException).message).toContain('777');
+      }
+    });
+
+    it('allows updateAccess when all provided user IDs exist', async () => {
+      const usersService = {
+        findById: jest
+          .fn((id) => Promise.resolve({ id })),
+      };
+
+      const roomsRepository = {
+        findOne: jest.fn(() =>
+          Promise.resolve({
+            id: 1,
+            author: { id: 10 },
+            contributors: [],
+            packageManagementAccess: 'author',
+            packageManagementUserIds: [],
+            packageCreationAccess: 'author',
+            packageCreationUserIds: [],
+          }),
+        ),
+        save: jest.fn(() => Promise.resolve({ id: 1 })),
+      };
+
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService as never,
+      );
+      const user = { id: 10 } as never;
+      const dto: UpdateRoomAccessDto = {
+        packageManagementAccess: 'users',
+        packageManagementUserIds: [5, 15],
+      };
+
+      await expect(
+        service.updateAccess(1, dto, user),
+      ).resolves.toBeDefined();
+
+      expect(roomsRepository.save).toHaveBeenCalled();
+    });
+
+    it('allows updateAccess with no user IDs provided', async () => {
+      const usersService = {
+        findById: jest.fn(),
+      };
+
+      const roomsRepository = {
+        findOne: jest.fn(() =>
+          Promise.resolve({
+            id: 1,
+            author: { id: 10 },
+            contributors: [],
+            packageManagementAccess: 'author',
+            packageManagementUserIds: [],
+            packageCreationAccess: 'author',
+            packageCreationUserIds: [],
+          }),
+        ),
+        save: jest.fn(() => Promise.resolve({ id: 1 })),
+      };
+
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService as never,
+      );
+      const user = { id: 10 } as never;
+      const dto: UpdateRoomAccessDto = {
+        packageManagementAccess: 'author',
+      };
+
+      await expect(
+        service.updateAccess(1, dto, user),
+      ).resolves.toBeDefined();
+
+      expect(usersService.findById).not.toHaveBeenCalled();
+      expect(roomsRepository.save).toHaveBeenCalled();
+    });
+
+    it('skips validation when user ID arrays are empty', async () => {
+      const usersService = {
+        findById: jest.fn(),
+      };
+
+      const roomsRepository = {
+        findOne: jest.fn(() =>
+          Promise.resolve({
+            id: 1,
+            author: { id: 10 },
+            contributors: [],
+            packageManagementAccess: 'users',
+            packageManagementUserIds: [5],
+            packageCreationAccess: 'users',
+            packageCreationUserIds: [5],
+          }),
+        ),
+        save: jest.fn(() => Promise.resolve({ id: 1 })),
+      };
+
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService as never,
+      );
+      const user = { id: 10 } as never;
+      const dto: UpdateRoomAccessDto = {
+        packageManagementUserIds: [],
+        packageCreationUserIds: [],
+      };
+
+      await expect(
+        service.updateAccess(1, dto, user),
+      ).resolves.toBeDefined();
+
+      expect(usersService.findById).not.toHaveBeenCalled();
+    });
+
+    it('deduplicates user IDs when validating', async () => {
+      const usersService = {
+        findById: jest.fn((id) => Promise.resolve({ id })),
+      };
+
+      const roomsRepository = {
+        findOne: jest.fn(() =>
+          Promise.resolve({
+            id: 1,
+            author: { id: 10 },
+            contributors: [],
+            packageManagementAccess: 'author',
+            packageManagementUserIds: [],
+            packageCreationAccess: 'author',
+            packageCreationUserIds: [],
+          }),
+        ),
+        save: jest.fn(() => Promise.resolve({ id: 1 })),
+      };
+
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService as never,
+      );
+      const user = { id: 10 } as never;
+      const dto: UpdateRoomAccessDto = {
+        packageManagementUserIds: [5, 5, 15, 15],
+        packageCreationUserIds: [5],
+      };
+
+      await expect(
+        service.updateAccess(1, dto, user),
+      ).resolves.toBeDefined();
+
+      // Each unique user ID should be validated once, not multiple times
+      // With Set deduplication, we expect 3 unique IDs: 5, 15
+      expect(usersService.findById).toHaveBeenCalledTimes(2);
+      expect(usersService.findById).toHaveBeenCalledWith(5);
+      expect(usersService.findById).toHaveBeenCalledWith(15);
     });
   });
 });

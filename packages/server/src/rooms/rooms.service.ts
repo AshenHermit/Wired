@@ -14,12 +14,14 @@ import { CreateRoomDto } from './dto/create-room.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
 import { UpdateRoomAccessDto } from './dto/update-room-access.dto';
 import { canEditRoom, canViewRoom } from './room-access';
+import { UsersService } from 'src/users/users.service';
 
 @Injectable()
 export class RoomsService implements OnApplicationBootstrap {
   constructor(
     @InjectRepository(Room)
     private readonly roomsRepository: Repository<Room>,
+    private readonly usersService: UsersService,
   ) {}
 
   async assertRoomCreation(user: User, room: CreateRoomDto): Promise<void> {
@@ -173,18 +175,34 @@ export class RoomsService implements OnApplicationBootstrap {
     const room = await this.findOne(id);
 
     // Validate that all provided user IDs exist
+    const userIdsToValidate = new Set<number>();
+
     if (
       dto.packageManagementUserIds &&
       dto.packageManagementUserIds.length > 0
     ) {
-      // Validation would require a UsersService dependency; for now we accept
-      // the IDs and let the database handle any constraint violations
-      // This mirrors the pattern in other services where user IDs are trusted
-      // from the client request after authorization.
+      dto.packageManagementUserIds.forEach((uid) => userIdsToValidate.add(uid));
     }
 
     if (dto.packageCreationUserIds && dto.packageCreationUserIds.length > 0) {
-      // Same pattern for creation user IDs
+      dto.packageCreationUserIds.forEach((uid) => userIdsToValidate.add(uid));
+    }
+
+    if (userIdsToValidate.size > 0) {
+      const invalidIds: number[] = [];
+
+      for (const userId of userIdsToValidate) {
+        const userExists = await this.usersService.findById(userId);
+        if (!userExists) {
+          invalidIds.push(userId);
+        }
+      }
+
+      if (invalidIds.length > 0) {
+        throw new BadRequestException(
+          `The following user IDs do not exist: ${invalidIds.join(', ')}`,
+        );
+      }
     }
 
     // Update only the fields provided in the DTO
