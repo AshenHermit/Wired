@@ -90,4 +90,34 @@ export class Room {
     (scriptingPackage) => scriptingPackage.room,
   )
   scriptingPackages: ScriptingPackage[];
+
+  @ApiProperty({
+    description: 'package management access mode',
+    nullable: true,
+  })
+  @Column({ type: 'varchar', nullable: true, default: null })
+  packageManagementAccess: string | null;
+
+  @ApiProperty({
+    description: 'user IDs with package management access',
+    isArray: true,
+    nullable: true,
+  })
+  @Column({ type: 'jsonb', nullable: true, default: () => "'[]'" })
+  packageManagementUserIds: number[] | null;
+
+  @ApiProperty({
+    description: 'package creation access mode',
+    nullable: true,
+  })
+  @Column({ type: 'varchar', nullable: true, default: null })
+  packageCreationAccess: string | null;
+
+  @ApiProperty({
+    description: 'user IDs with package creation access',
+    isArray: true,
+    nullable: true,
+  })
+  @Column({ type: 'jsonb', nullable: true, default: () => "'[]'" })
+  packageCreationUserIds: number[] | null;
 }
