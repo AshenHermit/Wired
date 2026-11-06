@@ -22,6 +22,7 @@ import {
   WorkshopActionError,
   WorkshopSlugTakenError,
 } from "./use-room-packages";
+import { withApiPrefix } from "@/utils/variables";
 import { PackagesTab } from "./PackagesTab";
 import { resetWorkshopTagsCache } from "@/components/packages/use-workshop-tags";
 
@@ -193,6 +194,45 @@ afterEach(() => {
 });
 
 describe("PackagesTab", () => {
+  it("shows a left thumbnail when a room package has a preview", () => {
+    const preview = `/media/${"a".repeat(64)}.jpg`;
+    const { container } = render(
+      <PackagesTab
+        onRoomSaved={vi.fn()}
+        room={roomFixture()}
+        roomId={1}
+        canCreatePackages
+        canManagePackages
+        viewerId={42}
+        packages={controller({
+          entries: [entry({ previewImage: preview })],
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Demo")).toBeTruthy();
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute("src")).toBe(withApiPrefix(preview));
+  });
+
+  it("keeps room package cards text-only without a preview", () => {
+    const { container } = render(
+      <PackagesTab
+        onRoomSaved={vi.fn()}
+        room={roomFixture()}
+        roomId={1}
+        canCreatePackages
+        canManagePackages
+        viewerId={42}
+        packages={controller({ entries: [entry({ previewImage: null })] })}
+      />,
+    );
+
+    expect(screen.getByText("Demo")).toBeTruthy();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
   it("lists all room packages with their editor and backend states", () => {
     render(
       <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}

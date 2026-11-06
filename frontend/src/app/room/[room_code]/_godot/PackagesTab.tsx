@@ -20,6 +20,7 @@ import {
   UploadIcon,
 } from "lucide-react";
 import type { Room } from "@wired-io/shared";
+import { PreviewThumbnail } from "@/components/media/PreviewThumbnail";
 import { Button } from "@/components/ui/button";
 import { useAppMessage, type AppMessage, type MessageKey } from "@/i18n/message";
 import {
@@ -254,11 +255,13 @@ function PackageCard({
   const t = useTranslations("Packages");
   const rootT = useTranslations();
   const disabled = !fsReady || action.busy;
+  const preview = entry.previewImage;
 
   return (
     <li className="rounded-lg border border-border bg-card p-4 text-sm text-foreground">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
+        {preview ? <PreviewThumbnail src={preview} /> : null}
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <PackageIcon className="size-4 shrink-0 text-muted-foreground" />
             <span className="truncate text-base font-semibold">
