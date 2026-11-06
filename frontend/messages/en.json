@@ -71,6 +71,18 @@
     "update": "Update",
     "updated": "Profile updated successfully"
   },
+  "Media": {
+    "label": "Preview image",
+    "upload": "Upload",
+    "paste": "Paste",
+    "remove": "Remove",
+    "uploading": "Uploading…",
+    "errors": {
+      "invalidType": "Only PNG, JPEG, and WEBP images are supported",
+      "tooLarge": "Image must be 2 MiB or smaller",
+      "uploadFailed": "Failed to upload the image"
+    }
+  },
   "Rooms": {
     "createTitle": "Create Room",
     "createDescription": "Create a new room",

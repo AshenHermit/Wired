@@ -71,6 +71,18 @@
     "update": "Обновить",
     "updated": "Профиль обновлён"
   },
+  "Media": {
+    "label": "Превью",
+    "upload": "Загрузить",
+    "paste": "Вставить",
+    "remove": "Удалить",
+    "uploading": "Загрузка…",
+    "errors": {
+      "invalidType": "Поддерживаются только PNG, JPEG и WEBP",
+      "tooLarge": "Размер изображения не больше 2 МиБ",
+      "uploadFailed": "Не удалось загрузить изображение"
+    }
+  },
   "Rooms": {
     "createTitle": "Создать комнату",
     "createDescription": "Создать новую комнату",
