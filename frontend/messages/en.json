@@ -14,7 +14,7 @@
     "dragPanel": "Drag panel",
     "tabs": {
       "editor": "Editor",
-      "packages": "Packages",
+      "packages": "Room",
       "game": "Game"
     }
   },
