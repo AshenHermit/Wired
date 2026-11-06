@@ -93,6 +93,20 @@ export class ScriptingPackage {
   @Column({ default: true })
   enabled: boolean;
 
+  @ApiProperty({
+    description: 'editing access level for the package',
+    nullable: true,
+  })
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  editingAccess: string | null;
+
+  @ApiProperty({
+    description: 'user IDs with editing access',
+    isArray: true,
+  })
+  @Column({ type: 'jsonb', default: [] })
+  editingUserIds: number[];
+
   @ApiProperty({ description: 'package author', type: () => User })
   @ManyToOne(() => User, (user) => user.scriptingPackages, { nullable: true })
   author?: User | null;
