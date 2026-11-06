@@ -91,10 +91,11 @@ export function canCreateRoomPackages(
 }
 
 /**
- * Mirrors the server's package-editing rule. The package author is always
- * allowed. In `all` mode any authenticated user may edit; in `users` mode the
- * room author and users listed in `editingUserIds` may edit; in `author` mode
- * only the package author may edit.
+ * Mirrors the server's package-editing rule. The package author and the room
+ * author are always allowed — a package policy can only expand access beyond
+ * those baseline owners, never remove them. In `all` mode any authenticated
+ * user may edit; in `users` mode users listed in `editingUserIds` may edit; in
+ * `author` mode only the package author may edit.
  *
  * `room` is supplied separately (rather than read from `pkg.room`) because the
  * frontend already carries the room the user is inside, and the server's rule
@@ -109,6 +110,11 @@ export function canEditPackage(
     return true;
   }
 
+  // The room author is always allowed, regardless of the policy.
+  if (isAuthor(room, userId)) {
+    return true;
+  }
+
   const access = pkg.editingAccess;
 
   if (access === "all") {
@@ -116,10 +122,6 @@ export function canEditPackage(
   }
 
   if (access === "users") {
-    // The room author is allowed in 'users' mode.
-    if (isAuthor(room, userId)) {
-      return true;
-    }
     return userId != null && (pkg.editingUserIds ?? []).includes(userId);
   }
 

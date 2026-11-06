@@ -1,30 +1,20 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { RoomsController } from './rooms.controller';
 import { UpdateRoomAccessDto } from './dto/update-room-access.dto';
+import { AUTH_POLICY_KEY } from 'src/auth/auth-policy';
 
 describe('RoomsController', () => {
   describe('updateAccess', () => {
-    it('returns 401 when called by an anonymous user', async () => {
-      const roomsService = {
-        assertRoomAccessEditing: jest.fn(),
-        updateAccess: jest.fn(),
-      };
-
-      const controller = new RoomsController(roomsService as never);
-
-      // When no @UseAuthGuard() is enforced, an unauthenticated request
-      // will have req.user as undefined. The controller's use of
-      // AuthenticatedRequest type is the contract; in tests we verify
-      // the guard would reject before the method executes.
-      // This test documents that @UseAuthGuard() decorator is applied.
-
-      const req = { user: undefined } as never;
-      const dto: UpdateRoomAccessDto = { packageManagementAccess: 'users' };
-
-      // The actual 401 is returned by @UseAuthGuard() before the method runs.
-      // We verify the guard is in place by checking the method signature
-      // and the service calls it receives authenticated requests.
-      expect(controller.updateAccess(1, dto, req)).toBeDefined();
+    it('marks updateAccess with @UseAuthGuard() so anonymous callers get 401', () => {
+      // The real 401 for an unauthenticated request is produced by
+      // @UseAuthGuard() before the handler runs, which a unit test cannot
+      // exercise. Pin the contract instead: the decorator writes the
+      // `required` policy that drives the guard's rejection.
+      expect(
+        Reflect.getMetadata(
+          AUTH_POLICY_KEY,
+          RoomsController.prototype.updateAccess,
+        ),
+      ).toBe('required');
     });
 
     it('calls assertRoomAccessEditing to enforce authorization', async () => {

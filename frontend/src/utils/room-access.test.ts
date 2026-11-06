@@ -65,13 +65,16 @@ describe("room package access helpers", () => {
     expect(canEditPackage(pkg, undefined, anyUser)).toBe(false);
   });
 
-  it("restricts author-mode editing to the package author alone", () => {
+  it("always allows the room author, even in author mode", () => {
     const pkg: PackageAccessSubject = {
       author: { id: 5 },
       editingAccess: "author",
       editingUserIds: [],
     };
     expect(canEditPackage(pkg, 5, room)).toBe(true);
-    expect(canEditPackage(pkg, 1, room)).toBe(false);
+    // The room author keeps baseline access and cannot be locked out.
+    expect(canEditPackage(pkg, 1, room)).toBe(true);
+    // An unrelated authenticated user is still denied in author mode.
+    expect(canEditPackage(pkg, 7, room)).toBe(false);
   });
 });

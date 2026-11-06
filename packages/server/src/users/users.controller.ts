@@ -33,7 +33,11 @@ const USER_SEARCH_DEFAULT_LIMIT = 20;
  */
 function parseOptionalNumber(value: unknown): number | undefined {
   if (typeof value !== 'string' || value.trim() === '') return undefined;
-  return Number(value.trim());
+  const result = Number(value.trim());
+  if (!Number.isFinite(result)) {
+    throw new BadRequestException('`limit` must be a number');
+  }
+  return result;
 }
 
 @ApiTags('users')

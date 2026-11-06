@@ -975,7 +975,6 @@ export function PackagesTab({
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
           room={room}
-          roomId={roomId}
         />
       </div>
     </div>

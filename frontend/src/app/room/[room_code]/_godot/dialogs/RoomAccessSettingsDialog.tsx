@@ -100,7 +100,6 @@ export function RoomAccessSettingsDialog({
   onOpenChange: (open: boolean) => void;
   /** Full room; source of the current access fields. */
   room: Room;
-  roomId: number;
 }) {
   const t = useTranslations("RoomAccess");
   const common = useTranslations("Common");

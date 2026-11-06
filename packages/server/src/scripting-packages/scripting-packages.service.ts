@@ -23,7 +23,12 @@ import { Room } from 'src/database/entities/room.entity';
 import { CreateScriptingPackageDto } from './dto/create-scripting-package.dto';
 import { UpdateScriptingPackageDto } from './dto/update-scripting-package.dto';
 import { UpdatePackageAccessDto } from './dto/update-package-access.dto';
-import { canCreateRoomPackages, canEditRoom, canManageRoomPackages, canViewRoom, isRoomMember } from 'src/rooms/room-access';
+import {
+  canCreateRoomPackages,
+  canEditRoom,
+  canManageRoomPackages,
+  canViewRoom,
+} from 'src/rooms/room-access';
 import { UsersService } from 'src/users/users.service';
 import {
   PackageStorageService,
@@ -44,10 +49,7 @@ import {
   PACKAGE_REVISION_DISPATCHER,
   PackageRevisionDispatcher,
 } from 'src/common/runtime-contracts';
-import {
-  PackageSlugAvailability,
-  isValidPackageSlug,
-} from '@wired-io/shared';
+import { PackageSlugAvailability, isValidPackageSlug } from '@wired-io/shared';
 
 /** What a slug rename had to touch, reported once the transaction commits. */
 interface SlugRenameOutcome {
@@ -219,48 +221,45 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
   private static ownsPackage(pkg: ScriptingPackage, user: User): boolean {
     return (
       pkg.author?.id === user.id ||
-      Boolean(pkg.contributors?.some((contributor) => contributor.id === user.id))
+      Boolean(
+        pkg.contributors?.some((contributor) => contributor.id === user.id),
+      )
     );
   }
 
   /**
    * Whether a user can edit a package based on its editingAccess policy.
    *
-   * The package author is always allowed. For 'all' and 'users' modes,
-   * the room author is also always allowed. For 'author' mode, only the
-   * package author is allowed.
+   * The package author and the room author of `pkg.room` are always allowed:
+   * a package policy can only expand access beyond these baseline owners, never
+   * remove them. Contributors are only admitted through `editingUserIds`, not
+   * through the contributor relation itself.
    *
-   * For 'all' mode, any authenticated user is allowed.
-   * For 'users' mode, only users in editingUserIds are allowed (plus author/room author).
-   * For 'author' mode, only the package author is allowed.
+   * - 'all': any authenticated user.
+   * - 'users': a user listed in `editingUserIds`.
+   * - 'author': only the package author (plus the always-allowed room author).
    */
-  canEditPackage(
-    pkg: ScriptingPackage,
-    userId?: number | null,
-  ): boolean {
+  canEditPackage(pkg: ScriptingPackage, userId?: number | null): boolean {
     // Package author is always allowed
     if (userId != null && pkg.author?.id === userId) {
       return true;
     }
 
+    // Room author is always allowed, regardless of the policy.
+    if (userId != null && pkg.room?.author?.id === userId) {
+      return true;
+    }
+
     const access = pkg.editingAccess;
 
-    // 'all' allows any authenticated user (and room author)
+    // 'all' allows any authenticated user
     if (access === 'all') {
       return userId != null;
     }
 
-    // 'users' allows room author, users in the access list, and any authenticated user listed
+    // 'users' requires an exact match in the access list
     if (access === 'users') {
-      // Room author is allowed in users mode
-      if (userId != null && pkg.room?.author?.id === userId) {
-        return true;
-      }
-      // Explicit users in the list
-      return (
-        userId != null &&
-        (pkg.editingUserIds ?? []).includes(userId)
-      );
+      return userId != null && (pkg.editingUserIds ?? []).includes(userId);
     }
 
     // 'author' mode only allows the package author (already checked above)
@@ -268,43 +267,53 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
   }
 
   /**
-   * Enforces package editing access by loading the package and checking
-   * canEditPackage. Throws NotFoundException if the package does not exist,
-   * or ForbiddenException if the user lacks editing access.
+   * Enforces package access administration: only the room author or the
+   * package author may change the access policy. This is deliberately distinct
+   * from `canEditPackage`, which is the edit-action policy — otherwise an `all`
+   * edit policy would let anyone rewrite who may edit, and an `author` edit
+   * policy would lock the room author out of administering access.
+   *
+   * Throws NotFoundException if the package does not exist, or
+   * ForbiddenException if the user may not administer access.
    */
   async assertPackageAccessEditing(
     user: User,
     packageId: number,
   ): Promise<void> {
     const pkg = await this.loadForAccess(packageId);
-    if (!this.canEditPackage(pkg, user.id)) {
+    const isRoomAuthor = pkg.room ? canEditRoom(pkg.room, user.id) : false;
+    if (!isRoomAuthor && pkg.author?.id !== user.id) {
       throw new ForbiddenException(
-        'You are not allowed to edit this package',
+        'You are not allowed to change this package access',
       );
     }
   }
 
   async assertPackageEditing(user: User, packageId: number): Promise<void> {
     const pkg = await this.loadForAccess(packageId);
-    const isRoomAuthor = pkg.room ? canEditRoom(pkg.room, user.id) : false;
-
-    if (!ScriptingPackagesService.ownsPackage(pkg, user) && !isRoomAuthor) {
+    if (!this.canEditPackage(pkg, user.id)) {
       throw new ForbiddenException('You are not allowed to edit this package');
     }
   }
 
   /**
-   * Publishing is broader than editing: a room contributor may emit revisions.
-   * Workshop packages (`room = null`) never receive revisions over HTTP, so
-   * they are rejected even for their own author.
+   * Publishing is a room-level action: the package owner may always emit their
+   * own package, and otherwise the room's `packageManagement` policy decides.
+   * The legacy "any room member" bypass is gone — a contributor outside the
+   * management policy can no longer emit or publish. Workshop packages
+   * (`room = null`) never receive revisions over HTTP, so they are rejected
+   * even for their own author.
    */
   async assertPackagePublishing(user: User, packageId: number): Promise<void> {
     const pkg = await this.loadForAccess(packageId);
 
-    const isRoomMemberOfRoom = Boolean(pkg.room) && isRoomMember(pkg.room!, user.id);
-    const canManageRoom = Boolean(pkg.room) && canManageRoomPackages(pkg.room!, user.id);
+    const canManageRoom =
+      Boolean(pkg.room) && canManageRoomPackages(pkg.room!, user.id);
 
-    if (!ScriptingPackagesService.ownsPackage(pkg, user) && !isRoomMemberOfRoom && !canManageRoom) {
+    if (
+      !ScriptingPackagesService.ownsPackage(pkg, user) &&
+      !canManageRoom
+    ) {
       throw new ForbiddenException(
         'You are not allowed to publish this package',
       );
@@ -331,7 +340,9 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       })
       .then((pkg) => {
         if (!pkg) {
-          throw new NotFoundException(`ScriptingPackage with id=${id} not found`);
+          throw new NotFoundException(
+            `ScriptingPackage with id=${id} not found`,
+          );
         }
         return pkg;
       });
@@ -623,9 +634,9 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       await this.dispatcher.packageEnabledChanged(packageId);
     } catch (error) {
       this.logger.warn(
-        `Package ${packageId} was saved but its room was not notified: ${
-          errorMessage(error)
-        }`,
+        `Package ${packageId} was saved but its room was not notified: ${errorMessage(
+          error,
+        )}`,
       );
     }
   }
@@ -645,8 +656,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     if (!pkg.room) {
       throw new BadRequestException({
         code: 'slug_not_editable',
-        message:
-          'Slug пакета workshop нельзя изменить: создайте новую запись',
+        message: 'Slug пакета workshop нельзя изменить: создайте новую запись',
       });
     }
     const roomId = pkg.room.id;
@@ -675,7 +685,9 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       await this.delivery
         .invalidatePackage(packageId)
         .catch((cause) =>
-          this.logger.warn(`artifact invalidation failed: ${errorMessage(cause)}`),
+          this.logger.warn(
+            `artifact invalidation failed: ${errorMessage(cause)}`,
+          ),
         );
     }
     if (outcome.rewrittenIds.length > 0) {
@@ -790,8 +802,10 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
           }
         }
 
-        const rewrite = await this.storage.beginRewrite(targets, (filepath, data) =>
-          rewriteSlugReferences(filepath, data, oldSlug, nextSlug),
+        const rewrite = await this.storage.beginRewrite(
+          targets,
+          (filepath, data) =>
+            rewriteSlugReferences(filepath, data, oldSlug, nextSlug),
         );
         try {
           const rewritten = new Map<number, PackageFileEntry[]>();
@@ -955,9 +969,9 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       await this.storage.removePackage(id);
     } catch (error) {
       this.logger.warn(
-        `ScriptingPackage ${id} was deleted but its files were not removed: ${
-          errorMessage(error)
-        }`,
+        `ScriptingPackage ${id} was deleted but its files were not removed: ${errorMessage(
+          error,
+        )}`,
       );
     }
     if (roomId !== null) {
@@ -965,9 +979,9 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
         this.dispatcher.packageRemoved(id, roomId);
       } catch (error) {
         this.logger.warn(
-          `Package ${id} was deleted but its room was not notified: ${
-            errorMessage(error)
-          }`,
+          `Package ${id} was deleted but its room was not notified: ${errorMessage(
+            error,
+          )}`,
         );
       }
     }

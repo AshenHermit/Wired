@@ -13,6 +13,7 @@ import { PackagePublishLockService } from './publish/package-publish-lock.servic
 import { PackageDeliveryModule } from './delivery/package-delivery.module';
 import { AppConfigModule } from 'src/config/config.module';
 import { GodotGameModule } from 'src/godot-game/godot-game.module';
+import { UsersService } from 'src/users/users.service';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { GodotGameModule } from 'src/godot-game/godot-game.module';
     PackageRevisionsService,
     PackageWorkshopService,
     PackagePublishLockService,
+    UsersService,
   ],
   // `WorkshopController` must come first: `GET /scripting-packages/workshop`
   // would otherwise be matched by the authoring `GET /scripting-packages/:id`

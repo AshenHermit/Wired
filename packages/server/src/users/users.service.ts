@@ -57,6 +57,7 @@ export class UsersService {
   async search(query: string, limit: number): Promise<PublicUser[]> {
     const users = await this.usersRepository.find({
       where: [{ name: ILike(`%${query}%`) }, { email: ILike(`%${query}%`) }],
+      order: { name: 'ASC' },
       take: limit,
     });
     return users.map(toPublicUser);

@@ -192,16 +192,32 @@ describe('ScriptingPackagesService', () => {
       ).resolves.toBeUndefined();
     });
 
-    it('allows a package contributor', async () => {
+    it('allows a contributor listed in editingUserIds', async () => {
       const service = makeService({
         id: 10,
         author,
         contributors: [contributor],
         room: null,
+        editingAccess: 'users',
+        editingUserIds: [contributor.id],
       });
       await expect(
         service.assertPackageEditing(contributor as never, 10),
       ).resolves.toBeUndefined();
+    });
+
+    it('denies a contributor when editingAccess is author-only', async () => {
+      const service = makeService({
+        id: 10,
+        author,
+        contributors: [contributor],
+        room: { id: 5, author: roomAuthor },
+        editingAccess: 'author',
+        editingUserIds: [],
+      });
+      await expect(
+        service.assertPackageEditing(contributor as never, 10),
+      ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
     it('allows the author of the owning room', async () => {
@@ -270,15 +286,37 @@ describe('ScriptingPackagesService', () => {
       );
     }
 
-    it('lets a room contributor publish a revision', async () => {
+    it('denies a room contributor when the management policy is author-only', async () => {
       const service = makeService({
         id: 10,
         author: { id: 1 },
         contributors: [],
-        room: { id: 5, author: { id: 3 }, contributors: [{ id: 2 }] },
+        room: {
+          id: 5,
+          author: { id: 3 },
+          contributors: [{ id: 2 }],
+          packageManagementAccess: 'author',
+        },
       });
       await expect(
         service.assertPackagePublishing({ id: 2 } as never, 10),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('lets the package owner publish their own package regardless of policy', async () => {
+      const service = makeService({
+        id: 10,
+        author: { id: 1 },
+        contributors: [],
+        room: {
+          id: 5,
+          author: { id: 3 },
+          contributors: [],
+          packageManagementAccess: 'author',
+        },
+      });
+      await expect(
+        service.assertPackagePublishing({ id: 1 } as never, 10),
       ).resolves.toBeUndefined();
     });
 
@@ -1321,7 +1359,7 @@ describe('canEditPackage', () => {
     expect(service.canEditPackage(pkg, 3)).toBe(false);
   });
 
-  it('allows only package author when editingAccess is author', () => {
+  it('allows the package author and room author when editingAccess is author', () => {
     const service = makeService();
     const pkg2 = {
       id: 1,
@@ -1331,7 +1369,9 @@ describe('canEditPackage', () => {
       editingUserIds: [],
     } as never;
     expect(service.canEditPackage(pkg2, 5)).toBe(true);
-    expect(service.canEditPackage(pkg2, 1)).toBe(false);
+    // The room author is always allowed, even in author mode.
+    expect(service.canEditPackage(pkg2, 1)).toBe(true);
+    expect(service.canEditPackage(pkg2, 7)).toBe(false);
     expect(service.canEditPackage(pkg2, undefined)).toBe(false);
   });
 
@@ -1366,6 +1406,32 @@ describe('assertPackageAccessEditing', () => {
       author: { id: 5 },
       room: { id: 1, author: { id: 1 } },
       editingAccess: 'author',
+      editingUserIds: [],
+    });
+    await expect(
+      service.assertPackageAccessEditing({ id: 7 } as never, 1),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('allows the room author to change access even in author mode', async () => {
+    const service = makeService({
+      id: 1,
+      author: { id: 5 },
+      room: { id: 1, author: { id: 1 } },
+      editingAccess: 'author',
+      editingUserIds: [],
+    });
+    await expect(
+      service.assertPackageAccessEditing({ id: 1 } as never, 1),
+    ).resolves.toBeUndefined();
+  });
+
+  it('denies a stranger rewriting access even when editingAccess is all', async () => {
+    const service = makeService({
+      id: 1,
+      author: { id: 5 },
+      room: { id: 1, author: { id: 1 } },
+      editingAccess: 'all',
       editingUserIds: [],
     });
     await expect(
@@ -1427,7 +1493,9 @@ describe('ScriptingPackagesService slug rename', () => {
 
     const packages = {
       findOne: jest.fn(async (query: { where: { id?: number } }) =>
-        query.where.id === undefined ? (options.live ?? null) : (options.self ?? pkg),
+        query.where.id === undefined
+          ? (options.live ?? null)
+          : (options.self ?? pkg),
       ),
       find: jest.fn(async () => options.dependentRows ?? []),
       save: jest.fn(async (value: unknown) => value),
@@ -1510,12 +1578,20 @@ describe('ScriptingPackagesService slug rename', () => {
           results,
           commit: async () => {
             for (const target of attempted) {
-              await finishRewrite(target.packageId, target.revision, target.kind);
+              await finishRewrite(
+                target.packageId,
+                target.revision,
+                target.kind,
+              );
             }
           },
           abort: async () => {
             for (const target of [...attempted].reverse()) {
-              await abortRewrite(target.packageId, target.revision, target.kind);
+              await abortRewrite(
+                target.packageId,
+                target.revision,
+                target.kind,
+              );
             }
           },
         };
@@ -1623,8 +1699,9 @@ describe('ScriptingPackagesService slug rename', () => {
       live: { id: 99, slug: 'taken' },
     });
 
-    await expect(service.update(5, { slug: 'taken', name: 'New' })).rejects
-      .toMatchObject({ response: { code: 'slug_taken' } });
+    await expect(
+      service.update(5, { slug: 'taken', name: 'New' }),
+    ).rejects.toMatchObject({ response: { code: 'slug_taken' } });
 
     expect(packages.save).not.toHaveBeenCalled();
     expect(storage.rewriteRevision).not.toHaveBeenCalled();
