@@ -125,8 +125,8 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
                SELECT "authorId" as id FROM scripting_package sp
                WHERE sp.id = scripting_package.id AND "authorId" IS NOT NULL
                UNION
-               SELECT contributor_id as id
-               FROM scripting_package_contributors_user sc
+               SELECT "userId" as id
+               FROM scripting_package_contributors sc
                WHERE sc."scriptingPackageId" = scripting_package.id
                UNION
                SELECT r."authorId" as id
