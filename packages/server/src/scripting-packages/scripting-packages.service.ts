@@ -622,6 +622,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     if (dto.description !== undefined) pkg.description = dto.description;
     if (dto.dependencies !== undefined) pkg.dependencies = dto.dependencies;
     if (dto.tags !== undefined) pkg.tags = normalizeTags(dto.tags);
+    if (dto.previewImage !== undefined) pkg.previewImage = dto.previewImage;
 
     const previousEnabled = pkg.enabled !== false;
     if (dto.enabled === true && previousEnabled === false) {

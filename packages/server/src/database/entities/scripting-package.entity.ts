@@ -73,6 +73,13 @@ export class ScriptingPackage {
   @Column({ default: '' })
   description: string;
 
+  @ApiProperty({
+    description: 'optional preview image URL from POST /media',
+    nullable: true,
+  })
+  @Column({ type: 'varchar', nullable: true, default: null })
+  previewImage: string | null;
+
   @ApiProperty({ description: 'Workshop tags', isArray: true })
   @Column({ type: 'jsonb', default: [] })
   tags: string[];

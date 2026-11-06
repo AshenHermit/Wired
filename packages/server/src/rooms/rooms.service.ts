@@ -140,6 +140,7 @@ export class RoomsService implements OnApplicationBootstrap {
       description: dto.description,
       type: dto.type,
       parentRoomId: dto.parentRoomId ?? null,
+      previewImage: dto.previewImage ?? null,
       author,
       packageManagementAccess: 'author',
       packageManagementUserIds: [],
@@ -164,6 +165,7 @@ export class RoomsService implements OnApplicationBootstrap {
     if (dto.isPublic !== undefined) room.isPublic = dto.isPublic;
     if (dto.description !== undefined) room.description = dto.description;
     if (dto.parentRoomId !== undefined) room.parentRoomId = dto.parentRoomId;
+    if (dto.previewImage !== undefined) room.previewImage = dto.previewImage;
 
     const saved = await this.roomsRepository.save(room);
     return this.findOne(saved.id);

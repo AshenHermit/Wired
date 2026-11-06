@@ -4,13 +4,11 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  Matches,
-  MaxLength,
   MinLength,
-  ValidateNested,
+  ValidateIf,
 } from 'class-validator';
-import { Type } from 'class-transformer';
 import { IsPackageSlug } from './package-slug.decorator';
+import { IsWiredMediaUrl } from 'src/media/is-wired-media-url.decorator';
 
 export class CreateScriptingPackageDto {
   @ApiProperty({ example: 'hero_controller' })
@@ -73,4 +71,15 @@ export class CreateScriptingPackageDto {
   @IsOptional()
   @IsInt()
   parentPackageId?: number;
+
+  @ApiProperty({
+    example: '/media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.webp',
+    description: 'Optional preview image URL from POST /media',
+    required: false,
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsWiredMediaUrl()
+  previewImage?: string | null;
 }

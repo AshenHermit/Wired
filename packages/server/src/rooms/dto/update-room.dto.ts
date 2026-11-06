@@ -5,7 +5,9 @@ import {
   IsOptional,
   IsString,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
+import { IsWiredMediaUrl } from 'src/media/is-wired-media-url.decorator';
 
 /**
  * The mutable room fields. Declared explicitly rather than as
@@ -33,4 +35,15 @@ export class UpdateRoomDto {
   @IsOptional()
   @IsInt()
   parentRoomId?: number;
+
+  @ApiProperty({
+    example: '/media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png',
+    required: false,
+    nullable: true,
+    description: 'Set a /media URL or null to clear; omit to leave unchanged',
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsWiredMediaUrl()
+  previewImage?: string | null;
 }

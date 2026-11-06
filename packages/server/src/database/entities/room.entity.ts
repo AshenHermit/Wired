@@ -85,6 +85,13 @@ export class Room {
   parentRoomId: number | null;
 
   @ApiProperty({
+    description: 'optional preview image URL from POST /media',
+    nullable: true,
+  })
+  @Column({ type: 'varchar', nullable: true, default: null })
+  previewImage: string | null;
+
+  @ApiProperty({
     description: 'room packages',
     type: () => ScriptingPackage,
     isArray: true,
