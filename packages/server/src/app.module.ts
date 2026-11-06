@@ -11,6 +11,7 @@ import { RoomsModule } from './rooms/rooms.module';
 import { ScriptingPackagesModule } from './scripting-packages/scripting-packages.module';
 import { GodotGameModule } from './godot-game/godot-game.module';
 import { GodotEditorProviderModule } from './godot-editor-provider/godot-editor-provider.module';
+import { MediaModule } from './media/media.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { GodotEditorProviderModule } from './godot-editor-provider/godot-editor-
     UsersModule,
     RoomsModule,
     ScriptingPackagesModule,
+    MediaModule,
     TypeOrmModule.forRootAsync({
       imports: [AppConfigModule],
       inject: [AppConfigService],
