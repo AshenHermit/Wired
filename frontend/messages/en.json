@@ -80,7 +80,8 @@
     "errors": {
       "invalidType": "Only PNG, JPEG, and WEBP images are supported",
       "tooLarge": "Image must be 2 MiB or smaller",
-      "uploadFailed": "Failed to upload the image"
+      "uploadFailed": "Failed to upload the image",
+      "clipboardFailed": "Could not read an image from the clipboard"
     }
   },
   "Rooms": {

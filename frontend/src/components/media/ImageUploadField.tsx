@@ -1,11 +1,17 @@
 "use client";
 
-import { Loader2Icon } from "lucide-react";
+import { ImageIcon, Loader2Icon } from "lucide-react";
 import { useTranslations } from "next-intl";
 import * as React from "react";
 import { toast } from "sonner";
 import { uploadMedia } from "@/api/services/media";
-import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/animate-ui/components/radix/dropdown-menu";
+import { cn } from "@/lib/utils";
 import { mediaSrc } from "./media-url";
 
 const ACCEPTED = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -18,9 +24,9 @@ export type ImageUploadFieldProps = {
 };
 
 /**
- * Entity-agnostic image picker: file choose or clipboard paste uploads
- * immediately via POST /media and reports the returned URL to the parent.
- * Binding the URL to a room/package/user happens on the parent's save.
+ * Entity-agnostic image picker: a square frame opens a menu for file choose,
+ * clipboard paste, or remove. Upload happens immediately via POST /media;
+ * binding the URL to a room/package/user happens on the parent's save.
  */
 export function ImageUploadField({
   value,
@@ -62,7 +68,7 @@ export function ImageUploadField({
     if (file) void upload(file);
   };
 
-  const onPaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
+  const onPaste = (event: React.ClipboardEvent<HTMLButtonElement>) => {
     const items = event.clipboardData?.items;
     if (!items) return;
     for (const item of Array.from(items)) {
@@ -82,53 +88,99 @@ export function ImageUploadField({
     }
   };
 
+  const pasteFromClipboard = async () => {
+    if (disabled || uploading) return;
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find((candidate) =>
+          ACCEPTED.has(candidate),
+        );
+        if (!type) continue;
+        const blob = await item.getType(type);
+        const extension = type === "image/jpeg" ? "jpg" : type.split("/")[1]!;
+        const file = new File([blob], `paste.${extension}`, { type });
+        await upload(file);
+        return;
+      }
+      toast.error(t("errors.clipboardFailed"));
+    } catch (error) {
+      console.error(error);
+      toast.error(t("errors.clipboardFailed"));
+    }
+  };
+
+  const busy = disabled || uploading;
+
   return (
-    <div
-      className="flex flex-col gap-2"
-      tabIndex={0}
-      onPaste={onPaste}
-      aria-busy={uploading}
-    >
-      <div className="text-sm font-medium">{t("label")}</div>
-      {value ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={mediaSrc(value)}
-          alt=""
-          className="size-20 rounded-md object-cover object-center"
-        />
-      ) : null}
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          className="sr-only"
-          disabled={disabled || uploading}
-          onChange={onFileChange}
-        />
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={disabled || uploading}
-          onClick={() => inputRef.current?.click()}
-        >
-          {uploading ? <Loader2Icon className="animate-spin" /> : null}
-          {uploading ? t("uploading") : t("upload")}
-        </Button>
-        {value ? (
-          <Button
+    <div className="flex flex-col gap-2" aria-busy={uploading}>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        className="sr-only"
+        disabled={busy}
+        onChange={onFileChange}
+      />
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild disabled={busy}>
+          <button
             type="button"
-            variant="ghost"
-            size="sm"
-            disabled={disabled || uploading}
-            onClick={() => onChange(null)}
+            disabled={busy}
+            onPaste={onPaste}
+            aria-label={t("label")}
+            className={cn(
+              "relative flex size-20 items-center justify-center overflow-hidden rounded-md border bg-muted/30 text-muted-foreground outline-none transition-colors",
+              "hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
+              "disabled:pointer-events-none disabled:opacity-50",
+            )}
           >
-            {t("remove")}
-          </Button>
-        ) : null}
-      </div>
+            {value ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={mediaSrc(value)}
+                alt=""
+                className="size-full object-cover object-center"
+              />
+            ) : (
+              <ImageIcon className="size-6" aria-hidden />
+            )}
+            {uploading ? (
+              <span className="absolute inset-0 flex items-center justify-center bg-background/60">
+                <Loader2Icon className="size-5 animate-spin" aria-hidden />
+                <span className="sr-only">{t("uploading")}</span>
+              </span>
+            ) : null}
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuItem
+            disabled={busy}
+            onSelect={() => {
+              void pasteFromClipboard();
+            }}
+          >
+            {t("paste")}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={busy}
+            onSelect={() => {
+              inputRef.current?.click();
+            }}
+          >
+            {t("upload")}
+          </DropdownMenuItem>
+          {value ? (
+            <DropdownMenuItem
+              disabled={busy}
+              variant="destructive"
+              onSelect={() => onChange(null)}
+            >
+              {t("remove")}
+            </DropdownMenuItem>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
