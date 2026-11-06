@@ -24,6 +24,7 @@ type WorkshopRow = {
   version: string;
   description: string;
   tags: string[];
+  previewImage: string | null;
   authorId: number | null;
   authorName: string | null;
   authorEmail: string | null;
@@ -35,6 +36,8 @@ type WorkshopRow = {
   total: string;
 };
 
+const PREVIEW = `/media/${'c'.repeat(64)}.png`;
+
 const row: WorkshopRow = {
   id: 1,
   slug: 'hero',
@@ -42,6 +45,7 @@ const row: WorkshopRow = {
   version: '1.0',
   description: 'd',
   tags: ['2d'],
+  previewImage: null,
   authorId: 7,
   authorName: 'Ann',
   authorEmail: 'a@b.c',
@@ -169,6 +173,7 @@ describe('PackageWorkshopService', () => {
     expect(sql).toContain("status = 'published'");
     expect(sql).toContain('AND "publishedAt" IS NOT NULL');
     expect(sql).toContain('jsonb_array_elements_text');
+    expect(sql).toContain('p."previewImage"');
     expect(sql.trimEnd().endsWith('LIMIT $2 OFFSET $3')).toBe(true);
   });
 
@@ -185,6 +190,7 @@ describe('PackageWorkshopService', () => {
       version: '1.0',
       description: 'd',
       tags: ['2d'],
+      previewImage: null,
       revision: 3,
       publishedAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-02T00:00:00.000Z',
@@ -195,6 +201,16 @@ describe('PackageWorkshopService', () => {
         picture: 'p',
       },
     });
+  });
+
+  it('includes previewImage in the workshop summary when set', async () => {
+    const query = jest.fn(() =>
+      Promise.resolve([{ ...row, previewImage: PREVIEW }]),
+    );
+
+    const result = await makeService({ query }).list({});
+
+    expect(result.items[0].previewImage).toBe(PREVIEW);
   });
 
   it('omits the author when the package has none', async () => {
@@ -234,6 +250,7 @@ describe('PackageWorkshopService', () => {
         version: '1.0',
         description: 'd',
         tags: ['2d'],
+        previewImage: null,
         revision: 3,
         publishedAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-02T00:00:00.000Z',
@@ -334,7 +351,7 @@ describe('PackageWorkshopService copies', () => {
   it('creates a global record with the published snapshot', async () => {
     const flow = makeFlow();
     flow.repository.findOne
-      .mockResolvedValueOnce(roomPackage())
+      .mockResolvedValueOnce(roomPackage({ previewImage: PREVIEW }))
       .mockResolvedValueOnce(null);
     flow.revisionsRepository.findOne.mockResolvedValue({ revision: 2 });
     flow.packagesService.createGlobalRecord.mockResolvedValue({
@@ -351,6 +368,7 @@ describe('PackageWorkshopService copies', () => {
       version: '1.0',
       description: 'd',
       tags: ['2d'],
+      previewImage: PREVIEW,
       author: user,
     });
     expect(flow.revisionsService.publishCopiedRevision).toHaveBeenCalledWith({
@@ -390,6 +408,7 @@ describe('PackageWorkshopService copies', () => {
       version: '1.0',
       description: 'd',
       tags: ['3d'],
+      previewImage: null,
     });
     expect(
       flow.revisionsService.publishCopiedRevision.mock.invocationCallOrder[0],
@@ -534,7 +553,10 @@ describe('PackageWorkshopService copies', () => {
   it('forks with a new slug and keeps the parent', async () => {
     const flow = makeFlow();
     flow.repository.findOne.mockResolvedValueOnce(
-      roomPackage({ parentPackage: { id: 40 } as ScriptingPackage }),
+      roomPackage({
+        parentPackage: { id: 40 } as ScriptingPackage,
+        previewImage: PREVIEW,
+      }),
     );
     flow.revisionsRepository.findOne.mockResolvedValue({ revision: 2 });
     flow.packagesService.checkSlugAvailability.mockResolvedValue({
@@ -562,6 +584,7 @@ describe('PackageWorkshopService copies', () => {
         version: '1.0',
         description: 'd',
         tags: ['2d'],
+        previewImage: PREVIEW,
         roomId: 5,
         parentPackageId: 40,
       },
@@ -662,6 +685,7 @@ describe('PackageWorkshopService copies', () => {
         version: '1.0',
         description: 'd',
         tags: ['2d'],
+        previewImage: PREVIEW,
         room: null,
       })
       .mockResolvedValueOnce({ id: 31, slug: 'hero', room: { id: 9 } });
@@ -677,6 +701,7 @@ describe('PackageWorkshopService copies', () => {
         version: '1.0',
         description: 'd',
         tags: ['2d'],
+        previewImage: PREVIEW,
         roomId: 9,
         parentPackageId: 20,
       },

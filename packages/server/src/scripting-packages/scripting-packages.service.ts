@@ -449,6 +449,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     version: string;
     description: string;
     tags: string[];
+    previewImage?: string | null;
     author: User;
   }): Promise<ScriptingPackage> {
     return this.insertPackage({
@@ -458,6 +459,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
         version: input.version,
         description: input.description,
         tags: normalizeTags(input.tags),
+        previewImage: input.previewImage ?? null,
       },
       author: input.author,
       scope: 'global',

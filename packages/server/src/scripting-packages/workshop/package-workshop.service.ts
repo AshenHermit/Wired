@@ -27,6 +27,7 @@ import { PackageRevisionsService } from '../publish/package-revisions.service';
 import { ScriptingPackagesService } from '../scripting-packages.service';
 
 const WORKSHOP_SELECT = `SELECT p.id, p.slug, p.name, p.version, p.description, p.tags,
+       p."previewImage",
        a.id AS "authorId", a.name AS "authorName", a.email AS "authorEmail",
        a.picture AS "authorPicture", a.service AS "authorService",
        r.revision, r."publishedAt", p."updatedAt",
@@ -110,6 +111,7 @@ type WorkshopRow = {
   version: string;
   description: string;
   tags: string[];
+  previewImage: string | null;
   authorId: number | null;
   authorName: string;
   authorEmail: string;
@@ -242,6 +244,7 @@ export class PackageWorkshopService {
       version: metadata.version ?? pkg.version,
       description: metadata.description ?? pkg.description,
       tags: normalizeTags(metadata.tags ?? pkg.tags ?? []),
+      previewImage: pkg.previewImage ?? null,
     };
 
     let created: ScriptingPackage | undefined;
@@ -323,6 +326,7 @@ export class PackageWorkshopService {
         version: pkg.version,
         description: pkg.description,
         tags: pkg.tags,
+        previewImage: pkg.previewImage ?? null,
         roomId: pkg.room!.id,
         ...(pkg.parentPackage ? { parentPackageId: pkg.parentPackage.id } : {}),
       },
@@ -367,6 +371,7 @@ export class PackageWorkshopService {
         version: source.version,
         description: source.description,
         tags: source.tags,
+        previewImage: source.previewImage ?? null,
         roomId,
         parentPackageId: source.id,
       },
@@ -489,6 +494,7 @@ export class PackageWorkshopService {
       version: row.version,
       description: row.description,
       tags: row.tags,
+      previewImage: row.previewImage ?? null,
       revision: row.revision,
       publishedAt: row.publishedAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
