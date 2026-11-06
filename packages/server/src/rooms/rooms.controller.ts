@@ -16,6 +16,7 @@ import { Room } from 'src/database/entities/room.entity';
 import { RoomsService } from './rooms.service';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
+import { UpdateRoomAccessDto } from './dto/update-room-access.dto';
 import { UseAuthGuard, SilentAuth } from 'src/auth/auth-policy';
 import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 
@@ -59,6 +60,18 @@ export class RoomsController {
   ) {
     await this.roomsService.assertRoomEditing(req.user, roomId);
     return await this.roomsService.update(roomId, dto);
+  }
+
+  @UseAuthGuard()
+  @ApiOkResponse({ type: Room })
+  @Patch(':roomId/access')
+  async updateAccess(
+    @Param('roomId', ParseIntPipe) roomId: number,
+    @Body() dto: UpdateRoomAccessDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    await this.roomsService.assertRoomAccessEditing(req.user, roomId);
+    return await this.roomsService.updateAccess(roomId, dto, req.user);
   }
 
   @UseAuthGuard()
