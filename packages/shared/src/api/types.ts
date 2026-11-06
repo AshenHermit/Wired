@@ -90,6 +90,8 @@ export type CreatePackageRevisionPayload = {
   files: PackageFileEntry[];
 };
 
+export type RoomAccessMode = "all" | "author" | "users";
+
 export type Room = {
   id: number;
   name: string;
@@ -102,6 +104,10 @@ export type Room = {
   author?: PublicUser;
   contributors?: PublicUser[];
   scriptingPackages?: ScriptingPackage[];
+  packageManagementAccess?: RoomAccessMode;
+  packageManagementUserIds?: number[];
+  packageCreationAccess?: RoomAccessMode;
+  packageCreationUserIds?: number[];
 };
 
 export type ScriptingPackage = {
@@ -120,6 +126,8 @@ export type ScriptingPackage = {
   room?: Room;
   parentPackage?: ScriptingPackage;
   childrenPackages?: ScriptingPackage[];
+  editingAccess?: RoomAccessMode;
+  editingUserIds?: number[];
 };
 
 // DTOs / payloads
@@ -145,6 +153,13 @@ export type UpdateRoomPayload = {
   parentRoomId?: number;
 };
 
+export type UpdateRoomAccessPayload = {
+  packageManagementAccess?: RoomAccessMode;
+  packageManagementUserIds?: number[];
+  packageCreationAccess?: RoomAccessMode;
+  packageCreationUserIds?: number[];
+};
+
 export type CreateScriptingPackagePayload = {
   slug: string;
   name: string;
@@ -165,6 +180,11 @@ export type UpdateScriptingPackagePayload =
     /** Optional confirmation for a rename that published dependents point to. */
     confirmSlugRename?: boolean;
   };
+
+export type UpdatePackageAccessPayload = {
+  editingAccess?: RoomAccessMode;
+  editingUserIds?: number[];
+};
 
 /**
  * Authoring rule for package slugs, enforced by the server DTOs and mirrored by
