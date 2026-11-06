@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/animate-ui/components/radix/dialog";
 import { Button } from "@/components/animate-ui/components/buttons/button";
+import { ImageUploadField } from "@/components/media/ImageUploadField";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
@@ -53,8 +54,9 @@ export const RoomEditingPanel = React.forwardRef<
   const [room, setRoom] = React.useState<Room | null>(null);
   const [open, setOpen] = React.useState(false);
   const [operation, setOperation] = React.useState<"create" | "update">(
-    "create"
+    "create",
   );
+  const [previewImage, setPreviewImage] = React.useState<string | null>(null);
   const t = useTranslations("Rooms");
 
   const { register, handleSubmit, reset } = useForm<RoomEditingFieldsInfer>({
@@ -68,12 +70,14 @@ export const RoomEditingPanel = React.forwardRef<
   React.useImperativeHandle(ref, () => ({
     create: () => {
       setRoom(null);
+      setPreviewImage(null);
       reset({ name: "", description: "" });
       setOperation("create");
       setOpen(true);
     },
     edit: (next: Room) => {
       setRoom(next);
+      setPreviewImage(next.previewImage ?? null);
       reset({ name: next.name, description: next.description });
       setOperation("update");
       setOpen(true);
@@ -86,32 +90,41 @@ export const RoomEditingPanel = React.forwardRef<
   const { handleRequest } = useRequestHandler({ toastOnError: true });
 
   const createRoomCb = (data: RoomEditingFieldsInfer) => {
-    handleRequest(async () => {
-      await createRoom({ ...data, type: "godot" });
-      toast.success(t("created"));
-      setOpen(false);
-      onChange?.();
-    }, { errorMessage: { key: "Rooms.errors.create" } });
+    handleRequest(
+      async () => {
+        await createRoom({ ...data, type: "godot", previewImage });
+        toast.success(t("created"));
+        setOpen(false);
+        onChange?.();
+      },
+      { errorMessage: { key: "Rooms.errors.create" } },
+    );
   };
 
   const updateRoomCb = (data: RoomEditingFieldsInfer) => {
     if (!room) return;
-    handleRequest(async () => {
-      await updateRoom(room.id, { ...data });
-      toast.success(t("updated"));
-      setOpen(false);
-      onChange?.();
-    }, { errorMessage: { key: "Rooms.errors.update" } });
+    handleRequest(
+      async () => {
+        await updateRoom(room.id, { ...data, previewImage });
+        toast.success(t("updated"));
+        setOpen(false);
+        onChange?.();
+      },
+      { errorMessage: { key: "Rooms.errors.update" } },
+    );
   };
 
   const deleteRoomCb = () => {
     if (!room) return;
-    handleRequest(async () => {
-      await deleteRoom(room.id);
-      toast.success(t("deleted"));
-      setOpen(false);
-      onChange?.();
-    }, { errorMessage: { key: "Rooms.errors.delete" } });
+    handleRequest(
+      async () => {
+        await deleteRoom(room.id);
+        toast.success(t("deleted"));
+        setOpen(false);
+        onChange?.();
+      },
+      { errorMessage: { key: "Rooms.errors.delete" } },
+    );
   };
 
   return (
@@ -142,6 +155,13 @@ export const RoomEditingPanel = React.forwardRef<
               <Textarea
                 {...register("description")}
                 placeholder={t("descriptionPlaceholder")}
+              />
+            </Field>
+            <Field>
+              <FieldLabel>{t("preview")}</FieldLabel>
+              <ImageUploadField
+                value={previewImage}
+                onChange={setPreviewImage}
               />
             </Field>
           </FieldSet>

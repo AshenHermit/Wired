@@ -31,6 +31,7 @@ const room: Room = {
   description: "",
   type: "godot",
   parentRoomId: null,
+  previewImage: null,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
   author: { id: 7, name: "Ann", picture: "p" },

@@ -245,6 +245,9 @@ export function usePackageActions({
       if (patch.tags !== undefined) {
         payload.tags = patch.tags;
       }
+      if (patch.previewImage !== undefined) {
+        payload.previewImage = patch.previewImage;
+      }
       if (patch.confirmSlugRename !== undefined) {
         payload.confirmSlugRename = patch.confirmSlugRename;
       }

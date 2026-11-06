@@ -94,6 +94,7 @@ export function roomPackagesReducer(
                     version: action.package.version,
                     description: action.package.description ?? "",
                     tags: action.package.tags ?? [],
+                    previewImage: action.package.previewImage ?? null,
                   }
                 : entry,
             )

@@ -28,6 +28,7 @@ export type RoomPackageEntry = {
   /** Shown read-only on the card; edited in the package dialog. */
   description: string;
   tags: string[];
+  previewImage: string | null;
   status: RoomPackageStatus;
   /** The package is active in the room runtime. */
   enabled: boolean;
@@ -96,6 +97,7 @@ export type RoomPackagesController = {
       slug?: string;
       description?: string;
       tags?: string[];
+      previewImage?: string | null;
       confirmSlugRename?: boolean;
     },
   ) => Promise<ScriptingPackage>;
@@ -181,6 +183,7 @@ export function packageFromStatus(status: PackageSyncStatus): ScriptingPackage {
     version: "",
     description: "",
     tags: [],
+    previewImage: null,
     enabled: status.enabled,
     dependencies: [],
     createdAt: timestamp,
@@ -250,6 +253,7 @@ export function buildEntries(
       version: pkg.version,
       description: pkg.description ?? "",
       tags: pkg.tags ?? [],
+      previewImage: pkg.previewImage ?? null,
       status,
       enabled,
       loaded: loadedState !== null,

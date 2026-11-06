@@ -47,6 +47,7 @@ function entry(overrides: Partial<RoomPackageEntry> = {}): RoomPackageEntry {
     version: "0.1.0",
     description: "",
     tags: [],
+    previewImage: null,
     status: "loaded",
     enabled: true,
     loaded: true,
@@ -140,6 +141,7 @@ function roomPackage(
     version: "0.1.0",
     description: "Описание из комнаты",
     tags: ["room", "demo"],
+    previewImage: null,
     enabled: true,
     dependencies: [],
     createdAt: "2026-10-30T10:00:00.000Z",
@@ -156,6 +158,7 @@ function roomFixture(overrides: Partial<Room> = {}): Room {
     description: "",
     isPublic: false,
     parentRoomId: null,
+    previewImage: null,
     createdAt: "2026-10-30T10:00:00.000Z",
     updatedAt: "2026-10-30T10:00:00.000Z",
     ...overrides,
@@ -859,6 +862,7 @@ describe("PackagesTab", () => {
         slug: "hero2",
         description: "desc",
         tags: ["a", "b"],
+        previewImage: null,
       }),
     );
   });

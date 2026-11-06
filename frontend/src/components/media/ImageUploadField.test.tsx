@@ -23,7 +23,7 @@ describe("ImageUploadField", () => {
     );
     const img = container.querySelector("img");
     expect(img).not.toBeNull();
-    expect(img).toHaveAttribute("src", withApiPrefix(URL));
+    expect(img!.getAttribute("src")).toBe(withApiPrefix(URL));
   });
 
   it("does not render a bound preview image when value is null", () => {
