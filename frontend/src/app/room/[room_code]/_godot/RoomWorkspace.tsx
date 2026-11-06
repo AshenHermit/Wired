@@ -31,7 +31,14 @@ import {
   canManageRoomPackages,
 } from "@/utils/room-access";
 
-export function RoomWorkspace({ room }: { room: Room }) {
+export function RoomWorkspace({
+  room,
+  onRoomSaved,
+}: {
+  room: Room;
+  /** Receives the room returned by the access settings save. */
+  onRoomSaved: (room: Room) => void;
+}) {
   const t = useTranslations("Room");
   const [activeTab, setActiveTab] = React.useState("editor");
   const [gameMounted, setGameMounted] = React.useState(false);
@@ -121,6 +128,7 @@ export function RoomWorkspace({ room }: { room: Room }) {
               viewerId={viewerId}
               roomId={room.id}
               room={room}
+              onRoomSaved={onRoomSaved}
             />
           </TabsContent>
           <TabsContent value="game" className="w-full !h-full">

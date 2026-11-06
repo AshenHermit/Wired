@@ -519,6 +519,7 @@ export function PackagesTab({
   viewerId,
   roomId,
   room,
+  onRoomSaved,
 }: {
   packages: RoomPackagesController;
   /** The viewer may write to this room, so the API will accept the action. */
@@ -530,6 +531,8 @@ export function PackagesTab({
   roomId: number;
   /** The full room, for the access settings dialog. */
   room: Room;
+  /** Receives the room returned by the access settings save. */
+  onRoomSaved: (room: Room) => void;
 }) {
   const [createOpen, setCreateOpen] = React.useState(false);
   const [workshopOpen, setWorkshopOpen] = React.useState(false);
@@ -975,6 +978,7 @@ export function PackagesTab({
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
           room={room}
+          onSaved={onRoomSaved}
         />
       </div>
     </div>

@@ -62,5 +62,5 @@ export function RoomRouteGate({ roomCode }: { roomCode: string }) {
       </div>
     );
   }
-  return <RoomWorkspace room={room} />;
+  return <RoomWorkspace room={room} onRoomSaved={setRoom} />;
 }
