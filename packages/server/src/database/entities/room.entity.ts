@@ -12,7 +12,11 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { ScriptingPackage } from './scripting-package.entity';
-import { GAME_ROOMS_TYPES, GameRoomsType } from '@wired-io/shared';
+import {
+  GAME_ROOMS_TYPES,
+  GameRoomsType,
+  RoomAccessMode,
+} from '@wired-io/shared';
 
 @Entity()
 export class Room {
@@ -56,7 +60,7 @@ export class Room {
     description: 'room type',
     enum: GAME_ROOMS_TYPES,
   })
-  @Column({ type: 'enum', enum: GAME_ROOMS_TYPES, default: 'ts-game' })
+  @Column({ type: 'enum', enum: GAME_ROOMS_TYPES, default: 'godot' })
   type: GameRoomsType;
 
   @ApiProperty({ description: 'room author', type: () => User, nullable: true })
@@ -75,8 +79,10 @@ export class Room {
   @ApiProperty({
     description: 'parent room id',
   })
-  @Column({ nullable: true, default: null })
-  parentRoomId: number;
+  // Explicit type: TypeORM cannot infer a column type from `number | null`
+  // (it sees `Object` and refuses to start).
+  @Column({ type: 'int', nullable: true, default: null })
+  parentRoomId: number | null;
 
   @ApiProperty({
     description: 'room packages',
@@ -88,4 +94,34 @@ export class Room {
     (scriptingPackage) => scriptingPackage.room,
   )
   scriptingPackages: ScriptingPackage[];
+
+  @ApiProperty({
+    description: 'package management access mode',
+    nullable: true,
+  })
+  @Column({ type: 'varchar', nullable: true, default: null })
+  packageManagementAccess: RoomAccessMode | null;
+
+  @ApiProperty({
+    description: 'user IDs with package management access',
+    isArray: true,
+    nullable: true,
+  })
+  @Column({ type: 'jsonb', nullable: true, default: () => "'[]'" })
+  packageManagementUserIds: number[] | null;
+
+  @ApiProperty({
+    description: 'package creation access mode',
+    nullable: true,
+  })
+  @Column({ type: 'varchar', nullable: true, default: null })
+  packageCreationAccess: RoomAccessMode | null;
+
+  @ApiProperty({
+    description: 'user IDs with package creation access',
+    isArray: true,
+    nullable: true,
+  })
+  @Column({ type: 'jsonb', nullable: true, default: () => "'[]'" })
+  packageCreationUserIds: number[] | null;
 }

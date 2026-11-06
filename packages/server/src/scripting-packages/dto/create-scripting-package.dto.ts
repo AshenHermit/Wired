@@ -4,38 +4,20 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Matches,
+  MaxLength,
   MinLength,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { ScriptFile } from 'src/database/entities/scripting-package.entity';
-import { PhysicalFile } from '@wired-io/shared';
-
-class ScriptFileDto implements ScriptFile {
-  @ApiProperty({ example: 'main.ts', description: 'Script file path' })
-  @IsString()
-  filepath: string;
-
-  @ApiProperty({
-    example: 'console.log(\"hello\")',
-    description: 'Script body',
-  })
-  @IsString()
-  script: string;
-}
-
-class PhysicalFileDto implements PhysicalFile {
-  @ApiProperty({ example: 'main.ts', description: 'Physical file path' })
-  @IsString()
-  filepath: string;
-
-  @ApiProperty({ example: '1234567890', description: 'Physical file hash' })
-  @IsOptional()
-  @IsString()
-  hash?: string;
-}
+import { IsPackageSlug } from './package-slug.decorator';
 
 export class CreateScriptingPackageDto {
+  @ApiProperty({ example: 'hero_controller' })
+  @IsString()
+  @IsPackageSlug()
+  slug: string;
+
   @ApiProperty({ example: 'My package', description: 'Package title' })
   @IsString()
   @MinLength(1)
@@ -65,35 +47,14 @@ export class CreateScriptingPackageDto {
   dependencies?: string[];
 
   @ApiProperty({
-    description: 'Package scripts',
+    description: 'Workshop tags',
     required: false,
-    type: [ScriptFileDto],
+    type: [String],
   })
   @IsOptional()
   @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => ScriptFileDto)
-  scripts?: ScriptFile[];
-
-  @ApiProperty({
-    description: 'Package physical files',
-    required: false,
-    type: [PhysicalFileDto],
-  })
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => PhysicalFileDto)
-  physicalFiles?: PhysicalFile[];
-
-  @ApiProperty({
-    example: 1,
-    description: 'Author user id',
-    required: false,
-  })
-  @IsOptional()
-  @IsInt()
-  authorId?: number;
+  @IsString({ each: true })
+  tags?: string[];
 
   @ApiProperty({
     example: 1,

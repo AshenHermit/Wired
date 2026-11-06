@@ -1,16 +1,31 @@
-version: "3.5"
+name: wired
 
 services:
   db:
     image: postgres:18.1
     restart: always
     environment:
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_DB=${DB_NAME}
       - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - TZ=${TZ}
     container_name: wired_postgres
     volumes:
       - wired_db:/var/lib/postgresql
     ports:
-      - "${DB_EXTERNAL_PORT}:5432"
+      # Только loopback: бэкенд подключается по имени сервиса, наружу БД не нужна.
+      - "127.0.0.1:${DB_EXTERNAL_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - wired
 
@@ -20,26 +35,65 @@ services:
       dockerfile: backend.Dockerfile
     container_name: wired_backend
     restart: always
+    # Godot gets up to GODOT_ROOM_SHUTDOWN_GRACE_MS (10s) per room to write
+    # state.json; Docker's default 10s grace could SIGKILL the backend first.
+    stop_grace_period: 30s
     environment:
       - DB_HOST=${DB_HOST}
       - DB_PORT=${DB_PORT}
+      - DB_USER=${DB_USER}
+      - DB_NAME=${DB_NAME}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_SYNC=${DB_SYNC}
       - AUTH_SECRET=${AUTH_SECRET}
+      - AUTH_COOKIE_NAME=${AUTH_COOKIE_NAME}
       - PORT=${PORT}
-      - STORAGE_DIR=${STORAGE_DIR}
+      # Абсолютный путь обязателен для compose; volume монтируется сюда же.
+      - STORAGE_DIR=/app/storage
+      # Состояние комнат должно жить на volume, а не в образе.
+      - GODOT_ROOM_STATE_DIR=/app/storage/godot_rooms
       - GOOGLE_AUTH_CLIENT_ID=${GOOGLE_AUTH_CLIENT_ID}
       - GOOGLE_AUTH_CLIENT_SECRET=${GOOGLE_AUTH_CLIENT_SECRET}
       - GOOGLE_AUTH_CALLBACK=${GOOGLE_AUTH_CALLBACK}
       - SITE_HOST=${SITE_HOST}
       - COMMON_DOMAIN=${COMMON_DOMAIN}
+      - WIRED_GAME_TICKET_SECRET=${WIRED_GAME_TICKET_SECRET}
+      - WIRED_PACKAGE_READ_SECRET=${WIRED_PACKAGE_READ_SECRET}
+      - WIRED_PACKAGE_READ_TTL_SEC=${WIRED_PACKAGE_READ_TTL_SEC}
+      # Game sockets use the same public API vhost; the room id is in the path.
+      - GODOT_ROOM_PUBLIC_WS_BASE=wss://api.${COMMON_DOMAIN}/rooms/{room}/game/ws
+      - GODOT_ROOM_IDLE_TIMEOUT_MS=${GODOT_ROOM_IDLE_TIMEOUT_MS}
+      - GODOT_ROOM_PORT_START=${GODOT_ROOM_PORT_START}
+      - GODOT_ROOM_PORT_END=${GODOT_ROOM_PORT_END}
+      - GODOT_ROOM_WS_MAX_CLIENTS_PER_ROOM=${GODOT_ROOM_WS_MAX_CLIENTS_PER_ROOM}
+      - GODOT_ROOM_WS_MAX_TOTAL=${GODOT_ROOM_WS_MAX_TOTAL}
       - TZ=${TZ}
     ports:
       - "${BACKEND_EXTERNAL_PORT}:3000"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     volumes:
-      - wired_storage:${STORAGE_DIR}
+      - type: volume
+        source: wired_storage
+        target: /app/storage
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/docs').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - wired
 
@@ -51,16 +105,21 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
         NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
         NEXT_PUBLIC_WEBSOCKET_URL: ${NEXT_PUBLIC_WEBSOCKET_URL}
+        NEXT_PUBLIC_HASHIDS_SALT: ${NEXT_PUBLIC_HASHIDS_SALT}
     container_name: wired_frontend
     restart: always
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
       - NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL}
       - NEXT_PUBLIC_WEBSOCKET_URL=${NEXT_PUBLIC_WEBSOCKET_URL}
+      - NEXT_PUBLIC_HASHIDS_SALT=${NEXT_PUBLIC_HASHIDS_SALT}
     ports:
       - "${FRONTEND_EXTERNAL_PORT}:3000"
-    depends_on:
-      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - wired
 
@@ -69,12 +128,21 @@ services:
     container_name: wired_nginx
     restart: always
     volumes:
-      - ./nginx/conf:/etc/nginx/conf.d
+      - ./nginx/conf:/etc/nginx/templates:ro
+    environment:
+      - COMMON_DOMAIN=${COMMON_DOMAIN}
     ports:
       - "${NGINX_EXTERNAL_PORT}:8080"
     depends_on:
-      - frontend
-      - backend
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - wired
       - shared-net

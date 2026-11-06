@@ -12,11 +12,22 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { Room } from './room.entity';
-import { PhysicalFile } from '@wired-io/shared';
+
+/*
+ * The shapes below describe columns written by the retired Phaser-era package
+ * model. Package content now travels as revision files, so nothing writes them
+ * any more; they survive only because `DB_SYNC` cannot drop populated columns
+ * and older rows still carry values.
+ */
 
 export type ScriptFile = {
   filepath: string;
   script: string;
+};
+
+export type PhysicalFile = {
+  filepath: string;
+  hash?: string;
 };
 
 @Entity()
@@ -40,6 +51,16 @@ export class ScriptingPackage {
   })
   public updatedAt: Date;
 
+  @ApiProperty({
+    example: 'hero_controller',
+    description: 'Stable package slug',
+  })
+  // Nullable only for rows written before slugs existed: the startup backfill
+  // fills them before the app serves a request, and refuses to boot if it
+  // cannot. Wire payloads use requirePackageSlug() rather than this field.
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  slug: string | null;
+
   @ApiProperty({ example: 'Untitled', description: 'package title' })
   @Column({ default: 'Untitled' })
   name: string;
@@ -51,6 +72,10 @@ export class ScriptingPackage {
   @ApiProperty({ description: 'package description' })
   @Column({ default: '' })
   description: string;
+
+  @ApiProperty({ description: 'Workshop tags', isArray: true })
+  @Column({ type: 'jsonb', default: [] })
+  tags: string[];
 
   @ApiProperty({ description: 'package dependencies' })
   @Column({ type: 'jsonb', default: [] })
@@ -64,9 +89,27 @@ export class ScriptingPackage {
   @Column({ type: 'jsonb', default: [] })
   physicalFiles: PhysicalFile[];
 
+  @ApiProperty({ description: 'package is active in its room' })
+  @Column({ default: true })
+  enabled: boolean;
+
+  @ApiProperty({
+    description: 'editing access level for the package',
+    nullable: true,
+  })
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  editingAccess: string | null;
+
+  @ApiProperty({
+    description: 'user IDs with editing access',
+    isArray: true,
+  })
+  @Column({ type: 'jsonb', default: [] })
+  editingUserIds: number[];
+
   @ApiProperty({ description: 'package author', type: () => User })
-  @ManyToOne(() => User, (user) => user.scriptingPackages)
-  author: User;
+  @ManyToOne(() => User, (user) => user.scriptingPackages, { nullable: true })
+  author?: User | null;
 
   @ApiProperty({
     description: 'package contributors',
@@ -78,8 +121,8 @@ export class ScriptingPackage {
   contributors: User[];
 
   @ApiProperty({ description: 'package room', type: () => Room })
-  @ManyToOne(() => Room, (room) => room.scriptingPackages)
-  room: Room;
+  @ManyToOne(() => Room, (room) => room.scriptingPackages, { nullable: true })
+  room?: Room | null;
 
   @ApiProperty({
     description: 'package parent package',
@@ -88,8 +131,9 @@ export class ScriptingPackage {
   @ManyToOne(
     () => ScriptingPackage,
     (scriptingPackage) => scriptingPackage.childrenPackages,
+    { nullable: true },
   )
-  parentPackage: ScriptingPackage;
+  parentPackage?: ScriptingPackage | null;
 
   @ApiProperty({
     description: 'package children packages',

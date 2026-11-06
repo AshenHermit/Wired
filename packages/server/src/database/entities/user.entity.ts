@@ -2,7 +2,6 @@ import { ApiProperty } from '@nestjs/swagger';
 import {
   Column,
   Entity,
-  JoinTable,
   ManyToMany,
   OneToMany,
   PrimaryGeneratedColumn,
@@ -56,7 +55,7 @@ export class User {
     type: () => Room,
     isArray: true,
   })
-  @ManyToMany(() => Room, (room) => room.author)
+  @ManyToMany(() => Room, (room) => room.contributors)
   contributedRooms: Room[];
 
   @ApiProperty({

@@ -1,22 +1,31 @@
-import { CreateRoomPayload, Room, UpdateRoomPayload } from "@wired-io/shared";
-import { apiClient } from "../api-client/client-api";
+import {
+  CreateRoomPayload,
+  Room,
+  UpdateRoomAccessPayload,
+  UpdateRoomPayload,
+} from "@wired-io/shared";
+import { apiClient } from "../api-client/api-client";
 
-export async function listRooms() {
-  return apiClient.get<Room[], void>("rooms");
+export function listRooms() {
+  return apiClient.get<Room[]>("rooms");
 }
 
-export async function getRoom(id: number) {
-  return apiClient.get<Room, void>(`rooms/${id}`);
+export function getRoom(id: number) {
+  return apiClient.get<Room>(`rooms/${id}`);
 }
 
-export async function createRoom(data: CreateRoomPayload) {
-  return apiClient.post<Room, CreateRoomPayload>("rooms", data);
+export function createRoom(data: CreateRoomPayload) {
+  return apiClient.post<Room>("rooms", data);
 }
 
-export async function updateRoom(id: number, data: UpdateRoomPayload) {
-  return apiClient.patch<Room, UpdateRoomPayload>(`rooms/${id}`, data);
+export function updateRoom(id: number, data: UpdateRoomPayload) {
+  return apiClient.patch<Room>(`rooms/${id}`, data);
 }
 
-export async function deleteRoom(id: number) {
-  return apiClient.delete<void, void>(`rooms/${id}`);
+export function updateRoomAccess(id: number, data: UpdateRoomAccessPayload) {
+  return apiClient.patch<Room>(`rooms/${id}/access`, data);
+}
+
+export function deleteRoom(id: number) {
+  return apiClient.delete<void>(`rooms/${id}`);
 }

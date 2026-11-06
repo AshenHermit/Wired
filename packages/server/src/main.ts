@@ -1,20 +1,20 @@
-const originalXMLHttpRequest = global.XMLHttpRequest;
-import '@geckos.io/phaser-on-nodejs';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { IoAdapter } from '@nestjs/platform-socket.io';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import FakeXMLHttpRequest from './utils/fakeXMLHttpRequest';
-// import { XMLHttpRequest } from 'xmlhttprequest';
-
-global.XMLHttpRequest = FakeXMLHttpRequest as any;
+import { createValidationPipe } from './common/validation';
+import { AppConfigService } from './config/config.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const appConfig = app.get(AppConfigService);
 
-  // Настройка WebSocket adapter для Socket.IO
-  app.useWebSocketAdapter(new IoAdapter(app));
+  app.useGlobalPipes(createValidationPipe());
 
+  // Ensures room runtime processes are stopped when the backend exits
+  // (SIGINT/SIGTERM); RoomRuntimeService also terminates them gracefully.
+  app.enableShutdownHooks();
+
+  const corsOrigin = appConfig.site.corsOrigin;
   app.enableCors({
     allowedHeaders: [
       'Content-Type',
@@ -26,9 +26,11 @@ async function bootstrap() {
       'X-Forwarded-For',
       'X-Forwarded-Proto',
     ],
-    origin: process.env.SITE_HOST ?? '*',
+    // Browsers reject `*` together with credentials. Only send credentials
+    // when the allowed origin is actually configured.
+    origin: corsOrigin ?? '*',
     crossOriginIsolated: true,
-    credentials: true,
+    credentials: corsOrigin !== null,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     exposedHeaders: ['Content-Type', 'Content-Length'],
   });
@@ -42,6 +44,13 @@ async function bootstrap() {
   const documentFactory = () => SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, documentFactory);
 
-  await app.listen(process.env.PORT ?? 3000);
+  await app.listen(appConfig.port);
 }
-bootstrap();
+
+bootstrap().catch((error: unknown) => {
+  // Nest logs module-level failures itself, but a rejected bootstrap (missing
+  // config, unreachable database) would otherwise exit with an unhandled
+  // rejection and no non-zero status.
+  console.error('Failed to start the Wired API', error);
+  process.exit(1);
+});

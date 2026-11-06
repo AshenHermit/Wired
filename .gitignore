@@ -1,3 +1,14 @@
 node_modules
 dist
 .env
+.env.prod
+.env.prod.*
+!.env.prod.example
+.superpowers/
+.desloppify/
+.opencode/index/
+packages/server/storage/
+packages/server/game_export/
+packages/server/godot_editor/
+packages/server/godot_runtime/
+scorecard.png

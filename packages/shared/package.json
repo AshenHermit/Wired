@@ -2,17 +2,10 @@
     "name": "@wired-io/shared",
     "version": "1.0.0",
     "private": true,
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
     "scripts": {
-        "build:types": "tsc -p tsconfig.types.json"
-    },
-    "dependencies": {
-        "@box2d": "file:../box2d",
-        "easy-event-emitter": "^1.2.2",
-        "hashids": "^2.3.0",
-        "pathe": "^2.0.3",
-        "phaser": "^3.90.0",
-        "typescript": "^5.9.3",
-        "uuid": "^13.0.0"
+        "build": "tsc -p tsconfig.build.json"
     },
     "devDependencies": {
         "typescript": "^5.9.3"

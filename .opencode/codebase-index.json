@@ -1,0 +1,11 @@
+{
+  "embeddingProvider": "ollama",
+  "scope": "project",
+  "indexing": {
+    "autoIndex": false,
+    "watchFiles": true
+  },
+  "ollama": {
+    "numGpu": 0
+  }
+}

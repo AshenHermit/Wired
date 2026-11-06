@@ -1,0 +1,228 @@
+extends RefCounted
+class_name ArtifactStore
+
+## File-system side of a package artifact: staging, swap and pruning.
+##
+## `PackagesManager` decides *what* to apply; this script owns *how* a verified
+## artifact lands on disk. The layout is
+## `<packages root>/<slug>/<revision>-<artifact key>/`, so the bytes of two
+## different closure states never share a path and the engine's resource cache
+## can never mix them.
+##
+## The folder of a package is its slug, not its numeric id: the runtime manifest
+## names it, and the id stays the identity in every state dictionary, signal and
+## snapshot. A numeric legacy slug (`"7"`) is a valid folder name, so packages
+## created before slugs existed keep their directory. An invalid or missing slug
+## is an error: there is no `str(id)` fallback, because that would silently address
+## a different package's bytes.
+##
+## Rules:
+##   * a new artifact is written into `.staging` and only swapped in when it is
+##     complete, so a failed apply keeps a working package on disk;
+##   * the previous artifact is moved to `.previous` first and restored if the
+##     rename fails;
+##   * only numeric/artifact directories of that one slug are ever removed, so no
+##     other project file is touched.
+##
+## The packages root is read through a callable on every access: the runtime
+## learns its room after construction, and a room change must not require a new
+## store.
+
+const STAGING_DIR := ".staging"
+const PREVIOUS_DIR := ".previous"
+## The backend slug contract. It becomes a path segment, so it is validated
+## before it is joined to the packages root.
+const SLUG_PATTERN := "^[a-z0-9_]{1,64}$"
+
+static var _slug_regex := RegEx.create_from_string(SLUG_PATTERN)
+
+var _packages_root: Callable
+
+
+## `packages_root` returns the room's packages directory
+## (`user://wired/rooms/<room>/packages`).
+func _init(packages_root: Callable) -> void:
+	_packages_root = packages_root
+
+
+## Whether `slug` is a safe package folder name. Numeric slugs are valid for
+## packages created before slugs existed.
+static func is_valid_slug(slug: String) -> bool:
+	var found := _slug_regex.search(slug)
+	# Require the match to consume the whole input: PCRE2's `$` also matches
+	# before a trailing newline, which would accept `"hero\n"`.
+	return found != null and found.get_string() == slug
+
+
+## Directory of one package, or an empty string for an invalid slug. Everything
+## else derives from this path.
+func package_dir(slug: String) -> String:
+	if not is_valid_slug(slug):
+		return ""
+	return str(_packages_root.call()).path_join(slug)
+
+
+func staging_dir(slug: String) -> String:
+	var root := package_dir(slug)
+	if root.is_empty():
+		return ""
+	return root.path_join(STAGING_DIR)
+
+
+## Directory of one artifact. An empty `artifact_key` selects the plain
+## `<revision>` directory of a revision applied without a key.
+func revision_dir(slug: String, revision: int, artifact_key: String) -> String:
+	var root := package_dir(slug)
+	if root.is_empty():
+		return ""
+	return root.path_join(revision_dir_name(revision, artifact_key))
+
+
+static func revision_dir_name(revision: int, artifact_key: String) -> String:
+	if artifact_key.is_empty():
+		return str(revision)
+	return "%d-%s" % [revision, artifact_key]
+
+
+## Revision encoded in a `<revision>` or `<revision>-<artifact_key>` directory
+## name, or 0 for anything else (staging, `.previous`, arbitrary files).
+static func revision_of_dir_name(name: String) -> int:
+	var base := name.get_slice("-", 0)
+	return base.to_int() if base.is_valid_int() else 0
+
+
+## Writes the verified files into the staging directory. Returns an empty string
+## on success; a partially written staging directory is always removed.
+func stage(slug: String, files: Array) -> String:
+	var staging := staging_dir(slug)
+	if staging.is_empty():
+		return "package %s: invalid slug" % slug
+	remove_tree(staging)
+	for file: Dictionary in files:
+		var target := staging.path_join(str(file.filepath))
+		var dir_error := DirAccess.make_dir_recursive_absolute(target.get_base_dir())
+		if dir_error != OK:
+			remove_tree(staging)
+			return (
+				"package %s: cannot create %s: %s"
+				% [slug, target.get_base_dir(), error_string(dir_error)]
+			)
+		var handle := FileAccess.open(target, FileAccess.WRITE)
+		if handle == null:
+			remove_tree(staging)
+			return (
+				"package %s: cannot write %s: %s"
+				% [slug, target, error_string(FileAccess.get_open_error())]
+			)
+		handle.store_buffer(file.body)
+		handle.close()
+	return ""
+
+
+## Replaces the keyed artifact directory only after the staged copy is complete,
+## so a failed swap keeps a working package on disk. Returns an empty string on
+## success.
+func swap(slug: String, revision: int, artifact_key: String) -> String:
+	var root := package_dir(slug)
+	var target_dir := revision_dir(slug, revision, artifact_key)
+	var staging := staging_dir(slug)
+	if root.is_empty() or target_dir.is_empty() or staging.is_empty():
+		return "package %s: invalid slug" % slug
+	var backup_dir := root.path_join(PREVIOUS_DIR)
+	remove_tree(backup_dir)
+	# Re-applying the same artifact (a retry) overwrites it; move the old copy
+	# aside first so it survives a failed rename.
+	if DirAccess.dir_exists_absolute(target_dir):
+		var backup_error := DirAccess.rename_absolute(target_dir, backup_dir)
+		if backup_error != OK:
+			remove_tree(staging)
+			return (
+				"package %s: cannot replace revision %d: %s"
+				% [slug, revision, error_string(backup_error)]
+			)
+
+	var rename_error := DirAccess.rename_absolute(staging, target_dir)
+	if rename_error != OK:
+		if DirAccess.dir_exists_absolute(backup_dir):
+			DirAccess.rename_absolute(backup_dir, target_dir)
+		remove_tree(staging)
+		return (
+			"package %s: cannot publish revision %d: %s"
+			% [slug, revision, error_string(rename_error)]
+		)
+
+	remove_tree(backup_dir)
+	prune(slug, revision, target_dir.get_file())
+	return ""
+
+
+## Keeps the applied artifact and the newest other revision on disk. Older
+## artifacts of the same revision are removed: their bytes belong to a closure
+## that is no longer pinned. Deriving the previous revision from the directory
+## instead of memory keeps it correct after a restart and after a same-revision
+## refresh.
+func prune(slug: String, keep_revision: int, keep_dir_name: String) -> void:
+	var root := package_dir(slug)
+	if root.is_empty():
+		return
+	var keep_previous := highest_revision(slug, keep_revision)
+	var dir := DirAccess.open(root)
+	if dir == null:
+		return
+	for name: String in dir.get_directories():
+		if name == STAGING_DIR or name == PREVIOUS_DIR:
+			continue
+		var value := revision_of_dir_name(name)
+		if value <= 0:
+			continue
+		if name == keep_dir_name:
+			continue
+		if value == keep_previous:
+			continue
+		remove_tree(root.path_join(name))
+
+
+## Highest numeric revision directory of a package, ignoring `exclude`.
+func highest_revision(slug: String, exclude: int = 0) -> int:
+	var highest := 0
+	var root := package_dir(slug)
+	if root.is_empty():
+		return highest
+	var dir := DirAccess.open(root)
+	if dir == null:
+		return highest
+	for name: String in dir.get_directories():
+		var value := revision_of_dir_name(name)
+		if value != 0 and value != exclude:
+			highest = maxi(highest, value)
+	return highest
+
+
+func remove_files(paths: PackedStringArray) -> void:
+	for path: String in paths:
+		if path.is_empty():
+			continue
+		DirAccess.remove_absolute(path)
+
+
+func remove_tree(path: String) -> void:
+	if path.is_empty():
+		return
+	var dir := DirAccess.open(path)
+	if dir == null:
+		return
+	# Collect names first: deleting while enumerating can skip entries.
+	var names := PackedStringArray()
+	dir.list_dir_begin()
+	var name := dir.get_next()
+	while not name.is_empty():
+		names.append(name)
+		name = dir.get_next()
+	dir.list_dir_end()
+	for child_name: String in names:
+		var child := path.path_join(child_name)
+		if DirAccess.dir_exists_absolute(child):
+			remove_tree(child)
+		else:
+			DirAccess.remove_absolute(child)
+	DirAccess.remove_absolute(path)

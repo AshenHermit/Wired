@@ -1,4 +1,4 @@
-import { HomepageClient } from "./homepage-client";
+import { HomepageClient } from "./HomepageClient";
 
 export default function Home() {
   return <HomepageClient />;

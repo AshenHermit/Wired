@@ -4,11 +4,13 @@ import {
   Popover as PopoverPrimitive,
   PopoverTrigger as PopoverTriggerPrimitive,
   PopoverContent as PopoverContentPrimitive,
+  PopoverAnchor as PopoverAnchorPrimitive,
   PopoverPortal as PopoverPortalPrimitive,
   PopoverClose as PopoverClosePrimitive,
   type PopoverProps as PopoverPrimitiveProps,
   type PopoverTriggerProps as PopoverTriggerPrimitiveProps,
   type PopoverContentProps as PopoverContentPrimitiveProps,
+  type PopoverAnchorProps as PopoverAnchorPrimitiveProps,
   type PopoverCloseProps as PopoverClosePrimitiveProps,
 } from '@/components/animate-ui/primitives/radix/popover';
 import { cn } from '@/lib/utils';
@@ -23,6 +25,12 @@ type PopoverTriggerProps = PopoverTriggerPrimitiveProps;
 
 function PopoverTrigger(props: PopoverTriggerProps) {
   return <PopoverTriggerPrimitive {...props} />;
+}
+
+type PopoverAnchorProps = PopoverAnchorPrimitiveProps;
+
+function PopoverAnchor(props: PopoverAnchorProps) {
+  return <PopoverAnchorPrimitive {...props} />;
 }
 
 type PopoverContentProps = PopoverContentPrimitiveProps;
@@ -58,9 +66,11 @@ export {
   Popover,
   PopoverTrigger,
   PopoverContent,
+  PopoverAnchor,
   PopoverClose,
   type PopoverProps,
   type PopoverTriggerProps,
   type PopoverContentProps,
+  type PopoverAnchorProps,
   type PopoverCloseProps,
 };

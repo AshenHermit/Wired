@@ -1,0 +1,16 @@
+[gd_scene load_steps=2 format=3]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_platform"]
+size = Vector2(640, 32)
+
+[node name="Platform" type="StaticBody2D"]
+
+[node name="Sprite" type="Polygon2D" parent="."]
+polygon = PackedVector2Array(-320, -16, 320, -16, 320, 16, -320, 16)
+color = Color(0.27, 0.38, 0.5, 1)
+
+[node name="Collision" type="CollisionShape2D" parent="."]
+shape = SubResource("RectangleShape2D_platform")
+
+[node name="Spawn" type="Marker2D" parent="." groups=["wired_player_spawn"]]
+position = Vector2(0, -64)

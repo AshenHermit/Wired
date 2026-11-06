@@ -1,79 +1,102 @@
 import {
   Controller,
   Get,
-  Module,
+  NotFoundException,
   Param,
-  ParseArrayPipe,
   Req,
   Res,
   StreamableFile,
 } from '@nestjs/common';
-import { ProjectInfo } from '@wired-io/shared';
-import { Extension, getContentType } from 'content-type-to-ext';
-import { Response } from 'express';
-import { createReadStream } from 'fs';
-import { glob } from 'fs/promises';
-import path, { join } from 'path';
+import { GODOT_PROJECT_ROUTE, ProjectInfo } from '@wired-io/shared';
+import { Request, Response } from 'express';
+import { glob, stat } from 'node:fs/promises';
+import path, { resolve } from 'node:path';
 import { AppConfigService } from 'src/config/config.service';
+import { serveStaticAsset, wildcardPath } from 'src/common/static-assets';
+import { Public } from 'src/auth/auth-policy';
 
+const EXCLUDED_PROJECT_DIRS = new Set(['build', 'storage', '.godot']);
+
+/**
+ * Serves the WASM editor's own assets and the shared base project.
+ *
+ * Public on purpose: the editor bootstraps before it knows who the user is,
+ * and the files are the same for every room.
+ */
+@Public()
 @Controller('')
 export class GodotEditorProviderController {
   constructor(private readonly configService: AppConfigService) {}
 
   @Get('godot-editor/*path')
-  getFiles(
+  getEditorFile(
+    @Param('path') requestedPath: string | string[],
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
-  ): StreamableFile {
-    const relativeFilepath = req.url.split('/godot-editor/')[1];
-    const file = createReadStream(
-      join(
-        process.cwd(),
-        this.configService.godot.editorPath,
-        relativeFilepath,
-      ),
+  ): Promise<StreamableFile | undefined> {
+    return serveStaticAsset(
+      resolve(this.configService.godot.editorPath),
+      wildcardPath(requestedPath),
+      req,
+      res,
     );
-    res.set({
-      'Content-Type': getContentType(
-        path.extname(relativeFilepath).substring(1) as Extension,
-      ),
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-      'Cross-Origin-Opener-Policy': 'same-origin',
-    });
-    return new StreamableFile(file);
   }
-  @Get('godot-project-info/wired')
-  async getGodotProjectZip(): Promise<ProjectInfo> {
+
+  @Get(GODOT_PROJECT_ROUTE)
+  async getGodotProjectInfo(): Promise<ProjectInfo> {
     const projectDir = path.join(
-      process.cwd(),
-      this.configService.godot.projectPath,
+      resolve(this.configService.godot.projectPath),
       '_wired',
     );
     const filepaths: string[] = [];
-    for await (const filepath of glob(path.join(projectDir, '**', '*.*'))) {
-      filepaths.push(path.relative(projectDir, filepath).replace(/\\/g, '/'));
+    for await (const filepath of glob(path.join(projectDir, '**', '*'))) {
+      let isFile = false;
+      try {
+        isFile = (await stat(filepath)).isFile();
+      } catch {
+        continue;
+      }
+      if (!isFile) {
+        continue;
+      }
+      const relative = path.relative(projectDir, filepath).replace(/\\/g, '/');
+      // The export and runtime state must never reach the editor FS, even if
+      // somebody builds into the base project by mistake.
+      if (
+        relative
+          .split('/')
+          .some((segment) => EXCLUDED_PROJECT_DIRS.has(segment))
+      ) {
+        continue;
+      }
+      filepaths.push(relative);
     }
     const projectInfo: ProjectInfo = {
       name: 'Wired',
-      baseUrl: '/godot-project/wired/',
+      baseUrl: `/${GODOT_PROJECT_ROUTE}/`,
       filepaths: filepaths,
     };
     return projectInfo;
   }
-  @Get('godot-project/wired/*filepath')
+
+  @Get(`${GODOT_PROJECT_ROUTE}/*filepath`)
   getGodotProjectFile(
-    @Param('filepath', ParseArrayPipe) filepath: string[],
+    @Param('filepath') filepath: string | string[],
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
-  ): StreamableFile {
-    const projectDir = path.join(
-      process.cwd(),
-      this.configService.godot.projectPath,
-      '_wired',
+  ): Promise<StreamableFile | undefined> {
+    return serveStaticAsset(
+      path.join(resolve(this.configService.godot.projectPath), '_wired'),
+      wildcardPath(filepath),
+      req,
+      res,
+      {
+        // The editor writes these into its own file system, so the browser
+        // never has to interpret them.
+        contentType: () => 'application/octet-stream',
+        // Not document responses: isolation headers would only add noise.
+        crossOriginIsolation: false,
+      },
     );
-    const file = createReadStream(path.join(projectDir, filepath.join('/')));
-    res.set({
-      'Content-Type': 'application/octet-stream',
-    });
-    return new StreamableFile(file);
   }
 }

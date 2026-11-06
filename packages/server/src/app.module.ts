@@ -1,30 +1,21 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
-import { ProxyModule } from './proxy/proxy.module';
-import { WebsocketModule } from './websocket/websocket.module';
-import { TypesModule } from './types/types.module';
+import { APP_GUARD } from '@nestjs/core';
+import { AuthModule } from './auth/auth.module';
+import { DefaultAuthGuard } from './auth/default-auth.guard';
+import { JwtAuthGuard, JwtSilentAuthGuard } from './auth/jwt.guard';
 import { AppConfigModule } from './config/config.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppConfigService } from './config/config.service';
-import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { RoomsModule } from './rooms/rooms.module';
 import { ScriptingPackagesModule } from './scripting-packages/scripting-packages.module';
-import { EventEmitterModule } from '@nestjs/event-emitter';
-import { GameModule } from './ts-game/game.module';
 import { GodotGameModule } from './godot-game/godot-game.module';
 import { GodotEditorProviderModule } from './godot-editor-provider/godot-editor-provider.module';
 
 @Module({
   imports: [
-    EventEmitterModule.forRoot(),
-    ProxyModule,
     GodotEditorProviderModule,
     GodotGameModule,
-    GameModule,
-    WebsocketModule,
-    TypesModule,
     AppConfigModule,
     AuthModule,
     UsersModule,
@@ -37,15 +28,21 @@ import { GodotEditorProviderModule } from './godot-editor-provider/godot-editor-
         type: 'postgres',
         host: config.db.host,
         port: config.db.port,
-        username: 'postgres',
+        username: config.db.username,
         password: config.db.password,
-        database: 'postgres',
+        database: config.db.database,
         entities: config.db.entities,
         synchronize: config.db.sync,
       }),
     }),
   ],
   controllers: [],
-  providers: [],
+  providers: [
+    JwtAuthGuard,
+    JwtSilentAuthGuard,
+    // Authentication is the default for every route; handlers opt out with
+    // @Public() or soften it with @SilentAuth().
+    { provide: APP_GUARD, useClass: DefaultAuthGuard },
+  ],
 })
 export class AppModule {}

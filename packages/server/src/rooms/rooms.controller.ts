@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseIntPipe,
   Patch,
@@ -14,53 +16,72 @@ import { Room } from 'src/database/entities/room.entity';
 import { RoomsService } from './rooms.service';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
-import { UseAuthQuard } from 'src/auth/jwt-auth.guard';
-import { AuthenticatedRequest } from 'src/auth/jwt.strategy';
+import { UpdateRoomAccessDto } from './dto/update-room-access.dto';
+import { UseAuthGuard, SilentAuth } from 'src/auth/auth-policy';
+import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 
 @ApiTags('rooms')
 @Controller('rooms')
 export class RoomsController {
   constructor(private readonly roomsService: RoomsService) {}
 
+  @SilentAuth()
   @ApiOkResponse({ type: [Room] })
   @Get()
-  findAll() {
-    return this.roomsService.findAll();
+  findAll(@Req() req: SilentAuthRequest) {
+    return this.roomsService.findAll(req.user);
   }
 
+  @SilentAuth()
   @ApiOkResponse({ type: Room })
-  @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.roomsService.findOne(id);
+  @Get(':roomId')
+  findOne(
+    @Param('roomId', ParseIntPipe) roomId: number,
+    @Req() req: SilentAuthRequest,
+  ) {
+    return this.roomsService.findVisibleOne(roomId, req.user);
   }
 
-  @UseAuthQuard()
+  @UseAuthGuard()
   @ApiOkResponse({ type: Room })
   @Post()
   async create(@Body() dto: CreateRoomDto, @Req() req: AuthenticatedRequest) {
     await this.roomsService.assertRoomCreation(req.user, dto);
-    return await this.roomsService.create(dto);
+    return await this.roomsService.create(dto, req.user);
   }
 
-  @UseAuthQuard()
+  @UseAuthGuard()
   @ApiOkResponse({ type: Room })
-  @Patch(':id')
+  @Patch(':roomId')
   async update(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('roomId', ParseIntPipe) roomId: number,
     @Body() dto: UpdateRoomDto,
     @Req() req: AuthenticatedRequest,
   ) {
-    await this.roomsService.assertRoomEditing(req.user, id);
-    return await this.roomsService.update(id, dto);
+    await this.roomsService.assertRoomEditing(req.user, roomId);
+    return await this.roomsService.update(roomId, dto);
   }
 
-  @UseAuthQuard()
-  @Delete(':id')
-  async remove(
-    @Param('id', ParseIntPipe) id: number,
+  @UseAuthGuard()
+  @ApiOkResponse({ type: Room })
+  @Patch(':roomId/access')
+  async updateAccess(
+    @Param('roomId', ParseIntPipe) roomId: number,
+    @Body() dto: UpdateRoomAccessDto,
     @Req() req: AuthenticatedRequest,
   ) {
-    await this.roomsService.assertRoomEditing(req.user, id);
-    return await this.roomsService.remove(id);
+    await this.roomsService.assertRoomAccessEditing(req.user, roomId);
+    return await this.roomsService.updateAccess(roomId, dto, req.user);
+  }
+
+  @UseAuthGuard()
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Delete(':roomId')
+  async remove(
+    @Param('roomId', ParseIntPipe) roomId: number,
+    @Req() req: AuthenticatedRequest,
+  ): Promise<void> {
+    await this.roomsService.assertRoomEditing(req.user, roomId);
+    await this.roomsService.remove(roomId);
   }
 }

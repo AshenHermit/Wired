@@ -14,10 +14,9 @@
     "jsx": "react-jsx",
     "incremental": true,
     "skipLibCheck": true,
-    "strictNullChecks": true,
+    "strict": true,
+    "strictPropertyInitialization": false,
     "forceConsistentCasingInFileNames": true,
-    "noImplicitAny": false,
-    "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false,
     "lib": [
       "es6",
@@ -28,9 +27,6 @@
     "paths": {
       "@wired-io/shared": [
         "../shared/src"
-      ],
-      "@box2d": [
-        "../box2d/src"
       ]
     }
   }

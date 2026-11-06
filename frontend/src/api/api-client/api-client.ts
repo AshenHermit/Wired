@@ -1,52 +1,78 @@
-import { createEvent, EventHandler } from "@/lib/event-utils";
 import axios, { AxiosError, AxiosInstance, AxiosResponse } from "axios";
+import { BACKEND_URL } from "@/utils/variables";
+import { readAccessToken } from "@/utils/auth-cookie";
 
-export class APIError extends AxiosError {}
+/** Every request failure, carrying the response so callers can read the code. */
+export class ApiError extends AxiosError {}
+
+function extractMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const payload = error.response?.data as { message?: unknown } | undefined;
+    const message = payload?.message;
+    if (Array.isArray(message)) {
+      return message.map(String).join("; ");
+    }
+    if (typeof message === "string" && message.length > 0) {
+      return message;
+    }
+    return error.message;
+  }
+  return error instanceof Error ? error.message : "Request failed";
+}
+
+/** Query string values accepted by the client, forwarded to axios verbatim. */
+export type ApiClientQuery = Record<string, unknown>;
 
 export class ApiClient {
   axios: AxiosInstance;
-  errorCallback: EventHandler<[string]>;
 
   constructor(axiosClient: AxiosInstance) {
     this.axios = axiosClient;
-    this.errorCallback = createEvent();
   }
 
-  async processResponse<T>(res: Promise<AxiosResponse<any, any>>) {
+  async processResponse<T>(res: Promise<AxiosResponse<T>>): Promise<T> {
     try {
-      let response = await res;
-      return response.data as T;
-    } catch (e: any) {
-      let message = e.message;
-      try {
-        message = e.response.data.message;
-      } catch (err) {}
-      this.errorCallback(message);
-      throw new APIError(message);
+      const response = await res;
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        // Keep the response: callers need the HTTP status and the structured
+        // `code` (for example `packages_pending` is a wait, not a failure).
+        throw new ApiError(
+          extractMessage(error),
+          error.code,
+          error.config,
+          error.request,
+          error.response,
+        );
+      }
+      throw new ApiError(
+        error instanceof Error ? error.message : "Request failed",
+      );
     }
   }
 
-  async get<T, R>(endpoint: string, data?: R) {
-    return this.processResponse<T>(this.axios.get(endpoint, { params: data }));
+  async get<T>(endpoint: string, params?: ApiClientQuery): Promise<T> {
+    return this.processResponse<T>(this.axios.get(endpoint, { params }));
   }
-  async getFile<R>(endpoint: string, data?: R) {
+  async getFile(endpoint: string, params?: ApiClientQuery): Promise<ArrayBuffer> {
     return this.processResponse<ArrayBuffer>(
-      this.axios.get(endpoint, { params: data, responseType: "arraybuffer" })
+      this.axios.get(endpoint, { params, responseType: "arraybuffer" })
     );
   }
-  async post<T, R>(endpoint: string, data?: R) {
-    return this.processResponse<T>(this.axios.post(endpoint, data));
+  async post<T>(endpoint: string, body?: unknown): Promise<T> {
+    return this.processResponse<T>(this.axios.post(endpoint, body));
   }
-  async patch<T, R>(endpoint: string, data?: R) {
-    return this.processResponse<T>(this.axios.patch(endpoint, data));
+  async patch<T>(endpoint: string, body?: unknown): Promise<T> {
+    return this.processResponse<T>(this.axios.patch(endpoint, body));
   }
-  async delete<T, R>(endpoint: string, data?: R) {
+  async delete<T>(endpoint: string, params?: ApiClientQuery): Promise<T> {
     return this.processResponse<T>(
-      this.axios.delete(endpoint, { params: data })
+      this.axios.delete(endpoint, { params })
     );
   }
 
-  async postFile<T>(endpoint: string, file: File) {
+  async postFile<T>(endpoint: string, file: File): Promise<T> {
     const formData = new FormData();
     formData.append("file", file);
     return this.processResponse<T>(
@@ -58,3 +84,20 @@ export class ApiClient {
     );
   }
 }
+
+function createAxiosClient(): AxiosInstance {
+  const axiosClient = axios.create({ baseURL: BACKEND_URL });
+  axiosClient.interceptors.request.use((config) => {
+    if (typeof window !== "undefined") {
+      const token = readAccessToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    }
+    return config;
+  });
+  return axiosClient;
+}
+
+/** The configured client every service talks through. */
+export const apiClient = new ApiClient(createAxiosClient());
