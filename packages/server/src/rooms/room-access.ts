@@ -1,3 +1,5 @@
+import { RoomAccessMode } from '@wired-io/shared';
+
 /**
  * Single source of truth for room visibility, membership and edit rights.
  *
@@ -10,6 +12,10 @@ export type RoomAccessSubject = {
   isPublic: boolean;
   author?: { id: number } | null;
   contributors?: { id: number }[] | null;
+  packageManagementAccess?: RoomAccessMode | null;
+  packageManagementUserIds?: number[] | null;
+  packageCreationAccess?: RoomAccessMode | null;
+  packageCreationUserIds?: number[] | null;
 };
 
 function isAuthor(room: RoomAccessSubject, userId?: number | null): boolean {
@@ -54,4 +60,66 @@ export function canEditRoom(
   userId?: number | null,
 ): boolean {
   return isAuthor(room, userId);
+}
+
+/**
+ * Managing room packages: author always allowed, or users matching the access mode.
+ */
+export function canManageRoomPackages(
+  room: RoomAccessSubject,
+  userId?: number | null,
+): boolean {
+  // Author is always allowed
+  if (isAuthor(room, userId)) {
+    return true;
+  }
+
+  const access = room.packageManagementAccess;
+
+  // 'all' allows any authenticated user
+  if (access === 'all') {
+    return userId != null;
+  }
+
+  // 'users' requires exact match in the access list
+  if (access === 'users') {
+    return (
+      userId != null &&
+      (room.packageManagementUserIds ?? []).includes(userId)
+    );
+  }
+
+  // 'author' mode only allows the author (already checked above)
+  return false;
+}
+
+/**
+ * Creating room packages: author always allowed, or users matching the access mode.
+ */
+export function canCreateRoomPackages(
+  room: RoomAccessSubject,
+  userId?: number | null,
+): boolean {
+  // Author is always allowed
+  if (isAuthor(room, userId)) {
+    return true;
+  }
+
+  const access = room.packageCreationAccess;
+
+  // 'all' allows any authenticated user
+  if (access === 'all') {
+    return userId != null;
+  }
+
+  // 'users' requires exact match in the access list
+  if (access === 'users') {
+    return (
+      userId != null &&
+      (room.packageCreationUserIds ?? []).includes(userId)
+    );
+  }
+
+  // 'author' mode only allows the author (already checked above)
+  return false;
 }
