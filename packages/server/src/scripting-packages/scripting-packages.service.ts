@@ -119,8 +119,8 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     // room author. Build the composite list of user IDs.
     const accessBackfill = await this.packagesRepository.query(
       `UPDATE scripting_package
-       SET editingAccess = 'users',
-           editingUserIds = (
+       SET "editingAccess" = 'users',
+           "editingUserIds" = (
              SELECT jsonb_agg(DISTINCT id) FROM (
                SELECT "authorId" as id FROM scripting_package sp
                WHERE sp.id = scripting_package.id AND "authorId" IS NOT NULL
@@ -134,7 +134,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
                WHERE r.id = scripting_package."roomId" AND r."authorId" IS NOT NULL
              ) ids
            )
-       WHERE editingAccess IS NULL
+       WHERE "editingAccess" IS NULL
        RETURNING id`,
     );
     this.logger.log(
