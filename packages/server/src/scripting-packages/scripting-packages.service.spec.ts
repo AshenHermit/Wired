@@ -1202,6 +1202,90 @@ describe('ScriptingPackagesService enable guard', () => {
   });
 });
 
+describe('canEditPackage', () => {
+  function makeService() {
+    return new ScriptingPackagesService(
+      {} as never,
+      {} as never,
+      ...collaborators(),
+    );
+  }
+
+  it('allows package author and room author when editingAccess is users', () => {
+    const service = makeService();
+    const pkg = {
+      id: 1,
+      author: { id: 5 },
+      room: { id: 1, author: { id: 1 } },
+      editingAccess: 'users',
+      editingUserIds: [9],
+    } as never;
+    expect(service.canEditPackage(pkg, 5)).toBe(true);
+    expect(service.canEditPackage(pkg, 1)).toBe(true);
+    expect(service.canEditPackage(pkg, 9)).toBe(true);
+    expect(service.canEditPackage(pkg, 3)).toBe(false);
+  });
+
+  it('allows only package author when editingAccess is author', () => {
+    const service = makeService();
+    const pkg2 = {
+      id: 1,
+      author: { id: 5 },
+      room: { id: 1, author: { id: 1 } },
+      editingAccess: 'author',
+      editingUserIds: [],
+    } as never;
+    expect(service.canEditPackage(pkg2, 5)).toBe(true);
+    expect(service.canEditPackage(pkg2, 1)).toBe(false);
+    expect(service.canEditPackage(pkg2, undefined)).toBe(false);
+  });
+
+  it('allows all authenticated users when editingAccess is all', () => {
+    const service = makeService();
+    const pkgAll = {
+      id: 1,
+      author: { id: 5 },
+      room: { id: 1, author: { id: 1 } },
+      editingAccess: 'all',
+      editingUserIds: [9],
+    } as never;
+    expect(service.canEditPackage(pkgAll, 5)).toBe(true);
+    expect(service.canEditPackage(pkgAll, 999)).toBe(true);
+    expect(service.canEditPackage(pkgAll, undefined)).toBe(false);
+  });
+});
+
+describe('assertPackageAccessEditing', () => {
+  function makeService(pkg: unknown) {
+    const packagesRepository = { findOne: jest.fn(async () => pkg) };
+    return new ScriptingPackagesService(
+      packagesRepository as never,
+      {} as never,
+      ...collaborators(),
+    );
+  }
+
+  it('throws ForbiddenException when non-author tries to access', async () => {
+    const service = makeService({
+      id: 1,
+      author: { id: 5 },
+      room: { id: 1, author: { id: 1 } },
+      editingAccess: 'author',
+      editingUserIds: [],
+    });
+    await expect(
+      service.assertPackageAccessEditing({ id: 7 } as never, 1),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('throws NotFoundException when package does not exist', async () => {
+    const service = makeService(null);
+    await expect(
+      service.assertPackageAccessEditing({ id: 1 } as never, 999),
+    ).rejects.toThrow(NotFoundException);
+  });
+});
+
 describe('ScriptingPackagesService slug rename', () => {
   type RevisionRow = {
     id?: number;

@@ -220,6 +220,67 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     );
   }
 
+  /**
+   * Whether a user can edit a package based on its editingAccess policy.
+   *
+   * The package author is always allowed. For 'all' and 'users' modes,
+   * the room author is also always allowed. For 'author' mode, only the
+   * package author is allowed.
+   *
+   * For 'all' mode, any authenticated user is allowed.
+   * For 'users' mode, only users in editingUserIds are allowed (plus author/room author).
+   * For 'author' mode, only the package author is allowed.
+   */
+  canEditPackage(
+    pkg: ScriptingPackage,
+    userId?: number | null,
+  ): boolean {
+    // Package author is always allowed
+    if (userId != null && pkg.author?.id === userId) {
+      return true;
+    }
+
+    const access = pkg.editingAccess;
+
+    // 'all' allows any authenticated user (and room author)
+    if (access === 'all') {
+      return userId != null;
+    }
+
+    // 'users' allows room author, users in the access list, and any authenticated user listed
+    if (access === 'users') {
+      // Room author is allowed in users mode
+      if (userId != null && pkg.room?.author?.id === userId) {
+        return true;
+      }
+      // Explicit users in the list
+      return (
+        userId != null &&
+        (pkg.editingUserIds ?? []).includes(userId)
+      );
+    }
+
+    // 'author' mode only allows the package author (already checked above)
+    return false;
+  }
+
+  /**
+   * Enforces package editing access by loading the package and checking
+   * canEditPackage. Throws NotFoundException if the package does not exist,
+   * or ForbiddenException if the user lacks editing access.
+   */
+  async assertPackageAccessEditing(
+    user: User,
+    packageId: number,
+  ): Promise<void> {
+    const pkg = await this.loadForAccess(packageId);
+    if (!this.canEditPackage(pkg, user.id)) {
+      throw new ForbiddenException(
+        'You are not allowed to edit this package',
+      );
+    }
+  }
+
   async assertPackageEditing(user: User, packageId: number): Promise<void> {
     const pkg = await this.loadForAccess(packageId);
     const isRoomAuthor = pkg.room ? canEditRoom(pkg.room, user.id) : false;
