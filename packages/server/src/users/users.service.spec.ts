@@ -70,6 +70,44 @@ describe('lookups', () => {
   });
 });
 
+describe('search', () => {
+  it('searches name or email case-insensitively, capped at the limit', async () => {
+    const repo = repository();
+    repo.find.mockResolvedValue([
+      user({ id: 1, name: 'Anna', email: 'anna@wired.io' }),
+    ]);
+
+    await serviceWith(repo).search('ann', 20);
+
+    const [query] = repo.find.mock.calls[0] as [Record<string, unknown>];
+    expect(query).toMatchObject({ take: 20 });
+    const where = query.where as Array<Record<string, unknown>>;
+    expect(where.map((entry) => Object.keys(entry))).toEqual([
+      ['name'],
+      ['email'],
+    ]);
+  });
+
+  it('projects each result down to public fields only', async () => {
+    const repo = repository();
+    repo.find.mockResolvedValue([
+      user({
+        id: 1,
+        name: 'Anna',
+        picture: 'https://x/p.webp',
+        email: 'anna@wired.io',
+        password: 'secret-hash',
+      }),
+    ]);
+
+    const result = await serviceWith(repo).search('ann', 20);
+
+    expect(result).toEqual([
+      { id: 1, name: 'Anna', picture: 'https://x/p.webp' },
+    ]);
+  });
+});
+
 describe('create', () => {
   it('stores the password hashed, never in clear', async () => {
     const repo = repository();
