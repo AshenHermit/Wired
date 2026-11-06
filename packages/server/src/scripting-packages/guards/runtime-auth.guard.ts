@@ -58,7 +58,8 @@ export class RuntimeAuthGuard extends AuthGuard('jwt') {
     }
 
     throw (
-      err ?? packageError('authentication_required', 'The runtime token is invalid')
+      err ??
+      packageError('authentication_required', 'The runtime token is invalid')
     );
   }
 }

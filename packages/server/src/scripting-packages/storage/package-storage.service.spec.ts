@@ -84,9 +84,9 @@ describe('PackageStorageService', () => {
         Buffer.from('extends Node\n'),
       );
 
-      await expect(storage.readDraftFile(7, 1, 'scripts/hero.gd')).resolves.toBe(
-        'extends Node\n',
-      );
+      await expect(
+        storage.readDraftFile(7, 1, 'scripts/hero.gd'),
+      ).resolves.toBe('extends Node\n');
     });
 
     it('rejects reading a draft file that was never uploaded', async () => {

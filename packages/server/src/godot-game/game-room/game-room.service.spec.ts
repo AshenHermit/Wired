@@ -110,7 +110,10 @@ describe('GameRoomService', () => {
     service = new GameRoomService(
       rooms as unknown as RoomsService,
       runtime as unknown as RoomRuntimeService,
-      new GameRoomTicketRateLimiter(configService, new InMemoryTicketRateLimitStore()),
+      new GameRoomTicketRateLimiter(
+        configService,
+        new InMemoryTicketRateLimitStore(),
+      ),
       packageSync as unknown as PackageSyncService,
     );
     rooms.findOne.mockResolvedValue(room());

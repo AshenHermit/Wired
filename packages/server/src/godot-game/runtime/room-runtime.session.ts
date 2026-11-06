@@ -458,9 +458,7 @@ export class RoomRuntimeSession {
       this.appendLog(`[wired] control -> ${command}`);
       return true;
     } catch (error) {
-      this.appendLog(
-        `[wired] control write failed: ${errorMessage(error)}`,
-      );
+      this.appendLog(`[wired] control write failed: ${errorMessage(error)}`);
       return false;
     }
   }
@@ -803,14 +801,11 @@ export class RoomRuntimeSession {
       this.options.onEvent?.(event);
     } catch (error) {
       // A consumer bug must never break the runtime state machine.
-      this.appendLog(
-        `[wired] event observer failed: ${errorMessage(error)}`,
-      );
+      this.appendLog(`[wired] event observer failed: ${errorMessage(error)}`);
     }
   }
 
   private toError(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error));
   }
-
 }

@@ -50,7 +50,10 @@ describe('HTTP contract', () => {
           provide: UsersService,
           useValue: new UsersService(repository as unknown as Repository<User>),
         },
-        { provide: AppConfigService, useValue: { site: { authSecret: SECRET } } },
+        {
+          provide: AppConfigService,
+          useValue: { site: { authSecret: SECRET } },
+        },
       ],
     }).compile();
 

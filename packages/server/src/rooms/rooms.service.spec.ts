@@ -1,4 +1,8 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { RoomsService } from './rooms.service';
 import { UsersService } from 'src/users/users.service';
@@ -271,7 +275,7 @@ describe('RoomsService', () => {
       const service = new RoomsService(roomsRepository as never, usersService);
       await service.onApplicationBootstrap();
 
-      const savedCall = (roomsRepository.save as jest.Mock).mock.calls[0][0];
+      const savedCall = roomsRepository.save.mock.calls[0][0];
       const uniqueIds = new Set(savedCall.packageManagementUserIds);
       expect(uniqueIds.size).toBe(2); // Only 100 and 200
       expect(uniqueIds).toContain(100);
@@ -357,8 +361,7 @@ describe('RoomsService', () => {
   describe('updateAccess', () => {
     it('validates that all provided user IDs exist before updating', async () => {
       const usersService = {
-        findById: jest
-          .fn((id) => Promise.resolve(id === 5 ? { id: 5 } : null)),
+        findById: jest.fn((id) => Promise.resolve(id === 5 ? { id: 5 } : null)),
       };
 
       const roomsRepository = {
@@ -386,20 +389,17 @@ describe('RoomsService', () => {
         packageManagementUserIds: [5, 999],
       };
 
-      await expect(
-        service.updateAccess(1, dto, user),
-      ).rejects.toBeInstanceOf(BadRequestException);
-      await expect(
-        service.updateAccess(1, dto, user),
-      ).rejects.toMatchObject({
+      await expect(service.updateAccess(1, dto, user)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      await expect(service.updateAccess(1, dto, user)).rejects.toMatchObject({
         message: expect.stringContaining('999'),
       });
     });
 
     it('rejects with a list of all invalid user IDs', async () => {
       const usersService = {
-        findById: jest
-          .fn((id) => Promise.resolve(id === 5 ? { id: 5 } : null)),
+        findById: jest.fn((id) => Promise.resolve(id === 5 ? { id: 5 } : null)),
       };
 
       const roomsRepository = {
@@ -427,9 +427,9 @@ describe('RoomsService', () => {
         packageCreationUserIds: [777],
       };
 
-      await expect(
-        service.updateAccess(1, dto, user),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.updateAccess(1, dto, user)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
 
       try {
         await service.updateAccess(1, dto, user);
@@ -442,8 +442,7 @@ describe('RoomsService', () => {
 
     it('allows updateAccess when all provided user IDs exist', async () => {
       const usersService = {
-        findById: jest
-          .fn((id) => Promise.resolve({ id })),
+        findById: jest.fn((id) => Promise.resolve({ id })),
       };
 
       const roomsRepository = {
@@ -471,9 +470,7 @@ describe('RoomsService', () => {
         packageManagementUserIds: [5, 15],
       };
 
-      await expect(
-        service.updateAccess(1, dto, user),
-      ).resolves.toBeDefined();
+      await expect(service.updateAccess(1, dto, user)).resolves.toBeDefined();
 
       expect(roomsRepository.save).toHaveBeenCalled();
     });
@@ -507,9 +504,7 @@ describe('RoomsService', () => {
         packageManagementAccess: 'author',
       };
 
-      await expect(
-        service.updateAccess(1, dto, user),
-      ).resolves.toBeDefined();
+      await expect(service.updateAccess(1, dto, user)).resolves.toBeDefined();
 
       expect(usersService.findById).not.toHaveBeenCalled();
       expect(roomsRepository.save).toHaveBeenCalled();
@@ -545,9 +540,7 @@ describe('RoomsService', () => {
         packageCreationUserIds: [],
       };
 
-      await expect(
-        service.updateAccess(1, dto, user),
-      ).resolves.toBeDefined();
+      await expect(service.updateAccess(1, dto, user)).resolves.toBeDefined();
 
       expect(usersService.findById).not.toHaveBeenCalled();
     });
@@ -582,9 +575,7 @@ describe('RoomsService', () => {
         packageCreationUserIds: [5],
       };
 
-      await expect(
-        service.updateAccess(1, dto, user),
-      ).resolves.toBeDefined();
+      await expect(service.updateAccess(1, dto, user)).resolves.toBeDefined();
 
       // Each unique user ID should be validated once, not multiple times
       // With Set deduplication, we expect 3 unique IDs: 5, 15

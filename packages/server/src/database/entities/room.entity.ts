@@ -12,7 +12,11 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { ScriptingPackage } from './scripting-package.entity';
-import { GAME_ROOMS_TYPES, GameRoomsType, RoomAccessMode } from '@wired-io/shared';
+import {
+  GAME_ROOMS_TYPES,
+  GameRoomsType,
+  RoomAccessMode,
+} from '@wired-io/shared';
 
 @Entity()
 export class Room {

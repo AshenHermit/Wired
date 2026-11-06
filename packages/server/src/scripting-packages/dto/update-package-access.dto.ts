@@ -1,11 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { RoomAccessMode } from '@wired-io/shared';
-import {
-  IsArray,
-  IsEnum,
-  IsInt,
-  IsOptional,
-} from 'class-validator';
+import { IsArray, IsEnum, IsInt, IsOptional } from 'class-validator';
 
 /**
  * Update body for package access policies. All fields are optional to allow

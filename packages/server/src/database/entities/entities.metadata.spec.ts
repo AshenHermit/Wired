@@ -8,12 +8,7 @@ function createDataSource(): DataSource {
   return new DataSource({
     type: 'postgres',
     host: '127.0.0.1',
-    entities: [
-      Room,
-      User,
-      ScriptingPackage,
-      ScriptingPackageRevision,
-    ],
+    entities: [Room, User, ScriptingPackage, ScriptingPackageRevision],
   });
 }
 

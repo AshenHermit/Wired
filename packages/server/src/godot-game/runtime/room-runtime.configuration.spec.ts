@@ -67,12 +67,12 @@ describe('RoomRuntimeConfiguration', () => {
     const token = options.env?.WIRED_RUNTIME_API_TOKEN;
 
     expect(token).toMatch(/^[0-9a-f]{64}$/);
-    expect(verifyRuntimeServiceToken('secret', 'room-1', `Bearer ${token}`)).toBe(
-      true,
-    );
-    expect(verifyRuntimeServiceToken('secret', 'room-2', `Bearer ${token}`)).toBe(
-      false,
-    );
+    expect(
+      verifyRuntimeServiceToken('secret', 'room-1', `Bearer ${token}`),
+    ).toBe(true);
+    expect(
+      verifyRuntimeServiceToken('secret', 'room-2', `Bearer ${token}`),
+    ).toBe(false);
   });
 
   const production = new RoomRuntimeConfiguration({

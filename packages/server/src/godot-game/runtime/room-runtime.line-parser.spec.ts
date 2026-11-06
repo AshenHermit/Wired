@@ -25,7 +25,12 @@ describe('parseRuntimeLine', () => {
   it('parses a package application confirmation', () => {
     expect(
       parseRuntimeLine('WIRED_PACKAGES_APPLIED package=42 revision=3 files=7'),
-    ).toEqual({ kind: 'packages-applied', packageId: 42, revision: 3, files: 7 });
+    ).toEqual({
+      kind: 'packages-applied',
+      packageId: 42,
+      revision: 3,
+      files: 7,
+    });
   });
 
   it('parses a confirmation with an artifact key', () => {
@@ -33,7 +38,12 @@ describe('parseRuntimeLine', () => {
       parseRuntimeLine(
         'WIRED_PACKAGES_APPLIED package=42 revision=3 artifact=abc123 files=7',
       ),
-    ).toEqual({ kind: 'packages-applied', packageId: 42, revision: 3, files: 7 });
+    ).toEqual({
+      kind: 'packages-applied',
+      packageId: 42,
+      revision: 3,
+      files: 7,
+    });
   });
 
   it('parses a package application failure', () => {
@@ -51,7 +61,9 @@ describe('parseRuntimeLine', () => {
 
   it('parses a client package readiness report', () => {
     expect(
-      parseRuntimeLine('WIRED_CLIENT_PACKAGES_READY peer=5 package=42 revision=3'),
+      parseRuntimeLine(
+        'WIRED_CLIENT_PACKAGES_READY peer=5 package=42 revision=3',
+      ),
     ).toEqual({
       kind: 'client-packages-ready',
       peer: 5,

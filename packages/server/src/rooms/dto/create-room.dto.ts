@@ -1,5 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { AVAILABLE_GAME_ROOMS_TYPES, CreatableRoomType } from '@wired-io/shared';
+import {
+  AVAILABLE_GAME_ROOMS_TYPES,
+  CreatableRoomType,
+} from '@wired-io/shared';
 import {
   IsBoolean,
   IsEnum,

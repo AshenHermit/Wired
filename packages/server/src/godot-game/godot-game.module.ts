@@ -26,10 +26,7 @@ import { RuntimeProcessFactory } from './runtime/room-runtime.types';
     AppConfigModule,
     RoomsModule,
     PackageDeliveryModule,
-    TypeOrmModule.forFeature([
-      ScriptingPackage,
-      ScriptingPackageRevision,
-    ]),
+    TypeOrmModule.forFeature([ScriptingPackage, ScriptingPackageRevision]),
   ],
   controllers: [GameRoomController, GameExportController],
   providers: [

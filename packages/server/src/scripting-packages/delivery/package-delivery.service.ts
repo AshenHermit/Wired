@@ -230,10 +230,7 @@ export class PackageDeliveryService {
    */
   private async assertValidRoom(roomId: number): Promise<void> {
     if (!Number.isInteger(roomId) || roomId <= 0) {
-      throw packageError(
-        'room_invalid',
-        'Room id must be a positive integer',
-      );
+      throw packageError('room_invalid', 'Room id must be a positive integer');
     }
     const exists = await this.roomsRepository.exist({ where: { id: roomId } });
     if (!exists) {

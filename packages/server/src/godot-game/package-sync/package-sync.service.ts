@@ -544,5 +544,4 @@ export class PackageSyncService
   private retryDue(): void {
     this.scheduler.runDue(this.store.all(), (record) => this.dispatch(record));
   }
-
 }

@@ -111,7 +111,10 @@ describe('AuthController', () => {
 
     it('answers 204 like the other deletes', () => {
       expect(
-        Reflect.getMetadata(HTTP_CODE_METADATA, AuthController.prototype.logout),
+        Reflect.getMetadata(
+          HTTP_CODE_METADATA,
+          AuthController.prototype.logout,
+        ),
       ).toBe(HttpStatus.NO_CONTENT);
     });
   });

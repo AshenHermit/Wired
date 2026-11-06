@@ -1,4 +1,10 @@
-import { canEditRoom, canViewRoom, isRoomMember, canManageRoomPackages, canCreateRoomPackages } from './room-access';
+import {
+  canEditRoom,
+  canViewRoom,
+  isRoomMember,
+  canManageRoomPackages,
+  canCreateRoomPackages,
+} from './room-access';
 
 describe('room access policy', () => {
   const author = { id: 1 };
@@ -109,7 +115,11 @@ describe('room access policy', () => {
     });
 
     it('allows selected users and the author to create packages with users mode', () => {
-      const usersRoom = { ...room, packageCreationAccess: 'users' as const, packageCreationUserIds: [2] };
+      const usersRoom = {
+        ...room,
+        packageCreationAccess: 'users' as const,
+        packageCreationUserIds: [2],
+      };
       expect(canCreateRoomPackages(usersRoom, 2)).toBe(true);
       expect(canCreateRoomPackages(usersRoom, 1)).toBe(true);
       expect(canCreateRoomPackages(usersRoom, 3)).toBe(false);

@@ -472,7 +472,11 @@ export class PackageRevisionsService {
       if (text === null) {
         continue;
       }
-      for (const reference of this.resolveReferences(text, index, scopeRoomId)) {
+      for (const reference of this.resolveReferences(
+        text,
+        index,
+        scopeRoomId,
+      )) {
         if (reference.packageId !== skipPackageId) {
           referenced.add(reference.packageId);
         }
@@ -518,9 +522,9 @@ export class PackageRevisionsService {
     error: unknown,
   ): void {
     this.logger.warn(
-      `Package ${packageId} revision ${revision} copy cleanup failed: ${
-        errorMessage(error)
-      }`,
+      `Package ${packageId} revision ${revision} copy cleanup failed: ${errorMessage(
+        error,
+      )}`,
     );
   }
 
@@ -570,9 +574,9 @@ export class PackageRevisionsService {
       await this.storage.writePinnedDependencies(packageId, revision, pins);
     } catch (error) {
       this.logger.warn(
-        `Package ${packageId} revision ${revision} was published but its dependency pins were not recorded: ${
-          errorMessage(error)
-        }`,
+        `Package ${packageId} revision ${revision} was published but its dependency pins were not recorded: ${errorMessage(
+          error,
+        )}`,
       );
     }
   }
@@ -593,9 +597,9 @@ export class PackageRevisionsService {
       await this.dispatcher.revisionPublished(packageId, revision);
     } catch (error) {
       this.logger.error(
-        `Package ${packageId} revision ${revision} was published but runtime dispatch failed: ${
-          errorMessage(error)
-        }`,
+        `Package ${packageId} revision ${revision} was published but runtime dispatch failed: ${errorMessage(
+          error,
+        )}`,
       );
     }
   }

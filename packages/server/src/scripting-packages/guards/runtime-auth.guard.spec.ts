@@ -66,12 +66,7 @@ describe('RuntimeAuthGuard', () => {
     const token = createRuntimeServiceToken('secret', '42');
 
     expect(() =>
-      guard.handleRequest(
-        null,
-        false,
-        null,
-        context({}, `Bearer ${token}`),
-      ),
+      guard.handleRequest(null, false, null, context({}, `Bearer ${token}`)),
     ).toThrow(UnauthorizedException);
   });
 });

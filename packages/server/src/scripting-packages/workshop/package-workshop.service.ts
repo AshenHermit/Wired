@@ -408,9 +408,7 @@ export class PackageWorkshopService {
       await this.packagesService.remove(packageId);
     } catch (error) {
       this.logger.warn(
-        `Package ${packageId} copy rollback failed: ${
-          errorMessage(error)
-        }`,
+        `Package ${packageId} copy rollback failed: ${errorMessage(error)}`,
       );
     }
   }

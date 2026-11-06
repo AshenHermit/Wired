@@ -60,7 +60,10 @@ export class RoomMembershipGuard implements CanActivate {
     });
     // The room's own runtime is not a user, so it has no membership row. It is
     // still confined to its room: the package binding below applies to it too.
-    if (!room || (!isRuntimeServiceUser(user) && !isRoomMember(room, user.id))) {
+    if (
+      !room ||
+      (!isRuntimeServiceUser(user) && !isRoomMember(room, user.id))
+    ) {
       throw packageError('room_access_denied', 'You cannot read this room');
     }
 

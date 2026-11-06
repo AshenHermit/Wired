@@ -54,31 +54,49 @@ describe('GodotEditorProviderController', () => {
   });
 
   it('serves a file inside the editor directory', async () => {
-    const file = await controller.getEditorFile('engine.js', fakeRequest(), fakeResponse());
+    const file = await controller.getEditorFile(
+      'engine.js',
+      fakeRequest(),
+      fakeResponse(),
+    );
     expect(file).toBeDefined();
   });
 
   it.each(['../../secret.txt', '..%2F..%2Fsecret.txt', '/etc/passwd', ''])(
     'rejects an unsafe editor path: %p',
     async (unsafePath) => {
-      await expect(controller.getEditorFile(unsafePath, fakeRequest(), fakeResponse())).rejects.toThrow();
+      await expect(
+        controller.getEditorFile(unsafePath, fakeRequest(), fakeResponse()),
+      ).rejects.toThrow();
     },
   );
 
   it('serves a file inside the base project', async () => {
-    const file = await controller.getGodotProjectFile('project.godot', fakeRequest(), fakeResponse());
+    const file = await controller.getGodotProjectFile(
+      'project.godot',
+      fakeRequest(),
+      fakeResponse(),
+    );
     expect(file).toBeDefined();
   });
 
   it('rejects traversal outside the base project', async () => {
     await expect(
-      controller.getGodotProjectFile('../../secret.txt', fakeRequest(), fakeResponse()),
+      controller.getGodotProjectFile(
+        '../../secret.txt',
+        fakeRequest(),
+        fakeResponse(),
+      ),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('returns 404 for a missing project file', async () => {
     await expect(
-      controller.getGodotProjectFile('missing.godot', fakeRequest(), fakeResponse()),
+      controller.getGodotProjectFile(
+        'missing.godot',
+        fakeRequest(),
+        fakeResponse(),
+      ),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 

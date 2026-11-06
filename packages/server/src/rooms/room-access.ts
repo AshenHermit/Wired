@@ -22,7 +22,10 @@ function isAuthor(room: RoomAccessSubject, userId?: number | null): boolean {
   return userId != null && room.author?.id === userId;
 }
 
-function isContributor(room: RoomAccessSubject, userId?: number | null): boolean {
+function isContributor(
+  room: RoomAccessSubject,
+  userId?: number | null,
+): boolean {
   return (
     userId != null &&
     (room.contributors ?? []).some((contributor) => contributor.id === userId)
@@ -84,8 +87,7 @@ export function canManageRoomPackages(
   // 'users' requires exact match in the access list
   if (access === 'users') {
     return (
-      userId != null &&
-      (room.packageManagementUserIds ?? []).includes(userId)
+      userId != null && (room.packageManagementUserIds ?? []).includes(userId)
     );
   }
 
@@ -115,8 +117,7 @@ export function canCreateRoomPackages(
   // 'users' requires exact match in the access list
   if (access === 'users') {
     return (
-      userId != null &&
-      (room.packageCreationUserIds ?? []).includes(userId)
+      userId != null && (room.packageCreationUserIds ?? []).includes(userId)
     );
   }
 

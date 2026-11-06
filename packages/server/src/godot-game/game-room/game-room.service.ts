@@ -20,7 +20,10 @@ import { RoomsService } from 'src/rooms/rooms.service';
 import { canViewRoom } from 'src/rooms/room-access';
 import { GameRoomTicketRateLimiter } from './game-room.rate-limiter';
 import { PackageSyncService } from '../package-sync/package-sync.service';
-import { RoomRuntimeError, RoomRuntimeErrorCode } from '../runtime/room-runtime.errors';
+import {
+  RoomRuntimeError,
+  RoomRuntimeErrorCode,
+} from '../runtime/room-runtime.errors';
 import { RoomRuntimeService } from '../runtime/room-runtime.service';
 import type { RoomConnection } from '../runtime/room-runtime.types';
 
@@ -80,10 +83,7 @@ export class GameRoomService {
    * Starts or reuses the room runtime and mints a single-use ticket. Access is
    * checked against the database room, never against the id sent by a client.
    */
-  async connect(
-    user: User,
-    roomId: number,
-  ): Promise<GameRoomConnection> {
+  async connect(user: User, roomId: number): Promise<GameRoomConnection> {
     const { room, user: player } = await this.assertCanPlay(user, roomId);
     const limit = this.rateLimiter.consume(player.id, room.id);
     if (!limit.allowed) {
@@ -120,10 +120,7 @@ export class GameRoomService {
   }
 
   /** Reads the runtime state; this path never starts Godot. */
-  async getStatus(
-    user: User,
-    roomId: number,
-  ): Promise<GameRoomRuntimeStatus> {
+  async getStatus(user: User, roomId: number): Promise<GameRoomRuntimeStatus> {
     const { room } = await this.assertCanPlay(user, roomId);
     const info = this.runtime.getRuntime(String(room.id));
     return {
@@ -140,10 +137,7 @@ export class GameRoomService {
    * in-memory bookkeeping only; the published manifest remains authoritative.
    * Never starts the runtime.
    */
-  async getPackages(
-    user: User,
-    roomId: number,
-  ): Promise<RoomPackagesStatus> {
+  async getPackages(user: User, roomId: number): Promise<RoomPackagesStatus> {
     const { room } = await this.assertCanPlay(user, roomId);
     return {
       roomId: room.id,
@@ -163,7 +157,8 @@ export class GameRoomService {
       );
       if (
         status.packages.some(
-          (entry) => active.has(entry.packageId) && entry.runtime.state === 'failed',
+          (entry) =>
+            active.has(entry.packageId) && entry.runtime.state === 'failed',
         )
       ) {
         throw connectionFailure(

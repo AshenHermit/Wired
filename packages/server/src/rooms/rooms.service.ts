@@ -99,8 +99,10 @@ export class RoomsService implements OnApplicationBootstrap {
     for (const room of rooms) {
       const userIds = Array.from(
         new Set(
-          [room.author?.id, ...(room.contributors ?? []).map((c) => c?.id)]
-            .filter((id): id is number => typeof id === 'number'),
+          [
+            room.author?.id,
+            ...(room.contributors ?? []).map((c) => c?.id),
+          ].filter((id): id is number => typeof id === 'number'),
         ),
       );
 

@@ -236,9 +236,9 @@ export class PackageClosureResolver {
         );
       } catch (error) {
         this.logger.warn(
-          `Skipping package ${id} during dependent scan: ${
-            errorMessage(error)
-          }`,
+          `Skipping package ${id} during dependent scan: ${errorMessage(
+            error,
+          )}`,
         );
         continue;
       }
@@ -377,7 +377,6 @@ export class PackageClosureResolver {
     };
   }
 
-
   /**
    * Drops every cached byte of one package so the next resolve reads the files
    * from disk again. Called after a slug rename rewrites revisions in place:
@@ -413,9 +412,7 @@ export class PackageClosureResolver {
       return data;
     }
     while (this.fileCacheBytes + data.byteLength > this.maxFileCacheBytes) {
-      const oldestKey = this.fileBytes.keys().next().value as
-        | string
-        | undefined;
+      const oldestKey = this.fileBytes.keys().next().value;
       if (oldestKey === undefined) {
         break;
       }
@@ -565,10 +562,7 @@ class ClosureBuilder {
     // Dependencies recorded when *this* revision was published. A pinned
     // closure keeps `(packageId, revision)` deterministic; an older revision
     // without pins falls back to the latest published dependency below.
-    const pinned = await this.ports.readPinnedDependencies(
-      id,
-      loaded.revision,
-    );
+    const pinned = await this.ports.readPinnedDependencies(id, loaded.revision);
     const { fileSet, references } = await this.readRevision(id, loaded);
 
     for (const ref of references) {

@@ -121,9 +121,7 @@ export class RoomRuntimeService
 
   /** Sends the authoritative package list of a room to its running runtime. */
   sendRoomPackages(roomId: string, packageIds: number[]): boolean {
-    return (
-      this.registry.get(roomId)?.sendRoomPackages(packageIds) ?? false
-    );
+    return this.registry.get(roomId)?.sendRoomPackages(packageIds) ?? false;
   }
 
   async stopRoom(roomId: string, reason = 'requested'): Promise<void> {
@@ -290,5 +288,4 @@ export class RoomRuntimeService
       );
     }
   }
-
 }

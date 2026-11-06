@@ -575,7 +575,13 @@ describe('PackageDeliveryService', () => {
       const manifest = await service.getRuntimeManifest(5, 3, 7);
 
       await expect(
-        service.resolveRuntimeFile({ packageId: 5, revision: 3, roomId: 7, artifactKey: manifest.artifactKey, filepath: '../x' }),
+        service.resolveRuntimeFile({
+          packageId: 5,
+          revision: 3,
+          roomId: 7,
+          artifactKey: manifest.artifactKey,
+          filepath: '../x',
+        }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
@@ -584,7 +590,13 @@ describe('PackageDeliveryService', () => {
       const manifest = await service.getRuntimeManifest(5, 3, 7);
 
       await expect(
-        service.resolveRuntimeFile({ packageId: 5, revision: 3, roomId: 7, artifactKey: 'f'.repeat(64), filepath: 'hero.gd' }),
+        service.resolveRuntimeFile({
+          packageId: 5,
+          revision: 3,
+          roomId: 7,
+          artifactKey: 'f'.repeat(64),
+          filepath: 'hero.gd',
+        }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
@@ -593,7 +605,13 @@ describe('PackageDeliveryService', () => {
       await service.getRuntimeManifest(5, 3, 7);
 
       await expect(
-        service.resolveRuntimeFile({ packageId: 5, revision: 3, roomId: 7, artifactKey: '../5/3', filepath: 'hero.gd' }),
+        service.resolveRuntimeFile({
+          packageId: 5,
+          revision: 3,
+          roomId: 7,
+          artifactKey: '../5/3',
+          filepath: 'hero.gd',
+        }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
@@ -610,7 +628,13 @@ describe('PackageDeliveryService', () => {
           service.getRuntimeManifest(5, 3, roomId),
         ).rejects.toBeInstanceOf(BadRequestException);
         await expect(
-          service.resolveRuntimeFile({ packageId: 5, revision: 3, roomId, artifactKey: 'a'.repeat(64), filepath: 'hero.gd' }),
+          service.resolveRuntimeFile({
+            packageId: 5,
+            revision: 3,
+            roomId,
+            artifactKey: 'a'.repeat(64),
+            filepath: 'hero.gd',
+          }),
         ).rejects.toBeInstanceOf(BadRequestException);
         expect(packagesRepository.findOne).not.toHaveBeenCalled();
       },
@@ -623,7 +647,13 @@ describe('PackageDeliveryService', () => {
         NotFoundException,
       );
       await expect(
-        service.resolveRuntimeFile({ packageId: 5, revision: 3, roomId: 99, artifactKey: 'a'.repeat(64), filepath: 'hero.gd' }),
+        service.resolveRuntimeFile({
+          packageId: 5,
+          revision: 3,
+          roomId: 99,
+          artifactKey: 'a'.repeat(64),
+          filepath: 'hero.gd',
+        }),
       ).rejects.toBeInstanceOf(NotFoundException);
       await expect(artifactDirs(5, 3, 99)).rejects.toThrow();
       expect(packagesRepository.findOne).not.toHaveBeenCalled();

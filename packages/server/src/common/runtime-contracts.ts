@@ -87,7 +87,5 @@ export function verifyRuntimeServiceToken(
   }
   const expected = Buffer.from(createRuntimeServiceToken(secret, roomId));
   const actual = Buffer.from(match[1]);
-  return (
-    actual.length === expected.length && timingSafeEqual(actual, expected)
-  );
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }

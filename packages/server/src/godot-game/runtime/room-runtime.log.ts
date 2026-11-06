@@ -88,5 +88,4 @@ export class RoomRuntimeLog {
       // Missing file or a racing rotation is fine: the log is diagnostics only.
     }
   }
-
 }

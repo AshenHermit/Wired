@@ -53,9 +53,7 @@ export function normalizeRelativePath(raw: unknown): string {
     );
   }
   if (value.includes('\\')) {
-    throw new PathTraversalError(
-      `File path must use "/" separators: ${value}`,
-    );
+    throw new PathTraversalError(`File path must use "/" separators: ${value}`);
   }
   if (
     value.startsWith('/') ||
