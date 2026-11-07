@@ -48,4 +48,25 @@ export class UpdateRoomAccessDto {
   @IsArray()
   @IsInt({ each: true })
   packageCreationUserIds?: number[];
+
+  @ApiProperty({
+    example: 'all',
+    description: 'Room read access mode for package runtime delivery',
+    enum: ['all', 'author', 'users'],
+    required: false,
+  })
+  @IsOptional()
+  @IsEnum(['all', 'author', 'users'] as const)
+  readAccess?: RoomAccessMode;
+
+  @ApiProperty({
+    example: [1, 2],
+    description: 'User IDs allowed to read room package runtime delivery',
+    required: false,
+    type: [Number],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  readUserIds?: number[];
 }
