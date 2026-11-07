@@ -11,7 +11,7 @@ import { Repository } from 'typeorm';
 import { Room } from 'src/database/entities/room.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { RuntimeAuthRequest } from 'src/auth/jwt.strategy';
-import { isRoomMember } from 'src/rooms/room-access';
+import { canReadRoom } from 'src/rooms/room-access';
 import { readPositiveInt } from './request-ids';
 import { isRuntimeServiceUser } from 'src/auth/runtime-service-user';
 
@@ -62,7 +62,7 @@ export class RoomMembershipGuard implements CanActivate {
     // still confined to its room: the package binding below applies to it too.
     if (
       !room ||
-      (!isRuntimeServiceUser(user) && !isRoomMember(room, user.id))
+      (!isRuntimeServiceUser(user) && !canReadRoom(room, user.id))
     ) {
       throw packageError('room_access_denied', 'You cannot read this room');
     }

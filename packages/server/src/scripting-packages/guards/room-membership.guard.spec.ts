@@ -26,6 +26,8 @@ describe('RoomMembershipGuard', () => {
     isPublic: false,
     author: { id: 42 },
     contributors: [{ id: 43 }],
+    readAccess: 'all',
+    readUserIds: [],
   };
   const pkg = { id: 5, room: { id: room.id } };
 
@@ -92,11 +94,48 @@ describe('RoomMembershipGuard', () => {
     ).rejects.toThrow(ForbiddenException);
   });
 
-  it('rejects an authenticated non-member', async () => {
+  it('allows an authenticated stranger when readAccess is all', async () => {
+    await expect(guard.canActivate(contextFor({ id: 99 }))).resolves.toBe(true);
+    expect(packages.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 5 } }),
+    );
+  });
+
+  it('rejects an authenticated stranger under author mode', async () => {
+    rooms.findOne.mockResolvedValueOnce({
+      ...room,
+      readAccess: 'author',
+      readUserIds: [],
+    });
+
     await expect(guard.canActivate(contextFor({ id: 99 }))).rejects.toThrow(
       ForbiddenException,
     );
     expect(packages.findOne).not.toHaveBeenCalled();
+  });
+
+  it('allows a listed user under users mode', async () => {
+    rooms.findOne.mockResolvedValueOnce({
+      ...room,
+      readAccess: 'users',
+      readUserIds: [99],
+    });
+
+    await expect(guard.canActivate(contextFor({ id: 99 }))).resolves.toBe(
+      true,
+    );
+  });
+
+  it('rejects a contributor under author mode', async () => {
+    rooms.findOne.mockResolvedValueOnce({
+      ...room,
+      readAccess: 'author',
+      readUserIds: [],
+    });
+
+    await expect(guard.canActivate(contextFor({ id: 43 }))).rejects.toThrow(
+      ForbiddenException,
+    );
   });
 
   it('rejects a package that belongs to another room', async () => {
