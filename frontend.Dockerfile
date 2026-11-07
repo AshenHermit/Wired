@@ -45,4 +45,5 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=prod-deps /app/frontend/node_modules ./frontend/node_modules
 EXPOSE 3000
 WORKDIR /app/frontend
-CMD ["node", "node_modules/.bin/next", "start", "-p", "3000"]
+# `.bin/next` is a shell shim; running it under `node` parses the shell as JS.
+CMD ["node", "node_modules/next/dist/bin/next", "start", "-p", "3000"]
