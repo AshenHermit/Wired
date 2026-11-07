@@ -826,6 +826,101 @@ describe('ScriptingPackagesService', () => {
       expect(packagesRepository.delete).toHaveBeenCalledWith(42);
     });
   });
+
+  describe('removeAllInRoom', () => {
+    function makeService(options: {
+      packages?: Array<{ id: number; slug?: string; room: { id: number } | null }>;
+      dependentsByPackage?: Record<
+        number,
+        Array<{ packageId: number; roomId: number; revision: number }>
+      >;
+      dependentRows?: Array<{ id: number; name: string; enabled: boolean }>;
+    }) {
+      const packages = options.packages ?? [];
+      const byId = new Map(packages.map((pkg) => [pkg.id, pkg]));
+      const packagesRepository = {
+        find: jest.fn(async (args?: { where?: Record<string, unknown> }) => {
+          // Room cascade loads by room; the dependents guard loads by In(ids).
+          if (args?.where && 'room' in args.where) {
+            return packages.filter((pkg) => byId.has(pkg.id));
+          }
+          return options.dependentRows ?? [];
+        }),
+        findOne: jest.fn(async (args: { where: { id: number } }) => {
+          return byId.get(args.where.id) ?? null;
+        }),
+        delete: jest.fn(async (id: number) => {
+          byId.delete(id);
+          return { affected: 1 };
+        }),
+      };
+      attachTransactionManager(packagesRepository);
+      const storage = {
+        removePackage: jest.fn(async () => undefined),
+      };
+      const delivery = {
+        findDependentRoomPackages: jest.fn(async (packageId: number) =>
+          options.dependentsByPackage?.[packageId] ?? [],
+        ),
+        invalidatePackage: jest.fn(async () => undefined),
+      };
+      return {
+        packagesRepository,
+        storage,
+        delivery,
+        service: new ScriptingPackagesService(
+          packagesRepository as never,
+          {} as never,
+          ...collaborators({ storage, delivery }),
+        ),
+      };
+    }
+
+    it('deletes every package in the room via remove cleanup', async () => {
+      const { service, packagesRepository, storage } = makeService({
+        packages: [
+          { id: 10, slug: 'a', room: { id: 7 } },
+          { id: 11, slug: 'b', room: { id: 7 } },
+        ],
+      });
+
+      await service.removeAllInRoom(7);
+
+      expect(packagesRepository.delete).toHaveBeenCalledWith(10);
+      expect(packagesRepository.delete).toHaveBeenCalledWith(11);
+      expect(storage.removePackage).toHaveBeenCalledWith(10);
+      expect(storage.removePackage).toHaveBeenCalledWith(11);
+    });
+
+    it('succeeds when an in-room package has an enabled in-room dependent', async () => {
+      const { service, packagesRepository } = makeService({
+        packages: [
+          { id: 10, slug: 'lib', room: { id: 7 } },
+          { id: 9, slug: 'app', room: { id: 7 } },
+        ],
+        dependentsByPackage: {
+          10: [{ packageId: 9, roomId: 7, revision: 1 }],
+        },
+        dependentRows: [{ id: 9, name: 'App', enabled: true }],
+      });
+
+      await expect(service.removeAllInRoom(7)).resolves.toBeUndefined();
+
+      expect(packagesRepository.delete).toHaveBeenCalledWith(10);
+      expect(packagesRepository.delete).toHaveBeenCalledWith(9);
+    });
+
+    it('is a no-op when the room has no packages', async () => {
+      const { service, packagesRepository, storage } = makeService({
+        packages: [],
+      });
+
+      await expect(service.removeAllInRoom(7)).resolves.toBeUndefined();
+
+      expect(packagesRepository.delete).not.toHaveBeenCalled();
+      expect(storage.removePackage).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('ScriptingPackagesService slug lifecycle', () => {

@@ -912,13 +912,25 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
    * whose files are still referenced would therefore break every enabled
    * dependent on its next reload, so the delete is refused while one exists.
    */
-  private async assertNoEnabledDependents(packageId: number): Promise<void> {
+  private async assertNoEnabledDependents(
+    packageId: number,
+    /**
+     * Package ids being deleted in the same room cascade. Dependents in this
+     * set cannot block the delete — they are removed in the same sweep.
+     */
+    cascadeRoomPackageIds?: ReadonlySet<number>,
+  ): Promise<void> {
     const dependents = await this.delivery.findDependentRoomPackages(packageId);
-    if (dependents.length === 0) {
+    const relevant = cascadeRoomPackageIds
+      ? dependents.filter(
+          (dependent) => !cascadeRoomPackageIds.has(dependent.packageId),
+        )
+      : dependents;
+    if (relevant.length === 0) {
       return;
     }
     const rows = await this.packagesRepository.find({
-      where: { id: In(dependents.map((dependent) => dependent.packageId)) },
+      where: { id: In(relevant.map((dependent) => dependent.packageId)) },
     });
     const blocking = rows
       .filter((row) => row.enabled !== false)
@@ -944,8 +956,30 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
    * The row is authoritative, so a disk failure is logged instead of turning a
    * completed deletion into an error.
    */
-  async remove(id: number): Promise<void> {
-    await this.assertNoEnabledDependents(id);
+  /**
+   * Deletes every scripting package that belongs to `roomId`, reusing
+   * {@link remove} so revisions, disk files and runtime notify stay consistent.
+   * Same-room enabled dependents do not block: they are part of this cascade.
+   */
+  async removeAllInRoom(roomId: number): Promise<void> {
+    const packages = await this.packagesRepository.find({
+      where: { room: { id: roomId } },
+      select: ['id'],
+    });
+    if (packages.length === 0) {
+      return;
+    }
+    const cascadeRoomPackageIds = new Set(packages.map((pkg) => pkg.id));
+    for (const pkg of packages) {
+      await this.remove(pkg.id, { cascadeRoomPackageIds });
+    }
+  }
+
+  async remove(
+    id: number,
+    options?: { cascadeRoomPackageIds?: ReadonlySet<number> },
+  ): Promise<void> {
+    await this.assertNoEnabledDependents(id, options?.cascadeRoomPackageIds);
     const pkg = await this.findOne(id);
     const roomId = pkg.room?.id ?? null;
     // A room slug is local and stays reusable; a workshop slug becomes free
