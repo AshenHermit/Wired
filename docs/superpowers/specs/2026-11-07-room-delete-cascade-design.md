@@ -1,7 +1,7 @@
 # Room delete cascade + warning modal
 
 **Date:** 2026-11-07  
-**Status:** approved  
+**Status:** implemented  
 **Size:** small change
 
 ## Intent
