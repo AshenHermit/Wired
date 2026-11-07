@@ -540,6 +540,22 @@ export function GameTab({ room }: { room: Room }) {
   const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
   const lastFrameMessageAtRef = React.useRef(0);
 
+  // The game canvas only receives keyboard input while it (or its iframe) holds
+  // focus. Emit/package actions and tab switches move focus to buttons or the
+  // document, so re-focus the frame whenever the game becomes ready and on
+  // click, otherwise WASD/Space stop working while the mouse still does.
+  React.useEffect(() => {
+    if (phase !== "ready") return;
+    const frame = iframeRef.current;
+    if (frame) {
+      window.requestAnimationFrame(() => frame.focus());
+    }
+  }, [phase, attempt]);
+
+  const focusFrame = React.useCallback(() => {
+    iframeRef.current?.focus();
+  }, []);
+
   // Verify the export exists before mounting the frame, so an unbuilt export
   // produces an actionable message instead of a silent blank iframe.
   React.useEffect(() => {
@@ -851,7 +867,11 @@ export function GameTab({ room }: { room: Room }) {
   }, []);
 
   return (
-    <div className="relative w-full h-full bg-black text-white">
+    <div
+      className="relative w-full h-full bg-black text-white"
+      onClick={focusFrame}
+      tabIndex={-1}
+    >
       {exportReady && (
         <iframe
           key={attempt}
