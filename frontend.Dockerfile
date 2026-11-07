@@ -11,7 +11,7 @@ RUN corepack enable
 WORKDIR /app
 
 FROM base AS manifests
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY packages/shared/package.json ./packages/shared/package.json
 COPY packages/server/package.json ./packages/server/package.json
 COPY frontend/package.json ./frontend/package.json
