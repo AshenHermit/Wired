@@ -71,6 +71,19 @@
     "update": "Update",
     "updated": "Profile updated successfully"
   },
+  "Media": {
+    "label": "Preview image",
+    "upload": "Upload",
+    "paste": "Paste",
+    "remove": "Remove",
+    "uploading": "Uploading…",
+    "errors": {
+      "invalidType": "Only PNG, JPEG, and WEBP images are supported",
+      "tooLarge": "Image must be 2 MiB or smaller",
+      "uploadFailed": "Failed to upload the image",
+      "clipboardFailed": "Could not read an image from the clipboard"
+    }
+  },
   "Rooms": {
     "createTitle": "Create Room",
     "createDescription": "Create a new room",
@@ -78,11 +91,17 @@
     "editDescription": "Edit the room",
     "name": "Name",
     "description": "Description",
+    "preview": "Preview image",
     "namePlaceholder": "Room Name",
     "descriptionPlaceholder": "Room Description",
     "create": "Create",
     "update": "Update",
     "delete": "Delete",
+    "deleteDialog": {
+      "title": "Delete room?",
+      "description": "Room {name} and all of its packages, revisions, and artifacts will be permanently deleted. This cannot be undone.",
+      "confirm": "Delete room"
+    },
     "created": "Room created",
     "updated": "Room updated",
     "deleted": "Room deleted",
@@ -240,6 +259,7 @@
       "descriptionPlaceholder": "What the package does",
       "tags": "Tags",
       "tagsHint": "Enter, comma, or space adds a tag. Up to 10 tags.",
+      "preview": "Preview image",
       "detailsLoading": "Loading the package description and tags…",
       "detailsFailed": "Failed to load the package description and tags.",
       "dependentsTitle": "Packages reference this slug:",

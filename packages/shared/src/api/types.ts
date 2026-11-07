@@ -99,6 +99,8 @@ export type Room = {
   description: string;
   isPublic: boolean;
   parentRoomId: number | null;
+  /** Optional preview image URL (`/media/<hash>.<ext>`), or null when cleared. */
+  previewImage: string | null;
   createdAt: string;
   updatedAt: string;
   author?: PublicUser;
@@ -119,6 +121,8 @@ export type ScriptingPackage = {
   tags: string[];
   enabled: boolean;
   dependencies: string[];
+  /** Optional preview image URL (`/media/<hash>.<ext>`), or null when cleared. */
+  previewImage: string | null;
   createdAt: string;
   updatedAt: string;
   author?: PublicUser;
@@ -138,6 +142,7 @@ export type CreateRoomPayload = {
   isPublic?: boolean;
   description?: string;
   parentRoomId?: number;
+  previewImage?: string | null;
 };
 
 /**
@@ -151,6 +156,8 @@ export type UpdateRoomPayload = {
   isPublic?: boolean;
   description?: string;
   parentRoomId?: number;
+  /** Set to a `/media/...` URL or `null` to clear; omit to leave unchanged. */
+  previewImage?: string | null;
 };
 
 export type UpdateRoomAccessPayload = {
@@ -167,6 +174,7 @@ export type CreateScriptingPackagePayload = {
   description?: string;
   tags?: string[];
   dependencies?: string[];
+  previewImage?: string | null;
   /** The author is always the authenticated caller, never a payload field. */
   roomId?: number;
   parentPackageId?: number;
@@ -221,6 +229,7 @@ export type WorkshopPackageSummary = {
   version: string;
   description: string;
   tags: string[];
+  previewImage?: string | null;
   author?: PublicUser;
   revision: number;
   publishedAt: string;

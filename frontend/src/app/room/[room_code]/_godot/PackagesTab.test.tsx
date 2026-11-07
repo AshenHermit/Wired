@@ -22,6 +22,7 @@ import {
   WorkshopActionError,
   WorkshopSlugTakenError,
 } from "./use-room-packages";
+import { withApiPrefix } from "@/utils/variables";
 import { PackagesTab } from "./PackagesTab";
 import { resetWorkshopTagsCache } from "@/components/packages/use-workshop-tags";
 
@@ -47,6 +48,7 @@ function entry(overrides: Partial<RoomPackageEntry> = {}): RoomPackageEntry {
     version: "0.1.0",
     description: "",
     tags: [],
+    previewImage: null,
     status: "loaded",
     enabled: true,
     loaded: true,
@@ -140,6 +142,7 @@ function roomPackage(
     version: "0.1.0",
     description: "Описание из комнаты",
     tags: ["room", "demo"],
+    previewImage: null,
     enabled: true,
     dependencies: [],
     createdAt: "2026-10-30T10:00:00.000Z",
@@ -156,6 +159,7 @@ function roomFixture(overrides: Partial<Room> = {}): Room {
     description: "",
     isPublic: false,
     parentRoomId: null,
+    previewImage: null,
     createdAt: "2026-10-30T10:00:00.000Z",
     updatedAt: "2026-10-30T10:00:00.000Z",
     ...overrides,
@@ -190,9 +194,48 @@ afterEach(() => {
 });
 
 describe("PackagesTab", () => {
+  it("shows a left thumbnail when a room package has a preview", () => {
+    const preview = `/media/${"a".repeat(64)}.jpg`;
+    const { container } = render(
+      <PackagesTab
+        onRoomSaved={vi.fn()}
+        room={roomFixture()}
+        roomId={1}
+        canCreatePackages
+        canManagePackages
+        viewerId={42}
+        packages={controller({
+          entries: [entry({ previewImage: preview })],
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Demo")).toBeTruthy();
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute("src")).toBe(withApiPrefix(preview));
+  });
+
+  it("keeps room package cards text-only without a preview", () => {
+    const { container } = render(
+      <PackagesTab
+        onRoomSaved={vi.fn()}
+        room={roomFixture()}
+        roomId={1}
+        canCreatePackages
+        canManagePackages
+        viewerId={42}
+        packages={controller({ entries: [entry({ previewImage: null })] })}
+      />,
+    );
+
+    expect(screen.getByText("Demo")).toBeTruthy();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
   it("lists all room packages with their editor and backend states", () => {
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [
@@ -244,7 +287,7 @@ describe("PackagesTab", () => {
 
   it("shows the backend runtime error verbatim", () => {
     render(
-      <PackagesTab room={roomFixture()}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()}
         roomId={1}
         canCreatePackages canManagePackages viewerId={42}
         packages={controller({
@@ -264,7 +307,7 @@ describe("PackagesTab", () => {
 
   it("renders package statuses in English", () => {
     render(
-      <PackagesTab room={roomFixture()}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()}
         roomId={1}
         canCreatePackages canManagePackages viewerId={42}
         packages={controller({
@@ -308,13 +351,13 @@ describe("PackagesTab", () => {
         }),
       }),
     };
-    const view = render(<PackagesTab {...props} />, { locale: "ru" });
+    const view = render(<PackagesTab onRoomSaved={vi.fn()} {...props} />, { locale: "ru" });
 
     expect(screen.getByText("Пакет добавлен в комнату")).toBeTruthy();
 
     view.rerender(
       <IntlProvider locale="en">
-        <PackagesTab {...props} />
+        <PackagesTab onRoomSaved={vi.fn()} {...props} />
       </IntlProvider>,
     );
 
@@ -322,7 +365,7 @@ describe("PackagesTab", () => {
   });
 
   it("explains that Godot needs a project reload to see written files", () => {
-    render(<PackagesTab room={roomFixture()} roomId={1}canCreatePackages canManagePackages viewerId={42} packages={controller()} />);
+    render(<PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}canCreatePackages canManagePackages viewerId={42} packages={controller()} />);
 
     expect(
       screen.getByText(/Project → Reload Current Project/),
@@ -338,7 +381,7 @@ describe("PackagesTab", () => {
       .mockResolvedValueOnce(undefined);
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         canCreatePackages canManagePackages viewerId={42}
         packages={controller({ applyPublishedRevision })}
       />,
@@ -363,7 +406,7 @@ describe("PackagesTab", () => {
       );
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         canCreatePackages canManagePackages viewerId={42}
         packages={controller({ applyPublishedRevision })}
       />,
@@ -385,7 +428,7 @@ describe("PackagesTab", () => {
       .mockResolvedValueOnce(undefined);
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         canCreatePackages canManagePackages viewerId={42}
         packages={controller({ removePackageDirectory })}
       />,
@@ -408,7 +451,7 @@ describe("PackagesTab", () => {
       .mockResolvedValue({ id: 7, name: "New" } as never);
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}canCreatePackages canManagePackages viewerId={42} packages={controller({ createPackage })} />,
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}canCreatePackages canManagePackages viewerId={42} packages={controller({ createPackage })} />,
     );
 
     fireEvent.click(
@@ -437,7 +480,7 @@ describe("PackagesTab", () => {
   it("allows Emit only for a package loaded into the editor", async () => {
     const emitPackage = vi.fn().mockResolvedValue(undefined);
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [
@@ -466,7 +509,7 @@ describe("PackagesTab", () => {
   it("adopts a leftover directory so its files can be published", async () => {
     const adoptPackage = vi.fn().mockResolvedValue(undefined);
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [
@@ -495,7 +538,7 @@ describe("PackagesTab", () => {
       .mockResolvedValueOnce(undefined);
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [
@@ -522,7 +565,7 @@ describe("PackagesTab", () => {
 
   it("shows a disabled badge and hides Emit for a disabled package", () => {
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [entry({ enabled: false, status: "disabled" })],
@@ -537,7 +580,7 @@ describe("PackagesTab", () => {
 
   it("keeps Emit and Использовать каталог outside the actions menu", () => {
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         packages={controller({ entries: [entry({ loaded: false, localChanges: ["a.gd"] })] })}
         canCreatePackages canManagePackages viewerId={1}
       />,
@@ -552,7 +595,7 @@ describe("PackagesTab", () => {
   it("confirms permanent deletion in a dialog", async () => {
     const deletePackageRecord = vi.fn().mockResolvedValue(undefined);
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         canCreatePackages canManagePackages viewerId={42}
         packages={controller({
           entries: [entry({ packageId: 42 })],
@@ -576,7 +619,7 @@ describe("PackagesTab", () => {
   });
 
   it("opens the creation modal from the header button", () => {
-    render(<PackagesTab room={roomFixture()} roomId={1}packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
+    render(<PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
 
@@ -585,7 +628,7 @@ describe("PackagesTab", () => {
   });
 
   it("lowercases the typed slug", () => {
-    render(<PackagesTab room={roomFixture()} roomId={1}packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
+    render(<PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Создать пакет" }));
     const slugInput = screen.getByLabelText("Slug");
@@ -603,7 +646,7 @@ describe("PackagesTab", () => {
     });
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         packages={controller({ checkSlugAvailability })}
         canCreatePackages canManagePackages viewerId={42}
       />,
@@ -637,7 +680,7 @@ describe("PackagesTab", () => {
     );
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         packages={controller({ checkSlugAvailability })}
         canCreatePackages canManagePackages viewerId={42}
       />,
@@ -675,7 +718,7 @@ describe("PackagesTab", () => {
 
   it("disables creation while the editor is not ready", async () => {
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         packages={controller({ fsReady: false })}
         canCreatePackages canManagePackages viewerId={42}
       />,
@@ -701,7 +744,7 @@ describe("PackagesTab", () => {
     "disables creation for %s",
     async (_label, viewerId) => {
       render(
-        <PackagesTab room={roomFixture()}
+        <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()}
           roomId={1}
           packages={controller()}
           canManagePackages={false}
@@ -730,7 +773,7 @@ describe("PackagesTab", () => {
     const createPackage = vi.fn().mockRejectedValue(new Error("boom"));
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         packages={controller({ createPackage })}
         canCreatePackages canManagePackages viewerId={42}
       />,
@@ -760,7 +803,7 @@ describe("PackagesTab", () => {
       .mockRejectedValue(new Error("Slug уже занят"));
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         packages={controller({ createPackage })}
         canCreatePackages canManagePackages viewerId={42}
       />,
@@ -796,7 +839,7 @@ describe("PackagesTab", () => {
       });
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         packages={controller({ checkSlugAvailability })}
         canCreatePackages canManagePackages viewerId={42}
       />,
@@ -830,7 +873,7 @@ describe("PackagesTab", () => {
     );
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         packages={controller({
           entries: [
             entry({ packageId: 7, slug: "hero", name: "Hero", version: "1.0" }),
@@ -859,6 +902,7 @@ describe("PackagesTab", () => {
         slug: "hero2",
         description: "desc",
         tags: ["a", "b"],
+        previewImage: null,
       }),
     );
   });
@@ -876,7 +920,7 @@ describe("PackagesTab", () => {
     });
     const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
     render(
-      <PackagesTab room={roomFixture()}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()}
         roomId={1}
         canCreatePackages canManagePackages viewerId={42}
         packages={controller({
@@ -914,7 +958,7 @@ describe("PackagesTab", () => {
       .mockResolvedValue({} as never);
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero", name: "Hero" })],
           updatePackageMetadata,
@@ -955,7 +999,7 @@ describe("PackagesTab", () => {
     const renamePackageDir = vi.fn().mockResolvedValue(undefined);
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero", name: "Hero" })],
           updatePackageMetadata,
@@ -987,7 +1031,7 @@ describe("PackagesTab", () => {
     );
     const updatePackageMetadata = vi.fn().mockResolvedValue({} as never);
     render(
-      <PackagesTab room={roomFixture()}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()}
         roomId={1}
         canCreatePackages canManagePackages viewerId={42}
         packages={controller({
@@ -1015,7 +1059,7 @@ describe("PackagesTab", () => {
 
   it("shows the card metadata read-only", () => {
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         packages={controller({
           entries: [
             entry({
@@ -1048,7 +1092,7 @@ describe("PackagesTab", () => {
     });
 
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         packages={controller({ checkSlugAvailability })}
         canCreatePackages canManagePackages viewerId={42}
       />,
@@ -1075,7 +1119,7 @@ describe("PackagesTab", () => {
 
   it("renders the slug instead of the numeric id", () => {
     render(
-      <PackagesTab room={roomFixture()} roomId={1}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1}
         packages={controller({
           entries: [entry({ packageId: 7, slug: "hero" })],
         })}
@@ -1092,7 +1136,7 @@ describe("PackagesTab", () => {
       items: [workshopPackage()],
       total: 1,
     });
-    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
+    render(<PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1} packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Workshop" }));
 
@@ -1115,7 +1159,7 @@ describe("PackagesTab", () => {
     });
     const copyFromWorkshop = vi.fn().mockResolvedValue({ id: 9 } as never);
     render(
-      <PackagesTab room={roomFixture()}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()}
         roomId={1}
         packages={controller({ copyFromWorkshop })}
         canCreatePackages canManagePackages viewerId={42}
@@ -1133,7 +1177,7 @@ describe("PackagesTab", () => {
 
   it("disables publishing a package without a published revision", async () => {
     render(
-      <PackagesTab room={roomFixture()}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()}
         roomId={1}
         packages={controller({
           entries: [entry({ publishedRevision: null })],
@@ -1160,7 +1204,7 @@ describe("PackagesTab", () => {
       .fn()
       .mockResolvedValue({ mode: "created", package: workshopPackage() });
     render(
-      <PackagesTab room={roomFixture()}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
         canCreatePackages canManagePackages viewerId={42}
@@ -1199,7 +1243,7 @@ describe("PackagesTab", () => {
       ),
     );
     render(
-      <PackagesTab room={roomFixture()}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
         canCreatePackages canManagePackages viewerId={42}
@@ -1222,7 +1266,7 @@ describe("PackagesTab", () => {
   });
 
   it("shows the room package description and tags in the preview", async () => {
-    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
+    render(<PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1} packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
 
     const menu = await openPackageActions();
     fireEvent.click(
@@ -1244,7 +1288,7 @@ describe("PackagesTab", () => {
         resolveRoomPackage = resolve;
       }),
     );
-    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
+    render(<PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1} packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
 
     const menu = await openPackageActions();
     fireEvent.click(
@@ -1266,7 +1310,7 @@ describe("PackagesTab", () => {
     vi.mocked(packagesApi.lookupWorkshopPackage).mockRejectedValue(
       new Error("network down"),
     );
-    render(<PackagesTab room={roomFixture()} roomId={1} packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
+    render(<PackagesTab onRoomSaved={vi.fn()} room={roomFixture()} roomId={1} packages={controller()} canCreatePackages canManagePackages viewerId={42} />);
 
     const menu = await openPackageActions();
     fireEvent.click(
@@ -1304,7 +1348,7 @@ describe("PackagesTab", () => {
       .fn()
       .mockResolvedValue({ mode: "updated", package: workshopPackage() });
     render(
-      <PackagesTab room={roomFixture()}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
         canCreatePackages canManagePackages viewerId={42}
@@ -1336,7 +1380,7 @@ describe("PackagesTab", () => {
     );
     const publishToWorkshop = vi.fn();
     render(
-      <PackagesTab room={roomFixture()}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
         canCreatePackages canManagePackages viewerId={42}
@@ -1382,7 +1426,7 @@ describe("PackagesTab", () => {
         ),
       );
     render(
-      <PackagesTab room={roomFixture()}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()}
         roomId={1}
         packages={controller({ publishToWorkshop })}
         canCreatePackages canManagePackages viewerId={42}
@@ -1422,7 +1466,7 @@ describe("PackagesTab", () => {
     });
     const forkWorkshopPackage = vi.fn().mockResolvedValue({ id: 11 } as never);
     render(
-      <PackagesTab room={roomFixture()}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()}
         roomId={1}
         packages={controller({
           checkSlugAvailability,
@@ -1475,7 +1519,7 @@ describe("PackagesTab", () => {
       global: { available: false, reason: "taken" },
     });
     render(
-      <PackagesTab room={roomFixture()}
+      <PackagesTab onRoomSaved={vi.fn()} room={roomFixture()}
         roomId={1}
         packages={controller({ checkSlugAvailability })}
         canCreatePackages canManagePackages viewerId={42}

@@ -16,6 +16,7 @@ import {
 import { slugHintClass, slugHintKey } from "@/components/packages/slug";
 import { useSlugAvailability } from "@/components/packages/use-slug-availability";
 import { TagInput } from "@/components/packages/TagInput";
+import { ImageUploadField } from "@/components/media/ImageUploadField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -77,6 +78,7 @@ export function PackageEditDialog({
   const [version, setVersion] = React.useState("");
   const [slug, setSlug] = React.useState("");
   const [description, setDescription] = React.useState("");
+  const [previewImage, setPreviewImage] = React.useState<string | null>(null);
   const [tags, setTags] = React.useState<string[]>([]);
   const [tagsInvalid, setTagsInvalid] = React.useState(false);
   const tagsInvalidRef = React.useRef(false);
@@ -116,6 +118,7 @@ export function PackageEditDialog({
     setVersion(entry.version);
     setSlug(entry.slug);
     setDescription(entry.description);
+    setPreviewImage(entry.previewImage ?? null);
     setTags(entry.tags);
     setTagsInvalid(false);
     tagsInvalidRef.current = false;
@@ -136,6 +139,7 @@ export function PackageEditDialog({
         if (cancelled) return;
         setPkg(pkg);
         setDescription(pkg.description ?? "");
+        setPreviewImage(pkg.previewImage ?? null);
         setTags(pkg.tags ?? []);
         setDetailsState("ready");
       })
@@ -196,6 +200,7 @@ export function PackageEditDialog({
         slug: slug.trim(),
         description: description.trim(),
         tags,
+        previewImage,
         ...(confirmRename ? { confirmSlugRename: true } : {}),
       });
       onOpenChange(false);
@@ -354,6 +359,14 @@ export function PackageEditDialog({
               <p className="text-xs text-muted-foreground">
                 {t("editDialog.tagsHint")}
               </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>{t("editDialog.preview")}</Label>
+              <ImageUploadField
+                value={previewImage}
+                onChange={setPreviewImage}
+                disabled={submitting || detailsState !== "ready"}
+              />
             </div>
             {detailsState === "loading" && (
               <p className="text-xs text-muted-foreground">

@@ -6,6 +6,7 @@ import {
   RippleButton,
   RippleButtonRipples,
 } from "@/components/animate-ui/components/buttons/ripple";
+import { PreviewThumbnail } from "@/components/media/PreviewThumbnail";
 import { Card, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useUserStore } from "@/store/user-store";
 import { PlayIcon, WrenchIcon } from "lucide-react";
@@ -25,30 +26,41 @@ export function RoomCard({
   const authorized = useUserStore((state) => state.authorized);
   const userId = useUserStore((state) => state.id);
   const canEdit = editingApi && authorized && userId === room.author?.id;
+  const preview = room.previewImage;
+
   return (
-    <Card className="min-h-32">
-      <CardHeader>
-        <CardTitle>{room.name}</CardTitle>
-      </CardHeader>
-      <CardFooter className="flex justify-between">
-        <div>{room.author?.name}</div>
-        <div className="flex items-center gap-2">
-          {canEdit ? (
-            <RippleButton
-              variant={"outline"}
-              onClick={() => editingApi.current?.edit(room)}
-            >
-              <WrenchIcon />
-              <RippleButtonRipples />
-            </RippleButton>
-          ) : null}
-          <LiquidButton asChild>
-            <Link href={`/room/${encodeId("room", room.id)}`}>
-              <PlayIcon />
-            </Link>
-          </LiquidButton>
+    <Card className="p-4">
+      <div
+        className={
+          preview ? "flex items-start gap-3 h-full justify-between" : "h-full"
+        }
+      >
+        {preview ? <PreviewThumbnail src={preview} className="" /> : null}
+        <div className="min-w-0 flex-1">
+          <CardHeader className="p-0">
+            <CardTitle>{room.name}</CardTitle>
+          </CardHeader>
+          <CardFooter className="flex justify-between p-0">
+            <div>{room.author?.name}</div>
+            <div className="flex items-center gap-2">
+              {canEdit ? (
+                <RippleButton
+                  variant={"outline"}
+                  onClick={() => editingApi.current?.edit(room)}
+                >
+                  <WrenchIcon />
+                  <RippleButtonRipples />
+                </RippleButton>
+              ) : null}
+              <LiquidButton asChild>
+                <Link href={`/room/${encodeId("room", room.id)}`}>
+                  <PlayIcon />
+                </Link>
+              </LiquidButton>
+            </div>
+          </CardFooter>
         </div>
-      </CardFooter>
+      </div>
     </Card>
   );
 }

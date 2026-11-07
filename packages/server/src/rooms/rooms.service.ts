@@ -1,9 +1,11 @@
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
   OnApplicationBootstrap,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, IsNull, Repository } from 'typeorm';
@@ -15,6 +17,7 @@ import { UpdateRoomDto } from './dto/update-room.dto';
 import { UpdateRoomAccessDto } from './dto/update-room-access.dto';
 import { canEditRoom, canViewRoom } from './room-access';
 import { UsersService } from 'src/users/users.service';
+import { ScriptingPackagesService } from 'src/scripting-packages/scripting-packages.service';
 
 @Injectable()
 export class RoomsService implements OnApplicationBootstrap {
@@ -22,6 +25,8 @@ export class RoomsService implements OnApplicationBootstrap {
     @InjectRepository(Room)
     private readonly roomsRepository: Repository<Room>,
     private readonly usersService: UsersService,
+    @Inject(forwardRef(() => ScriptingPackagesService))
+    private readonly packagesService: ScriptingPackagesService,
   ) {}
 
   async assertRoomCreation(user: User, room: CreateRoomDto): Promise<void> {
@@ -140,6 +145,7 @@ export class RoomsService implements OnApplicationBootstrap {
       description: dto.description,
       type: dto.type,
       parentRoomId: dto.parentRoomId ?? null,
+      previewImage: dto.previewImage ?? null,
       author,
       packageManagementAccess: 'author',
       packageManagementUserIds: [],
@@ -164,6 +170,7 @@ export class RoomsService implements OnApplicationBootstrap {
     if (dto.isPublic !== undefined) room.isPublic = dto.isPublic;
     if (dto.description !== undefined) room.description = dto.description;
     if (dto.parentRoomId !== undefined) room.parentRoomId = dto.parentRoomId;
+    if (dto.previewImage !== undefined) room.previewImage = dto.previewImage;
 
     const saved = await this.roomsRepository.save(room);
     return this.findOne(saved.id);
@@ -227,6 +234,9 @@ export class RoomsService implements OnApplicationBootstrap {
 
   async remove(id: number): Promise<void> {
     await this.findOne(id);
+    // Packages hold an FK to room with no onDelete; clear them through the
+    // package service so revisions, disk and runtime artifacts go with them.
+    await this.packagesService.removeAllInRoom(id);
     const result = await this.roomsRepository.delete(id);
     if (!result.affected) {
       throw new NotFoundException(`Room with id=${id} not found`);

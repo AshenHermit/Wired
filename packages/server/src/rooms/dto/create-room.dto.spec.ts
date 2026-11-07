@@ -52,4 +52,40 @@ describe('global validation pipe', () => {
       transform({ name: 'Room', type: 'ts-game' }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
+
+  it('accepts a wired media previewImage URL', async () => {
+    await expect(
+      transform({
+        name: 'Room',
+        type: 'godot',
+        previewImage: `/media/${'a'.repeat(64)}.png`,
+      }),
+    ).resolves.toBeInstanceOf(CreateRoomDto);
+  });
+
+  it('accepts previewImage null', async () => {
+    await expect(
+      transform({ name: 'Room', type: 'godot', previewImage: null }),
+    ).resolves.toBeInstanceOf(CreateRoomDto);
+  });
+
+  it('rejects an external previewImage URL', async () => {
+    await expect(
+      transform({
+        name: 'Room',
+        type: 'godot',
+        previewImage: 'https://evil.example/x.png',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects a traversal-shaped previewImage', async () => {
+    await expect(
+      transform({
+        name: 'Room',
+        type: 'godot',
+        previewImage: '/media/../x.png',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
 });

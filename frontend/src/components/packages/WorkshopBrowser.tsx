@@ -4,6 +4,7 @@ import type { WorkshopPackageSummary } from "@wired-io/shared";
 import { Loader2Icon, SearchIcon, XIcon } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
 import * as React from "react";
+import { PreviewThumbnail } from "@/components/media/PreviewThumbnail";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAppMessage } from "@/i18n/message";
@@ -133,9 +134,12 @@ function WorkshopPackageCard({
 }) {
   const t = useTranslations("Workshop");
   const locale = useLocale();
+  const preview = item.previewImage;
+
   return (
     <article className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-4">
+        {preview ? <PreviewThumbnail src={preview} /> : null}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-2">
             <h3 className="font-medium">{item.name}</h3>

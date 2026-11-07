@@ -826,6 +826,121 @@ describe('ScriptingPackagesService', () => {
       expect(packagesRepository.delete).toHaveBeenCalledWith(42);
     });
   });
+
+  describe('removeAllInRoom', () => {
+    function makeService(options: {
+      packages?: Array<{ id: number; slug?: string; room: { id: number } | null }>;
+      dependentsByPackage?: Record<
+        number,
+        Array<{ packageId: number; roomId: number; revision: number }>
+      >;
+      dependentRows?: Array<{ id: number; name: string; enabled: boolean }>;
+    }) {
+      const packages = options.packages ?? [];
+      const byId = new Map(packages.map((pkg) => [pkg.id, pkg]));
+      const packagesRepository = {
+        find: jest.fn(async (args?: { where?: Record<string, unknown> }) => {
+          // Room cascade loads by room; the dependents guard loads by In(ids).
+          if (args?.where && 'room' in args.where) {
+            return packages.filter((pkg) => byId.has(pkg.id));
+          }
+          return options.dependentRows ?? [];
+        }),
+        findOne: jest.fn(async (args: { where: { id: number } }) => {
+          return byId.get(args.where.id) ?? null;
+        }),
+        delete: jest.fn(async (id: number) => {
+          byId.delete(id);
+          return { affected: 1 };
+        }),
+      };
+      attachTransactionManager(packagesRepository);
+      const storage = {
+        removePackage: jest.fn(async () => undefined),
+      };
+      const delivery = {
+        findDependentRoomPackages: jest.fn(async (packageId: number) =>
+          options.dependentsByPackage?.[packageId] ?? [],
+        ),
+        invalidatePackage: jest.fn(async () => undefined),
+      };
+      return {
+        packagesRepository,
+        storage,
+        delivery,
+        service: new ScriptingPackagesService(
+          packagesRepository as never,
+          {} as never,
+          ...collaborators({ storage, delivery }),
+        ),
+      };
+    }
+
+    it('deletes every package in the room via remove cleanup', async () => {
+      const { service, packagesRepository, storage } = makeService({
+        packages: [
+          { id: 10, slug: 'a', room: { id: 7 } },
+          { id: 11, slug: 'b', room: { id: 7 } },
+        ],
+      });
+
+      await service.removeAllInRoom(7);
+
+      expect(packagesRepository.delete).toHaveBeenCalledWith(10);
+      expect(packagesRepository.delete).toHaveBeenCalledWith(11);
+      expect(storage.removePackage).toHaveBeenCalledWith(10);
+      expect(storage.removePackage).toHaveBeenCalledWith(11);
+    });
+
+    it('succeeds when an in-room package has an enabled in-room dependent', async () => {
+      const { service, packagesRepository } = makeService({
+        packages: [
+          { id: 10, slug: 'lib', room: { id: 7 } },
+          { id: 9, slug: 'app', room: { id: 7 } },
+        ],
+        dependentsByPackage: {
+          10: [{ packageId: 9, roomId: 7, revision: 1 }],
+        },
+        dependentRows: [{ id: 9, name: 'App', enabled: true }],
+      });
+
+      await expect(service.removeAllInRoom(7)).resolves.toBeUndefined();
+
+      expect(packagesRepository.delete).toHaveBeenCalledWith(10);
+      expect(packagesRepository.delete).toHaveBeenCalledWith(9);
+    });
+
+    it('is a no-op when the room has no packages', async () => {
+      const { service, packagesRepository, storage } = makeService({
+        packages: [],
+      });
+
+      await expect(service.removeAllInRoom(7)).resolves.toBeUndefined();
+
+      expect(packagesRepository.delete).not.toHaveBeenCalled();
+      expect(storage.removePackage).not.toHaveBeenCalled();
+    });
+
+    it('refuses when an enabled dependent lives outside the room', async () => {
+      const { service, packagesRepository } = makeService({
+        packages: [{ id: 10, slug: 'lib', room: { id: 7 } }],
+        dependentsByPackage: {
+          // Delivery usually prunes other rooms; mock an escaped dependent so
+          // the cascade filter cannot silently ignore foreign rooms.
+          10: [{ packageId: 99, roomId: 8, revision: 1 }],
+        },
+        dependentRows: [{ id: 99, name: 'OtherRoomApp', enabled: true }],
+      });
+
+      await expect(service.removeAllInRoom(7)).rejects.toMatchObject({
+        response: {
+          code: 'package_has_dependents',
+          dependents: [{ packageId: 99, name: 'OtherRoomApp' }],
+        },
+      });
+      expect(packagesRepository.delete).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('ScriptingPackagesService slug lifecycle', () => {
@@ -833,6 +948,7 @@ describe('ScriptingPackagesService slug lifecycle', () => {
     options: {
       query?: jest.Mock;
       findOne?: jest.Mock;
+      find?: jest.Mock;
       save?: jest.Mock;
       manager?: FakeManager;
       pkg?: unknown;
@@ -849,6 +965,8 @@ describe('ScriptingPackagesService slug lifecycle', () => {
       findOne:
         options.findOne ??
         jest.fn(async () => options.pkg ?? { id: 7, slug: 'hero' }),
+      find: options.find ?? jest.fn(async () => []),
+      save: options.save ?? jest.fn(async (value: unknown) => value),
       manager,
     };
     const roomsRepository = {
@@ -878,15 +996,51 @@ describe('ScriptingPackagesService slug lifecycle', () => {
   });
 
   it('backfills null editingAccess to users mode with author and contributors', async () => {
-    const query = jest
-      .fn()
-      .mockResolvedValueOnce([]) // slug backfill returns empty
-      .mockResolvedValueOnce([]); // no missing slugs
-    const service = makeSlugService({ query });
+    const find = jest.fn(async () => [
+      {
+        id: 7,
+        author: { id: 1 },
+        contributors: [{ id: 2 }, { id: 3 }],
+        room: { author: { id: 4 } },
+      },
+      {
+        id: 8,
+        author: null,
+        contributors: [],
+        room: null,
+      },
+    ]);
+    const save = jest.fn(async (value: unknown) => value);
+    const service = makeSlugService({ find, save });
+
     await service.onApplicationBootstrap();
-    expect(query).toHaveBeenCalledWith(
-      expect.stringContaining('editingAccess'),
-    );
+
+    expect(find).toHaveBeenCalledWith({
+      where: { editingAccess: IsNull() },
+      relations: ['author', 'contributors', 'room', 'room.author'],
+    });
+    expect(save).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: 7,
+        editingAccess: 'users',
+        editingUserIds: [1, 2, 3, 4],
+      }),
+      expect.objectContaining({
+        id: 8,
+        editingAccess: 'users',
+        editingUserIds: [],
+      }),
+    ]);
+  });
+
+  it('does not save when no packages need an editingAccess backfill', async () => {
+    const find = jest.fn(async () => []);
+    const save = jest.fn(async (value: unknown) => value);
+    const service = makeSlugService({ find, save });
+
+    await service.onApplicationBootstrap();
+
+    expect(save).not.toHaveBeenCalled();
   });
 
   it('creates packages with author mode and empty editing user list', async () => {

@@ -116,31 +116,34 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     }
 
     // Backfill null editingAccess to users mode with author + contributors +
-    // room author. Build the composite list of user IDs.
-    const accessBackfill = await this.packagesRepository.query(
-      `UPDATE scripting_package
-       SET editingAccess = 'users',
-           editingUserIds = (
-             SELECT jsonb_agg(DISTINCT id) FROM (
-               SELECT "authorId" as id FROM scripting_package sp
-               WHERE sp.id = scripting_package.id AND "authorId" IS NOT NULL
-               UNION
-               SELECT contributor_id as id
-               FROM scripting_package_contributors_user sc
-               WHERE sc."scriptingPackageId" = scripting_package.id
-               UNION
-               SELECT r."authorId" as id
-               FROM room r
-               WHERE r.id = scripting_package."roomId" AND r."authorId" IS NOT NULL
-             ) ids
-           )
-       WHERE editingAccess IS NULL
-       RETURNING id`,
-    );
+    // room author. Use ORM to avoid raw SQL dependency on join table that
+    // may not exist yet during bootstrap.
+    const packagesToBackfill = await this.packagesRepository.find({
+      where: { editingAccess: IsNull() },
+      relations: ['author', 'contributors', 'room', 'room.author'],
+    });
+
+    for (const pkg of packagesToBackfill) {
+      const userIds = Array.from(
+        new Set(
+          [
+            pkg.author?.id,
+            ...(pkg.contributors ?? []).map((c) => c?.id),
+            pkg.room?.author?.id,
+          ].filter((id): id is number => typeof id === 'number'),
+        ),
+      );
+
+      pkg.editingAccess = 'users';
+      pkg.editingUserIds = userIds;
+    }
+
+    if (packagesToBackfill.length > 0) {
+      await this.packagesRepository.save(packagesToBackfill);
+    }
+
     this.logger.log(
-      `Package editing access backfill: ${
-        Array.isArray(accessBackfill) ? accessBackfill.length : 0
-      } row(s) updated`,
+      `Package editing access backfill: ${packagesToBackfill.length} row(s) updated`,
     );
   }
 
@@ -446,6 +449,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     version: string;
     description: string;
     tags: string[];
+    previewImage?: string | null;
     author: User;
   }): Promise<ScriptingPackage> {
     return this.insertPackage({
@@ -455,6 +459,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
         version: input.version,
         description: input.description,
         tags: normalizeTags(input.tags),
+        previewImage: input.previewImage ?? null,
       },
       author: input.author,
       scope: 'global',
@@ -619,6 +624,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     if (dto.description !== undefined) pkg.description = dto.description;
     if (dto.dependencies !== undefined) pkg.dependencies = dto.dependencies;
     if (dto.tags !== undefined) pkg.tags = normalizeTags(dto.tags);
+    if (dto.previewImage !== undefined) pkg.previewImage = dto.previewImage;
 
     const previousEnabled = pkg.enabled !== false;
     if (dto.enabled === true && previousEnabled === false) {
@@ -906,13 +912,25 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
    * whose files are still referenced would therefore break every enabled
    * dependent on its next reload, so the delete is refused while one exists.
    */
-  private async assertNoEnabledDependents(packageId: number): Promise<void> {
+  private async assertNoEnabledDependents(
+    packageId: number,
+    /**
+     * Package ids being deleted in the same room cascade. Dependents in this
+     * set cannot block the delete — they are removed in the same sweep.
+     */
+    cascadeRoomPackageIds?: ReadonlySet<number>,
+  ): Promise<void> {
     const dependents = await this.delivery.findDependentRoomPackages(packageId);
-    if (dependents.length === 0) {
+    const relevant = cascadeRoomPackageIds
+      ? dependents.filter(
+          (dependent) => !cascadeRoomPackageIds.has(dependent.packageId),
+        )
+      : dependents;
+    if (relevant.length === 0) {
       return;
     }
     const rows = await this.packagesRepository.find({
-      where: { id: In(dependents.map((dependent) => dependent.packageId)) },
+      where: { id: In(relevant.map((dependent) => dependent.packageId)) },
     });
     const blocking = rows
       .filter((row) => row.enabled !== false)
@@ -938,8 +956,30 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
    * The row is authoritative, so a disk failure is logged instead of turning a
    * completed deletion into an error.
    */
-  async remove(id: number): Promise<void> {
-    await this.assertNoEnabledDependents(id);
+  /**
+   * Deletes every scripting package that belongs to `roomId`, reusing
+   * {@link remove} so revisions, disk files and runtime notify stay consistent.
+   * Same-room enabled dependents do not block: they are part of this cascade.
+   */
+  async removeAllInRoom(roomId: number): Promise<void> {
+    const packages = await this.packagesRepository.find({
+      where: { room: { id: roomId } },
+      select: ['id'],
+    });
+    if (packages.length === 0) {
+      return;
+    }
+    const cascadeRoomPackageIds = new Set(packages.map((pkg) => pkg.id));
+    for (const pkg of packages) {
+      await this.remove(pkg.id, { cascadeRoomPackageIds });
+    }
+  }
+
+  async remove(
+    id: number,
+    options?: { cascadeRoomPackageIds?: ReadonlySet<number> },
+  ): Promise<void> {
+    await this.assertNoEnabledDependents(id, options?.cascadeRoomPackageIds);
     const pkg = await this.findOne(id);
     const roomId = pkg.room?.id ?? null;
     // A room slug is local and stays reusable; a workshop slug becomes free

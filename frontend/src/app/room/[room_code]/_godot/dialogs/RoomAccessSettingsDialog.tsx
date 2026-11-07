@@ -95,11 +95,18 @@ export function RoomAccessSettingsDialog({
   open,
   onOpenChange,
   room,
+  onSaved,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Full room; source of the current access fields. */
   room: Room;
+  /**
+   * Receives the room returned by the save request. The parent owns the room
+   * object, so it must replace it — otherwise reopening the dialog would seed
+   * from the pre-save policy fields.
+   */
+  onSaved: (room: Room) => void;
 }) {
   const t = useTranslations("RoomAccess");
   const common = useTranslations("Common");
@@ -151,7 +158,8 @@ export function RoomAccessSettingsDialog({
     setSaving(true);
     setError(false);
     try {
-      await updateRoomAccess(room.id, payload);
+      const updated = await updateRoomAccess(room.id, payload);
+      onSaved(updated);
       onOpenChange(false);
     } catch (failure) {
       console.error(failure);

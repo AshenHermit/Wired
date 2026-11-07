@@ -1,25 +1,36 @@
-import { plainToInstance } from 'class-transformer';
-import { validate } from 'class-validator';
+import { BadRequestException } from '@nestjs/common';
+import { createValidationPipe } from 'src/common/validation';
 import { UpdateScriptingPackageDto } from './update-scripting-package.dto';
 
-async function enabledErrors(enabled: unknown) {
-  const dto = plainToInstance(UpdateScriptingPackageDto, { enabled });
-  const errors = await validate(dto);
-  return errors.filter((error) => error.property === 'enabled');
-}
+describe('UpdateScriptingPackageDto previewImage', () => {
+  const pipe = createValidationPipe();
+  const transform = (payload: Record<string, unknown>) =>
+    pipe.transform(payload, {
+      type: 'body',
+      metatype: UpdateScriptingPackageDto,
+    });
 
-describe('UpdateScriptingPackageDto', () => {
-  it('accepts a boolean enabled flag', async () => {
-    expect(await enabledErrors(false)).toHaveLength(0);
-    expect(await enabledErrors(true)).toHaveLength(0);
+  it('accepts a wired media URL', async () => {
+    await expect(
+      transform({ previewImage: `/media/${'b'.repeat(64)}.jpg` }),
+    ).resolves.toBeInstanceOf(UpdateScriptingPackageDto);
   });
 
-  it('rejects a non-boolean enabled flag', async () => {
-    expect(await enabledErrors('false')).toHaveLength(1);
+  it('accepts null to clear the preview', async () => {
+    await expect(
+      transform({ previewImage: null }),
+    ).resolves.toBeInstanceOf(UpdateScriptingPackageDto);
   });
 
-  it('accepts an empty payload', async () => {
-    const dto = plainToInstance(UpdateScriptingPackageDto, {});
-    expect(await validate(dto)).toHaveLength(0);
+  it('rejects an external URL', async () => {
+    await expect(
+      transform({ previewImage: 'https://evil.example/x.png' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects a traversal-shaped path', async () => {
+    await expect(
+      transform({ previewImage: '/media/../x.png' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

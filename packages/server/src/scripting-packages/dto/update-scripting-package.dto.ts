@@ -5,8 +5,10 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  ValidateIf,
 } from 'class-validator';
 import { IsPackageSlug } from './package-slug.decorator';
+import { IsWiredMediaUrl } from 'src/media/is-wired-media-url.decorator';
 
 export class UpdateScriptingPackageDto {
   @ApiPropertyOptional({ example: 'My package', description: 'Package title' })
@@ -70,4 +72,15 @@ export class UpdateScriptingPackageDto {
   @IsOptional()
   @IsBoolean()
   confirmSlugRename?: boolean;
+
+  @ApiPropertyOptional({
+    example:
+      '/media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.webp',
+    description: 'Set a /media URL or null to clear; omit to leave unchanged',
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsWiredMediaUrl()
+  previewImage?: string | null;
 }

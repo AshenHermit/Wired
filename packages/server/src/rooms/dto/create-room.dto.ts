@@ -10,7 +10,9 @@ import {
   IsOptional,
   IsString,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
+import { IsWiredMediaUrl } from 'src/media/is-wired-media-url.decorator';
 
 /**
  * Room creation body. The author is never part of the payload: it always comes
@@ -57,4 +59,15 @@ export class CreateRoomDto {
   })
   @IsEnum(AVAILABLE_GAME_ROOMS_TYPES)
   type: CreatableRoomType;
+
+  @ApiProperty({
+    example: '/media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png',
+    description: 'Optional preview image URL from POST /media',
+    required: false,
+    nullable: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsWiredMediaUrl()
+  previewImage?: string | null;
 }

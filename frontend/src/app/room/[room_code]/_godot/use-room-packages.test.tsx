@@ -218,6 +218,7 @@ function roomPackage(
     version: "0.1.0",
     description: "",
     tags: [],
+    previewImage: null,
     enabled: true,
     dependencies: [],
     createdAt: "2026-10-30T10:00:00.000Z",

@@ -2,6 +2,7 @@ import type { WorkshopPackageSummary } from "@wired-io/shared";
 import { act, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithIntl as render } from "@/test/render-with-intl";
+import { withApiPrefix } from "@/utils/variables";
 
 vi.mock("@/api/services/scripting-packages", () => ({
   listWorkshopPackages: vi.fn(),
@@ -55,6 +56,31 @@ describe("WorkshopBrowser", () => {
     expect(screen.getByText("1.2.0", { exact: false })).toBeTruthy();
     expect(screen.getByText("ревизия 3")).toBeTruthy();
     expect(screen.getByText("gameplay")).toBeTruthy();
+  });
+
+  it("shows a left thumbnail when the workshop package has a preview", async () => {
+    const preview = `/media/${"f".repeat(64)}.png`;
+    vi.mocked(packagesApi.listWorkshopPackages).mockResolvedValue({
+      items: [workshopPackage({ previewImage: preview })],
+      total: 1,
+    });
+
+    const { container } = render(<WorkshopBrowser />);
+    expect(await screen.findByText("Hero")).toBeTruthy();
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute("src")).toBe(withApiPrefix(preview));
+  });
+
+  it("does not reserve an image slot without a preview", async () => {
+    vi.mocked(packagesApi.listWorkshopPackages).mockResolvedValue({
+      items: [workshopPackage({ previewImage: null })],
+      total: 1,
+    });
+
+    const { container } = render(<WorkshopBrowser />);
+    expect(await screen.findByText("Hero")).toBeTruthy();
+    expect(container.querySelector("img")).toBeNull();
   });
 
   it("debounces the search and sends the query", async () => {
