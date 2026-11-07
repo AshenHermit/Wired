@@ -29,16 +29,18 @@ export function RoomCard({
   const preview = room.previewImage;
 
   return (
-    <Card className="min-h-32">
-      <div className={preview ? "flex items-start gap-3" : undefined}>
-        {preview ? (
-          <PreviewThumbnail src={preview} className="ml-4 mt-4" />
-        ) : null}
+    <Card className="p-4">
+      <div
+        className={
+          preview ? "flex items-start gap-3 h-full justify-between" : "h-full"
+        }
+      >
+        {preview ? <PreviewThumbnail src={preview} className="" /> : null}
         <div className="min-w-0 flex-1">
-          <CardHeader>
+          <CardHeader className="p-0">
             <CardTitle>{room.name}</CardTitle>
           </CardHeader>
-          <CardFooter className="flex justify-between">
+          <CardFooter className="flex justify-between p-0">
             <div>{room.author?.name}</div>
             <div className="flex items-center gap-2">
               {canEdit ? (

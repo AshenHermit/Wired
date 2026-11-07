@@ -11,6 +11,7 @@
     "check-types": "tsc --noEmit --incremental false -p tsconfig.json",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
+    "prestart:dev": "pnpm --filter shared build",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/server/src/main",
