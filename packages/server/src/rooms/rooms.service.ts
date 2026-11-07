@@ -97,6 +97,7 @@ export class RoomsService implements OnApplicationBootstrap {
       where: [
         { packageManagementAccess: IsNull() },
         { packageCreationAccess: IsNull() },
+        { readAccess: IsNull() },
       ],
       relations: ['author', 'contributors'],
     });
@@ -128,6 +129,14 @@ export class RoomsService implements OnApplicationBootstrap {
         room.packageCreationUserIds = [];
         changed = true;
       }
+      if (room.readAccess == null) {
+        room.readAccess = 'all';
+        room.readUserIds = [];
+        changed = true;
+      } else if (room.readUserIds == null) {
+        room.readUserIds = [];
+        changed = true;
+      }
 
       if (changed) {
         await this.roomsRepository.save(room);
@@ -151,6 +160,8 @@ export class RoomsService implements OnApplicationBootstrap {
       packageManagementUserIds: [],
       packageCreationAccess: 'author',
       packageCreationUserIds: [],
+      readAccess: 'all',
+      readUserIds: [],
     });
 
     const saved = await this.roomsRepository.save(room);
@@ -197,6 +208,10 @@ export class RoomsService implements OnApplicationBootstrap {
       dto.packageCreationUserIds.forEach((uid) => userIdsToValidate.add(uid));
     }
 
+    if (dto.readUserIds && dto.readUserIds.length > 0) {
+      dto.readUserIds.forEach((uid) => userIdsToValidate.add(uid));
+    }
+
     if (userIdsToValidate.size > 0) {
       const invalidIds: number[] = [];
 
@@ -226,6 +241,12 @@ export class RoomsService implements OnApplicationBootstrap {
     }
     if (dto.packageCreationUserIds !== undefined) {
       room.packageCreationUserIds = dto.packageCreationUserIds;
+    }
+    if (dto.readAccess !== undefined) {
+      room.readAccess = dto.readAccess;
+    }
+    if (dto.readUserIds !== undefined) {
+      room.readUserIds = dto.readUserIds;
     }
 
     const saved = await this.roomsRepository.save(room);
