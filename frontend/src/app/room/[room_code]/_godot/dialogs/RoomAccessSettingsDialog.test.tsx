@@ -53,7 +53,8 @@ describe("RoomAccessSettingsDialog", () => {
       { locale: "en" },
     );
 
-    // Two AccessSections share the same mode labels; change package management.
+    // Three AccessSections share the same mode labels; change package management.
+    expect(screen.getByRole("heading", { name: "Room read" })).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", { name: "Everyone" })[0]!);
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 

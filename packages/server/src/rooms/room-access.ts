@@ -39,8 +39,8 @@ function isContributor(
  *
  * Distinct from `canViewRoom`, which also admits anyone to a public room. Use
  * this when the question is "does this user belong to this room" — editing and
- * publishing room-owned packages, runtime delivery — so a public room does not
- * hand those rights to every visitor.
+ * publishing room-owned packages — so a public room does not hand those rights
+ * to every visitor.
  */
 export function isRoomMember(
   room: RoomAccessSubject,

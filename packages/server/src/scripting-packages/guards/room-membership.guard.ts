@@ -22,7 +22,7 @@ import { isRuntimeServiceUser } from 'src/auth/runtime-service-user';
  * Without this guard, knowing two enumerable integer ids is enough to mint a
  * signed download token for any package of any room. Both relations are
  * verified here, before any artifact is built or streamed:
- *  - the authenticated user must be a member (author/contributor) of the room;
+ *  - the authenticated user must be allowed to read the room (canReadRoom);
  *  - the package must be attached to that exact room.
  *
  * It throws 403 instead of 404 so a member probing package ids learns nothing
