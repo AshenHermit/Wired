@@ -8,6 +8,12 @@ import { RoomsService } from './rooms.service';
 import { UsersService } from 'src/users/users.service';
 import { UpdateRoomAccessDto } from './dto/update-room-access.dto';
 
+function packagesServiceStub(
+  removeAllInRoom: jest.Mock = jest.fn(async () => undefined),
+) {
+  return { removeAllInRoom };
+}
+
 describe('RoomsService', () => {
   describe('create', () => {
     it('uses the authenticated user as author, ignoring dto.authorId', async () => {
@@ -18,7 +24,11 @@ describe('RoomsService', () => {
         delete: jest.fn(),
       };
       const usersService = {} as never;
-      const service = new RoomsService(roomsRepository as never, usersService);
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService,
+        packagesServiceStub() as never,
+      );
       const author = { id: 7 } as never;
 
       await service.create(
@@ -49,7 +59,11 @@ describe('RoomsService', () => {
         delete: jest.fn(),
       };
       const usersService = {} as never;
-      const service = new RoomsService(roomsRepository as never, usersService);
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService,
+        packagesServiceStub() as never,
+      );
       const author = { id: 7 } as never;
 
       await service.create(
@@ -77,7 +91,11 @@ describe('RoomsService', () => {
         findOne: jest.fn(() => Promise.resolve(rooms[0] ?? null)),
       };
       const usersService = {} as never;
-      const service = new RoomsService(roomsRepository as never, usersService);
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService,
+        packagesServiceStub() as never,
+      );
       return { service, roomsRepository };
     }
 
@@ -162,7 +180,11 @@ describe('RoomsService', () => {
       };
 
       const usersService = {} as never;
-      const service = new RoomsService(roomsRepository as never, usersService);
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService,
+        packagesServiceStub() as never,
+      );
       await service.onApplicationBootstrap();
 
       expect(roomsRepository.save).toHaveBeenCalledWith(
@@ -191,7 +213,11 @@ describe('RoomsService', () => {
       };
 
       const usersService = {} as never;
-      const service = new RoomsService(roomsRepository as never, usersService);
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService,
+        packagesServiceStub() as never,
+      );
       await service.onApplicationBootstrap();
 
       expect(roomsRepository.save).toHaveBeenCalledWith(
@@ -220,7 +246,11 @@ describe('RoomsService', () => {
       };
 
       const usersService = {} as never;
-      const service = new RoomsService(roomsRepository as never, usersService);
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService,
+        packagesServiceStub() as never,
+      );
       await service.onApplicationBootstrap();
 
       expect(roomsRepository.save).toHaveBeenCalledWith(
@@ -249,7 +279,11 @@ describe('RoomsService', () => {
       };
 
       const usersService = {} as never;
-      const service = new RoomsService(roomsRepository as never, usersService);
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService,
+        packagesServiceStub() as never,
+      );
       await service.onApplicationBootstrap();
 
       expect(roomsRepository.save).not.toHaveBeenCalled();
@@ -272,7 +306,11 @@ describe('RoomsService', () => {
       };
 
       const usersService = {} as never;
-      const service = new RoomsService(roomsRepository as never, usersService);
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService,
+        packagesServiceStub() as never,
+      );
       await service.onApplicationBootstrap();
 
       const savedCall = roomsRepository.save.mock.calls[0][0];
@@ -296,7 +334,11 @@ describe('RoomsService', () => {
       };
 
       const usersService = {} as never;
-      const service = new RoomsService(roomsRepository as never, usersService);
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService,
+        packagesServiceStub() as never,
+      );
       const user = { id: 999 } as never;
 
       await expect(
@@ -316,7 +358,11 @@ describe('RoomsService', () => {
       };
 
       const usersService = {} as never;
-      const service = new RoomsService(roomsRepository as never, usersService);
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService,
+        packagesServiceStub() as never,
+      );
       const user = { id: 10 } as never;
 
       await expect(
@@ -336,7 +382,11 @@ describe('RoomsService', () => {
       };
 
       const usersService = {} as never;
-      const service = new RoomsService(roomsRepository as never, usersService);
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService,
+        packagesServiceStub() as never,
+      );
       const contributor = { id: 20 } as never;
 
       await expect(
@@ -349,7 +399,11 @@ describe('RoomsService', () => {
         findOne: jest.fn(() => Promise.reject(new NotFoundException())),
       };
 
-      const service = new RoomsService(roomsRepository as never, {} as never);
+      const service = new RoomsService(
+        roomsRepository as never,
+        {} as never,
+        packagesServiceStub() as never,
+      );
       const user = { id: 10 } as never;
 
       await expect(
@@ -382,6 +436,7 @@ describe('RoomsService', () => {
       const service = new RoomsService(
         roomsRepository as never,
         usersService as never,
+        packagesServiceStub() as never,
       );
       const user = { id: 10 } as never;
       const dto: UpdateRoomAccessDto = {
@@ -420,6 +475,7 @@ describe('RoomsService', () => {
       const service = new RoomsService(
         roomsRepository as never,
         usersService as never,
+        packagesServiceStub() as never,
       );
       const user = { id: 10 } as never;
       const dto: UpdateRoomAccessDto = {
@@ -463,6 +519,7 @@ describe('RoomsService', () => {
       const service = new RoomsService(
         roomsRepository as never,
         usersService as never,
+        packagesServiceStub() as never,
       );
       const user = { id: 10 } as never;
       const dto: UpdateRoomAccessDto = {
@@ -498,6 +555,7 @@ describe('RoomsService', () => {
       const service = new RoomsService(
         roomsRepository as never,
         usersService as never,
+        packagesServiceStub() as never,
       );
       const user = { id: 10 } as never;
       const dto: UpdateRoomAccessDto = {
@@ -533,6 +591,7 @@ describe('RoomsService', () => {
       const service = new RoomsService(
         roomsRepository as never,
         usersService as never,
+        packagesServiceStub() as never,
       );
       const user = { id: 10 } as never;
       const dto: UpdateRoomAccessDto = {
@@ -568,6 +627,7 @@ describe('RoomsService', () => {
       const service = new RoomsService(
         roomsRepository as never,
         usersService as never,
+        packagesServiceStub() as never,
       );
       const user = { id: 10 } as never;
       const dto: UpdateRoomAccessDto = {
@@ -582,6 +642,55 @@ describe('RoomsService', () => {
       expect(usersService.findById).toHaveBeenCalledTimes(2);
       expect(usersService.findById).toHaveBeenCalledWith(5);
       expect(usersService.findById).toHaveBeenCalledWith(15);
+    });
+  });
+
+  describe('remove', () => {
+    it('deletes packages in the room before deleting the room', async () => {
+      const roomsRepository = {
+        findOne: jest.fn(async () => ({
+          id: 7,
+          author: { id: 1 },
+          contributors: [],
+        })),
+        delete: jest.fn(async () => ({ affected: 1 })),
+      };
+      const removeAllInRoom = jest.fn(async () => undefined);
+      const service = new RoomsService(
+        roomsRepository as never,
+        {} as never,
+        packagesServiceStub(removeAllInRoom) as never,
+      );
+
+      await service.remove(7);
+
+      expect(removeAllInRoom).toHaveBeenCalledWith(7);
+      expect(roomsRepository.delete).toHaveBeenCalledWith(7);
+      expect(removeAllInRoom.mock.invocationCallOrder[0]).toBeLessThan(
+        roomsRepository.delete.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('still deletes a room with no packages', async () => {
+      const roomsRepository = {
+        findOne: jest.fn(async () => ({
+          id: 3,
+          author: { id: 1 },
+          contributors: [],
+        })),
+        delete: jest.fn(async () => ({ affected: 1 })),
+      };
+      const removeAllInRoom = jest.fn(async () => undefined);
+      const service = new RoomsService(
+        roomsRepository as never,
+        {} as never,
+        packagesServiceStub(removeAllInRoom) as never,
+      );
+
+      await service.remove(3);
+
+      expect(removeAllInRoom).toHaveBeenCalledWith(3);
+      expect(roomsRepository.delete).toHaveBeenCalledWith(3);
     });
   });
 });
