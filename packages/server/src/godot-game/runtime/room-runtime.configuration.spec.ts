@@ -75,6 +75,21 @@ describe('RoomRuntimeConfiguration', () => {
     ).toBe(false);
   });
 
+  it('forwards XDG_DATA_HOME into the Godot runtime env', () => {
+    const original = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = '/app/storage/godot-data';
+    try {
+      const options = configuration.createSpawnOptions(config, 'room-1', 19101);
+      expect(options.env?.XDG_DATA_HOME).toBe('/app/storage/godot-data');
+    } finally {
+      if (original === undefined) {
+        delete process.env.XDG_DATA_HOME;
+      } else {
+        process.env.XDG_DATA_HOME = original;
+      }
+    }
+  });
+
   const production = new RoomRuntimeConfiguration({
     isProduction: true,
   } as unknown as AppConfigService);

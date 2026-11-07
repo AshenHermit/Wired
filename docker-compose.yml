@@ -52,6 +52,8 @@ services:
       - STORAGE_DIR=/app/storage
       # Состояние комнат должно жить на volume, а не в образе.
       - GODOT_ROOM_STATE_DIR=/app/storage/godot_rooms
+      # Godot user:// (кэш пакетов комнат) — тоже на volume; иначе /opt/godot-data из образа.
+      - XDG_DATA_HOME=/app/storage/godot-data
       - GOOGLE_AUTH_CLIENT_ID=${GOOGLE_AUTH_CLIENT_ID}
       - GOOGLE_AUTH_CLIENT_SECRET=${GOOGLE_AUTH_CLIENT_SECRET}
       - GOOGLE_AUTH_CALLBACK=${GOOGLE_AUTH_CALLBACK}
