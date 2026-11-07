@@ -110,6 +110,8 @@ export type Room = {
   packageManagementUserIds?: number[];
   packageCreationAccess?: RoomAccessMode;
   packageCreationUserIds?: number[];
+  readAccess?: RoomAccessMode;
+  readUserIds?: number[];
 };
 
 export type ScriptingPackage = {
@@ -165,6 +167,8 @@ export type UpdateRoomAccessPayload = {
   packageManagementUserIds?: number[];
   packageCreationAccess?: RoomAccessMode;
   packageCreationUserIds?: number[];
+  readAccess?: RoomAccessMode;
+  readUserIds?: number[];
 };
 
 export type CreateScriptingPackagePayload = {

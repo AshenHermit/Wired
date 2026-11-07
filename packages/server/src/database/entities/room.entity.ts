@@ -131,4 +131,19 @@ export class Room {
   })
   @Column({ type: 'jsonb', nullable: true, default: () => "'[]'" })
   packageCreationUserIds: number[] | null;
+
+  @ApiProperty({
+    description: 'room read access mode for package runtime delivery',
+    nullable: true,
+  })
+  @Column({ type: 'varchar', nullable: true, default: null })
+  readAccess: RoomAccessMode | null;
+
+  @ApiProperty({
+    description: 'user IDs with room read access',
+    isArray: true,
+    nullable: true,
+  })
+  @Column({ type: 'jsonb', nullable: true, default: () => "'[]'" })
+  readUserIds: number[] | null;
 }
