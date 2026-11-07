@@ -920,6 +920,26 @@ describe('ScriptingPackagesService', () => {
       expect(packagesRepository.delete).not.toHaveBeenCalled();
       expect(storage.removePackage).not.toHaveBeenCalled();
     });
+
+    it('refuses when an enabled dependent lives outside the room', async () => {
+      const { service, packagesRepository } = makeService({
+        packages: [{ id: 10, slug: 'lib', room: { id: 7 } }],
+        dependentsByPackage: {
+          // Delivery usually prunes other rooms; mock an escaped dependent so
+          // the cascade filter cannot silently ignore foreign rooms.
+          10: [{ packageId: 99, roomId: 8, revision: 1 }],
+        },
+        dependentRows: [{ id: 99, name: 'OtherRoomApp', enabled: true }],
+      });
+
+      await expect(service.removeAllInRoom(7)).rejects.toMatchObject({
+        response: {
+          code: 'package_has_dependents',
+          dependents: [{ packageId: 99, name: 'OtherRoomApp' }],
+        },
+      });
+      expect(packagesRepository.delete).not.toHaveBeenCalled();
+    });
   });
 });
 

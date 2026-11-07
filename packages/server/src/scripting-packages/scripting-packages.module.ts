@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
@@ -18,7 +18,8 @@ import { UsersService } from 'src/users/users.service';
 @Module({
   imports: [
     AppConfigModule,
-    GodotGameModule,
+    // Cycle: RoomsModule → ScriptingPackagesModule → GodotGameModule → RoomsModule.
+    forwardRef(() => GodotGameModule),
     PackageDeliveryModule,
     TypeOrmModule.forFeature([
       ScriptingPackage,

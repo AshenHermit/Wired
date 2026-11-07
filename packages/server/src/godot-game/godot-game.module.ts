@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppConfigModule } from 'src/config/config.module';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
@@ -24,7 +24,8 @@ import { RuntimeProcessFactory } from './runtime/room-runtime.types';
 @Module({
   imports: [
     AppConfigModule,
-    RoomsModule,
+    // Cycle: RoomsModule → ScriptingPackagesModule → GodotGameModule → RoomsModule.
+    forwardRef(() => RoomsModule),
     PackageDeliveryModule,
     TypeOrmModule.forFeature([ScriptingPackage, ScriptingPackageRevision]),
   ],

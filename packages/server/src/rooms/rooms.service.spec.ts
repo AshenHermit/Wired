@@ -692,5 +692,31 @@ describe('RoomsService', () => {
       expect(removeAllInRoom).toHaveBeenCalledWith(3);
       expect(roomsRepository.delete).toHaveBeenCalledWith(3);
     });
+
+    it('does not delete the room when package cascade fails', async () => {
+      const roomsRepository = {
+        findOne: jest.fn(async () => ({
+          id: 7,
+          author: { id: 1 },
+          contributors: [],
+        })),
+        delete: jest.fn(async () => ({ affected: 1 })),
+      };
+      const removeAllInRoom = jest.fn(async () => {
+        throw Object.assign(new Error('blocked'), {
+          response: { code: 'package_has_dependents' },
+        });
+      });
+      const service = new RoomsService(
+        roomsRepository as never,
+        {} as never,
+        packagesServiceStub(removeAllInRoom) as never,
+      );
+
+      await expect(service.remove(7)).rejects.toMatchObject({
+        response: { code: 'package_has_dependents' },
+      });
+      expect(roomsRepository.delete).not.toHaveBeenCalled();
+    });
   });
 });
