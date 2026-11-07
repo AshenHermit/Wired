@@ -4,6 +4,7 @@ import {
   isRoomMember,
   canManageRoomPackages,
   canCreateRoomPackages,
+  canReadRoom,
 } from './room-access';
 
 describe('room access policy', () => {
@@ -130,6 +131,40 @@ describe('room access policy', () => {
       const allRoom = { ...room, packageCreationAccess: 'all' as const };
       expect(canCreateRoomPackages(allRoom, 999)).toBe(true);
       expect(canCreateRoomPackages(allRoom, undefined)).toBe(false);
+    });
+  });
+
+  describe('canReadRoom', () => {
+    const room = {
+      isPublic: false,
+      author: { id: 1 },
+      contributors: [{ id: 2 }],
+    };
+
+    it('allows selected users and the author with users mode', () => {
+      const usersRoom = { ...room, readAccess: 'users' as const, readUserIds: [2] };
+      expect(canReadRoom(usersRoom, 2)).toBe(true);
+      expect(canReadRoom(usersRoom, 1)).toBe(true);
+      expect(canReadRoom(usersRoom, 3)).toBe(false);
+      expect(canReadRoom(usersRoom, undefined)).toBe(false);
+    });
+
+    it('treats all as any authenticated user', () => {
+      const allRoom = { ...room, readAccess: 'all' as const, readUserIds: [] };
+      expect(canReadRoom(allRoom, 999)).toBe(true);
+      expect(canReadRoom(allRoom, undefined)).toBe(false);
+    });
+
+    it('denies contributors under author mode', () => {
+      const authorRoom = { ...room, readAccess: 'author' as const, readUserIds: [] };
+      expect(canReadRoom(authorRoom, 1)).toBe(true);
+      expect(canReadRoom(authorRoom, 2)).toBe(false);
+    });
+
+    it('denies strangers when readAccess is null', () => {
+      const nullRoom = { ...room, readAccess: null, readUserIds: null };
+      expect(canReadRoom(nullRoom, 1)).toBe(true);
+      expect(canReadRoom(nullRoom, 3)).toBe(false);
     });
   });
 });

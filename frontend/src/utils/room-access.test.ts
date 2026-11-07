@@ -3,6 +3,7 @@ import {
   canCreateRoomPackages,
   canEditPackage,
   canManageRoomPackages,
+  canReadRoom,
   type PackageAccessSubject,
   type RoomAccessSubject,
 } from "./room-access";
@@ -76,5 +77,42 @@ describe("room package access helpers", () => {
     expect(canEditPackage(pkg, 1, room)).toBe(true);
     // An unrelated authenticated user is still denied in author mode.
     expect(canEditPackage(pkg, 7, room)).toBe(false);
+  });
+
+  it("mirrors server room read rights", () => {
+    const usersRoom: RoomAccessSubject = {
+      author: { id: 1 },
+      contributors: [{ id: 2 }],
+      readAccess: "users",
+      readUserIds: [2],
+    };
+    expect(canReadRoom(usersRoom, 2)).toBe(true);
+    expect(canReadRoom(usersRoom, 1)).toBe(true);
+    expect(canReadRoom(usersRoom, 3)).toBe(false);
+    expect(canReadRoom(usersRoom, undefined)).toBe(false);
+
+    const allRoom: RoomAccessSubject = {
+      author: { id: 1 },
+      readAccess: "all",
+    };
+    expect(canReadRoom(allRoom, 999)).toBe(true);
+    expect(canReadRoom(allRoom, undefined)).toBe(false);
+
+    const authorRoom: RoomAccessSubject = {
+      author: { id: 1 },
+      contributors: [{ id: 2 }],
+      readAccess: "author",
+      readUserIds: [],
+    };
+    expect(canReadRoom(authorRoom, 1)).toBe(true);
+    expect(canReadRoom(authorRoom, 2)).toBe(false);
+
+    const nullRoom: RoomAccessSubject = {
+      author: { id: 1 },
+      readAccess: null,
+      readUserIds: null,
+    };
+    expect(canReadRoom(nullRoom, 1)).toBe(true);
+    expect(canReadRoom(nullRoom, 3)).toBe(false);
   });
 });

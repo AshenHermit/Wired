@@ -14,6 +14,8 @@ export type RoomAccessSubject = {
   packageManagementUserIds?: number[] | null;
   packageCreationAccess?: RoomAccessMode | null;
   packageCreationUserIds?: number[] | null;
+  readAccess?: RoomAccessMode | null;
+  readUserIds?: number[] | null;
 };
 
 /**
@@ -87,6 +89,32 @@ export function canCreateRoomPackages(
   }
 
   // 'author' mode (or anything else) only allows the author, already handled.
+  return false;
+}
+
+/**
+ * Mirrors the server's room read rule: the room author is always allowed,
+ * an `all` policy admits any authenticated user, and a `users` policy
+ * requires an exact match in the room's `readUserIds`.
+ */
+export function canReadRoom(
+  room: RoomAccessSubject,
+  userId: number | null | undefined,
+): boolean {
+  if (isAuthor(room, userId)) {
+    return true;
+  }
+
+  const access = room.readAccess;
+
+  if (access === "all") {
+    return userId != null;
+  }
+
+  if (access === "users") {
+    return userId != null && (room.readUserIds ?? []).includes(userId);
+  }
+
   return false;
 }
 

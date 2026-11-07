@@ -341,9 +341,10 @@
   },
   "RoomAccess": {
     "title": "Room access",
-    "description": "Who can manage this room's packages and create new ones. The room author always keeps access.",
+    "description": "Who can read this room's package data for the runtime, manage its packages, and create new ones. The room author always keeps access.",
     "packageManagement": "Package management",
     "packageCreation": "Package creation",
+    "roomRead": "Room read",
     "modeLabel": "Access mode",
     "modeAll": "Everyone",
     "modeAuthor": "Author only",

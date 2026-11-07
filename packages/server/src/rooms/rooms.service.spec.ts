@@ -77,6 +77,8 @@ describe('RoomsService', () => {
           packageManagementUserIds: [],
           packageCreationAccess: 'author',
           packageCreationUserIds: [],
+          readAccess: 'all',
+          readUserIds: [],
         }),
       );
     });
@@ -271,6 +273,8 @@ describe('RoomsService', () => {
         packageManagementUserIds: [1],
         packageCreationAccess: 'all',
         packageCreationUserIds: [],
+        readAccess: 'all',
+        readUserIds: [],
       };
 
       const roomsRepository = {
@@ -287,6 +291,71 @@ describe('RoomsService', () => {
       await service.onApplicationBootstrap();
 
       expect(roomsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('backfills null readAccess to all and empty user list', async () => {
+      const room = {
+        id: 5,
+        author: { id: 7 },
+        contributors: [{ id: 17 }],
+        packageManagementAccess: 'author',
+        packageManagementUserIds: [],
+        packageCreationAccess: 'author',
+        packageCreationUserIds: [],
+        readAccess: null,
+        readUserIds: null,
+      };
+
+      const roomsRepository = {
+        find: jest.fn(() => Promise.resolve([room])),
+        save: jest.fn(),
+      };
+
+      const usersService = {} as never;
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService,
+        packagesServiceStub() as never,
+      );
+      await service.onApplicationBootstrap();
+
+      expect(roomsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 5,
+          readAccess: 'all',
+          readUserIds: [],
+        }),
+      );
+    });
+
+    it('does not overwrite an explicitly set readAccess', async () => {
+      const room = {
+        id: 6,
+        author: { id: 7 },
+        contributors: [],
+        packageManagementAccess: null,
+        packageManagementUserIds: null,
+        packageCreationAccess: null,
+        packageCreationUserIds: null,
+        readAccess: 'author',
+        readUserIds: [],
+      };
+
+      const roomsRepository = {
+        find: jest.fn(() => Promise.resolve([room])),
+        save: jest.fn(),
+      };
+
+      const usersService = {} as never;
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService,
+        packagesServiceStub() as never,
+      );
+      await service.onApplicationBootstrap();
+
+      const savedCall = roomsRepository.save.mock.calls[0][0];
+      expect(savedCall.readAccess).toBe('author');
     });
 
     it('deduplicates author and contributors in backfilled lists', async () => {
@@ -642,6 +711,87 @@ describe('RoomsService', () => {
       expect(usersService.findById).toHaveBeenCalledTimes(2);
       expect(usersService.findById).toHaveBeenCalledWith(5);
       expect(usersService.findById).toHaveBeenCalledWith(15);
+    });
+
+    it('validates readUserIds and rejects unknown IDs', async () => {
+      const usersService = {
+        findById: jest.fn((id) => Promise.resolve(id === 5 ? { id: 5 } : null)),
+      };
+
+      const roomsRepository = {
+        findOne: jest.fn(() =>
+          Promise.resolve({
+            id: 1,
+            author: { id: 10 },
+            contributors: [],
+            packageManagementAccess: 'author',
+            packageManagementUserIds: [],
+            packageCreationAccess: 'author',
+            packageCreationUserIds: [],
+            readAccess: 'users',
+            readUserIds: [],
+          }),
+        ),
+        save: jest.fn(),
+      };
+
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService as never,
+        packagesServiceStub() as never,
+      );
+      const user = { id: 10 } as never;
+      const dto: UpdateRoomAccessDto = {
+        readUserIds: [5, 999],
+      };
+
+      await expect(service.updateAccess(1, dto, user)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(roomsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('persists readAccess and readUserIds when valid', async () => {
+      const usersService = {
+        findById: jest.fn((id) => Promise.resolve({ id })),
+      };
+
+      const roomsRepository = {
+        findOne: jest.fn(() =>
+          Promise.resolve({
+            id: 1,
+            author: { id: 10 },
+            contributors: [],
+            packageManagementAccess: 'author',
+            packageManagementUserIds: [],
+            packageCreationAccess: 'author',
+            packageCreationUserIds: [],
+            readAccess: 'author',
+            readUserIds: [],
+          }),
+        ),
+        save: jest.fn(() => Promise.resolve({ id: 1 })),
+      };
+
+      const service = new RoomsService(
+        roomsRepository as never,
+        usersService as never,
+        packagesServiceStub() as never,
+      );
+      const user = { id: 10 } as never;
+      const dto: UpdateRoomAccessDto = {
+        readAccess: 'users',
+        readUserIds: [5, 15],
+      };
+
+      await expect(service.updateAccess(1, dto, user)).resolves.toBeDefined();
+
+      expect(roomsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          readAccess: 'users',
+          readUserIds: [5, 15],
+        }),
+      );
     });
   });
 

@@ -11,7 +11,7 @@ import { Repository } from 'typeorm';
 import { Room } from 'src/database/entities/room.entity';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { RuntimeAuthRequest } from 'src/auth/jwt.strategy';
-import { isRoomMember } from 'src/rooms/room-access';
+import { canReadRoom } from 'src/rooms/room-access';
 import { readPositiveInt } from './request-ids';
 import { isRuntimeServiceUser } from 'src/auth/runtime-service-user';
 
@@ -22,7 +22,7 @@ import { isRuntimeServiceUser } from 'src/auth/runtime-service-user';
  * Without this guard, knowing two enumerable integer ids is enough to mint a
  * signed download token for any package of any room. Both relations are
  * verified here, before any artifact is built or streamed:
- *  - the authenticated user must be a member (author/contributor) of the room;
+ *  - the authenticated user must be allowed to read the room (canReadRoom);
  *  - the package must be attached to that exact room.
  *
  * It throws 403 instead of 404 so a member probing package ids learns nothing
@@ -62,7 +62,7 @@ export class RoomMembershipGuard implements CanActivate {
     // still confined to its room: the package binding below applies to it too.
     if (
       !room ||
-      (!isRuntimeServiceUser(user) && !isRoomMember(room, user.id))
+      (!isRuntimeServiceUser(user) && !canReadRoom(room, user.id))
     ) {
       throw packageError('room_access_denied', 'You cannot read this room');
     }

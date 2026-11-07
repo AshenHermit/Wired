@@ -29,7 +29,8 @@ import { RoomTokenAuth } from 'src/auth/auth-policy';
  * (package, revision, room) plus the artifact files it names.
  *
  * Separate from the authoring controller because this half is readable by any
- * room member (a user JWT or the room's own service token) and never mutates
+ * user granted room read access (a user JWT or the room's own service token)
+ * and never mutates
  * anything, while authoring is authenticated per package.
  */
 @ApiTags('scripting-packages')

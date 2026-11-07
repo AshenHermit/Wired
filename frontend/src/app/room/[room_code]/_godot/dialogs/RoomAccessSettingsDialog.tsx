@@ -119,6 +119,8 @@ export function RoomAccessSettingsDialog({
   const [creationMode, setCreationMode] =
     React.useState<RoomAccessMode>("author");
   const [creationUserIds, setCreationUserIds] = React.useState<number[]>([]);
+  const [readMode, setReadMode] = React.useState<RoomAccessMode>("all");
+  const [readUserIds, setReadUserIds] = React.useState<number[]>([]);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState(false);
 
@@ -130,6 +132,8 @@ export function RoomAccessSettingsDialog({
     setManagementUserIds(room.packageManagementUserIds ?? []);
     setCreationMode(room.packageCreationAccess ?? "author");
     setCreationUserIds(room.packageCreationUserIds ?? []);
+    setReadMode(room.readAccess ?? "all");
+    setReadUserIds(room.readUserIds ?? []);
     setError(false);
   }, [open, room]);
 
@@ -147,6 +151,10 @@ export function RoomAccessSettingsDialog({
     () => contributors.filter((user) => creationUserIds.includes(user.id)),
     [contributors, creationUserIds],
   );
+  const readAvailable = React.useMemo(
+    () => contributors.filter((user) => readUserIds.includes(user.id)),
+    [contributors, readUserIds],
+  );
 
   const save = async () => {
     const payload: UpdateRoomAccessPayload = {
@@ -154,6 +162,8 @@ export function RoomAccessSettingsDialog({
       packageManagementUserIds: managementUserIds,
       packageCreationAccess: creationMode,
       packageCreationUserIds: creationUserIds,
+      readAccess: readMode,
+      readUserIds: readUserIds,
     };
     setSaving(true);
     setError(false);
@@ -194,6 +204,15 @@ export function RoomAccessSettingsDialog({
             userIds={creationUserIds}
             onUserIdsChange={setCreationUserIds}
             availableUsers={creationAvailable}
+            disabled={saving}
+          />
+          <AccessSection
+            title={t("roomRead")}
+            mode={readMode}
+            onModeChange={setReadMode}
+            userIds={readUserIds}
+            onUserIdsChange={setReadUserIds}
+            availableUsers={readAvailable}
             disabled={saving}
           />
         </div>
