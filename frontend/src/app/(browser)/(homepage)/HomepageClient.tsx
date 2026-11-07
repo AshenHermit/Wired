@@ -120,6 +120,17 @@ export function HomepageClient() {
                       </div>
                     </Link>
                   </div>
+                  <div>
+                    {t("docs.issues.description")}{" "}
+                    <a
+                      href="https://github.com/AshenHermit/Wired/issues/new"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="hover:underline text-[#ff617b]"
+                    >
+                      {t("docs.issues.link")}
+                    </a>
+                  </div>
                 </CardContent>
               </TabsContent>
             </TabsContents>

@@ -6,6 +6,7 @@
 [ext_resource type="Script" uid="uid://clsfqh313y4pt" path="res://_wired/scripts/global/players_manager.gd" id="4_players"]
 [ext_resource type="Script" uid="uid://c6hxa3adohjw5" path="res://_wired/scripts/world/dynamic_world_container.gd" id="5_dynamic"]
 [ext_resource type="Script" uid="uid://dwt87pnw2ogtp" path="res://_wired/scripts/world/wired_game_scene.gd" id="6_game"]
+[ext_resource type="Script" uid="uid://cqltt6bnd3jkm" path="res://_wired/scripts/global/system_info_ui.gd" id="7_kkcc7"]
 
 [node name="Main" type="Node" unique_id=1750532957 node_paths=PackedStringArray("default_game_root", "net", "ui", "status_label", "log_label", "static_world", "dynamic_world", "dynamic_spawner", "players_manager", "players_spawner")]
 script = ExtResource("1_main")
@@ -56,22 +57,21 @@ script = ExtResource("4_players")
 spawn_path = NodePath("..")
 
 [node name="UI" type="CanvasLayer" parent="." unique_id=1705381535]
+script = ExtResource("7_kkcc7")
 
 [node name="Background" type="ColorRect" parent="UI" unique_id=912057212]
-anchors_preset = -1
-anchor_right = 0.496875
+anchors_preset = 15
+anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 color = Color(0, 0, 0, 0.12941177)
-metadata/_edit_use_anchors_ = true
 
 [node name="Margin" type="MarginContainer" parent="UI" unique_id=1589338362]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_right = -477.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2

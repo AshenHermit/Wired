@@ -39,7 +39,7 @@
       "description": "Join in!"
     },
     "controls": {
-      "title": "Controls",
+      "title": "Control",
       "description": "Create and manage rooms here"
     },
     "packages": {
@@ -54,15 +54,19 @@
         "apiReference": "API Reference",
         "entityRegistration": "Entity Registration",
         "multiplayerGuide": "Multiplayer Guide"
+      },
+      "issues": {
+        "description": "Report an issue or suggest a feature on the GitHub repository",
+        "link": "Github Wired"
       }
     },
     "greeting": "> Hi, {name}!",
     "intro": "wired io isn't as cool as it could be yet, but the author is trying",
     "small": "hopefully the parallax won't make you dizzy",
-    "warning": "Warning: For the author at least: there may be problems with the <code>Wired()</code> context if there is more than one room,"
+    "warning": ""
   },
   "Login": {
-    "title": "let me join",
+    "title": "i suggest joining",
     "google": "Login with Google"
   },
   "Profile": {
@@ -305,7 +309,7 @@
     },
     "errors": {
       "loginRequired": "Sign in to create packages.",
-    "notRoomMember": "Only the room author and its contributors can change its packages.",
+      "notRoomMember": "Only the room author and its contributors can change its packages.",
       "nameRequired": "Enter a package name",
       "slugRequired": "Enter a package slug",
       "dirOccupied": "The editor already has a directory with slug {slug}; rename or delete it",
