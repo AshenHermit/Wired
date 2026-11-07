@@ -63,6 +63,8 @@ describe("RoomAccessSettingsDialog", () => {
         packageManagementUserIds: [],
         packageCreationAccess: "author",
         packageCreationUserIds: [],
+        readAccess: "all",
+        readUserIds: [],
       });
     });
     expect(onSaved).toHaveBeenCalledWith(saved);
