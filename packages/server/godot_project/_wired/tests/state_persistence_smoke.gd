@@ -245,6 +245,7 @@ func _run() -> void:
 	_test_parked_dynamic_records_are_saved_and_reseeded()
 	_test_room_packages_purges_only_unlisted_ids()
 	_test_dynamic_restore_waits_for_the_package_chain()
+	_test_dynamic_restore_waits_for_hot_reload_barrier()
 	await _test_package_ops_are_serialized()
 	await _test_world_snapshot_waits_for_a_running_package_op()
 	await _test_reconcile_unloads_a_package_missing_from_the_server()
@@ -503,6 +504,26 @@ func _test_dynamic_restore_waits_for_the_package_chain() -> void:
 
 ## The queue is the only entry point that mutates packages, so a suspended apply
 ## must block a client apply and an unload behind it.
+func _test_dynamic_restore_waits_for_hot_reload_barrier() -> void:
+	var probe: Variant = _make_entry_probe()
+	if probe == null:
+		return
+	probe.net.mode = "server"
+	probe._hot_reload_barriers["42:7"] = true
+	probe._restore_dynamic_if_ready()
+	_check(
+		probe.dynamic_world.restore_calls == 0,
+		"a hot-reload barrier must keep parked records from spawning",
+	)
+	probe._hot_reload_barriers.clear()
+	probe._restore_dynamic_if_ready()
+	_check(
+		probe.dynamic_world.restore_calls == 1,
+		"parked records must restore after the hot-reload barrier releases",
+	)
+	_free_entry_probe(probe)
+
+
 func _test_package_ops_are_serialized() -> void:
 	var probe: Variant = _make_package_op_probe()
 	if probe == null:

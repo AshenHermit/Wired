@@ -433,6 +433,7 @@ func _on_hot_reload_ready(package_id: int, revision: int) -> void:
 	_hot_reload_barriers.erase(key)
 	if not _hot_reload_barriers.is_empty():
 		return
+	_restore_dynamic_if_ready()
 	for peer_id: int in multiplayer.get_peers():
 		if net.is_peer_packages_ready(peer_id):
 			_send_world_snapshot(peer_id)
@@ -847,6 +848,8 @@ func _restore_dynamic_if_ready() -> void:
 		return
 	if _package_ops_busy or not _package_ops_queue.is_empty():
 		return
+	if not _hot_reload_barriers.is_empty():
+		return
 	if _room_packages_known:
 		var applied: Dictionary = (
 			_packages.applied_packages() if _packages != null else {}
@@ -867,6 +870,15 @@ func _restore_dynamic_if_ready() -> void:
 ## the manifest, verifies hashes and writes the files; only then is the
 ## revision announced to clients. File bytes never travel over the game socket.
 func _apply_package_revision(package_id: int, revision: int) -> void:
+	# Establish the barrier before downloading/applying the revision: the package
+	# callback parks live entities and may rebuild the world synchronously.
+	# Snapshot gating alone cannot stop the spawner packets emitted by that work.
+	for old_key: String in _hot_reload_barriers.keys():
+		if old_key.begins_with("%d:" % package_id):
+			_hot_reload_barriers.erase(old_key)
+	var pending_key := "%d:%d" % [package_id, revision]
+	_hot_reload_barriers[pending_key] = true
+	net.begin_hot_reload(package_id, revision)
 	print(
 		"WIRED_PACKAGES_SYNC_STARTED package=%d revision=%d"
 		% [package_id, revision]
@@ -877,11 +889,11 @@ func _apply_package_revision(package_id: int, revision: int) -> void:
 		# requested revision; the backend owns retries.
 		return
 	var applied := int(result.get("revision", revision))
-	for old_key: String in _hot_reload_barriers.keys():
-		if old_key.begins_with("%d:" % package_id):
-			_hot_reload_barriers.erase(old_key)
-	var key := "%d:%d" % [package_id, applied]
-	_hot_reload_barriers[key] = true
+	if applied != revision:
+		_hot_reload_barriers.erase(pending_key)
+		pending_key = "%d:%d" % [package_id, applied]
+		_hot_reload_barriers[pending_key] = true
+		net.begin_hot_reload(package_id, applied)
 	net.set_package_revision(package_id, applied)
 
 
