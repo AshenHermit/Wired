@@ -22,7 +22,7 @@ signal auth_failed(reason: String)
 signal connection_failed()
 signal disconnected()
 # Server side: a peer completed ticket auth and entered the game.
-signal peer_authenticated(peer_id: int, player_id: int, name: String)
+signal peer_authenticated(peer_id: int, player_id: int, account_id: int, name: String)
 # Server side: every announced package revision reported ready for that peer.
 # This is the initial-spawn gate only; later revisions do not re-emit it.
 signal peer_packages_ready(peer_id: int)
@@ -252,6 +252,7 @@ func cli_hello(payload_json: String) -> void:
 	_next_player_id += 1
 	_players[peer_id] = {
 		KEY_PLAYER_ID: pid,
+		WiredProtocol.KEY_ACCOUNT_ID: int(result.account_id),
 		"ready": false,
 		"packages_ready": false,
 		"name": str(payload.get("name", "player")),
@@ -262,6 +263,7 @@ func cli_hello(payload_json: String) -> void:
 		"protocol": PROTOCOL_VERSION,
 		"room": room_code,
 		KEY_PLAYER_ID: pid,
+		WiredProtocol.KEY_ACCOUNT_ID: int(result.account_id),
 		"peer_id": peer_id,
 		"server_time": Time.get_unix_time_from_system(),
 	}
@@ -278,7 +280,12 @@ func cli_hello(payload_json: String) -> void:
 	# A client that joins late (or reconnects after a lost notification) gets
 	# the current revisions immediately; it then downloads and reports itself.
 	_send_package_revisions(peer_id)
-	peer_authenticated.emit(peer_id, pid, str(_players[peer_id]["name"]))
+	peer_authenticated.emit(
+		peer_id,
+		pid,
+		int(_players[peer_id][WiredProtocol.KEY_ACCOUNT_ID]),
+		str(_players[peer_id]["name"])
+	)
 	_broadcast_event({KEY_TYPE: EVENT_PLAYER_JOINED, KEY_PLAYER_ID: pid})
 
 

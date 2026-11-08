@@ -76,15 +76,17 @@ const META_SNAPSHOT_REPAIR := "_wired_snapshot_repair"
 var _registry: WiredPackageRegistry = null
 var _network: WiredNetwork = null
 var _spawner: MultiplayerSpawner = null
-# peer_id -> {player_id, name}
+# peer_id -> {player_id, account_id, name}
 var _authenticated: Dictionary = {}
 # peer_id -> WiredPlayer
 var _spawned: Dictionary = {}
 # peer_id -> spawn slot of the live player. A slot is released on despawn, so a
 # reconnect does not inherit the ever-growing index of its player id.
 var _spawn_slots: Dictionary = {}
-# player_id -> saved player state, applied on (re)spawn
+# account_id -> saved player state, applied on the first account spawn
 var _saved_states: Dictionary = {}
+# account_id -> number of currently spawned connections
+var _active_accounts: Dictionary = {}
 # One diagnostic is enough: spawn lookups happen twice per player.
 var _warned_missing_static_world := false
 
@@ -148,7 +150,8 @@ func build_player(data: Dictionary, registry: WiredPackageRegistry) -> WiredPlay
 		int(data.get(WiredProtocol.KEY_PLAYER_ID, 0)),
 		int(data.get(WiredProtocol.KEY_PEER_ID, 0)),
 		_player_display_name(data),
-		_network
+		_network,
+		int(data.get(WiredProtocol.KEY_ACCOUNT_ID, 0))
 	)
 	player.spawn_position_2d = spawn_2d
 	player.spawn_position_3d = spawn_3d
@@ -440,6 +443,9 @@ func spawn_player(peer_id: int) -> void:
 
 func despawn_player(peer_id: int) -> void:
 	var player := get_player_by_peer(peer_id)
+	if player != null and player.account_id > 0:
+		_saved_states[player.account_id] = player.save_state()
+		_decrement_active_account(player.account_id)
 	_spawned.erase(peer_id)
 	_spawn_slots.erase(peer_id)
 	if player == null:
@@ -447,6 +453,16 @@ func despawn_player(peer_id: int) -> void:
 	# Freeing the node in the tree both releases it locally and tells the
 	# MultiplayerSpawner to despawn the matching instance on every peer.
 	player.queue_free()
+
+
+func _decrement_active_account(account_id: int) -> void:
+	if account_id <= 0:
+		return
+	var count := int(_active_accounts.get(account_id, 0)) - 1
+	if count <= 0:
+		_active_accounts.erase(account_id)
+	else:
+		_active_accounts[account_id] = count
 
 
 ## Called by `MultiplayerSpawner` on every peer. The spawner parents the
@@ -469,27 +485,41 @@ func _spawn_player(data: Dictionary) -> Node:
 		return null
 	player.name = player_name(player.player_id)
 	_spawned[player.peer_id] = player
+	if player.account_id > 0:
+		_active_accounts[player.account_id] = int(_active_accounts.get(player.account_id, 0)) + 1
 	# The saved anchor is available before the subtree is ready, so a body
 	# component without its own saved state still starts at the right place.
-	if _saved_states.has(player.player_id):
-		player.apply_saved_anchor(_saved_states[player.player_id])
-		# Component hooks may use @onready refs, so the rest of the restored
-		# state is applied only after the spawned subtree reports ready. The
-		# spawner parents the node after this call returns.
-		player.ready.connect(_apply_saved_state.bind(player), CONNECT_ONE_SHOT)
+	if player.account_id > 0 and int(_active_accounts.get(player.account_id, 0)) == 1:
+		if _saved_states.has(player.account_id):
+			player.apply_saved_anchor(_saved_states[player.account_id])
+			# Component hooks may use @onready refs, so the rest of the restored
+			# state is applied only after the spawned subtree reports ready.
+			player.ready.connect(_apply_saved_state.bind(player), CONNECT_ONE_SHOT)
 	if _spawner == null:
 		add_child(player)
 	return player
 
 
 func save_state() -> Dictionary:
+	var by_account: Dictionary = {}
 	var records: Array = []
+	for account_id: Variant in _saved_states.keys():
+		if int(account_id) > 0:
+			by_account[int(account_id)] = _saved_states[account_id]
 	var peer_ids := _spawned.keys()
 	peer_ids.sort()
 	for peer_id in peer_ids:
 		var player: WiredPlayer = _spawned[peer_id]
 		if is_instance_valid(player):
-			records.append(player.save_state())
+			var saved := player.save_state()
+			if player.account_id > 0:
+				by_account[player.account_id] = saved
+			else:
+				records.append(saved)
+	var account_ids := by_account.keys()
+	account_ids.sort()
+	for account_id: Variant in account_ids:
+		records.append(by_account[account_id])
 	return {WiredProtocol.KEY_PLAYERS: records}
 
 
@@ -503,14 +533,14 @@ func load_state(state: Dictionary) -> void:
 	for record: Variant in record_list:
 		if typeof(record) != TYPE_DICTIONARY:
 			continue
-		var player_id := int(record.get(WiredProtocol.KEY_PLAYER_ID, 0))
-		if player_id <= 0:
+		var account_id := int(record.get(WiredProtocol.KEY_ACCOUNT_ID, 0))
+		if account_id <= 0:
 			continue
-		var existing := get_player_by_id(player_id)
+		var existing := _active_player_for_account(account_id)
 		if existing != null:
 			existing.load_state(record)
 		else:
-			_saved_states[player_id] = record
+			_saved_states[account_id] = record
 
 
 ## Drops parked component state of a permanently deleted package, on live
@@ -522,8 +552,8 @@ func purge_package(package_id: int) -> void:
 		var player: WiredPlayer = _spawned[peer_id]
 		if is_instance_valid(player):
 			player.purge_package(key)
-	for player_id: Variant in _saved_states.keys():
-		var state: Dictionary = _saved_states[player_id]
+	for account_id: Variant in _saved_states.keys():
+		var state: Dictionary = _saved_states[account_id]
 		var components: Dictionary = state.get("components", {})
 		for component_key: String in components.keys():
 			if component_key.begins_with(key + ":"):
@@ -538,18 +568,27 @@ func purge_missing_packages(package_ids: PackedStringArray) -> void:
 		var player: WiredPlayer = _spawned[peer_id]
 		if is_instance_valid(player):
 			player.keep_only_packages(package_ids)
-	for player_id: Variant in _saved_states.keys():
-		var state: Dictionary = _saved_states[player_id]
+	for account_id: Variant in _saved_states.keys():
+		var state: Dictionary = _saved_states[account_id]
 		var components: Dictionary = state.get("components", {})
 		for component_key: String in components.keys():
 			if not package_ids.has(component_key.get_slice(":", 0)):
 				components.erase(component_key)
 
 
-func _on_peer_authenticated(peer_id: int, player_id: int, name: String) -> void:
+func _on_peer_authenticated(
+	peer_id: int, player_id: int, account_or_name: Variant, name: String = ""
+) -> void:
+	var account_id := 0
+	var display_name := name
+	if typeof(account_or_name) == TYPE_STRING:
+		display_name = str(account_or_name)
+	else:
+		account_id = int(account_or_name)
 	_authenticated[peer_id] = {
 		WiredProtocol.KEY_PLAYER_ID: player_id,
-		WiredProtocol.KEY_NAME: name,
+		WiredProtocol.KEY_ACCOUNT_ID: account_id,
+		WiredProtocol.KEY_NAME: display_name,
 	}
 	_try_spawn(peer_id)
 
@@ -595,6 +634,7 @@ func _spawn_data(peer_id: int, slot: int) -> Dictionary:
 	var player_id := int(info.get(WiredProtocol.KEY_PLAYER_ID, DEFAULT_PLAYER_ID))
 	return {
 		WiredProtocol.KEY_PLAYER_ID: player_id,
+		WiredProtocol.KEY_ACCOUNT_ID: int(info.get(WiredProtocol.KEY_ACCOUNT_ID, 0)),
 		WiredProtocol.KEY_PEER_ID: peer_id,
 		WiredProtocol.KEY_NAME: str(info.get(WiredProtocol.KEY_NAME, "")),
 		WiredProtocol.KEY_SPAWN_POSITION_2D: _clear_spawn_position_2d(
@@ -757,10 +797,18 @@ func _warn_missing_static_world() -> void:
 
 
 func _apply_saved_state(player: WiredPlayer) -> void:
-	if not _saved_states.has(player.player_id):
+	if player.account_id <= 0 or not _saved_states.has(player.account_id):
 		return
-	player.load_state(_saved_states[player.player_id])
-	_saved_states.erase(player.player_id)
+	player.load_state(_saved_states[player.account_id])
+	_saved_states.erase(player.account_id)
+
+
+func _active_player_for_account(account_id: int) -> WiredPlayer:
+	for peer_id: Variant in _spawned.keys():
+		var player: WiredPlayer = _spawned[peer_id]
+		if is_instance_valid(player) and player.account_id == account_id:
+			return player
+	return null
 
 
 ## `name` is the spawn record key; `display_name` is what a saved state uses.

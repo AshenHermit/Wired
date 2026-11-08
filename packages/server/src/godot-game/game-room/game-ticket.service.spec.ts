@@ -16,6 +16,7 @@ const baseConfig: GodotRuntimeConfig = {
   ticketSecret: 'ticket-secret',
   ticketRateLimit: 20,
   ticketRateLimitWindowMs: 60_000,
+  stateSaveIntervalMs: 30_000,
   stateDir: 'state',
   apiUrl: 'http://127.0.0.1:3000',
   exportDir: 'game_export/web',
@@ -35,34 +36,46 @@ const createService = (
 };
 
 describe('GameTicketService', () => {
-  it('mints tickets in the format verified by the Godot runtime', () => {
+  it('mints v2 tickets signed with the authenticated account ID', () => {
     const service = createService();
     const now = Math.floor(Date.now() / 1000);
-    const minted = service.mint('room-1');
+    const minted = service.mint('room-1', 42);
 
-    const [exp, nonce, mac] = minted.ticket.split('.');
+    const [version, exp, accountId, nonce, mac] = minted.ticket.split('.');
+    expect(version).toBe('v2');
     expect(Number(exp)).toBeGreaterThanOrEqual(now + 50);
+    expect(accountId).toBe('42');
     expect(nonce).toMatch(/^[0-9a-f]{32}$/);
     expect(mac).toBe(
       createHmac('sha256', 'ticket-secret')
-        .update(`room-1:${exp}:${nonce}`)
+        .update(`v2:room-1:${accountId}:${exp}:${nonce}`)
         .digest('hex'),
     );
   });
 
-  it('binds the ticket to the room and never reuses a nonce', () => {
+  it('binds the ticket to the room and account and never reuses a nonce', () => {
     const service = createService();
-    const first = service.mint('room-1');
-    const second = service.mint('room-2');
+    const first = service.mint('room-1', 42);
+    const second = service.mint('room-2', 42);
+    const third = service.mint('room-1', 43);
 
     expect(first.ticket).not.toBe(second.ticket);
+    expect(first.ticket).not.toBe(third.ticket);
     expect(first.nonce).not.toBe(second.nonce);
     expect(first.ticket).toContain(first.nonce);
+  });
+
+  it.each([0, -1])('rejects non-positive account ID %s', (accountId) => {
+    const service = createService();
+
+    expect(() => service.mint('room-1', accountId)).toThrow(
+      /account ID must be positive/,
+    );
   });
 
   it('fails explicitly when the shared secret is missing', () => {
     const service = createService({ ticketSecret: '' });
 
-    expect(() => service.mint('room-1')).toThrow(/WIRED_GAME_TICKET_SECRET/);
+    expect(() => service.mint('room-1', 1)).toThrow(/WIRED_GAME_TICKET_SECRET/);
   });
 });

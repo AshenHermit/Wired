@@ -34,6 +34,7 @@ const MOVE_DOWN := "wired_move_down"
 const JUMP := "wired_jump"
 
 var player_id: int = 0
+var account_id: int = 0
 var peer_id: int = 0
 var display_name: String = ""
 ## Last accepted input snapshot: `{move: Vector2, jump: bool, seq: int}`.
@@ -68,11 +69,13 @@ func setup(
 	new_player_id: int,
 	new_peer_id: int,
 	new_display_name: String,
-	new_network: WiredNetwork
+	new_network: WiredNetwork,
+	new_account_id: int = 0
 ) -> void:
 	player_id = new_player_id
 	peer_id = new_peer_id
 	display_name = new_display_name
+	account_id = new_account_id
 	network = new_network
 	if network != null:
 		if not network.player_input_received.is_connected(_on_player_input_received):
@@ -222,6 +225,7 @@ func save_state() -> Dictionary:
 		component_states[component.state_key()] = component._wired_save_state()
 	return {
 		WiredProtocol.KEY_PLAYER_ID: player_id,
+		WiredProtocol.KEY_ACCOUNT_ID: account_id,
 		WiredProtocol.KEY_PEER_ID: peer_id,
 		WiredProtocol.KEY_DISPLAY_NAME: display_name,
 		WiredProtocol.KEY_ANCHOR_POSITION_2D: [_anchor_position_2d.x, _anchor_position_2d.y],

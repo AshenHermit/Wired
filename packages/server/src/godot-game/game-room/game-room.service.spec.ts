@@ -141,7 +141,7 @@ describe('GameRoomService', () => {
     const result = await service.connect(user(7), 42);
 
     expect(rooms.findOne).toHaveBeenCalledWith(42);
-    expect(runtime.connectRoom).toHaveBeenCalledWith('42');
+    expect(runtime.connectRoom).toHaveBeenCalledWith('42', 7);
     expect(result).toEqual({
       roomId: 42,
       endpoint: 'ws://127.0.0.1:19100',

@@ -173,6 +173,8 @@ export class RoomRuntimeConfiguration {
         // PORT, so a proxy or a different backend port cannot break lookups.
         '--api-url',
         config.apiUrl,
+        '--state-save-interval-ms',
+        String(config.stateSaveIntervalMs),
       ],
       cwd: projectPath,
       env: this.buildRuntimeEnv(config.ticketSecret, roomId),

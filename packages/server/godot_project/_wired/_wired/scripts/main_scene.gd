@@ -41,6 +41,8 @@ const WiredGameSceneScript := preload("res://_wired/scripts/world/wired_game_sce
 var _server_port := 0
 var _state_dir := ""
 var _control_thread: Thread = null
+var _state_save_timer: Timer = null
+var _state_save_interval_ms := 30_000
 var _shutdown_in_progress := false
 var _authenticated_once := false
 var _auth_error_reported := false
@@ -708,6 +710,9 @@ func _read_config() -> Dictionary:
 			"room": _arg_value(args, "--room", DEFAULT_ROOM),
 			"bind": _arg_value(args, "--bind", DEFAULT_BIND),
 			"state_dir": _arg_value(args, "--state-dir", ""),
+			"state_save_interval_ms": int(
+				_arg_value(args, "--state-save-interval-ms", "30000")
+			),
 		}
 	var cfg := {
 		"mode": "client",
@@ -746,10 +751,26 @@ func _run_server(cfg: Dictionary) -> void:
 		_fail("server start failed: %s" % error_string(err))
 		get_tree().quit(3)
 		return
+	_state_save_interval_ms = maxi(
+		1, int(cfg.get("state_save_interval_ms", _state_save_interval_ms))
+	)
+	_state_save_timer = Timer.new()
+	_state_save_timer.name = "StateSaveTimer"
+	_state_save_timer.wait_time = _state_save_interval_ms / 1000.0
+	_state_save_timer.one_shot = false
+	_state_save_timer.timeout.connect(_on_state_save_timer_timeout)
+	add_child(_state_save_timer)
+	_state_save_timer.start()
 	_start_control_listener()
 
 
-## Backend sends one line over stdin: `shutdown`. The same thread also notices
+func _on_state_save_timer_timeout() -> void:
+	if _shutdown_in_progress:
+		return
+	_save_state("periodic")
+
+
+## Backend sends one line over stdin: `shutdown`.  The same thread also notices
 ## EOF, which happens when the backend dies, so a killed backend cannot leave
 ## an orphaned Godot server behind.
 func _start_control_listener() -> void:
@@ -979,6 +1000,8 @@ func _request_shutdown(reason: String) -> void:
 	if _shutdown_in_progress:
 		return
 	_shutdown_in_progress = true
+	if _state_save_timer != null:
+		_state_save_timer.stop()
 	print("WIRED_SHUTDOWN_REQUESTED reason=%s" % reason)
 	_save_state(reason)
 	print("WIRED_SHUTDOWN_ACK")

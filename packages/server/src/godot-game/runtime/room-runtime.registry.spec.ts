@@ -15,6 +15,7 @@ const config: GodotRuntimeConfig = {
   ticketSecret: 'test-secret',
   ticketRateLimit: 20,
   ticketRateLimitWindowMs: 60_000,
+  stateSaveIntervalMs: 30_000,
   apiUrl: 'http://127.0.0.1:3000',
   stateDir: 'C:/wired/storage/rooms',
   exportDir: 'C:/wired/game_export/web',
