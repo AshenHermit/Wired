@@ -840,6 +840,14 @@ func _control_loop() -> void:
 						"_apply_room_packages",
 						parts[1] if parts.size() > 1 else ""
 					)
+				"drop-account":
+					if parts.size() == 2 and parts[1].is_valid_int():
+						call_deferred(
+							"_drop_account",
+							parts[1].to_int()
+						)
+					else:
+						print("WIRED_CONTROL_ERROR invalid_drop_account_command=%s" % command)
 				_:
 					print("WIRED_CONTROL_ERROR unknown_command=%s" % command)
 
@@ -1006,6 +1014,13 @@ func _request_shutdown(reason: String) -> void:
 	_save_state(reason)
 	print("WIRED_SHUTDOWN_ACK")
 	get_tree().quit(0)
+
+
+## Wipes one account from the live world and from the saved anchor so the next
+## state.json save does not restore it.
+func _drop_account(account_id: int) -> void:
+	if players_manager != null:
+		players_manager.drop_account(account_id)
 
 
 ## The project owns its save format; the backend only waits for the process to

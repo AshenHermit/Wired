@@ -198,6 +198,10 @@ export function RoomAccessSettingsDialog({
         await cleanupRoomState(room.id, confirmScope);
       }
       setConfirmScope(null);
+      if (confirmScope === "self") {
+        window.location.reload();
+        return;
+      }
     } catch (failure) {
       console.error(failure);
       setError(true);

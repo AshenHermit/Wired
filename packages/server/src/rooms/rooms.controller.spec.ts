@@ -31,7 +31,7 @@ describe('RoomsController', () => {
         ),
       };
 
-      const controller = new RoomsController(roomsService as never);
+      const controller = new RoomsController(roomsService as never, { dropSelfState: jest.fn() } as never);
       const user = { id: 10 };
       const req = { user } as never;
       const dto: UpdateRoomAccessDto = {
@@ -61,7 +61,7 @@ describe('RoomsController', () => {
         ),
       };
 
-      const controller = new RoomsController(roomsService as never);
+      const controller = new RoomsController(roomsService as never, { dropSelfState: jest.fn() } as never);
       const user = { id: 10 };
       const req = { user } as never;
       const dto: UpdateRoomAccessDto = {

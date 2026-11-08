@@ -150,6 +150,11 @@ export class GameRoomService {
     await this.runtime.stopRoom(String(roomId), 'requested');
   }
 
+  /** Drops the current user's state from the running runtime (if any). */
+  dropSelfState(user: User, roomId: number): void {
+    this.runtime.dropAccount(String(roomId), user.id);
+  }
+
   private async waitForInitialPackages(roomId: string): Promise<void> {
     const deadline = Date.now() + PACKAGE_READY_TIMEOUT_MS;
     for (;;) {
