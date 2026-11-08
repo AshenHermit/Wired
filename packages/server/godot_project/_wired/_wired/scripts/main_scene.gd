@@ -1184,6 +1184,10 @@ func _apply_client_package(package_id: int, revision: int) -> void:
 		"WIRED_CLIENT_PACKAGES_SYNC_STARTED package=%d revision=%d"
 		% [package_id, revision]
 	)
+	# `sync_package` emits `package_applied` before it returns. The connected
+	# `_on_package_applied` callback is synchronous, so this continuation is the
+	# completion boundary: registry/static content and live player components
+	# have already been rebuilt before the acknowledgement below is sent.
 	var result: Dictionary = await _packages.sync_package(package_id, revision)
 	var ok := bool(result.get("ok", false))
 	var applied := int(result.get("revision", 0))
