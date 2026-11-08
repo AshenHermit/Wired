@@ -49,6 +49,7 @@ export interface AppConfig {
     ticketSecret: string;
     ticketRateLimit: number;
     ticketRateLimitWindowMs: number;
+    stateSaveIntervalMs: number;
     /** Base URL of this backend as seen by the local Godot runtime. */
     apiUrl: string;
     stateDir: string;

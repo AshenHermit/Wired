@@ -13,8 +13,10 @@ export interface MintedGameTicket {
  * Mints the short-lived single-use ticket consumed by the Godot room server.
  *
  * Format and signature are defined by the Godot project
- * (`_wired/scripts/network/ticket.gd`): `<exp>.<nonce>.<hmac_sha256>` over
- * `<room>:<exp>:<nonce>`, keyed by `WIRED_GAME_TICKET_SECRET`.
+ * (`_wired/scripts/network/ticket.gd`):
+ * `v2.<exp>.<account_id>.<nonce>.<hmac_sha256>` over
+ * `v2:<room>:<account_id>:<exp>:<nonce>`, keyed by
+ * `WIRED_GAME_TICKET_SECRET`.
  *
  * Nonces are random per request, so a ticket cannot be replayed: the Godot
  * runtime burns the nonce on first successful verification.
@@ -23,7 +25,17 @@ export interface MintedGameTicket {
 export class GameTicketService {
   constructor(private readonly configService: AppConfigService) {}
 
-  mint(roomId: string, ttlSec?: number): MintedGameTicket {
+  mint(
+    roomId: string,
+    accountId: number,
+    ttlSec?: number,
+  ): MintedGameTicket {
+    if (!Number.isInteger(accountId) || accountId <= 0) {
+      throw new RoomRuntimeError(
+        'config',
+        'account ID must be positive',
+      );
+    }
     const config = this.configService.godotRuntime;
     if (!config.ticketSecret) {
       throw new RoomRuntimeError(
@@ -36,11 +48,11 @@ export class GameTicketService {
       Math.floor(Date.now() / 1000) + (ttlSec ?? config.ticketTtlSec);
     const nonce = randomBytes(16).toString('hex');
     const signature = createHmac('sha256', config.ticketSecret)
-      .update(`${roomId}:${expiresAt}:${nonce}`)
+      .update(`v2:${roomId}:${accountId}:${expiresAt}:${nonce}`)
       .digest('hex');
 
     return {
-      ticket: `${expiresAt}.${nonce}.${signature}`,
+      ticket: `v2.${expiresAt}.${accountId}.${nonce}.${signature}`,
       nonce,
       expiresAt,
     };

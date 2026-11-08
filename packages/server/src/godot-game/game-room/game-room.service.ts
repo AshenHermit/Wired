@@ -104,7 +104,7 @@ export class GameRoomService {
       // through the handshake window. The ticket TTL (60s by default) is
       // comfortably larger than the bounded readiness wait (10s), so the
       // browser still receives a usable window.
-      connection = await this.runtime.connectRoom(runtimeRoomId);
+      connection = await this.runtime.connectRoom(runtimeRoomId, player.id);
       await this.waitForInitialPackages(runtimeRoomId);
     } catch (error) {
       throw this.toHttpException(error, runtimeRoomId);
@@ -143,6 +143,11 @@ export class GameRoomService {
       roomId: room.id,
       packages: await this.packageSync.getStatuses(String(room.id)),
     };
+  }
+
+  async stopRuntime(user: User, roomId: number): Promise<void> {
+    await this.assertCanPlay(user, roomId);
+    await this.runtime.stopRoom(String(roomId), 'requested');
   }
 
   private async waitForInitialPackages(roomId: string): Promise<void> {

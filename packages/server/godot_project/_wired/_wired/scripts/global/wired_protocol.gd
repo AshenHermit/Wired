@@ -19,6 +19,7 @@ class_name WiredProtocol
 # --- spawn record and late-join snapshot keys ------------------------------
 
 const KEY_PLAYER_ID := "player_id"
+const KEY_ACCOUNT_ID := "account_id"
 const KEY_PEER_ID := "peer_id"
 const KEY_NAME := "name"
 const KEY_DISPLAY_NAME := "display_name"

@@ -22,6 +22,7 @@ func _run() -> void:
 	_test_readiness_matrix()
 	_test_network_api_surface()
 	_test_packages_ready_emits_once()
+	_test_hot_reload_barrier()
 	_test_gameplay_rpcs_require_authentication()
 	_test_network_buffer_configuration()
 	_test_focus_in_requests_snapshot()
@@ -120,6 +121,13 @@ class FocusProbe extends WiredNetwork:
 
 	func request_world_snapshot() -> void:
 		snapshot_requests += 1
+
+
+class BarrierProbe extends WiredNetwork:
+	var sender_id := 0
+
+	func _remote_sender_id() -> int:
+		return sender_id
 
 
 func _test_readiness_matrix() -> void:
@@ -231,6 +239,71 @@ func _test_packages_ready_emits_once() -> void:
 		not net.is_peer_packages_ready(99),
 		"a peer that never authenticated must not become ready",
 	)
+	net.free()
+
+
+func _test_hot_reload_barrier() -> void:
+	var net := BarrierProbe.new()
+	net.mode = "server"
+	var released: Array = []
+	_check(net.has_signal("hot_reload_ready"), "hot_reload_ready signal must exist")
+	_check(net.has_method("begin_hot_reload"), "begin_hot_reload method must exist")
+	if not net.has_signal("hot_reload_ready") or not net.has_method("begin_hot_reload"):
+		net.free()
+		return
+	net.hot_reload_ready.connect(
+		func(package_id: int, revision: int) -> void:
+			released.append({"package_id": package_id, "revision": revision})
+	)
+	net._players[7] = {"player_id": 3, "ready": true, "packages_ready": true, "name": "bob"}
+	net._players[8] = {"player_id": 4, "ready": true, "packages_ready": true, "name": "eve"}
+	net._package_reports[7] = {}
+	net._package_reports[8] = {}
+
+	net.begin_hot_reload(42, 9)
+	_check(released.is_empty(), "a revision with authenticated peers must remain pending")
+	net.sender_id = 7
+	net.cli_package_ready(JSON.stringify({"package_id": 42, "revision": 9, "ok": true}))
+	_check(released.is_empty(), "one successful client report must not release the barrier")
+	net.sender_id = 8
+	net.cli_package_ready(JSON.stringify({"package_id": 42, "revision": 9, "ok": true}))
+	_check(released == [{"package_id": 42, "revision": 9}], "all successful reports must release exactly once")
+	net.cli_package_ready(JSON.stringify({"package_id": 42, "revision": 9, "ok": true}))
+	_check(released.size() == 1, "a released revision must not emit twice")
+
+	net.begin_hot_reload(42, 10)
+	net.sender_id = 7
+	net.cli_package_ready(JSON.stringify({"package_id": 42, "revision": 10, "ok": false}))
+	_check(released.size() == 1, "a failed report must leave the barrier pending")
+	net.cli_package_ready(JSON.stringify({"package_id": 42, "revision": 9, "ok": true}))
+	_check(released.size() == 1, "a stale report must not release the current revision")
+	net.cli_package_ready(JSON.stringify({"package_id": 42, "revision": 10, "ok": true}))
+	net.sender_id = 8
+	net.cli_package_ready(JSON.stringify({"package_id": 42, "revision": 10, "ok": true}))
+	_check(released == [{"package_id": 42, "revision": 9}, {"package_id": 42, "revision": 10}], "a successful retry must release the current revision")
+
+	net.begin_hot_reload(42, 11)
+	net._on_peer_disconnected(7)
+	_check(released.size() == 2, "one remaining peer must keep the barrier pending")
+	net._on_peer_disconnected(8)
+	_check(released == [{"package_id": 42, "revision": 9}, {"package_id": 42, "revision": 10}, {"package_id": 42, "revision": 11}], "disconnecting all pending peers must release the revision")
+
+	net.begin_hot_reload(42, 12)
+	_check(released.back() == {"package_id": 42, "revision": 12}, "no authenticated peers must release immediately")
+
+	net._players[10] = {"player_id": 6, "ready": true, "packages_ready": true, "name": "lee"}
+	net._package_reports[10] = {}
+	var release_count_before_late_peer := released.size()
+	net.begin_hot_reload(42, 13)
+	net._players[11] = {"player_id": 7, "ready": true, "packages_ready": true, "name": "zoe"}
+	net._package_reports[11] = {}
+	net._add_hot_reload_peer(11)
+	net.sender_id = 10
+	net.cli_package_ready(JSON.stringify({"package_id": 42, "revision": 13, "ok": true}))
+	_check(net.is_hot_reload_pending(42, 13), "a peer admitted during a barrier must be pending")
+	net.sender_id = 11
+	net.cli_package_ready(JSON.stringify({"package_id": 42, "revision": 13, "ok": true}))
+	_check(released.size() == release_count_before_late_peer + 1, "the late peer report must release the barrier")
 	net.free()
 
 

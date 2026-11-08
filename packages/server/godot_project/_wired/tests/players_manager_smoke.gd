@@ -549,6 +549,12 @@ func _test_hot_reload_rebuilds_live_components() -> void:
 		_check(false, "the hot-reload test needs a live component")
 		return
 	var previous: Variant = player.components[0]
+	var previous_sync: Node = previous.get_node_or_null("Sync")
+	_check(
+		previous_sync != null,
+		"the hot-reload test needs a synchronizer on the replicated component",
+	)
+	var previous_sync_id := previous_sync.get_instance_id() if previous_sync != null else 0
 	previous.body.position = Vector2(11, 12)
 	var player_id := player.get_instance_id()
 
@@ -573,8 +579,13 @@ func _test_hot_reload_rebuilds_live_components() -> void:
 		% player.components.size(),
 	)
 	_check(
-		previous.is_queued_for_deletion(),
-		"the previous component must be released, not left running",
+		not is_instance_valid(previous),
+		"the previous component must be freed before the replacement enters the tree",
+	)
+	var rebuilt_sync := player.components[0].get_node_or_null("Sync")
+	_check(
+		rebuilt_sync != null and rebuilt_sync.get_instance_id() == previous_sync_id,
+		"a hot reload must preserve the synchronizer instance and replication identity",
 	)
 	var positions := {}
 	for component: WiredPlayerComponent in player.components:
@@ -706,7 +717,9 @@ func _test_purge_missing_packages_keeps_listed_packages() -> void:
 			"players": [
 				{
 					"player_id": 8,
+					"account_id": 8,
 					"components": {keys["42"]: {}, keys["99"]: {}},
+
 				},
 			],
 		}
@@ -740,7 +753,7 @@ func _test_spawn_waits_for_both_gates_and_routes_actions() -> void:
 	root.add_child(manager)
 	_owned.append(manager)
 	manager.setup(registry, net, null)
-	net.peer_authenticated.emit(5, 9, "eve")
+	net.peer_authenticated.emit(5, 9, 42, "eve")
 	_check(
 		manager.get_player_by_peer(5) == null,
 		"authentication alone must not spawn a player",
@@ -832,7 +845,7 @@ func _test_disconnect_despawns_the_player() -> void:
 	root.add_child(manager)
 	_owned.append(manager)
 	manager.setup(registry, net, null)
-	net.peer_authenticated.emit(5, 9, "eve")
+	net.peer_authenticated.emit(5, 9, 0, "eve")
 	net._mark_packages_ready(5)
 	var player := manager.get_player_by_peer(5)
 	_check(player != null, "the disconnect test needs a spawned player")
@@ -894,7 +907,7 @@ func _test_spawner_parents_the_spawned_player() -> void:
 	root.add_child(manager)
 	_owned.append(manager)
 	manager.setup(registry, net, spawner)
-	net.peer_authenticated.emit(6, 10, "frank")
+	net.peer_authenticated.emit(6, 10, 0, "frank")
 	net._mark_packages_ready(6)
 	var player := manager.get_player_by_peer(6)
 	_check(player != null, "a configured spawner must spawn the player")
@@ -928,6 +941,7 @@ func _test_reconnect_reuses_the_free_spawn_slot() -> void:
 	manager.setup(_make_registry(), null, null)
 	manager._authenticated[5] = {
 		WiredProtocol.KEY_PLAYER_ID: 9,
+		WiredProtocol.KEY_ACCOUNT_ID: 42,
 		WiredProtocol.KEY_NAME: "eve",
 	}
 	manager.spawn_player(5)
@@ -980,6 +994,7 @@ func _test_spawn_avoids_an_occupied_marker() -> void:
 	manager.setup(_make_registry(), null, null)
 	manager._authenticated[5] = {
 		WiredProtocol.KEY_PLAYER_ID: 9,
+		WiredProtocol.KEY_ACCOUNT_ID: 42,
 		WiredProtocol.KEY_NAME: "eve",
 	}
 	manager.spawn_player(5)
@@ -1137,6 +1152,7 @@ func _build_player(
 	_owned.append(manager)
 	var data := {
 		"player_id": player_id,
+		"account_id": 42,
 		"peer_id": peer_id,
 		"name": "bob",
 		"spawn_position_2d": position,

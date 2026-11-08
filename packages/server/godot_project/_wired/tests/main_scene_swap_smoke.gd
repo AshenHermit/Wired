@@ -25,6 +25,7 @@ class StubPackages extends PackagesManager:
 
 func _initialize() -> void:
 	_test_swap_and_restore()
+	_test_wrapped_game_root_keeps_stable_path()
 	_test_invalid_root_keeps_current()
 	_test_missing_file_keeps_current()
 	_test_missing_viewport_keeps_current()
@@ -34,6 +35,7 @@ func _initialize() -> void:
 	_test_custom_ui_keeps_mouse_filter()
 	_test_revision_rebuild()
 	_test_retry_after_invalid()
+	_test_hot_reload_barrier_wiring()
 	_finish()
 
 
@@ -94,6 +96,10 @@ func _test_swap_and_restore() -> void:
 	main.call("_rebuild_game_scene_if_needed")
 	var custom: Node = main._game_root
 	_check(custom != default_root, "the package scene must replace the default Game root")
+	_check(
+		custom.name == default_root.name,
+		"the replacement root must preserve the stable network root name",
+	)
 	_check(custom.get_parent() == main, "the package scene must be installed under Main")
 	_check(default_root.get_parent() == null, "the default Game root must be detached, not freed")
 	_check(main._game_root == custom, "Main must track the installed root")
@@ -120,6 +126,42 @@ func _test_swap_and_restore() -> void:
 	_check(dw.get_parent() == default_viewport, "DynamicWorld must return to the default viewport")
 	_check(pm.get_parent() == default_viewport, "Players must return to the default viewport")
 
+	main.free()
+
+
+func _make_wrapped_package_scene() -> PackedScene:
+	var wrapper := Node.new()
+	wrapper.name = "CustomMain"
+	wrapper.set_script(WiredGameSceneScript)
+	var game := SubViewportContainer.new()
+	game.name = "Game"
+	wrapper.add_child(game)
+	game.owner = wrapper
+	var viewport := SubViewport.new()
+	viewport.name = "SubViewport"
+	game.add_child(viewport)
+	viewport.owner = wrapper
+	wrapper.set("world_viewport", viewport)
+	var ui_layer := CanvasLayer.new()
+	ui_layer.name = "UI"
+	wrapper.add_child(ui_layer)
+	ui_layer.owner = wrapper
+	var packed := PackedScene.new()
+	packed.pack(wrapper)
+	wrapper.free()
+	return packed
+
+
+func _test_wrapped_game_root_keeps_stable_path() -> void:
+	var main = _make_main()
+	var default_root: Node = main.default_game_root
+	_register_main(main, "1", "game/wrapped.tscn", _make_wrapped_package_scene())
+	main.call("_rebuild_game_scene_if_needed")
+	_check(main._game_root.name == default_root.name, "wrapped root must use stable Game name")
+	_check(main._game_root.get_node_or_null("SubViewport") != null, "inner Game must become runtime root")
+	_check(main.get_node_or_null("Game/Game") == null, "wrapped package must not create Main/Game/Game")
+	_check(main.get_node_or_null("Game/SubViewport") != null, "world viewport must stay at stable path")
+	_check(main._game_root.get_node_or_null("UI") != null, "wrapper UI must be preserved")
 	main.free()
 
 
@@ -209,7 +251,7 @@ func _test_reserved_service_node_rejected() -> void:
 	_register_main(main, "1", "game/reserved.tscn", _make_package_scene("Fixed"))
 	main.call("_rebuild_game_scene_if_needed")
 	_check(
-		main._game_root.name == "Fixed",
+		main._game_root.name == default_root.name,
 		"a valid scene must install after a reserved-node rejection",
 	)
 	main.free()
@@ -236,8 +278,9 @@ func _test_multiple_registrations() -> void:
 	_register_main(main, "1", "game/early.tscn", _make_package_scene("Early"), 10)
 	main.call("_rebuild_game_scene_if_needed")
 	_check(
-		main._game_root.name == "Early",
-		"the deterministic first main scene must win, got %s" % main._game_root.name,
+		main._game_root != null and main._game_root.name == main.default_game_root.name,
+		"the deterministic first main scene must win with the stable root name, got %s"
+		% main._game_root.name,
 	)
 	_check(
 		main._registry.get_main_scenes().size() == 2,
@@ -291,10 +334,13 @@ func _test_revision_rebuild() -> void:
 	main.call("_rebuild_game_scene_if_needed")
 	var second: Node = main._game_root
 	_check(
-		second != first and second.name == "Rev2",
-		"a new revision must rebuild the main scene",
+		second == first,
+		"a new revision must preserve the stable Game root identity",
 	)
-	_check(first.get_parent() == null, "the previous revision root must leave Main")
+	_check(
+		second.get("world_viewport") == first.get("world_viewport"),
+		"a new revision must preserve the stable world viewport identity",
+	)
 	main.free()
 
 
@@ -308,9 +354,16 @@ func _test_retry_after_invalid() -> void:
 	_register_main(main, "1", "game/retry.tscn", _make_package_scene("Retried"))
 	main.call("_rebuild_game_scene_if_needed")
 	_check(
-		main._game_root.name == "Retried",
+		main._game_root.name == default_root.name,
 		"a fixed scene must replace the default Game after a failed attempt",
 	)
+	main.free()
+
+
+func _test_hot_reload_barrier_wiring() -> void:
+	var main = _make_main()
+	_check(main.has_method("_on_hot_reload_ready"), "Main must handle hot_reload_ready")
+	_check(main.net.has_signal("hot_reload_ready"), "Network must expose hot_reload_ready")
 	main.free()
 
 

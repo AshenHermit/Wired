@@ -92,6 +92,7 @@ const config: () => AppConfig = () => ({
       'GODOT_GAME_TICKET_RATE_WINDOW_MS',
       60_000,
     ),
+    stateSaveIntervalMs: intFromEnv('GODOT_ROOM_STATE_SAVE_INTERVAL_MS', 30_000),
     // The runtime fetches package manifests from the backend over loopback.
     // GODOT_ROOM_API_URL is required when the backend port differs from PORT
     // (for example behind a proxy) or when it listens on another interface.

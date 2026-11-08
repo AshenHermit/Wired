@@ -65,6 +65,14 @@ export function RoomWorkspace({
       // Mount lazily, then keep it mounted: switching to the editor must not
       // disconnect the player. Removing the iframe is what closes the peer.
       setGameMounted(true);
+      // Returning to the Game tab must hand keyboard focus back to the game
+      // iframe; otherwise keys go to the document and WASD stops working.
+      window.requestAnimationFrame(() => {
+        const frame = document.querySelector(
+          'iframe[title="Wired game"]',
+        ) as HTMLIFrameElement | null;
+        frame?.focus();
+      });
     }
   }, []);
 

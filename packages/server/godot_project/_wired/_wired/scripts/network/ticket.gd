@@ -4,8 +4,8 @@ extends RefCounted
 ## Short-lived, single-use ticket shared with the Godot runtime through the
 ## `WIRED_GAME_TICKET_SECRET` environment variable.
 ##
-## Format: `<exp_unix>.<nonce>.<hex_hmac_sha256>`
-## Signed message: `<room>:<exp_unix>:<nonce>`
+## Format: `v2.<exp_unix>.<account_id>.<nonce>.<hex_hmac_sha256>`
+## Signed message: `v2:<room>:<account_id>:<exp_unix>:<nonce>`
 ##
 ## The backend mints tickets; the Godot server only verifies them. A ticket is
 ## burned by the runtime on first successful verification (`_used_nonces`).
@@ -14,11 +14,14 @@ static func verify(
 	ticket: String, secret: String, room: String, now_unix: float
 ) -> Dictionary:
 	var parts := ticket.split(".")
-	if parts.size() != 3:
+	if parts.size() != 5 or parts[0] != "v2":
 		return {"ok": false, "reason": "malformed"}
-	var exp := parts[0].to_int()
-	var nonce := parts[1]
-	var mac := parts[2].to_lower()
+	var exp := parts[1].to_int()
+	var account_id := parts[2].to_int()
+	var nonce := parts[3]
+	var mac := parts[4].to_lower()
+	if account_id <= 0:
+		return {"ok": false, "reason": "bad_account_id"}
 	if exp <= int(now_unix):
 		return {"ok": false, "reason": "expired"}
 	if nonce.is_empty() or nonce.length() > 128:
@@ -27,11 +30,11 @@ static func verify(
 	var err: int = ctx.start(HashingContext.HASH_SHA256, secret.to_utf8_buffer())
 	if err != OK:
 		return {"ok": false, "reason": "hmac_init_failed"}
-	ctx.update(("%s:%d:%s" % [room, exp, nonce]).to_utf8_buffer())
+	ctx.update(("v2:%s:%d:%d:%s" % [room, account_id, exp, nonce]).to_utf8_buffer())
 	var expected := ctx.finish().hex_encode()
 	if not equals_constant_time(expected, mac):
 		return {"ok": false, "reason": "bad_signature"}
-	return {"ok": true, "nonce": nonce, "exp": exp}
+	return {"ok": true, "account_id": account_id, "nonce": nonce, "exp": exp}
 
 
 static func equals_constant_time(a: String, b: String) -> bool:

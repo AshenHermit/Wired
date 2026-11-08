@@ -94,6 +94,20 @@ func register_action(local_name: String, handler: Callable) -> void:
 	player.register_action(_qualify(local_name), handler)
 
 
+## Registers a package-local InputMap action (qualified with the package id so
+## packages never collide). `events` is an Array of InputEvent. Call this in
+## `_wired_ready()`; afterwards read it with `Input.is_action_pressed(name)` or
+## `event.is_action(name)` in `_wired_unhandled_input`. Names are qualified the
+## same way as gameplay actions, so use the local (unqualified) name here.
+func register_input_action(local_name: String, events: Array = []) -> String:
+	var qualified := _qualify(local_name)
+	if not InputMap.has_action(qualified):
+		InputMap.add_action(qualified)
+	for event: Variant in events:
+		if event is InputEvent:
+			InputMap.action_add_event(qualified, event as InputEvent)
+	return qualified
+
 ## Sends an action intent to the server. The caller passes the package-local
 ## name; only the local player may send.
 func request_action(local_name: String, payload: Dictionary = {}) -> void:
@@ -174,6 +188,26 @@ func _is_simulation_owner() -> bool:
 
 func _qualify(local_name: String) -> String:
 	return "%s/%s" % [package_id, local_name]
+
+
+## Returns the package-qualified name for a local action/input action, so package
+## authors never build the `"<package_id>/<name>"` string by hand.
+func action_name(local_name: String) -> String:
+	return _qualify(local_name)
+
+
+## Convenience wrappers around `Input` that use the package-qualified name, so
+## authors can write `is_action_pressed("move_left")` instead of qualifying.
+func is_action_pressed(local_name: String) -> bool:
+	return Input.is_action_pressed(_qualify(local_name))
+
+
+func is_action_just_pressed(local_name: String) -> bool:
+	return Input.is_action_just_pressed(_qualify(local_name))
+
+
+func is_action_just_released(local_name: String) -> bool:
+	return Input.is_action_just_released(_qualify(local_name))
 
 
 # --- package hooks --------------------------------------------------------

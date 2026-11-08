@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'node:child_process';
+﻿import { spawn, ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -59,7 +59,8 @@ describeIntegration('RoomRuntimeService with real Godot', () => {
       ticketSecret: secret,
       ticketRateLimit: 20,
       ticketRateLimitWindowMs: 60_000,
-      stateDir,
+       stateSaveIntervalMs: 30_000,
+       stateDir,
       apiUrl: 'http://127.0.0.1:3000',
       // This spec talks to the runtime directly; the browser proxy is not
       // involved, so use the legacy port placeholder to reach the listener.
@@ -91,8 +92,8 @@ describeIntegration('RoomRuntimeService with real Godot', () => {
 
   it('shares one process, saves state on idle, and restarts for the next join', async () => {
     const [first, second] = await Promise.all([
-      service.connectRoom(roomId),
-      service.connectRoom(roomId),
+      service.connectRoom(roomId, 42),
+      service.connectRoom(roomId, 42),
     ]);
     expect(first.pid).toBe(second.pid);
     expect(first.port).toBe(port);
@@ -157,7 +158,7 @@ describeIntegration('RoomRuntimeService with real Godot', () => {
     expect(logs).toContain('WIRED_STATE_SAVED');
     expect(logs).not.toContain('forcing');
 
-    const restarted = await service.connectRoom(roomId);
+    const restarted = await service.connectRoom(roomId, 42);
     expect(restarted.state).toBe('running');
     expect(restarted.port).toBe(port);
     expect(restarted.pid).not.toBeNull();

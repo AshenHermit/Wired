@@ -66,12 +66,15 @@ export class RoomRuntimeService
    * Rejects with an explicit lifecycle error when the room cannot start; it
    * never falls back to a "maybe works" endpoint.
    */
-  async connectRoom(roomId: string): Promise<RoomConnection> {
+  async connectRoom(
+    roomId: string,
+    accountId: number,
+  ): Promise<RoomConnection> {
     const session = this.ensureSession(roomId);
     await session.readyPromise;
 
     const ticketTtlSec = session.reserveConnection();
-    const ticket = this.tickets.mint(roomId, ticketTtlSec);
+    const ticket = this.tickets.mint(roomId, accountId, ticketTtlSec);
     return {
       ...session.info(),
       ticket: ticket.ticket,

@@ -22,6 +22,18 @@ const PLAYER_BODY_META := "_wired_player_body"
 @export var friction := 1200.0
 
 var body: CharacterBody2D = null
+## Package-defined input actions (registered via `register_input_action`),
+## independent of the core `wired_move_*` map.
+const MOVE_LEFT := "move_left"
+const MOVE_RIGHT := "move_right"
+const MOVE_UP := "move_up"
+const MOVE_DOWN := "move_down"
+const JUMP := "jump"
+const DASH_ACTION := "dash"
+var _dash_impulse := 600.0
+## Last move vector received from the owning client (server authority).
+var _move_input := Vector2.ZERO
+var _jump_input := false
 
 
 func _wired_ready() -> void:
@@ -31,6 +43,30 @@ func _wired_ready() -> void:
 			"WIRED_EXAMPLE_BODY_MISSING_NODE package=%s node=Body" % package_id
 		)
 		return
+	# Register package-local movement + jump + dash actions. `register_input_action`
+	# qualifies every name with the package id, so they never collide with other
+	# packages or the core `wired_*` actions.
+	var left_ev := InputEventKey.new()
+	left_ev.physical_keycode = KEY_A
+	var right_ev := InputEventKey.new()
+	right_ev.physical_keycode = KEY_D
+	var up_ev := InputEventKey.new()
+	up_ev.physical_keycode = KEY_W
+	var down_ev := InputEventKey.new()
+	down_ev.physical_keycode = KEY_S
+	var jump_ev := InputEventKey.new()
+	jump_ev.physical_keycode = KEY_SPACE
+	var dash_ev := InputEventKey.new()
+	dash_ev.physical_keycode = KEY_SHIFT
+	register_input_action(MOVE_LEFT, [left_ev])
+	register_input_action(MOVE_RIGHT, [right_ev])
+	register_input_action(MOVE_UP, [up_ev])
+	register_input_action(MOVE_DOWN, [down_ev])
+	register_input_action(JUMP, [jump_ev])
+	register_input_action(DASH_ACTION, [dash_ev])
+	if is_server():
+		register_action("move", _on_move)
+		register_action(DASH_ACTION, _on_dash)
 	# The scene carries both markers; set them again so a programmatically built
 	# body follows the same contract as the shipped scene.
 	set_meta(PLAYER_BODY_META, true)
@@ -46,12 +82,59 @@ func _wired_ready() -> void:
 		player.set_anchor_position_2d(body.position)
 
 
+## Client only: sample the package-defined movement keys and forward them to the
+## server. The base component already gates this hook by `player.is_local_player()`.
+func _wired_unhandled_input(event: InputEvent) -> void:
+	if not is_local_player():
+		return
+	# Only keyboard events change movement/dash state; reacting to every input
+	# event (mouse motion) would flood the action rate limit and drop updates.
+	if not (event is InputEventKey):
+		return
+	if event.echo:
+		return
+	var move := Vector2(
+		(float(is_action_pressed(MOVE_RIGHT)) - float(is_action_pressed(MOVE_LEFT))),
+		(float(is_action_pressed(MOVE_DOWN)) - float(is_action_pressed(MOVE_UP)))
+	).limit_length(1.0)
+	var jump := is_action_pressed(JUMP)
+	request_action("move", {"move": [move.x, move.y], "jump": jump})
+	if is_action_just_pressed(DASH_ACTION):
+		request_action(DASH_ACTION, {})
+
+
+## Server side: store the latest movement snapshot from the owning client.
+func _on_move(sender_peer: int, payload: Dictionary) -> void:
+	if not is_server() or player == null:
+		return
+	if sender_peer != player.peer_id:
+		return
+	var m = payload.get("move", [0.0, 0.0])
+	if m is Array and m.size() >= 2:
+		_move_input = Vector2(float(m[0]), float(m[1]))
+	_jump_input = bool(payload.get("jump", false))
+
+
+## Server side: apply a horizontal dash impulse to the authoritative body.
+func _on_dash(sender_peer: int, _payload: Dictionary) -> void:
+	if not is_server() or body == null or player == null:
+		return
+	if sender_peer != player.peer_id:
+		return
+	var dir := 1.0
+	if body.velocity.x < 0:
+		dir = -1.0
+	elif body.velocity.x == 0:
+		dir = 1.0
+	body.velocity.x = dir * _dash_impulse
+
+
 ## Server only (the component base gates this hook). Moves the body, publishes
 ## the anchor and pushes other player bodies it ran into.
 func _wired_physics_process(delta: float) -> void:
 	if body == null or player == null:
 		return
-	var input_x := _move_x(player.input.get("move", Vector2.ZERO))
+	var input_x := _move_x(_move_input)
 	if absf(input_x) > 0.01:
 		# Meaningful input owns the horizontal axis.
 		body.velocity.x = input_x * speed
@@ -61,7 +144,7 @@ func _wired_physics_process(delta: float) -> void:
 		# move this body.
 		body.velocity.x = move_toward(body.velocity.x, 0.0, friction * delta)
 	if body.is_on_floor():
-		if bool(player.input.get("jump", false)):
+		if _jump_input:
 			body.velocity.y = jump_velocity
 	else:
 		body.velocity.y += gravity * delta

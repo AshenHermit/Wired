@@ -41,6 +41,8 @@ const WiredGameSceneScript := preload("res://_wired/scripts/world/wired_game_sce
 var _server_port := 0
 var _state_dir := ""
 var _control_thread: Thread = null
+var _state_save_timer: Timer = null
+var _state_save_interval_ms := 30_000
 var _shutdown_in_progress := false
 var _authenticated_once := false
 var _auth_error_reported := false
@@ -78,6 +80,9 @@ var _pending_world_snapshot: Dictionary = {}
 ## different closure must not turn into an endless request/response loop: a
 ## fresh request is sent only when the local applied map actually changes.
 var _snapshot_request_signature := ""
+## Server side: revisions whose client acknowledgements have not released the
+## post-apply snapshot barrier yet.
+var _hot_reload_barriers: Dictionary = {}
 
 func _is_wired_game_scene(root: Node) -> bool:
 	return root != null and root is WiredGameSceneScript
@@ -88,6 +93,40 @@ func _world_viewport_of(root: Node) -> SubViewport:
 		return null
 	var viewport: Variant = root.get("world_viewport")
 	return viewport as SubViewport
+
+
+## Package main scenes are commonly authored as a wrapper (`CustomMain/Game`).
+## The multiplayer root must be the inner Game node, otherwise installing the
+## wrapper under Main/Game creates Main/Game/Game and invalidates replication
+## paths cached by MultiplayerSpawner and MultiplayerSynchronizer.
+func _normalize_game_scene_root(root: Node) -> Node:
+	var viewport := _world_viewport_of(root)
+	if viewport == null:
+		return root
+	var inner := root.get_node_or_null("Game")
+	if inner == null or not inner.is_ancestor_of(viewport):
+		return root
+	if not (inner is SubViewportContainer):
+		return root
+	for child: Node in root.get_children():
+		if child == inner:
+			continue
+		if inner.get_node_or_null(NodePath(str(child.name))) != null:
+			push_warning(
+				"WIRED_MAIN_SCENE_NORMALIZE_COLLISION name=%s" % child.name
+			)
+			return root
+	root.remove_child(inner)
+	inner.owner = null
+	for child: Node in root.get_children():
+		root.remove_child(child)
+		child.owner = null
+		inner.add_child(child)
+		child.owner = inner
+	inner.set_script(WiredGameSceneScript)
+	inner.set("world_viewport", viewport)
+	root.free()
+	return inner
 
 
 func _validate_exports() -> bool:
@@ -155,6 +194,8 @@ func _ready() -> void:
 	# mismatch. PlayersManager was connected earlier, so its own player exists
 	# by the time the snapshot is built.
 	net.peer_packages_ready.connect(_on_peer_packages_ready)
+	net.hot_reload_ready.connect(_on_hot_reload_ready)
+	net.package_revision_removed.connect(_on_package_revision_removed)
 	net.world_snapshot_requested.connect(_on_world_snapshot_requested)
 	net.world_snapshot_received.connect(_on_world_snapshot_received)
 	# The host waits for this before minting a ticket.
@@ -251,12 +292,42 @@ func _desired_game_scene() -> Dictionary:
 	}
 
 
+func _merge_game_scene_revision(new_root: Node, new_viewport: SubViewport) -> bool:
+	var stable_viewport := _world_viewport_of(_game_root)
+	if stable_viewport == null or stable_viewport.get_parent() != _game_root:
+		return false
+	# Keep the live Game/SubViewport nodes in the tree. Replacing either node
+	# invalidates MultiplayerSpawner/MultiplayerSynchronizer path caches.
+	for child: Node in _game_root.get_children():
+		if child != stable_viewport:
+			child.free()
+	for child: Node in new_root.get_children():
+		if child == new_viewport:
+			continue
+		new_root.remove_child(child)
+		child.owner = null
+		_game_root.add_child(child)
+	for child: Node in stable_viewport.get_children():
+		if child.name in _reserved_service_names:
+			continue
+		child.free()
+	for child: Node in new_viewport.get_children():
+		new_viewport.remove_child(child)
+		child.owner = null
+		stable_viewport.add_child(child)
+	new_root.free()
+	_bind_game_services(stable_viewport)
+	return true
+
+
 func _swap_game_scene(new_root: Node) -> bool:
 	var viewport := _world_viewport_of(new_root)
 	if viewport == null:
 		return false
 	if new_root == _game_root:
 		return true
+	if not _game_scene_key.is_empty() and new_root != _default_game_root:
+		return _merge_game_scene_revision(new_root, viewport)
 	_unbind_game_services()
 	var parent := _game_root.get_parent()
 	var index := _game_root.get_index()
@@ -264,6 +335,11 @@ func _swap_game_scene(new_root: Node) -> bool:
 	# Clear it for the move and restore the authored owner afterwards.
 	var new_root_owner := new_root.owner
 	new_root.owner = null
+	# The Game root is part of every MultiplayerSpawner/synchronizer path.
+	# Package scenes may use any authored name (for example `CustomMain`), but
+	# replacing that name would invalidate Godot's scene replication cache even
+	# when Players and their `Sync` nodes keep the same relative structure.
+	new_root.name = _game_root.name
 	if parent != null:
 		parent.remove_child(_game_root)
 		parent.add_child(new_root)
@@ -320,6 +396,7 @@ func _rebuild_game_scene_if_needed() -> void:
 		)
 		instance.free()
 		return
+	instance = _normalize_game_scene_root(instance)
 	if not _swap_game_scene(instance):
 		instance.free()
 		return
@@ -363,14 +440,14 @@ func _apply_registered_package(package_id: int, revision: int) -> void:
 			% [package_id, revision]
 		)
 		return
-	# Server: the running entities of the previous revision leave the tree and
-	# keep their state, so the new revision resumes them. Client: its copies are
-	# respawned by the server, so they are dropped without a record.
-	if dynamic_world != null:
-		if net.mode == "server":
-			dynamic_world.park_package(package_id)
-		else:
-			dynamic_world.drop_package(package_id)
+	# Client copies are still dropped before the authoritative snapshot. The
+	# server captures records while old nodes still exist and parks/restores them
+	# only at commit, after the new static layer is ready.
+	var prepared_dynamic: Dictionary = {}
+	if dynamic_world != null and net.mode == "server":
+		prepared_dynamic = dynamic_world.prepare_package_reload(package_id)
+		if not bool(prepared_dynamic.get("ok", false)):
+			return
 	var artifact_key := _packages.current_artifact_key(package_id)
 	var context := WiredPackageContext.new()
 	context.package_id = str(package_id)
@@ -382,9 +459,22 @@ func _apply_registered_package(package_id: int, revision: int) -> void:
 	# A package without `wired_package.gd` is valid: it just contributes no
 	# content. The old entries were already cleared above.
 	PackageEntryLoader.load_entry(context.package_id, revision, context, _registry)
+	if dynamic_world != null and net.mode != "server":
+		dynamic_world.drop_package(package_id)
+	var prepared_static: Dictionary = {}
+	if static_world != null:
+		prepared_static = static_world.prepare_rebuild()
+		if not bool(prepared_static.get("ok", false)):
+			static_world.discard_prepared(prepared_static)
+			return
 	_rebuild_game_scene_if_needed()
 	if static_world != null:
-		static_world.rebuild()
+		if not static_world.commit_prepared(prepared_static):
+			static_world.discard_prepared(prepared_static)
+			return
+	if dynamic_world != null and net.mode == "server":
+		if not dynamic_world.commit_package_reload(prepared_dynamic):
+			return
 	# Players already in the world keep running the previous revision's scripts
 	# unless their components are rebuilt. The root stays (and keeps the
 	# spawner's net id); only the components are replaced, with their state.
@@ -411,9 +501,30 @@ func _request_world_snapshot() -> void:
 ## gate opened. Deferred by one frame so the joining player's normal spawner
 ## packet is queued first; the receiver is idempotent anyway.
 func _on_peer_packages_ready(peer_id: int) -> void:
-	if net.mode != "server" or _shutdown_in_progress:
+	if net.mode != "server" or _shutdown_in_progress or not _hot_reload_barriers.is_empty():
 		return
 	_send_world_snapshot.call_deferred(peer_id)
+
+
+func _on_hot_reload_ready(package_id: int, revision: int) -> void:
+	if net.mode != "server" or _shutdown_in_progress:
+		return
+	var key := "%d:%d" % [package_id, revision]
+	_hot_reload_barriers.erase(key)
+	if not _hot_reload_barriers.is_empty():
+		return
+	_restore_dynamic_if_ready()
+	for peer_id: int in multiplayer.get_peers():
+		if net.is_peer_packages_ready(peer_id):
+			_send_world_snapshot(peer_id)
+
+
+func _on_package_revision_removed(package_id: int) -> void:
+	if net.mode != "server":
+		return
+	for key: String in _hot_reload_barriers.keys():
+		if key.begins_with("%d:" % package_id):
+			_hot_reload_barriers.erase(key)
 
 
 func _on_world_snapshot_requested(peer_id: int) -> void:
@@ -599,6 +710,9 @@ func _read_config() -> Dictionary:
 			"room": _arg_value(args, "--room", DEFAULT_ROOM),
 			"bind": _arg_value(args, "--bind", DEFAULT_BIND),
 			"state_dir": _arg_value(args, "--state-dir", ""),
+			"state_save_interval_ms": int(
+				_arg_value(args, "--state-save-interval-ms", "30000")
+			),
 		}
 	var cfg := {
 		"mode": "client",
@@ -637,10 +751,26 @@ func _run_server(cfg: Dictionary) -> void:
 		_fail("server start failed: %s" % error_string(err))
 		get_tree().quit(3)
 		return
+	_state_save_interval_ms = maxi(
+		1, int(cfg.get("state_save_interval_ms", _state_save_interval_ms))
+	)
+	_state_save_timer = Timer.new()
+	_state_save_timer.name = "StateSaveTimer"
+	_state_save_timer.wait_time = _state_save_interval_ms / 1000.0
+	_state_save_timer.one_shot = false
+	_state_save_timer.timeout.connect(_on_state_save_timer_timeout)
+	add_child(_state_save_timer)
+	_state_save_timer.start()
 	_start_control_listener()
 
 
-## Backend sends one line over stdin: `shutdown`. The same thread also notices
+func _on_state_save_timer_timeout() -> void:
+	if _shutdown_in_progress:
+		return
+	_save_state("periodic")
+
+
+## Backend sends one line over stdin: `shutdown`.  The same thread also notices
 ## EOF, which happens when the backend dies, so a killed backend cannot leave
 ## an orphaned Godot server behind.
 func _start_control_listener() -> void:
@@ -817,6 +947,8 @@ func _restore_dynamic_if_ready() -> void:
 		return
 	if _package_ops_busy or not _package_ops_queue.is_empty():
 		return
+	if not _hot_reload_barriers.is_empty():
+		return
 	if _room_packages_known:
 		var applied: Dictionary = (
 			_packages.applied_packages() if _packages != null else {}
@@ -827,7 +959,7 @@ func _restore_dynamic_if_ready() -> void:
 	var restored := dynamic_world.restore_pending()
 	# A peer that finished its package gate before the restore saw an empty
 	# world in its first snapshot. Resend it once the entities actually exist.
-	if restored > 0:
+	if restored > 0 and _hot_reload_barriers.is_empty():
 		for peer_id: int in multiplayer.get_peers():
 			if net.is_peer_packages_ready(peer_id):
 				_send_world_snapshot(peer_id)
@@ -837,6 +969,15 @@ func _restore_dynamic_if_ready() -> void:
 ## the manifest, verifies hashes and writes the files; only then is the
 ## revision announced to clients. File bytes never travel over the game socket.
 func _apply_package_revision(package_id: int, revision: int) -> void:
+	# Establish the barrier before downloading/applying the revision: the package
+	# callback parks live entities and may rebuild the world synchronously.
+	# Snapshot gating alone cannot stop the spawner packets emitted by that work.
+	for old_key: String in _hot_reload_barriers.keys():
+		if old_key.begins_with("%d:" % package_id):
+			_hot_reload_barriers.erase(old_key)
+	var pending_key := "%d:%d" % [package_id, revision]
+	_hot_reload_barriers[pending_key] = true
+	net.begin_hot_reload(package_id, revision)
 	print(
 		"WIRED_PACKAGES_SYNC_STARTED package=%d revision=%d"
 		% [package_id, revision]
@@ -847,6 +988,11 @@ func _apply_package_revision(package_id: int, revision: int) -> void:
 		# requested revision; the backend owns retries.
 		return
 	var applied := int(result.get("revision", revision))
+	if applied != revision:
+		_hot_reload_barriers.erase(pending_key)
+		pending_key = "%d:%d" % [package_id, applied]
+		_hot_reload_barriers[pending_key] = true
+		net.begin_hot_reload(package_id, applied)
 	net.set_package_revision(package_id, applied)
 
 
@@ -854,6 +1000,8 @@ func _request_shutdown(reason: String) -> void:
 	if _shutdown_in_progress:
 		return
 	_shutdown_in_progress = true
+	if _state_save_timer != null:
+		_state_save_timer.stop()
 	print("WIRED_SHUTDOWN_REQUESTED reason=%s" % reason)
 	_save_state(reason)
 	print("WIRED_SHUTDOWN_ACK")
@@ -1161,6 +1309,10 @@ func _apply_client_package(package_id: int, revision: int) -> void:
 		"WIRED_CLIENT_PACKAGES_SYNC_STARTED package=%d revision=%d"
 		% [package_id, revision]
 	)
+	# `sync_package` emits `package_applied` before it returns. The connected
+	# `_on_package_applied` callback is synchronous, so this continuation is the
+	# completion boundary: registry/static content and live player components
+	# have already been rebuilt before the acknowledgement below is sent.
 	var result: Dictionary = await _packages.sync_package(package_id, revision)
 	var ok := bool(result.get("ok", false))
 	var applied := int(result.get("revision", 0))

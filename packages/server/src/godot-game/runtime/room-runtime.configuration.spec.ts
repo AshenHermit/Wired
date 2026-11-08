@@ -16,6 +16,7 @@ const config: GodotRuntimeConfig = {
   ticketSecret: 'secret',
   ticketRateLimit: 10,
   ticketRateLimitWindowMs: 60_000,
+  stateSaveIntervalMs: 30_000,
   stateDir: './storage/rooms',
   publicWsBaseUrl: '',
   wsMaxClientsPerRoom: 32,
