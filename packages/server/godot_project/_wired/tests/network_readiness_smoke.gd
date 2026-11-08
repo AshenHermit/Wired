@@ -290,6 +290,20 @@ func _test_hot_reload_barrier() -> void:
 
 	net.begin_hot_reload(42, 12)
 	_check(released.back() == {"package_id": 42, "revision": 12}, "no authenticated peers must release immediately")
+
+	net._players[10] = {"player_id": 6, "ready": true, "packages_ready": true, "name": "lee"}
+	net._package_reports[10] = {}
+	var release_count_before_late_peer := released.size()
+	net.begin_hot_reload(42, 13)
+	net._players[11] = {"player_id": 7, "ready": true, "packages_ready": true, "name": "zoe"}
+	net._package_reports[11] = {}
+	net._add_hot_reload_peer(11)
+	net.sender_id = 10
+	net.cli_package_ready(JSON.stringify({"package_id": 42, "revision": 13, "ok": true}))
+	_check(net.is_hot_reload_pending(42, 13), "a peer admitted during a barrier must be pending")
+	net.sender_id = 11
+	net.cli_package_ready(JSON.stringify({"package_id": 42, "revision": 13, "ok": true}))
+	_check(released.size() == release_count_before_late_peer + 1, "the late peer report must release the barrier")
 	net.free()
 
 

@@ -159,6 +159,7 @@ func _ready() -> void:
 	# by the time the snapshot is built.
 	net.peer_packages_ready.connect(_on_peer_packages_ready)
 	net.hot_reload_ready.connect(_on_hot_reload_ready)
+	net.package_revision_removed.connect(_on_package_revision_removed)
 	net.world_snapshot_requested.connect(_on_world_snapshot_requested)
 	net.world_snapshot_received.connect(_on_world_snapshot_received)
 	# The host waits for this before minting a ticket.
@@ -435,6 +436,14 @@ func _on_hot_reload_ready(package_id: int, revision: int) -> void:
 	for peer_id: int in multiplayer.get_peers():
 		if net.is_peer_packages_ready(peer_id):
 			_send_world_snapshot(peer_id)
+
+
+func _on_package_revision_removed(package_id: int) -> void:
+	if net.mode != "server":
+		return
+	for key: String in _hot_reload_barriers.keys():
+		if key.begins_with("%d:" % package_id):
+			_hot_reload_barriers.erase(key)
 
 
 func _on_world_snapshot_requested(peer_id: int) -> void:
@@ -868,6 +877,9 @@ func _apply_package_revision(package_id: int, revision: int) -> void:
 		# requested revision; the backend owns retries.
 		return
 	var applied := int(result.get("revision", revision))
+	for old_key: String in _hot_reload_barriers.keys():
+		if old_key.begins_with("%d:" % package_id):
+			_hot_reload_barriers.erase(old_key)
 	var key := "%d:%d" % [package_id, applied]
 	_hot_reload_barriers[key] = true
 	net.set_package_revision(package_id, applied)

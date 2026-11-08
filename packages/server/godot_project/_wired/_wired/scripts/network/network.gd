@@ -38,6 +38,7 @@ signal world_snapshot_received(snapshot: Dictionary)
 signal peer_left(peer_id: int)
 # Server side: every active peer applied a newly announced revision.
 signal hot_reload_ready(package_id: int, revision: int)
+signal package_revision_removed(package_id: int)
 
 const PROTOCOL_VERSION := 1
 const AUTH_TIMEOUT_SEC := 5.0
@@ -256,6 +257,7 @@ func cli_hello(payload_json: String) -> void:
 		"name": str(payload.get("name", "player")),
 	}
 	_package_reports[peer_id] = {}
+	_add_hot_reload_peer(peer_id)
 	var auth := {
 		"protocol": PROTOCOL_VERSION,
 		"room": room_code,
@@ -467,6 +469,15 @@ func _check_hot_reload_ready(package_id: int) -> void:
 	hot_reload_ready.emit(package_id, revision)
 
 
+func _add_hot_reload_peer(peer_id: int) -> void:
+	for package_id: Variant in _hot_reload_pending.keys():
+		var entry: Dictionary = _hot_reload_pending[package_id]
+		var pending: Dictionary = entry.get("pending", {})
+		pending[peer_id] = true
+		entry["pending"] = pending
+		_hot_reload_pending[package_id] = entry
+
+
 func _remove_hot_reload_peer(peer_id: int) -> void:
 	for package_id: Variant in _hot_reload_pending.keys():
 		var entry: Dictionary = _hot_reload_pending[package_id]
@@ -486,12 +497,14 @@ func remove_package_revision(package_id: int) -> void:
 	if not _package_revisions.has(package_id):
 		return
 	_package_revisions.erase(package_id)
+	_hot_reload_pending.erase(package_id)
 	for peer_id in _package_reports:
 		_package_reports[peer_id].erase(package_id)
 	print("WIRED_PACKAGE_REVISION_REMOVED package=%d" % package_id)
 	_broadcast_event(
 		{KEY_TYPE: EVENT_PACKAGE_REMOVED, "package_id": package_id}
 	)
+	package_revision_removed.emit(package_id)
 
 
 func _send_package_revisions(peer_id: int) -> void:
