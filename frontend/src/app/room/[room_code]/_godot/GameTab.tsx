@@ -550,6 +550,12 @@ export function GameTab({ room }: { room: Room }) {
     if (frame) {
       window.requestAnimationFrame(() => frame.focus());
     }
+    // Whenever the browser window regains focus (e.g. after an Emit dialog
+    // closes), hand it back to the game frame so Godot receives the focus-in
+    // notification and requests a world snapshot instead of staying stale.
+    const onFocus = () => iframeRef.current?.focus();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, [phase, attempt]);
 
   const focusFrame = React.useCallback(() => {

@@ -87,6 +87,12 @@ func _wired_ready() -> void:
 func _wired_unhandled_input(event: InputEvent) -> void:
 	if not is_local_player():
 		return
+	# Only keyboard events change movement/dash state; reacting to every input
+	# event (mouse motion) would flood the action rate limit and drop updates.
+	if not (event is InputEventKey):
+		return
+	if event.echo:
+		return
 	var move := Vector2(
 		(float(is_action_pressed(MOVE_RIGHT)) - float(is_action_pressed(MOVE_LEFT))),
 		(float(is_action_pressed(MOVE_DOWN)) - float(is_action_pressed(MOVE_UP)))
