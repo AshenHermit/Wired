@@ -25,6 +25,7 @@ class StubPackages extends PackagesManager:
 
 func _initialize() -> void:
 	_test_swap_and_restore()
+	_test_wrapped_game_root_keeps_stable_path()
 	_test_invalid_root_keeps_current()
 	_test_missing_file_keeps_current()
 	_test_missing_viewport_keeps_current()
@@ -125,6 +126,42 @@ func _test_swap_and_restore() -> void:
 	_check(dw.get_parent() == default_viewport, "DynamicWorld must return to the default viewport")
 	_check(pm.get_parent() == default_viewport, "Players must return to the default viewport")
 
+	main.free()
+
+
+func _make_wrapped_package_scene() -> PackedScene:
+	var wrapper := Node.new()
+	wrapper.name = "CustomMain"
+	wrapper.set_script(WiredGameSceneScript)
+	var game := SubViewportContainer.new()
+	game.name = "Game"
+	wrapper.add_child(game)
+	game.owner = wrapper
+	var viewport := SubViewport.new()
+	viewport.name = "SubViewport"
+	game.add_child(viewport)
+	viewport.owner = wrapper
+	wrapper.set("world_viewport", viewport)
+	var ui_layer := CanvasLayer.new()
+	ui_layer.name = "UI"
+	wrapper.add_child(ui_layer)
+	ui_layer.owner = wrapper
+	var packed := PackedScene.new()
+	packed.pack(wrapper)
+	wrapper.free()
+	return packed
+
+
+func _test_wrapped_game_root_keeps_stable_path() -> void:
+	var main = _make_main()
+	var default_root: Node = main.default_game_root
+	_register_main(main, "1", "game/wrapped.tscn", _make_wrapped_package_scene())
+	main.call("_rebuild_game_scene_if_needed")
+	_check(main._game_root.name == default_root.name, "wrapped root must use stable Game name")
+	_check(main._game_root.get_node_or_null("SubViewport") != null, "inner Game must become runtime root")
+	_check(main.get_node_or_null("Game/Game") == null, "wrapped package must not create Main/Game/Game")
+	_check(main.get_node_or_null("Game/SubViewport") != null, "world viewport must stay at stable path")
+	_check(main._game_root.get_node_or_null("UI") != null, "wrapper UI must be preserved")
 	main.free()
 
 

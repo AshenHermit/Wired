@@ -93,6 +93,40 @@ func _world_viewport_of(root: Node) -> SubViewport:
 	return viewport as SubViewport
 
 
+## Package main scenes are commonly authored as a wrapper (`CustomMain/Game`).
+## The multiplayer root must be the inner Game node, otherwise installing the
+## wrapper under Main/Game creates Main/Game/Game and invalidates replication
+## paths cached by MultiplayerSpawner and MultiplayerSynchronizer.
+func _normalize_game_scene_root(root: Node) -> Node:
+	var viewport := _world_viewport_of(root)
+	if viewport == null:
+		return root
+	var inner := root.get_node_or_null("Game")
+	if inner == null or not inner.is_ancestor_of(viewport):
+		return root
+	if not (inner is SubViewportContainer):
+		return root
+	for child: Node in root.get_children():
+		if child == inner:
+			continue
+		if inner.get_node_or_null(NodePath(str(child.name))) != null:
+			push_warning(
+				"WIRED_MAIN_SCENE_NORMALIZE_COLLISION name=%s" % child.name
+			)
+			return root
+	root.remove_child(inner)
+	inner.owner = null
+	for child: Node in root.get_children():
+		root.remove_child(child)
+		child.owner = null
+		inner.add_child(child)
+		child.owner = inner
+	inner.set_script(WiredGameSceneScript)
+	inner.set("world_viewport", viewport)
+	root.free()
+	return inner
+
+
 func _validate_exports() -> bool:
 	var missing: PackedStringArray = []
 	if default_game_root == null:
@@ -330,6 +364,7 @@ func _rebuild_game_scene_if_needed() -> void:
 		)
 		instance.free()
 		return
+	instance = _normalize_game_scene_root(instance)
 	if not _swap_game_scene(instance):
 		instance.free()
 		return
