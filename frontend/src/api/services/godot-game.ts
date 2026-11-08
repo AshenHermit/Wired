@@ -37,8 +37,21 @@ export function getGameRoomStatus(roomId: number) {
  * Published package revisions of the room and how far the runtime and its
  * clients have applied them. Used by the editor to catch up after Emit.
  */
+export function stopRoomRuntime(roomId: number) {
+  return apiClient.post(`rooms/${roomId}/game/stop`);
+}
+
 export function getRoomPackages(roomId: number) {
   return apiClient.get<RoomPackagesStatus>(
     `rooms/${roomId}/game/packages`
   );
+}
+
+export type RoomStateCleanupScope = "self" | "all-players" | "dynamic";
+
+export function cleanupRoomState(
+  roomId: number,
+  scope: RoomStateCleanupScope,
+) {
+  return apiClient.post(`rooms/${roomId}/state/cleanup`, { scope });
 }

@@ -10,6 +10,8 @@ import type {
   UpdateRoomAccessPayload,
 } from "@wired-io/shared";
 import { updateRoomAccess } from "@/api/services/rooms";
+import { cleanupRoomState, stopRoomRuntime } from "@/api/services/godot-game";
+import { useUserStore } from "@/store/user-store";
 import { UserPicker } from "@/components/access/UserPicker";
 import {
   Dialog,
@@ -123,6 +125,13 @@ export function RoomAccessSettingsDialog({
   const [readUserIds, setReadUserIds] = React.useState<number[]>([]);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState(false);
+  const [confirmScope, setConfirmScope] =
+    React.useState<"self" | "all-players" | "dynamic" | "stop-runtime" | null>(
+      null,
+    );
+  const [cleaning, setCleaning] = React.useState(false);
+  const userId = useUserStore((state) => state.id);
+  const isOwner = !!room.author && room.author.id === userId;
 
   // Re-seed local state from the room whenever the dialog is reopened, so a
   // save made elsewhere (or a stale room object) never leaves stale defaults.
@@ -179,7 +188,26 @@ export function RoomAccessSettingsDialog({
     }
   };
 
+  const runCleanup = async () => {
+    if (!confirmScope) return;
+    setCleaning(true);
+    try {
+      if (confirmScope === "stop-runtime") {
+        await stopRoomRuntime(room.id);
+      } else {
+        await cleanupRoomState(room.id, confirmScope);
+      }
+      setConfirmScope(null);
+    } catch (failure) {
+      console.error(failure);
+      setError(true);
+    } finally {
+      setCleaning(false);
+    }
+  };
+
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent showCloseButton={!saving}>
         <DialogHeader>
@@ -223,6 +251,52 @@ export function RoomAccessSettingsDialog({
           </div>
         )}
 
+        <section className="space-y-2 rounded-lg border border-border p-3">
+          <h3 className="text-sm font-medium">Очистка данных state.json</h3>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={saving || cleaning}
+              onClick={() => setConfirmScope("self")}
+            >
+              Очистить мои данные
+            </Button>
+            {isOwner && (
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={saving || cleaning}
+                  onClick={() => setConfirmScope("all-players")}
+                >
+                  Очистить данные всех пользователей
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={saving || cleaning}
+                  onClick={() => setConfirmScope("dynamic")}
+                >
+                  Очистить данные динамических объектов
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive"
+                  disabled={saving || cleaning}
+                  onClick={() => setConfirmScope("stop-runtime")}
+                >
+                  Остановить серверный runtime
+                </Button>
+              </>
+            )}
+          </div>
+        </section>
+
         <DialogFooter>
           <Button
             type="button"
@@ -241,5 +315,25 @@ export function RoomAccessSettingsDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <Dialog open={!!confirmScope} onOpenChange={(v) => !v && setConfirmScope(null)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Подтвердите действие</DialogTitle>
+          <DialogDescription>
+            Вы уверены, что хотите выполнить очистку данных?
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setConfirmScope(null)} disabled={cleaning}>
+            Отмена
+          </Button>
+          <Button onClick={() => void runCleanup()} disabled={cleaning}>
+            {cleaning ? <Loader2Icon className="size-4 animate-spin" /> : null}
+            Подтвердить
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

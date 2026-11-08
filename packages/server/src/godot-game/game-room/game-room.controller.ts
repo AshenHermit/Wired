@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  HttpCode,
   Param,
   ParseIntPipe,
   Post,
@@ -49,5 +50,14 @@ export class GameRoomController {
     @Req() req: AuthenticatedRequest,
   ) {
     return this.gameRooms.getPackages(req.user, roomId);
+  }
+
+  @Post('stop')
+  @HttpCode(204)
+  async stop(
+    @Param('roomId', ParseIntPipe) roomId: number,
+    @Req() req: AuthenticatedRequest,
+  ): Promise<void> {
+    await this.gameRooms.stopRuntime(req.user, roomId);
   }
 }

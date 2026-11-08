@@ -145,6 +145,11 @@ export class GameRoomService {
     };
   }
 
+  async stopRuntime(user: User, roomId: number): Promise<void> {
+    await this.assertCanPlay(user, roomId);
+    await this.runtime.stopRoom(String(roomId), 'requested');
+  }
+
   private async waitForInitialPackages(roomId: string): Promise<void> {
     const deadline = Date.now() + PACKAGE_READY_TIMEOUT_MS;
     for (;;) {
