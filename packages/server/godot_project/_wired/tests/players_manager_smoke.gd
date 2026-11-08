@@ -549,6 +549,12 @@ func _test_hot_reload_rebuilds_live_components() -> void:
 		_check(false, "the hot-reload test needs a live component")
 		return
 	var previous: Variant = player.components[0]
+	var previous_sync: Node = previous.get_node_or_null("Sync")
+	_check(
+		previous_sync != null,
+		"the hot-reload test needs a synchronizer on the replicated component",
+	)
+	var previous_sync_id := previous_sync.get_instance_id() if previous_sync != null else 0
 	previous.body.position = Vector2(11, 12)
 	var player_id := player.get_instance_id()
 
@@ -573,8 +579,13 @@ func _test_hot_reload_rebuilds_live_components() -> void:
 		% player.components.size(),
 	)
 	_check(
-		previous.is_queued_for_deletion(),
-		"the previous component must be released, not left running",
+		not is_instance_valid(previous),
+		"the previous component must be freed before the replacement enters the tree",
+	)
+	var rebuilt_sync := player.components[0].get_node_or_null("Sync")
+	_check(
+		rebuilt_sync != null and rebuilt_sync.get_instance_id() == previous_sync_id,
+		"a hot reload must preserve the synchronizer instance and replication identity",
 	)
 	var positions := {}
 	for component: WiredPlayerComponent in player.components:

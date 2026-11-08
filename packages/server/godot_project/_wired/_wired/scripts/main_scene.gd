@@ -290,12 +290,42 @@ func _desired_game_scene() -> Dictionary:
 	}
 
 
+func _merge_game_scene_revision(new_root: Node, new_viewport: SubViewport) -> bool:
+	var stable_viewport := _world_viewport_of(_game_root)
+	if stable_viewport == null or stable_viewport.get_parent() != _game_root:
+		return false
+	# Keep the live Game/SubViewport nodes in the tree. Replacing either node
+	# invalidates MultiplayerSpawner/MultiplayerSynchronizer path caches.
+	for child: Node in _game_root.get_children():
+		if child != stable_viewport:
+			child.free()
+	for child: Node in new_root.get_children():
+		if child == new_viewport:
+			continue
+		new_root.remove_child(child)
+		child.owner = null
+		_game_root.add_child(child)
+	for child: Node in stable_viewport.get_children():
+		if child.name in _reserved_service_names:
+			continue
+		child.free()
+	for child: Node in new_viewport.get_children():
+		new_viewport.remove_child(child)
+		child.owner = null
+		stable_viewport.add_child(child)
+	new_root.free()
+	_bind_game_services(stable_viewport)
+	return true
+
+
 func _swap_game_scene(new_root: Node) -> bool:
 	var viewport := _world_viewport_of(new_root)
 	if viewport == null:
 		return false
 	if new_root == _game_root:
 		return true
+	if not _game_scene_key.is_empty() and new_root != _default_game_root:
+		return _merge_game_scene_revision(new_root, viewport)
 	_unbind_game_services()
 	var parent := _game_root.get_parent()
 	var index := _game_root.get_index()
@@ -408,14 +438,14 @@ func _apply_registered_package(package_id: int, revision: int) -> void:
 			% [package_id, revision]
 		)
 		return
-	# Server: the running entities of the previous revision leave the tree and
-	# keep their state, so the new revision resumes them. Client: its copies are
-	# respawned by the server, so they are dropped without a record.
-	if dynamic_world != null:
-		if net.mode == "server":
-			dynamic_world.park_package(package_id)
-		else:
-			dynamic_world.drop_package(package_id)
+	# Client copies are still dropped before the authoritative snapshot. The
+	# server captures records while old nodes still exist and parks/restores them
+	# only at commit, after the new static layer is ready.
+	var prepared_dynamic: Dictionary = {}
+	if dynamic_world != null and net.mode == "server":
+		prepared_dynamic = dynamic_world.prepare_package_reload(package_id)
+		if not bool(prepared_dynamic.get("ok", false)):
+			return
 	var artifact_key := _packages.current_artifact_key(package_id)
 	var context := WiredPackageContext.new()
 	context.package_id = str(package_id)
@@ -427,9 +457,22 @@ func _apply_registered_package(package_id: int, revision: int) -> void:
 	# A package without `wired_package.gd` is valid: it just contributes no
 	# content. The old entries were already cleared above.
 	PackageEntryLoader.load_entry(context.package_id, revision, context, _registry)
+	if dynamic_world != null and net.mode != "server":
+		dynamic_world.drop_package(package_id)
+	var prepared_static: Dictionary = {}
+	if static_world != null:
+		prepared_static = static_world.prepare_rebuild()
+		if not bool(prepared_static.get("ok", false)):
+			static_world.discard_prepared(prepared_static)
+			return
 	_rebuild_game_scene_if_needed()
 	if static_world != null:
-		static_world.rebuild()
+		if not static_world.commit_prepared(prepared_static):
+			static_world.discard_prepared(prepared_static)
+			return
+	if dynamic_world != null and net.mode == "server":
+		if not dynamic_world.commit_package_reload(prepared_dynamic):
+			return
 	# Players already in the world keep running the previous revision's scripts
 	# unless their components are rebuilt. The root stays (and keeps the
 	# spawner's net id); only the components are replaced, with their state.

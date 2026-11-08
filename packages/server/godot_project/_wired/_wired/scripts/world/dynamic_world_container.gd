@@ -271,6 +271,46 @@ func drop_package(package_id: int) -> int:
 	return dropped
 
 
+## Server only. Stages a package replacement while the current entities remain
+## active. The prepared records are restored only during commit.
+func prepare_package_reload(package_id: int) -> Dictionary:
+	if not _server_only("prepare_package_reload"):
+		return {"ok": false}
+	var records: Array[Dictionary] = []
+	for id: Variant in _entities.keys():
+		var entity: Variant = _entities[id]
+		if not is_instance_valid(entity) or _package_of(str(entity.type_id)) != package_id:
+			continue
+		records.append(_parked_record({
+			WiredProtocol.KEY_ENTITY_ID: int(id),
+			WiredProtocol.KEY_TYPE_ID: str(entity.type_id),
+			WiredProtocol.KEY_OWNER_PLAYER_ID: int(entity.owner_player_id),
+			WiredProtocol.KEY_STATE: entity._wired_save_state(),
+			"persistent": bool(entity.persistent),
+		}))
+	return {"ok": true, "records": records}
+
+
+## Commits a staged package replacement, preserving the saved entity ids.
+func commit_package_reload(prepared: Dictionary) -> bool:
+	if not bool(prepared.get("ok", false)) or not _is_server():
+		return false
+	var records: Variant = prepared.get("records", [])
+	if typeof(records) != TYPE_ARRAY:
+		return false
+	var package_ids: Dictionary = {}
+	for record: Dictionary in records:
+		package_ids[_package_of(str(record.get(WiredProtocol.KEY_TYPE_ID, "")))] = true
+	for package_id: Variant in package_ids:
+		park_package(int(package_id))
+	var restored := 0
+	for record: Dictionary in records:
+		restored += _restore_records([record])
+	if restored != records.size():
+		return false
+	return true
+
+
 ## Server only. Restores every parked record whose package is registered again,
 ## and keeps the records that still wait. Returns how many entities it spawned.
 func restore_pending() -> int:

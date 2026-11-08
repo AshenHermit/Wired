@@ -44,6 +44,7 @@ func _initialize() -> void:
 
 
 func _run() -> void:
+	_test_staged_package_reload_keeps_entity_until_commit()
 	_test_setup_creates_a_spawner_when_missing()
 	_test_setup_uses_the_passed_spawner_without_duplicating_it()
 	_test_spawn_entity_instantiates_and_tracks_the_entity()
@@ -995,6 +996,37 @@ func _test_server_only_ops_refuse_to_run_on_a_client() -> void:
 		"seed_pending must not replace the records on a client, got %s"
 		% [world.pending_records()],
 	)
+
+
+func _test_staged_package_reload_keeps_entity_until_commit() -> void:
+	var world := _make_world()
+	var registry := _make_stamp_registry()
+	world.setup(registry, null)
+	var entity := world.spawn_entity(STAMP_CRATE_TYPE, {"position": Vector2(4, 6)})
+	_check(entity != null, "staged reload test needs a live entity")
+	if entity == null:
+		return
+	var entity_id := int(entity.entity_id)
+	var prepared: Dictionary = world.prepare_package_reload(STAMP_PACKAGE_NUMBER)
+	_check(
+		prepared.get("ok", false),
+		"dynamic reload must prepare a replacement",
+	)
+	_check(
+		_live_entities(world).has(entity),
+		"old dynamic entity must stay live before commit",
+	)
+	_check(
+		world.commit_package_reload(prepared),
+		"dynamic reload must commit prepared replacement",
+	)
+	var live := _live_entities(world)
+	_check(live.size() == 1, "commit must leave one live dynamic entity")
+	if live.size() == 1:
+		_check(
+			int((live[0] as WiredDynamicEntity).entity_id) == entity_id,
+			"dynamic reload must preserve entity id",
+		)
 
 
 # --- helpers --------------------------------------------------------------

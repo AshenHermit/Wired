@@ -382,14 +382,33 @@ func _rebuild_components(player: WiredPlayer) -> void:
 	# Park first: a component whose package was removed is not rebuilt, so its
 	# last state must survive on the player until the package returns.
 	player.park_component_states()
+	# SceneReplicationInterface identifies synchronizers by their registered
+	# instance/net id, not only by their path. Preserve each old Sync while the
+	# component is rebuilt, otherwise the replacement gets a new identity and
+	# peers continue sending replication packets for the freed synchronizer.
+	var synchronizers: Dictionary = {}
 	for component: WiredPlayerComponent in player.components:
-		if is_instance_valid(component):
-			# Detach first so the component stops processing this frame and a
-			# same-named replacement cannot collide with the pending free.
-			player.remove_child(component)
-			component.queue_free()
+		if not is_instance_valid(component):
+			continue
+		var sync := component.get_node_or_null(WiredPlayerComponent.SYNC_NAME)
+		if sync is MultiplayerSynchronizer:
+			component.remove_child(sync)
+			synchronizers[component.state_key()] = sync
+		# Detach and free synchronously before creating a same-named replacement.
+		component.get_parent().remove_child(component)
+		component.free()
 	player.components.clear()
 	_add_registered_components(player, _registry)
+	for component: WiredPlayerComponent in player.components:
+		var old_sync: Variant = synchronizers.get(component.state_key(), null)
+		if not is_instance_valid(old_sync):
+			continue
+		var new_sync := component.get_node_or_null(WiredPlayerComponent.SYNC_NAME)
+		if new_sync is MultiplayerSynchronizer:
+			old_sync.replication_config = new_sync.replication_config
+			old_sync.set_multiplayer_authority(new_sync.get_multiplayer_authority())
+			new_sync.free()
+		component.add_child(old_sync)
 
 
 ## Server only. Spawns through the scene's `MultiplayerSpawner`, which calls

@@ -334,10 +334,13 @@ func _test_revision_rebuild() -> void:
 	main.call("_rebuild_game_scene_if_needed")
 	var second: Node = main._game_root
 	_check(
-		second != first and second.name == first.name,
-		"a new revision must rebuild the main scene without changing its root name",
+		second == first,
+		"a new revision must preserve the stable Game root identity",
 	)
-	_check(first.get_parent() == null, "the previous revision root must leave Main")
+	_check(
+		second.get("world_viewport") == first.get("world_viewport"),
+		"a new revision must preserve the stable world viewport identity",
+	)
 	main.free()
 
 

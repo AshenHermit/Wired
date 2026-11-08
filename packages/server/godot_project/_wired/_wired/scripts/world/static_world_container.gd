@@ -38,9 +38,18 @@ func setup(registry: WiredPackageRegistry) -> void:
 ## scene that fails to load is skipped: one broken package must not empty the
 ## rest of the world.
 func rebuild() -> void:
-	clear()
+	var prepared := prepare_rebuild()
+	if bool(prepared.get("ok", false)):
+		commit_prepared(prepared)
+
+
+## Instantiates the current registry into an unattached replacement set. The
+## active children remain in the tree and continue participating in physics
+## until `commit_prepared()` is called.
+func prepare_rebuild() -> Dictionary:
+	var replacements: Array[Node] = []
 	if _registry == null:
-		return
+		return {"ok": true, "replacements": replacements}
 	for descriptor: Dictionary in _registry.get_static_scenes():
 		var package_id := str(descriptor.get("package_id", ""))
 		var path := str(descriptor.get("path", ""))
@@ -57,7 +66,42 @@ func rebuild() -> void:
 			continue
 		instance.set_meta(META_PACKAGE_ID, package_id)
 		instance.set_meta(META_REGISTERED, true)
+		replacements.append(instance)
+	return {"ok": true, "replacements": replacements}
+
+
+## Adds the prepared roots before removing the active roots, so there is no
+## empty physics window during a package reload.
+func commit_prepared(prepared: Dictionary) -> bool:
+	if not bool(prepared.get("ok", false)):
+		return false
+	var replacements: Variant = prepared.get("replacements", [])
+	if typeof(replacements) != TYPE_ARRAY:
+		return false
+	for instance: Node in replacements:
+		if not is_instance_valid(instance) or instance.get_parent() != null:
+			return false
+	var previous: Array[Node] = []
+	for child: Node in get_children():
+		if bool(child.get_meta(META_REGISTERED, false)):
+			previous.append(child)
+	for instance: Node in replacements:
 		add_child(instance)
+	for child: Node in previous:
+		if is_instance_valid(child):
+			remove_child(child)
+			child.free()
+	return true
+
+
+## Releases a prepared set when the new revision cannot be committed.
+func discard_prepared(prepared: Dictionary) -> void:
+	var replacements: Variant = prepared.get("replacements", [])
+	if typeof(replacements) != TYPE_ARRAY:
+		return
+	for instance: Node in replacements:
+		if is_instance_valid(instance) and instance.get_parent() == null:
+			instance.free()
 
 
 ## Removes only the children created by `rebuild()`. Nodes authored directly in

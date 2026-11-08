@@ -33,6 +33,7 @@ func _initialize() -> void:
 
 func _run() -> void:
 	_test_rebuild_instantiates_registered_static_scenes()
+	_test_staged_rebuild_keeps_old_world_until_commit()
 	_test_rebuild_does_not_duplicate_scenes()
 	_test_clear_removes_only_registered_children()
 	_test_rebuild_removes_scenes_of_a_forgotten_package()
@@ -67,6 +68,30 @@ func _test_rebuild_instantiates_registered_static_scenes() -> void:
 		"the first spawn marker must be at (48, 96), got %s"
 		% world.get_spawn_position_2d(0),
 	)
+
+
+func _test_staged_rebuild_keeps_old_world_until_commit() -> void:
+	var world := _make_world(_make_registry())
+	world.rebuild()
+	var old_instance := world.get_child(0)
+	var prepared: Dictionary = world.prepare_rebuild()
+	_check(
+		prepared.get("ok", false),
+		"staged rebuild must prepare a replacement set",
+	)
+	_check(
+		world.get_child(0) == old_instance,
+		"staged rebuild must keep the old world active before commit",
+	)
+	_check(
+		world.commit_prepared(prepared),
+		"staged rebuild must commit a prepared replacement",
+	)
+	_check(
+		world.get_child_count() == 1 and world.get_child(0) != old_instance,
+		"commit must replace the old world without duplication",
+	)
+	world.free()
 
 
 func _test_rebuild_does_not_duplicate_scenes() -> void:
