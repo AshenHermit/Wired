@@ -127,6 +127,18 @@ export class RoomRuntimeService
     return this.registry.get(roomId)?.sendRoomPackages(packageIds) ?? false;
   }
 
+  /**
+   * Asks a running runtime to drop one account from the live world and from its
+   * saved anchor so the next state.json save does not restore it. Returns false
+   * when the room is not running or not accepting commands.
+   */
+  dropAccount(roomId: string, accountId: number): boolean {
+    if (!Number.isInteger(accountId) || accountId <= 0) {
+      return false;
+    }
+    return this.registry.get(roomId)?.sendCommand(`drop-account ${accountId}`) ?? false;
+  }
+
   async stopRoom(roomId: string, reason = 'requested'): Promise<void> {
     const session = this.registry.get(roomId);
     if (!session) {

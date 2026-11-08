@@ -54,6 +54,7 @@ import { RuntimeProcessFactory } from './runtime/room-runtime.types';
   ],
   exports: [
     RoomRuntimeService,
+    GameRoomService,
     GameTicketService,
     PackageSyncService,
     PACKAGE_REVISION_DISPATCHER,

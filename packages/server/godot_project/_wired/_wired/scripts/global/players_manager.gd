@@ -523,6 +523,19 @@ func save_state() -> Dictionary:
 	return {WiredProtocol.KEY_PLAYERS: records}
 
 
+## Drops one account from the live world and from the saved anchor so the next
+## state.json save does not restore it. Used to wipe a player's data while the
+## room runtime is running.
+func drop_account(account_id: int) -> void:
+	var player := _active_player_for_account(account_id)
+	if player != null:
+		# Mark it non-persistent so despawn_player() does not write it back
+		# into _saved_states; the node is removed from the tree either way.
+		player.account_id = 0
+		despawn_player(player.peer_id)
+	_saved_states.erase(account_id)
+
+
 ## Restores the players found in `state.json`. Already spawned players receive
 ## the state immediately; the rest is applied when that `player_id` spawns.
 func load_state(state: Dictionary) -> void:

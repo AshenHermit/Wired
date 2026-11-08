@@ -308,7 +308,7 @@
       "emitPublished": "Опубликована ревизия {revision}: {uploaded} файл(ов)."
     },
     "errors": {
-      "notRoomMember": "������ ������ ������� ����� ������ � ����� � ���������.",
+      "notRoomMember": "Only the room author and its contributors can change its packages.",
       "loginRequired": "Войдите в аккаунт, чтобы создавать пакеты.",
       "nameRequired": "Укажите имя пакета",
       "slugRequired": "Укажите слаг пакета",

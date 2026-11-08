@@ -15,6 +15,7 @@ import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { ForbiddenException } from '@nestjs/common';
 import { Room } from 'src/database/entities/room.entity';
 import { RoomsService } from './rooms.service';
+import { GameRoomService } from 'src/godot-game/game-room/game-room.service';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import config from 'src/config/config';
@@ -27,7 +28,10 @@ import { AuthenticatedRequest, SilentAuthRequest } from 'src/auth/jwt.strategy';
 @ApiTags('rooms')
 @Controller('rooms')
 export class RoomsController {
-  constructor(private readonly roomsService: RoomsService) {}
+  constructor(
+    private readonly roomsService: RoomsService,
+    private readonly gameRooms: GameRoomService,
+  ) {}
 
   @SilentAuth()
   @ApiOkResponse({ type: [Room] })
@@ -101,6 +105,9 @@ export class RoomsController {
     const scope = body?.scope;
     if (scope !== 'self' && !isOwner) {
       throw new ForbiddenException('Only room author can clear all data');
+    }
+    if (scope === 'self') {
+      this.gameRooms.dropSelfState(req.user, roomId);
     }
     const stateDir = config().godotRuntime.stateDir;
     const file = join(stateDir, String(roomId), 'state.json');

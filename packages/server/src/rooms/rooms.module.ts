@@ -6,12 +6,14 @@ import { RoomsService } from './rooms.service';
 import { RoomsController } from './rooms.controller';
 import { UsersService } from 'src/users/users.service';
 import { ScriptingPackagesModule } from 'src/scripting-packages/scripting-packages.module';
+import { GodotGameModule } from 'src/godot-game/godot-game.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Room, User]),
     // Cycle: ScriptingPackagesModule → GodotGameModule → RoomsModule.
     forwardRef(() => ScriptingPackagesModule),
+    forwardRef(() => GodotGameModule),
   ],
   providers: [RoomsService, UsersService],
   controllers: [RoomsController],
