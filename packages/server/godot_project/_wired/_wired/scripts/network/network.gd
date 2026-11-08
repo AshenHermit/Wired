@@ -36,6 +36,8 @@ signal world_snapshot_requested(peer_id: int)
 signal world_snapshot_received(snapshot: Dictionary)
 # Server side: an authenticated peer disconnected and left the game.
 signal peer_left(peer_id: int)
+# Server side: every active peer applied a newly announced revision.
+signal hot_reload_ready(package_id: int, revision: int)
 
 const PROTOCOL_VERSION := 1
 const AUTH_TIMEOUT_SEC := 5.0
@@ -81,6 +83,8 @@ var _used_nonces: Dictionary = {}
 var _package_revisions: Dictionary = {}
 # server: peer -> { package_id: {revision, state} }
 var _package_reports: Dictionary = {}
+# server: package id -> {revision: int, pending: {peer_id: true}}
+var _hot_reload_pending: Dictionary = {}
 # Web only: keep the JS callback and bridge alive for the life of the game.
 var _web_bridge: Object = null
 var _visibility_callback: Variant = null
@@ -192,6 +196,8 @@ func _on_peer_connected(peer_id: int) -> void:
 
 
 func _on_peer_disconnected(peer_id: int) -> void:
+	if mode == "server":
+		_remove_hot_reload_peer(peer_id)
 	# The transport callback is only connected by `start_server`, but keep the
 	# server-only contract explicit: clients never own player lifecycle state.
 	if mode != "server":
@@ -418,7 +424,7 @@ func request_world_snapshot() -> void:
 func set_package_revision(package_id: int, revision: int) -> void:
 	if mode != "server" or package_id <= 0 or revision <= 0:
 		return
-	_package_revisions[package_id] = revision
+	begin_hot_reload(package_id, revision)
 	print(
 		"WIRED_PACKAGE_REVISION_ANNOUNCED package=%d revision=%d players=%d"
 		% [package_id, revision, _players.size()]
@@ -426,6 +432,49 @@ func set_package_revision(package_id: int, revision: int) -> void:
 	_broadcast_event(
 		{KEY_TYPE: EVENT_PACKAGE_REVISION, "package_id": package_id, "revision": revision}
 	)
+
+
+## Starts the independent barrier used by revisions applied after clients joined.
+## Every currently authenticated peer must report this exact revision.
+func begin_hot_reload(package_id: int, revision: int) -> void:
+	if mode != "server" or package_id <= 0 or revision <= 0:
+		return
+	_package_revisions[package_id] = revision
+	var pending: Dictionary = {}
+	for peer_id: Variant in _players.keys():
+		pending[int(peer_id)] = true
+	_hot_reload_pending[package_id] = {"revision": revision, "pending": pending}
+	_check_hot_reload_ready(package_id)
+
+
+func is_hot_reload_pending(package_id: int, revision: int = 0) -> bool:
+	var entry: Variant = _hot_reload_pending.get(package_id, null)
+	if typeof(entry) != TYPE_DICTIONARY:
+		return false
+	return revision <= 0 or int(entry.get("revision", 0)) == revision
+
+
+func _check_hot_reload_ready(package_id: int) -> void:
+	var entry: Variant = _hot_reload_pending.get(package_id, null)
+	if typeof(entry) != TYPE_DICTIONARY:
+		return
+	var pending: Dictionary = entry.get("pending", {})
+	if not pending.is_empty():
+		return
+	var revision := int(entry.get("revision", 0))
+	_hot_reload_pending.erase(package_id)
+	print("WIRED_HOT_RELOAD_READY package=%d revision=%d" % [package_id, revision])
+	hot_reload_ready.emit(package_id, revision)
+
+
+func _remove_hot_reload_peer(peer_id: int) -> void:
+	for package_id: Variant in _hot_reload_pending.keys():
+		var entry: Dictionary = _hot_reload_pending[package_id]
+		var pending: Dictionary = entry.get("pending", {})
+		pending.erase(peer_id)
+		entry["pending"] = pending
+		_hot_reload_pending[package_id] = entry
+		_check_hot_reload_ready(int(package_id))
 
 
 ## Drops a package from the announced set and tells every client to unload it.
@@ -499,6 +548,15 @@ func cli_package_ready(payload_json: String) -> void:
 		"revision": revision,
 		"state": "ready" if ok else "failed",
 	}
+	var barrier: Variant = _hot_reload_pending.get(package_id, null)
+	if typeof(barrier) == TYPE_DICTIONARY:
+		var barrier_revision := int(barrier.get("revision", 0))
+		if revision == barrier_revision and ok:
+			var pending: Dictionary = barrier.get("pending", {})
+			pending.erase(peer_id)
+			barrier["pending"] = pending
+			_hot_reload_pending[package_id] = barrier
+			_check_hot_reload_ready(package_id)
 	if ok:
 		print(
 			"WIRED_CLIENT_PACKAGES_READY peer=%d package=%d revision=%d"
