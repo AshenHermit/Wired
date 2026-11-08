@@ -117,18 +117,19 @@ export function RoomWorkspace({
           />
         )}
         <TabsContents
-          className="w-full !h-full relative"
+          className="w-screen !h-full relative"
+          childClass="w-screen"
           motionDivProps={{
             style: { justifyItems: "stretch", height: "100%" },
           }}
         >
-          <TabsContent value="editor" className="w-full !h-full">
+          <TabsContent value="editor" className="w-screen !h-full">
             <GodotEditor
               roomId={room.id}
               afterStart={packages.afterEditorStart}
             />
           </TabsContent>
-          <TabsContent value="packages" className="w-full !h-full">
+          <TabsContent value="packages" className="w-screen !h-full">
             <PackagesTab
               packages={packages}
               canManagePackages={canManagePackages}
@@ -139,7 +140,7 @@ export function RoomWorkspace({
               onRoomSaved={onRoomSaved}
             />
           </TabsContent>
-          <TabsContent value="game" className="w-full !h-full">
+          <TabsContent value="game" className="w-screen !h-full">
             {gameMounted && <GameTab room={room} />}
           </TabsContent>
         </TabsContents>

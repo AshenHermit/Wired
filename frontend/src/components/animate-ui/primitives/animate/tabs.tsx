@@ -14,6 +14,7 @@ import {
   Slot,
   type WithAsChild,
 } from "@/components/animate-ui/primitives/animate/slot";
+import { cn } from "@/lib/utils";
 
 type TabsContextType = {
   activeValue: string;
@@ -188,6 +189,7 @@ type TabsContentsProps = HTMLMotionProps<"div"> & {
   children: React.ReactNode;
   transition?: Transition;
   motionDivProps?: HTMLMotionProps<"div">;
+  childClass?: string;
 };
 
 function TabsContents({
@@ -200,6 +202,7 @@ function TabsContents({
     restDelta: 0.01,
   },
   motionDivProps,
+  childClass,
   ...props
 }: TabsContentsProps) {
   const { activeValue } = useTabs();
@@ -298,7 +301,7 @@ function TabsContents({
             ref={(el) => {
               itemRefs.current[index] = el;
             }}
-            className="w-screen shrink-0 px-2 h-full"
+            className={cn("w-full shrink-0 px-2 h-full", childClass)}
           >
             {child}
           </div>
