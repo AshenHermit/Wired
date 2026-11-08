@@ -34,6 +34,7 @@ func _initialize() -> void:
 	_test_custom_ui_keeps_mouse_filter()
 	_test_revision_rebuild()
 	_test_retry_after_invalid()
+	_test_hot_reload_barrier_wiring()
 	_finish()
 
 
@@ -94,6 +95,10 @@ func _test_swap_and_restore() -> void:
 	main.call("_rebuild_game_scene_if_needed")
 	var custom: Node = main._game_root
 	_check(custom != default_root, "the package scene must replace the default Game root")
+	_check(
+		custom.name == default_root.name,
+		"the replacement root must preserve the stable network root name",
+	)
 	_check(custom.get_parent() == main, "the package scene must be installed under Main")
 	_check(default_root.get_parent() == null, "the default Game root must be detached, not freed")
 	_check(main._game_root == custom, "Main must track the installed root")
@@ -209,7 +214,7 @@ func _test_reserved_service_node_rejected() -> void:
 	_register_main(main, "1", "game/reserved.tscn", _make_package_scene("Fixed"))
 	main.call("_rebuild_game_scene_if_needed")
 	_check(
-		main._game_root.name == "Fixed",
+		main._game_root.name == default_root.name,
 		"a valid scene must install after a reserved-node rejection",
 	)
 	main.free()
@@ -236,8 +241,9 @@ func _test_multiple_registrations() -> void:
 	_register_main(main, "1", "game/early.tscn", _make_package_scene("Early"), 10)
 	main.call("_rebuild_game_scene_if_needed")
 	_check(
-		main._game_root.name == "Early",
-		"the deterministic first main scene must win, got %s" % main._game_root.name,
+		main._game_root != null and main._game_root.name == main.default_game_root.name,
+		"the deterministic first main scene must win with the stable root name, got %s"
+		% main._game_root.name,
 	)
 	_check(
 		main._registry.get_main_scenes().size() == 2,
@@ -291,8 +297,8 @@ func _test_revision_rebuild() -> void:
 	main.call("_rebuild_game_scene_if_needed")
 	var second: Node = main._game_root
 	_check(
-		second != first and second.name == "Rev2",
-		"a new revision must rebuild the main scene",
+		second != first and second.name == first.name,
+		"a new revision must rebuild the main scene without changing its root name",
 	)
 	_check(first.get_parent() == null, "the previous revision root must leave Main")
 	main.free()
@@ -308,9 +314,16 @@ func _test_retry_after_invalid() -> void:
 	_register_main(main, "1", "game/retry.tscn", _make_package_scene("Retried"))
 	main.call("_rebuild_game_scene_if_needed")
 	_check(
-		main._game_root.name == "Retried",
+		main._game_root.name == default_root.name,
 		"a fixed scene must replace the default Game after a failed attempt",
 	)
+	main.free()
+
+
+func _test_hot_reload_barrier_wiring() -> void:
+	var main = _make_main()
+	_check(main.has_method("_on_hot_reload_ready"), "Main must handle hot_reload_ready")
+	_check(main.net.has_signal("hot_reload_ready"), "Network must expose hot_reload_ready")
 	main.free()
 
 

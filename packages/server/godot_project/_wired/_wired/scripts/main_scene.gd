@@ -78,6 +78,9 @@ var _pending_world_snapshot: Dictionary = {}
 ## different closure must not turn into an endless request/response loop: a
 ## fresh request is sent only when the local applied map actually changes.
 var _snapshot_request_signature := ""
+## Server side: revisions whose client acknowledgements have not released the
+## post-apply snapshot barrier yet.
+var _hot_reload_barriers: Dictionary = {}
 
 func _is_wired_game_scene(root: Node) -> bool:
 	return root != null and root is WiredGameSceneScript
@@ -155,6 +158,7 @@ func _ready() -> void:
 	# mismatch. PlayersManager was connected earlier, so its own player exists
 	# by the time the snapshot is built.
 	net.peer_packages_ready.connect(_on_peer_packages_ready)
+	net.hot_reload_ready.connect(_on_hot_reload_ready)
 	net.world_snapshot_requested.connect(_on_world_snapshot_requested)
 	net.world_snapshot_received.connect(_on_world_snapshot_received)
 	# The host waits for this before minting a ticket.
@@ -264,6 +268,11 @@ func _swap_game_scene(new_root: Node) -> bool:
 	# Clear it for the move and restore the authored owner afterwards.
 	var new_root_owner := new_root.owner
 	new_root.owner = null
+	# The Game root is part of every MultiplayerSpawner/synchronizer path.
+	# Package scenes may use any authored name (for example `CustomMain`), but
+	# replacing that name would invalidate Godot's scene replication cache even
+	# when Players and their `Sync` nodes keep the same relative structure.
+	new_root.name = _game_root.name
 	if parent != null:
 		parent.remove_child(_game_root)
 		parent.add_child(new_root)
@@ -411,9 +420,21 @@ func _request_world_snapshot() -> void:
 ## gate opened. Deferred by one frame so the joining player's normal spawner
 ## packet is queued first; the receiver is idempotent anyway.
 func _on_peer_packages_ready(peer_id: int) -> void:
-	if net.mode != "server" or _shutdown_in_progress:
+	if net.mode != "server" or _shutdown_in_progress or not _hot_reload_barriers.is_empty():
 		return
 	_send_world_snapshot.call_deferred(peer_id)
+
+
+func _on_hot_reload_ready(package_id: int, revision: int) -> void:
+	if net.mode != "server" or _shutdown_in_progress:
+		return
+	var key := "%d:%d" % [package_id, revision]
+	_hot_reload_barriers.erase(key)
+	if not _hot_reload_barriers.is_empty():
+		return
+	for peer_id: int in multiplayer.get_peers():
+		if net.is_peer_packages_ready(peer_id):
+			_send_world_snapshot(peer_id)
 
 
 func _on_world_snapshot_requested(peer_id: int) -> void:
@@ -827,7 +848,7 @@ func _restore_dynamic_if_ready() -> void:
 	var restored := dynamic_world.restore_pending()
 	# A peer that finished its package gate before the restore saw an empty
 	# world in its first snapshot. Resend it once the entities actually exist.
-	if restored > 0:
+	if restored > 0 and _hot_reload_barriers.is_empty():
 		for peer_id: int in multiplayer.get_peers():
 			if net.is_peer_packages_ready(peer_id):
 				_send_world_snapshot(peer_id)
@@ -847,6 +868,8 @@ func _apply_package_revision(package_id: int, revision: int) -> void:
 		# requested revision; the backend owns retries.
 		return
 	var applied := int(result.get("revision", revision))
+	var key := "%d:%d" % [package_id, applied]
+	_hot_reload_barriers[key] = true
 	net.set_package_revision(package_id, applied)
 
 
