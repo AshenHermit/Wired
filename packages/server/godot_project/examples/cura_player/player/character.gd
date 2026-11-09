@@ -86,6 +86,9 @@ func _wired_ready() -> void:
 func _wired_unhandled_input(event: InputEvent) -> void:
 	if not is_local_player():
 		return
+	if event.is_action_pressed(action_name(DASH_ACTION)):
+		request_action(DASH_ACTION)
+		return
 	if event is InputEventMouseButton:
 		var button := event as InputEventMouseButton
 		# A browser can drop pointer lock without delivering the Escape key, so
@@ -119,10 +122,24 @@ func _release_mouse() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
+## Whether a captured pointer may turn the view. Browsers can silently drop
+## pointer lock without delivering Escape, so on web the real pointer mode is
+## authoritative; headless tests have no real mode and rely on the flag.
+func look_is_active(captured: bool, mouse_mode: int, is_web: bool) -> bool:
+	return captured and (not is_web or mouse_mode == Input.MOUSE_MODE_CAPTURED)
+
+
+func _look_input_allowed() -> bool:
+	if look_is_active(_look_captured, Input.mouse_mode, OS.has_feature("web")):
+		return true
+	_look_captured = false
+	return false
+
+
 ## Applies a mouse delta locally. The first delta seeds the local angles from
 ## the current body/camera transform, so there is no jump when look starts.
 func apply_mouse_look(relative: Vector2) -> void:
-	if not _look_captured or body == null:
+	if not _look_input_allowed() or body == null:
 		return
 	if not _local_look_started:
 		_local_yaw = body.rotation.y
@@ -243,9 +260,14 @@ func _wired_visual_process(_delta: float) -> void:
 	body.rotation.y = visual_yaw()
 	if camera != null:
 		camera.rotation.x = visual_pitch()
+	var avatar := body.get_node_or_null("Mesh") as MeshInstance3D
+	if avatar != null:
+		avatar.visible = not is_local_player()
 	if player != null:
 		player.set_anchor_position_3d(body.position)
 	if is_local_player():
+		if not look_is_active(_look_captured, Input.mouse_mode, OS.has_feature("web")):
+			_look_captured = false
 		_send_look_if_due()
 
 

@@ -67,20 +67,26 @@ Input channel:
 
 ### Input and look
 
-- Register only `look` and `dash` package actions (`register_input_action` is
-  not needed for movement; `dash` stays on Shift).
+- Register the `look` and `dash` gameplay actions and a `cura_player/dash`
+  InputMap action on Shift. Movement and jump use the core snapshot; a Shift
+  press sends the package `dash` action via `request_action`.
 - `_wired_ready`: the local player makes the camera current. A left click
   captures the pointer (browser pointer lock requires a user gesture);
   Escape releases it.
-- `_wired_unhandled_input` (local player only): on captured
-  `InputEventMouseMotion`, apply `relative` with `mouse_sensitivity`, clamp
-  pitch to ±89°, update `Body.rotation.y`/`Camera.rotation.x` immediately,
-  mark look dirty.
+- `_wired_unhandled_input` (local player only): a Shift press sends `dash`;
+  on captured `InputEventMouseMotion`, apply `relative` with
+  `mouse_sensitivity`, clamp pitch to ±89°, update
+  `Body.rotation.y`/`Camera.rotation.x` immediately, and mark look dirty.
+  On web, a delta whose real `Input.mouse_mode` is not captured clears the
+  capture flag and is ignored, because the browser can drop pointer lock
+  without delivering Escape.
 - `_wired_visual_process` (every peer, every idle frame):
   - owner before the first mouse movement: use the replicated yaw/pitch;
   - owner after the first mouse movement: apply `_local_yaw`/`_local_pitch`
     every frame so replication can never snap the camera back;
-  - non-owner: apply replicated yaw/pitch.
+  - clear a stale capture flag when web pointer lock is gone;
+  - non-owner: apply replicated yaw/pitch;
+  - show the remote avatar only to non-owners;
   - publish `Body.position` into the player anchor in all cases.
 - Look snapshot is sent from `_wired_visual_process` at most every 66 ms while
   dirty; payload is absolute `{yaw, pitch}` in radians.
@@ -104,7 +110,7 @@ Input channel:
 ### Replication
 
 - Replicated properties: `Body:position`, `Body:velocity`,
-  `_replicated_yaw`, `_replicated_pitch`.
+  `replicated_yaw`, `replicated_pitch`.
 - Do **not** replicate `Body:rotation` / `Body/Camera:rotation`: the owner
   drives them locally, and remote peers derive them from the replicated
   angles in `_wired_visual_process`.
@@ -121,9 +127,14 @@ Input channel:
 ### Scene
 
 - Remove the `speed = 1.0` override (default becomes `6.0` m/s).
-- Raise the camera to eye height (`y = 1.6`).
-- Give the capsule explicit proportions (`radius 0.4`, `height 1.8`) so the
-  camera sits above the collider.
+- Give the capsule explicit proportions (`radius 0.4`, `height 1.8`) and
+  offset it to `y = 0.9`, so the body origin is at the feet.
+- Put the camera at eye height: `y = 1.6` above the feet (1.6 m above the
+  floor at rest), not 1.6 m above the capsule centre.
+- Add a capsule `MeshInstance3D` avatar aligned with the collider so remote
+  peers can see the player; hide it for the owning player.
+- Put the spawn marker on the floor (`y = 0.5`) so the body does not drop on
+  spawn.
 
 ## Files
 

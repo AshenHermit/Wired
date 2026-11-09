@@ -28,6 +28,10 @@
 - **Jump spam:** holding jump must not auto-bunny-hop; only a rising edge on the floor jumps. Pinned by `test_jump_requires_rising_edge`.
 - **Pointer lock:** mouse motion must not rotate anything while the pointer is not captured. Pinned by `test_mouse_look_requires_capture`.
 - **Pitch limits:** pitch must stay inside ±89°, never flip the camera. Pinned by `test_pitch_is_clamped`.
+- **Dash:** Shift sends a package-qualified `dash` action via `request_action`. Pinned by `test_local_shift_requests_dash`.
+- **Pointer lock guard:** `apply_mouse_look` uses `_look_input_allowed()`, which reads real `Input.mouse_mode` on web and clears stale capture flags. Pinned by `test_pointer_lock_guard_uses_real_mode`.
+- **Remote avatar visibility:** non-local players show a `Mesh` avatar; the owner hides its own. Pinned by `test_remote_avatar_visibility`.
+- **Component contract:** `_wired_ready` registers `dash` and replicates `replicated_yaw`/`replicated_pitch`. Pinned by `test_ready_registers_component_contract`.
 
 ---
 
@@ -40,7 +44,7 @@
 
 **Interfaces:**
 - Consumes: `WiredPlayerComponent` hooks (`_wired_ready`, `_wired_unhandled_input`, `_wired_physics_process`, `_wired_visual_process`, `_wired_replicated_properties`, `_wired_save_state`, `_wired_load_state`), `WiredPlayer.input` (`{move: Vector2, jump: bool, seq: int}`), `register_action`, `request_action`, `player.set_anchor_position_3d`.
-- Produces: `func wish_direction(yaw: float, move: Vector2) -> Vector3`, `func dash_direction(yaw: float, move: Vector2) -> Vector3`, `func clamp_look_pitch(pitch: float) -> float`, `func jump_edge(on_floor: bool, jump_down: bool, was_down: bool) -> bool`, `func visual_yaw() -> float`, `func visual_pitch() -> float`, `func apply_mouse_look(relative: Vector2) -> void`, replicated properties `replicated_yaw`, `replicated_pitch`, and the `look` / `dash` actions.
+- Produces: `func wish_direction(yaw: float, move: Vector2) -> Vector3`, `func dash_direction(yaw: float, move: Vector2) -> Vector3`, `func clamp_look_pitch(pitch: float) -> float`, `func jump_edge(on_floor: bool, jump_down: bool, was_down: bool) -> bool`, `func visual_yaw() -> float`, `func visual_pitch() -> float`, `func apply_mouse_look(relative: Vector2) -> void`, `func look_is_active(captured: bool, mouse_mode: int, is_web: bool) -> bool`, `func _look_input_allowed() -> bool`, replicated properties `replicated_yaw`, `replicated_pitch`, and the `look` / `dash` actions.
 
 - [ ] **Step 1: Write the failing headless smoke test**
 
@@ -76,6 +80,10 @@ func _run() -> void:
 	test_old_two_axis_state_loads()
 	test_mouse_look_requires_capture()
 	test_scene_is_fps_ready()
+	test_local_shift_requests_dash()
+	test_pointer_lock_guard_uses_real_mode()
+	test_remote_avatar_visibility()
+	test_ready_registers_component_contract()
 	_finish()
 
 
@@ -327,9 +335,10 @@ var _jump_was_down := false
 Behavior:
 
 - `_wired_ready`: guard `body == null` with the existing warning; set both `PLAYER_BODY_META` markers; register `dash` InputMap action on `KEY_SHIFT` and, when `is_server()`, `register_action(LOOK, _on_look)` and `register_action(DASH_ACTION, _on_dash)`. Apply `player.get_anchor_position_3d()` to `body.position` and back. When `is_local_player()` and `camera != null`, call `camera.make_current()`.
-- `_wired_unhandled_input`: return unless `is_local_player()`. Left mouse press while `not _look_captured` calls `_capture_mouse()`; `Escape` (key press) calls `_release_mouse()`. `InputEventMouseMotion` calls `apply_mouse_look(event.relative)`.
+- `_wired_unhandled_input`: return unless `is_local_player()`. Left mouse press calls `_capture_mouse()` (also recaptures when `Input.mouse_mode != MOUSE_MODE_CAPTURED` to recover from a browser-dropped lock); `Escape` (key press) calls `_release_mouse()`. `InputEventMouseMotion` calls `apply_mouse_look(event.relative)` only when `_look_input_allowed()` returns true; Shift key press sends the package `dash` action via `request_action()`.
 - `_capture_mouse` sets `_look_captured = true` and `Input.mouse_mode = Input.MOUSE_MODE_CAPTURED`; `_release_mouse` sets it false and `MOUSE_MODE_VISIBLE`.
-- `apply_mouse_look(relative)`: return unless `_look_captured and body != null`. On the first call set `_local_yaw = body.rotation.y`, `_local_pitch = camera.rotation.x` (or `0.0`), and `_local_look_started = true`. Then `_local_yaw = wrapf(_local_yaw - relative.x * mouse_sensitivity, -PI, PI)`, `_local_pitch = clamp_look_pitch(_local_pitch - relative.y * mouse_sensitivity)`, write both to the body/camera, and set `_look_dirty = true`.
+- `look_is_active(captured, mouse_mode, is_web)` returns `captured and (not is_web or mouse_mode == MOUSE_MODE_CAPTURED)`; `_look_input_allowed()` calls it with `_look_captured`, `Input.mouse_mode`, `OS.has_feature("web")` and clears `_look_captured` when it returns false.
+- `apply_mouse_look(relative)`: return unless `_look_input_allowed() and body != null`. On the first call set `_local_yaw = body.rotation.y`, `_local_pitch = camera.rotation.x` (or `0.0`), and `_local_look_started = true`. Then `_local_yaw = wrapf(_local_yaw - relative.x * mouse_sensitivity, -PI, PI)`, `_local_pitch = clamp_look_pitch(_local_pitch - relative.y * mouse_sensitivity)`, write both to the body/camera, and set `_look_dirty = true`.
 - `visual_yaw()` / `visual_pitch()` return the local values when `_local_look_started`, otherwise the replicated values.
 - `clamp_look_pitch(pitch)` returns `clampf(pitch, -MAX_PITCH, MAX_PITCH)`.
 - `wish_direction(yaw, move)` clamps `move` with `limit_length(1.0)`, returns `Vector3.ZERO` below `0.0001` squared length, otherwise `(right * move.x + forward * -move.y).normalized()` with `right = Vector3(cos(yaw), 0, -sin(yaw))` and `forward = Vector3(-sin(yaw), 0, -cos(yaw))`.
@@ -338,7 +347,7 @@ Behavior:
 - `_on_look(sender_peer, payload)`: accept only server + owning peer; read `yaw`/`pitch` with the current values as defaults; reject non-finite; `_yaw = wrapf(yaw, -PI, PI)`, `_pitch = clamp_look_pitch(pitch)`, then assign `replicated_yaw` / `replicated_pitch`.
 - `_on_dash(sender_peer, payload)`: accept only server + owning peer; ignore while `_dash_cooldown_left > 0`; `_dash_dir = dash_direction(_yaw, _current_move())`, `_dash_time_left = dash_duration`, `_dash_cooldown_left = dash_cooldown`.
 - `_wired_physics_process(delta)`: return when `body == null or player == null`. Read `_current_move()` from `player.input.get("move", Vector2.ZERO)`. Tick `_dash_time_left` / `_dash_cooldown_left` down with `maxf(..., 0.0)`. While dashing set horizontal velocity to `_dash_dir * dash_speed`; with a wish direction set it to `wish * speed`; otherwise `move_toward` X/Z toward zero with `friction * delta`. Read `jump_down = bool(player.input.get("jump", false))`; if `jump_edge(body.is_on_floor(), jump_down, _jump_was_down)` set `velocity.y = jump_velocity`, else if `not body.is_on_floor()` subtract `gravity * delta`. Store `_jump_was_down`. Set `body.rotation.y = _yaw`, `replicated_yaw = _yaw`, `replicated_pitch = _pitch`, `body.move_and_slide()`, then `player.set_anchor_position_3d(body.position)`.
-- `_wired_visual_process`: return when `body == null`; write `body.rotation.y = visual_yaw()` and `camera.rotation.x = visual_pitch()` (guard camera); publish the anchor; when `is_local_player()` call `_send_look_if_due()`.
+- `_wired_visual_process`: return when `body == null`; write `body.rotation.y = visual_yaw()` and `camera.rotation.x = visual_pitch()` (guard camera); set the avatar mesh `visible = not is_local_player()`; publish the anchor; when `is_local_player()` clear a stale capture flag via `_look_input_allowed()` and call `_send_look_if_due()`.
 - `_send_look_if_due`: return unless `_look_dirty and _local_look_started`; use `Time.get_ticks_msec()` and skip while `now - _last_look_sent_msec < LOOK_SEND_INTERVAL_MSEC`; then clear `_look_dirty`, store the time, and `request_action(LOOK, {"yaw": _local_yaw, "pitch": _local_pitch})`.
 - `_current_move()` converts `player.input`'s `move` (`Vector2` or 2-element Array) to `Vector2`, `limit_length(1.0)`, or `Vector2.ZERO`.
 - `_wired_replicated_properties()` returns exactly `PackedStringArray(["Body:position", "Body:velocity", "replicated_yaw", "replicated_pitch"])`.
@@ -365,13 +374,18 @@ In `player_character.tscn`:
 radius = 0.4
 height = 1.8
 ```
+and offset the `CollisionShape3D` transform to `y = 0.9` so the body origin sits at the feet.
 
-- Move the camera to eye height:
+- Add a capsule `MeshInstance3D` avatar named `Mesh` aligned with the collider so remote peers can see the player; it is hidden for the owning player in `_wired_visual_process`.
+
+- Move the camera to eye height (`y = 1.6` above the feet):
 
 ```ini
 [node name="Camera" type="Camera3D" parent="Body" unique_id=2021528673]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
 ```
+
+- Put the spawn marker on the floor (`y = 0.5`) so the body does not drop on spawn.
 
 - [ ] **Step 5: Run the smoke test and confirm it passes**
 

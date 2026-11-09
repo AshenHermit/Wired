@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://bec5fnmvmllyd"]
 
-[ext_resource type="Texture2D" uid="uid://cm2wl8vf5akij" path="res://packages/cura_player/static/77d6fb9b270ee55638a31f62438ec91e.jpg" id="1_rohop"]
+[ext_resource type="Texture2D" path="77d6fb9b270ee55638a31f62438ec91e.jpg" id="1_rohop"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_xddtg"]
 size = Vector3(10, 1, 10)
@@ -24,7 +24,7 @@ material_override = SubResource("StandardMaterial3D_n282m")
 mesh = SubResource("BoxMesh_rohop")
 
 [node name="Marker3D" type="Marker3D" parent="." unique_id=1369872461 groups=["wired_player_spawn"]]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.9028881, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
 
 [node name="OmniLight3D" type="OmniLight3D" parent="." unique_id=853816569]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.8418928, 0)

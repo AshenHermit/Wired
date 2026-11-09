@@ -10,6 +10,26 @@ const EXAMPLE_DIR := "../examples/cura_player"
 const CHARACTER_PATH := "player/player_character.tscn"
 const EPSILON := 0.001
 
+
+## Minimal player double: the component only needs the authority switches and
+## an action sink. `WiredPlayer` supplies the anchor storage.
+class StubPlayer extends WiredPlayer:
+	var local := false
+	var sent_actions: Array[Dictionary] = []
+
+	func _ready() -> void:
+		pass
+
+	func is_local_player() -> bool:
+		return local
+
+	func is_server_authority() -> bool:
+		return false
+
+	func request_action(action: String, payload: Dictionary = {}) -> void:
+		sent_actions.append({"action": action, "payload": payload})
+
+
 var _failures: PackedStringArray = []
 var _instances: Array[Node] = []
 var _checks := 0
@@ -27,7 +47,11 @@ func _run() -> void:
 	test_replication_uses_look_angles()
 	test_old_two_axis_state_loads()
 	test_mouse_look_requires_capture()
+	test_local_shift_requests_dash()
+	test_pointer_lock_guard_uses_real_mode()
 	test_scene_is_fps_ready()
+	test_remote_avatar_visibility()
+	test_ready_registers_component_contract()
 	_finish()
 
 
@@ -158,6 +182,56 @@ func test_mouse_look_requires_capture() -> void:
 	)
 
 
+func test_local_shift_requests_dash() -> void:
+	var character: Variant = _load_character()
+	if character == null:
+		return
+	var stub := StubPlayer.new()
+	stub.local = true
+	character.player = stub
+	character.package_id = "cura_player"
+	var shift := InputEventKey.new()
+	shift.keycode = KEY_SHIFT
+	shift.physical_keycode = KEY_SHIFT
+	character.register_input_action("dash", [shift])
+	var press := InputEventKey.new()
+	press.keycode = KEY_SHIFT
+	press.physical_keycode = KEY_SHIFT
+	press.pressed = true
+	character._wired_unhandled_input(press)
+	_check(stub.sent_actions.size() == 1, "Shift must request the dash action")
+	if not stub.sent_actions.is_empty():
+		_check(
+			stub.sent_actions[0]["action"] == "cura_player/dash",
+			"the dash request must use the package-qualified action",
+		)
+	stub.free()
+
+
+func test_pointer_lock_guard_uses_real_mode() -> void:
+	var character: Variant = _load_character()
+	if character == null:
+		return
+	_check(
+		character.has_method("look_is_active"),
+		"look capture must consult the real pointer mode on web",
+	)
+	if not character.has_method("look_is_active"):
+		return
+	_check(
+		not character.look_is_active(true, Input.MOUSE_MODE_VISIBLE, true),
+		"web look must stop when the browser releases the pointer",
+	)
+	_check(
+		character.look_is_active(true, Input.MOUSE_MODE_CAPTURED, true),
+		"captured pointer lock must allow look",
+	)
+	_check(
+		character.look_is_active(true, Input.MOUSE_MODE_VISIBLE, false),
+		"non-web tests must use the capture flag",
+	)
+
+
 func test_scene_is_fps_ready() -> void:
 	var character: Variant = _load_character()
 	if character == null:
@@ -176,8 +250,115 @@ func test_scene_is_fps_ready() -> void:
 			if capsule != null:
 				_check(is_equal_approx(capsule.radius, 0.4), "capsule radius must be 0.4 m")
 				_check(is_equal_approx(capsule.height, 1.8), "capsule height must be 1.8 m")
+				_check(
+					is_equal_approx(collider.position.y, 0.9),
+					"the capsule must be offset so the body origin is at the feet",
+				)
+				var capsule_bottom := collider.position.y - capsule.height / 2.0
+				_check(is_zero_approx(capsule_bottom), "the capsule must start at the body origin")
+				if camera != null:
+					_check(
+						is_equal_approx(camera.position.y - capsule_bottom, 1.6),
+						"the camera must sit 1.6 m above the feet",
+					)
+		var avatar := body.get_node_or_null("Mesh") as MeshInstance3D
+		_check(avatar != null, "the body must have an avatar mesh for remote players")
+		if avatar != null:
+			_check(avatar.mesh is CapsuleMesh, "the avatar mesh must be a capsule")
+			_check(
+				is_equal_approx(avatar.position.y, 0.9),
+				"the avatar mesh must align with the collider",
+			)
 	if camera != null:
 		_check(is_equal_approx(camera.position.y, 1.6), "the camera must sit at eye height 1.6 m")
+	var static_path := _example_path("static/static.tscn")
+	var static_text := FileAccess.get_file_as_string(static_path)
+	_check(not static_text.is_empty(), "the static scene must be readable")
+	var marker_y := _node_translation_y(static_text, "Marker3D")
+	_check(not is_nan(marker_y), "the static scene must expose a spawn marker")
+	if not is_nan(marker_y):
+		_check(
+			is_equal_approx(marker_y, 0.5),
+			"the spawn marker must sit on the floor so the body does not drop",
+		)
+
+
+func test_remote_avatar_visibility() -> void:
+	var character: Variant = _load_character()
+	if character == null:
+		return
+	var body: CharacterBody3D = character.get("body")
+	var avatar := body.get_node_or_null("Mesh") as MeshInstance3D
+	_check(avatar != null, "remote players need an avatar mesh")
+	if avatar == null:
+		return
+	var stub := StubPlayer.new()
+	character.player = stub
+	stub.local = false
+	character._wired_visual_process(0.0)
+	_check(avatar.visible, "a remote player's avatar must be visible")
+	stub.local = true
+	character._wired_visual_process(0.0)
+	_check(not avatar.visible, "the owner's own avatar must be hidden")
+	stub.free()
+
+
+func test_ready_registers_component_contract() -> void:
+	var character: Variant = _load_character()
+	if character == null:
+		return
+	var stub := StubPlayer.new()
+	stub.local = true
+	character.player = stub
+	character.package_id = "cura_player"
+	stub.add_child(character)
+	get_root().add_child(stub)
+	_check(
+		InputMap.has_action("cura_player/dash"),
+		"ready must register the package-qualified dash input",
+	)
+	_check(
+		character.has_meta("_wired_player_body"),
+		"ready must mark the component root as the player body",
+	)
+	var body: CharacterBody3D = character.get("body")
+	_check(
+		body.has_meta("_wired_player_body"),
+		"ready must mark the CharacterBody3D as the player body",
+	)
+	_check(
+		is_equal_approx(body.position.y, 0.0),
+		"ready must apply the player anchor to the body",
+	)
+	get_root().remove_child(stub)
+	stub.remove_child(character)
+	_instances.erase(character)
+	character.free()
+	stub.free()
+
+
+## Reads a node's local translation Y directly from a `.tscn` so the static
+## scene's texture does not have to be imported into this project.
+func _node_translation_y(scene_text: String, node_name: String) -> float:
+	var lines := scene_text.split("\n")
+	var header := "[node name=\"%s\"" % node_name
+	for index in lines.size():
+		if not lines[index].begins_with(header):
+			continue
+		for offset in range(index + 1, mini(index + 6, lines.size())):
+			var line := lines[offset].strip_edges()
+			if line.begins_with("[node "):
+				break
+			if line.begins_with("transform = Transform3D("):
+				var values := (
+					line
+					.trim_prefix("transform = Transform3D(")
+					.trim_suffix(")")
+					.split(",")
+				)
+				if values.size() >= 12:
+					return float(values[10].strip_edges())
+	return NAN
 
 
 func _load_character() -> Node:
