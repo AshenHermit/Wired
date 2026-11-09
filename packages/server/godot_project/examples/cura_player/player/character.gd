@@ -1,41 +1,55 @@
 extends WiredPlayerComponent
 
-## Example 2D platformer body (package `wired-platformer`).
+## Example first-person controller (package `cura_player`).
 ##
-## Server authority: the server reads the replicated input snapshot, simulates
-## `Body` with `move_and_slide` and publishes `Body:position`/`Body:velocity`.
-## Every peer keeps the component for visuals and writes the replicated body
-## position into the player anchor, which the camera follows.
+## Server authority: the server reads the core 30 Hz input snapshot, derives
+## the wish direction from the look yaw, simulates `Body` with `move_and_slide`
+## and replicates `Body:position`/`Body:velocity` plus the look angles.
 ##
-## The root and the actual `CharacterBody2D` both carry `_wired_player_body`:
+## Mouse look is client-authoritative and immediate: the owning client rotates
+## `Body`/`Camera` from mouse deltas and sends absolute yaw/pitch snapshots to
+## the server at 15 Hz. Body and camera rotation are deliberately not
+## replicated, so the owner's camera is never snapped back by the server.
+##
+## The root and the actual `CharacterBody3D` both carry `_wired_player_body`:
 ## `move_and_slide` reports the collider child, while package lookups usually
 ## start from the component root.
 
 const PLAYER_BODY_META := "_wired_player_body"
+const MAX_PITCH := PI / 2.0 - 0.001
+const LOOK_SEND_INTERVAL_MSEC := 66
 
-@export var speed := 240.0
-@export var jump_velocity := -420.0
-@export var gravity := 980.0
-@export var push_strength := 1.0
-## Horizontal decay applied when the player gives no meaningful input, so a
-## push from another player survives the next frame and then settles.
-@export var friction := 1200.0
-@export var camera_movement_speed := 0.01
+@export var speed := 6.0
+@export var jump_velocity := 6.5
+@export var gravity := 20.0
+@export var friction := 60.0
+@export var mouse_sensitivity := 0.0022
+@export var dash_speed := 12.0
+@export var dash_duration := 0.15
+@export var dash_cooldown := 0.6
 
 @export var body: CharacterBody3D = null
 @export var camera: Camera3D = null
-## Package-defined input actions (registered via `register_input_action`),
-## independent of the core `wired_move_*` map.
-const MOVE_LEFT := "move_left"
-const MOVE_RIGHT := "move_right"
-const MOVE_UP := "move_up"
-const MOVE_DOWN := "move_down"
-const JUMP := "jump"
+
+const LOOK := "look"
 const DASH_ACTION := "dash"
-var _dash_impulse := 600.0
-## Last move vector received from the owning client (server authority).
-var _move_input := Vector2.ZERO
-var _jump_input := false
+
+## Server-authored look, replicated to every peer.
+var replicated_yaw := 0.0
+var replicated_pitch := 0.0
+
+var _yaw := 0.0
+var _pitch := 0.0
+var _local_yaw := 0.0
+var _local_pitch := 0.0
+var _local_look_started := false
+var _look_captured := false
+var _look_dirty := false
+var _last_look_sent_msec := -1
+var _dash_time_left := 0.0
+var _dash_cooldown_left := 0.0
+var _dash_dir := Vector3.FORWARD
+var _jump_was_down := false
 
 
 func _wired_ready() -> void:
@@ -44,30 +58,11 @@ func _wired_ready() -> void:
 			"WIRED_EXAMPLE_BODY_MISSING_NODE package=%s node=Body" % package_id
 		)
 		return
-	# Register package-local movement + jump + dash actions. `register_input_action`
-	# qualifies every name with the package id, so they never collide with other
-	# packages or the core `wired_*` actions.
-	var left_ev := InputEventKey.new()
-	left_ev.physical_keycode = KEY_A
-	var right_ev := InputEventKey.new()
-	right_ev.physical_keycode = KEY_D
-	var up_ev := InputEventKey.new()
-	up_ev.physical_keycode = KEY_W
-	var down_ev := InputEventKey.new()
-	down_ev.physical_keycode = KEY_S
-	var jump_ev := InputEventKey.new()
-	jump_ev.physical_keycode = KEY_SPACE
 	var dash_ev := InputEventKey.new()
 	dash_ev.physical_keycode = KEY_SHIFT
-	register_input_action(MOVE_LEFT, [left_ev])
-	register_input_action(MOVE_RIGHT, [right_ev])
-	register_input_action(MOVE_UP, [up_ev])
-	register_input_action(MOVE_DOWN, [down_ev])
-	register_input_action(JUMP, [jump_ev])
 	register_input_action(DASH_ACTION, [dash_ev])
 	if is_server():
-		register_action("move", _on_move)
-		register_action("rotate", _on_rotate)
+		register_action(LOOK, _on_look)
 		register_action(DASH_ACTION, _on_dash)
 	# The scene carries both markers; set them again so a programmatically built
 	# body follows the same contract as the shipped scene.
@@ -82,114 +77,223 @@ func _wired_ready() -> void:
 		# the persisted position.
 		body.position = player.get_anchor_position_3d()
 		player.set_anchor_position_3d(body.position)
-	
-	if is_local_player():
+	if is_local_player() and camera != null:
 		camera.make_current()
 
-## Client only: sample the package-defined movement keys and forward them to the
-## server. The base component already gates this hook by `player.is_local_player()`.
+
+## Client only: capture the pointer on click, release it on Escape and turn
+## mouse motion into an immediate local look update.
 func _wired_unhandled_input(event: InputEvent) -> void:
 	if not is_local_player():
 		return
-	# Only keyboard events change movement/dash state; reacting to every input
-	# event (mouse motion) would flood the action rate limit and drop updates.
-	if event is InputEventMouseMotion:
-		body.rotation.y += event.velocity.x * camera_movement_speed
-		camera.rotation.x += event.velocity.y * camera_movement_speed
-		request_action("rotate", {"rotate": [event.velocity.x, event.velocity.y]})
+	if event is InputEventMouseButton:
+		var button := event as InputEventMouseButton
+		# A browser can drop pointer lock without delivering the Escape key, so
+		# also recover when the pointer mode says the capture is gone.
+		if (
+			button.button_index == MOUSE_BUTTON_LEFT
+			and button.pressed
+			and (
+				not _look_captured
+				or Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
+			)
+		):
+			_capture_mouse()
+		return
 	if event is InputEventKey:
-		if event.echo:
-			return
-		var move := Vector2(
-			(float(is_action_pressed(MOVE_RIGHT)) - float(is_action_pressed(MOVE_LEFT))),
-			(float(is_action_pressed(MOVE_DOWN)) - float(is_action_pressed(MOVE_UP)))
-		).limit_length(1.0)
-		var jump := is_action_pressed(JUMP)
-		request_action("move", {"move": [move.x, move.y], "jump": jump})
-		if is_action_just_pressed(DASH_ACTION):
-			request_action(DASH_ACTION, {})
+		var key := event as InputEventKey
+		if key.pressed and not key.echo and key.keycode == KEY_ESCAPE:
+			_release_mouse()
+		return
+	if event is InputEventMouseMotion:
+		apply_mouse_look((event as InputEventMouseMotion).relative)
 
 
-## Server side: store the latest movement snapshot from the owning client.
-func _on_move(sender_peer: int, payload: Dictionary) -> void:
-	if not is_server() or player == null:
-		return
-	if sender_peer != player.peer_id:
-		return
-	var m = payload.get("move", [0.0, 0.0])
-	if m is Array and m.size() >= 2:
-		_move_input = Vector2(float(m[0]), float(m[1]))
-	_jump_input = bool(payload.get("jump", false))
+func _capture_mouse() -> void:
+	_look_captured = true
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
-func _on_rotate(sender_peer: int, payload: Dictionary) -> void:
-	if not is_server() or player == null:
-		return
-	if sender_peer != player.peer_id:
-		return
-	var rot = payload.get("rotate", [0.0, 0.0])
-	body.rotation.y += rot[0]
-	camera.rotation.x += rot[1]
-	camera.rotation.x = clampf(camera.rotation.x, -PI/2.0, PI/2.0)
 
-## Server side: apply a horizontal dash impulse to the authoritative body.
+func _release_mouse() -> void:
+	_look_captured = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+## Applies a mouse delta locally. The first delta seeds the local angles from
+## the current body/camera transform, so there is no jump when look starts.
+func apply_mouse_look(relative: Vector2) -> void:
+	if not _look_captured or body == null:
+		return
+	if not _local_look_started:
+		_local_yaw = body.rotation.y
+		_local_pitch = camera.rotation.x if camera != null else 0.0
+		_local_look_started = true
+	_local_yaw = wrapf(_local_yaw - relative.x * mouse_sensitivity, -PI, PI)
+	_local_pitch = clamp_look_pitch(_local_pitch - relative.y * mouse_sensitivity)
+	body.rotation.y = _local_yaw
+	if camera != null:
+		camera.rotation.x = _local_pitch
+	_look_dirty = true
+
+
+func visual_yaw() -> float:
+	return _local_yaw if _local_look_started else replicated_yaw
+
+
+func visual_pitch() -> float:
+	return _local_pitch if _local_look_started else replicated_pitch
+
+
+func clamp_look_pitch(pitch: float) -> float:
+	return clampf(pitch, -MAX_PITCH, MAX_PITCH)
+
+
+## Converts the core movement snapshot into a world-space horizontal direction.
+## `move.y` is down-positive in the core snapshot, so W (`y = -1`) maps to the
+## forward axis.
+func wish_direction(yaw: float, move: Vector2) -> Vector3:
+	var input := move.limit_length(1.0)
+	if input.length_squared() < 0.0001:
+		return Vector3.ZERO
+	var right := Vector3(cos(yaw), 0.0, -sin(yaw))
+	var forward := Vector3(-sin(yaw), 0.0, -cos(yaw))
+	return (right * input.x + forward * -input.y).normalized()
+
+
+func dash_direction(yaw: float, move: Vector2) -> Vector3:
+	var wish := wish_direction(yaw, move)
+	if wish.length_squared() > 0.0:
+		return wish
+	return Vector3(-sin(yaw), 0.0, -cos(yaw))
+
+
+func jump_edge(on_floor: bool, jump_down: bool, was_down: bool) -> bool:
+	return on_floor and jump_down and not was_down
+
+
+## Server side: store the latest validated look snapshot from the owning client.
+func _on_look(sender_peer: int, payload: Dictionary) -> void:
+	if not is_server() or player == null or sender_peer != player.peer_id:
+		return
+	var yaw_value: Variant = payload.get("yaw", _yaw)
+	var pitch_value: Variant = payload.get("pitch", _pitch)
+	if not (yaw_value is float or yaw_value is int):
+		return
+	if not (pitch_value is float or pitch_value is int):
+		return
+	var yaw := float(yaw_value)
+	var pitch := float(pitch_value)
+	if not is_finite(yaw) or not is_finite(pitch):
+		return
+	_yaw = wrapf(yaw, -PI, PI)
+	_pitch = clamp_look_pitch(pitch)
+	replicated_yaw = _yaw
+	replicated_pitch = _pitch
+	if body != null:
+		body.rotation.y = _yaw
+
+
+## Server side: start a dash in the current wish direction.
 func _on_dash(sender_peer: int, _payload: Dictionary) -> void:
-	if not is_server() or body == null or player == null:
+	if not is_server() or player == null or sender_peer != player.peer_id:
 		return
-	if sender_peer != player.peer_id:
+	if _dash_cooldown_left > 0.0:
 		return
-	var dir := 1.0
-	if body.velocity.x < 0:
-		dir = -1.0
-	elif body.velocity.x == 0:
-		dir = 1.0
-	body.velocity.x = dir * _dash_impulse
+	_dash_dir = dash_direction(_yaw, _current_move())
+	_dash_time_left = dash_duration
+	_dash_cooldown_left = dash_cooldown
 
 
-## Server only (the component base gates this hook). Moves the body, publishes
-## the anchor and pushes other player bodies it ran into.
+## Server only (the component base gates this hook). Simulates the body from
+## the core input snapshot and publishes the anchor.
 func _wired_physics_process(delta: float) -> void:
 	if body == null or player == null:
 		return
-	if _move_input.length() > 0.01:
-		# Meaningful input owns the horizontal axis.
-		body.velocity += body.global_transform.basis.x * _move_input.x
-		body.velocity += body.global_transform.basis.z * _move_input.y
-	
-	body.velocity.x = move_toward(body.velocity.x, 0.0, friction * delta)
-	body.velocity.z = move_toward(body.velocity.z, 0.0, friction * delta)
-	
-	if body.is_on_floor():
-		if _jump_input:
-			body.velocity.y = jump_velocity
+	_dash_time_left = maxf(_dash_time_left - delta, 0.0)
+	_dash_cooldown_left = maxf(_dash_cooldown_left - delta, 0.0)
+	var wish := wish_direction(_yaw, _current_move())
+	var horizontal := Vector2(body.velocity.x, body.velocity.z)
+	if _dash_time_left > 0.0:
+		horizontal = Vector2(_dash_dir.x, _dash_dir.z) * dash_speed
+	elif wish.length_squared() > 0.0:
+		horizontal = Vector2(wish.x, wish.z) * speed
 	else:
-		body.velocity.y += gravity * delta
-	# `move_and_slide` removes the velocity component that hit the other body,
-	# so keep the intended velocity for the push loop.
-	var motion_velocity := body.velocity
+		horizontal.x = move_toward(horizontal.x, 0.0, friction * delta)
+		horizontal.y = move_toward(horizontal.y, 0.0, friction * delta)
+	body.velocity.x = horizontal.x
+	body.velocity.z = horizontal.y
+	var jump_down := bool(player.input.get("jump", false))
+	if jump_edge(body.is_on_floor(), jump_down, _jump_was_down):
+		body.velocity.y = jump_velocity
+	elif not body.is_on_floor():
+		body.velocity.y -= gravity * delta
+	_jump_was_down = jump_down
+	body.rotation.y = _yaw
+	replicated_yaw = _yaw
+	replicated_pitch = _pitch
 	body.move_and_slide()
 	player.set_anchor_position_3d(body.position)
 
 
-## Every peer: derive the local anchor from the replicated body position. The
-## camera component reads the same anchor, so clients follow the server.
+## Every peer: apply the best available look angles and follow the body with the
+## camera anchor. The owner keeps local look; remote peers use replicated look.
 func _wired_visual_process(_delta: float) -> void:
-	if body == null or player == null:
+	if body == null:
 		return
-	player.set_anchor_position_3d(body.position)
+	body.rotation.y = visual_yaw()
+	if camera != null:
+		camera.rotation.x = visual_pitch()
+	if player != null:
+		player.set_anchor_position_3d(body.position)
+	if is_local_player():
+		_send_look_if_due()
+
+
+func _send_look_if_due() -> void:
+	if not _look_dirty or not _local_look_started:
+		return
+	var now := Time.get_ticks_msec()
+	if now - _last_look_sent_msec < LOOK_SEND_INTERVAL_MSEC:
+		return
+	_look_dirty = false
+	_last_look_sent_msec = now
+	request_action(LOOK, {"yaw": _local_yaw, "pitch": _local_pitch})
+
+
+func _current_move() -> Vector2:
+	if player == null:
+		return Vector2.ZERO
+	var raw: Variant = player.input.get("move", Vector2.ZERO)
+	var move := Vector2.ZERO
+	if raw is Vector2:
+		var vector: Vector2 = raw
+		move = vector
+	elif raw is Array:
+		var values: Array = raw
+		if values.size() >= 2:
+			move = Vector2(float(values[0]), float(values[1]))
+	return move.limit_length(1.0)
 
 
 func _wired_replicated_properties() -> PackedStringArray:
-	return PackedStringArray(["Body:position", "Body:rotation", "Body:velocity", "Body/Camera:rotation"])
+	return PackedStringArray([
+		"Body:position",
+		"Body:velocity",
+		"replicated_yaw",
+		"replicated_pitch",
+	])
 
 
-## Persists both the body transform and its velocity: a restart must resume the
-## body in the same place and with the same motion, not at the spawn marker.
+## Persists the full 3D body transform, velocity and look direction: a restart
+## must resume in the same place and looking the same way.
 func _wired_save_state() -> Dictionary:
 	if body == null:
 		return {}
 	return {
-		"position": [body.position.x, body.position.y],
-		"linear_velocity": [body.velocity.x, body.velocity.y],
+		"position": [body.position.x, body.position.y, body.position.z],
+		"linear_velocity": [body.velocity.x, body.velocity.y, body.velocity.z],
+		"yaw": _yaw,
+		"pitch": _pitch,
 	}
 
 
@@ -200,6 +304,19 @@ func _wired_load_state(state: Dictionary) -> void:
 		body.position = _as_vector3(state["position"], body.position)
 	if state.has("linear_velocity"):
 		body.velocity = _as_vector3(state["linear_velocity"], body.velocity)
+	if state.has("yaw"):
+		var yaw_value: Variant = state["yaw"]
+		if yaw_value is float or yaw_value is int:
+			_yaw = wrapf(float(yaw_value), -PI, PI)
+	if state.has("pitch"):
+		var pitch_value: Variant = state["pitch"]
+		if pitch_value is float or pitch_value is int:
+			_pitch = clamp_look_pitch(float(pitch_value))
+	replicated_yaw = _yaw
+	replicated_pitch = _pitch
+	body.rotation.y = _yaw
+	if camera != null:
+		camera.rotation.x = _pitch
 	if player != null:
 		player.set_anchor_position_3d(body.position)
 
@@ -208,15 +325,10 @@ func _as_vector3(value: Variant, fallback: Vector3) -> Vector3:
 	if value is Vector3:
 		var vector: Vector3 = value
 		return vector
-	if value is Array and value.size() >= 3:
-		return Vector3(float(value[0]), float(value[1]), float(value[2]))
+	if value is Array:
+		var values: Array = value
+		if values.size() >= 3:
+			return Vector3(float(values[0]), float(values[1]), float(values[2]))
+		if values.size() == 2:
+			return Vector3(float(values[0]), float(values[1]), 0.0)
 	return fallback
-
-
-func _move_x(move: Variant) -> float:
-	var value := 0.0
-	if move is Vector2:
-		value = (move as Vector2).x
-	elif move is Vector3:
-		value = (move as Vector3).x
-	return clampf(value, -1.0, 1.0)
