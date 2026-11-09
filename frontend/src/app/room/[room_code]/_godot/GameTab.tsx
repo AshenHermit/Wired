@@ -159,7 +159,6 @@ function replaceFrame(state: GameState, attempt: number): GameState {
   return {
     ...state,
     attempt,
-    exportReady: false,
     phase: "checking",
     message: { key: "Game.checkingExport" },
     sentAttempt: null,

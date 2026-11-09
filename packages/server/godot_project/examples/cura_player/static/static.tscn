@@ -1,0 +1,31 @@
+[gd_scene format=3 uid="uid://bec5fnmvmllyd"]
+
+[ext_resource type="Texture2D" path="77d6fb9b270ee55638a31f62438ec91e.jpg" id="1_rohop"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_xddtg"]
+size = Vector3(10, 1, 10)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_n282m"]
+albedo_texture = ExtResource("1_rohop")
+uv1_scale = Vector3(9.22, 9.22, 9.22)
+
+[sub_resource type="BoxMesh" id="BoxMesh_rohop"]
+size = Vector3(10, 1, 10)
+
+[node name="Static" type="Node" unique_id=1231112994]
+
+[node name="StaticBody3D" type="StaticBody3D" parent="." unique_id=1396729538]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="StaticBody3D" unique_id=792154323]
+shape = SubResource("BoxShape3D_xddtg")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="StaticBody3D" unique_id=1817608481]
+material_override = SubResource("StandardMaterial3D_n282m")
+mesh = SubResource("BoxMesh_rohop")
+
+[node name="Marker3D" type="Marker3D" parent="." unique_id=1369872461 groups=["wired_player_spawn"]]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+
+[node name="OmniLight3D" type="OmniLight3D" parent="." unique_id=853816569]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.8418928, 0)
+light_energy = 3.0
