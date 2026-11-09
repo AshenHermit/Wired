@@ -87,6 +87,9 @@ func _wired_unhandled_input(event: InputEvent) -> void:
 	if not is_local_player():
 		return
 	if event.is_action_pressed(action_name(DASH_ACTION)):
+		# Prevent repeat while Shift is held (ignore echo events)
+		if event is InputEventKey and (event as InputEventKey).echo:
+			return
 		request_action(DASH_ACTION)
 		return
 	if event is InputEventMouseButton:
@@ -268,6 +271,8 @@ func _wired_visual_process(_delta: float) -> void:
 	if is_local_player():
 		if not look_is_active(_look_captured, Input.mouse_mode, OS.has_feature("web")):
 			_look_captured = false
+			# When the pointer is no longer captured we also discard any pending look delta
+			_look_dirty = false
 		_send_look_if_due()
 
 
