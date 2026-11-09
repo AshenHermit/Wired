@@ -1,0 +1,19 @@
+[gd_scene format=3 uid="uid://c35lbml1jftn0"]
+
+[ext_resource type="Script" uid="uid://d1nve6w1yb25n" path="res://packages/cura_player/player/character.gd" id="1_58pw5"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_nsyls"]
+
+[node name="PlayerCharacter" type="Node" unique_id=859364420 node_paths=PackedStringArray("body", "camera")]
+script = ExtResource("1_58pw5")
+speed = 1.0
+body = NodePath("Body")
+camera = NodePath("Body/Camera")
+
+[node name="Body" type="CharacterBody3D" parent="." unique_id=950524739]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Body" unique_id=1029278657]
+shape = SubResource("CapsuleShape3D_nsyls")
+
+[node name="Camera" type="Camera3D" parent="Body" unique_id=2021528673]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6179602, 0)
