@@ -306,8 +306,6 @@ func _wired_replicated_properties() -> PackedStringArray:
 	return PackedStringArray([
 		"Body:position",
 		"Body:velocity",
-		"replicated_yaw",
-		"replicated_pitch",
 	])
 
 
