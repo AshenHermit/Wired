@@ -7,9 +7,12 @@ extends WiredPlayerComponent
 ## and replicates `Body:position`/`Body:velocity` plus the look angles.
 ##
 ## Mouse look is client-authoritative and immediate: the owning client rotates
-## `Body`/`Camera` from mouse deltas and sends absolute yaw/pitch snapshots to
-## the server at 15 Hz. Body and camera rotation are deliberately not
-## replicated, so the owner's camera is never snapped back by the server.
+## `Body` from mouse deltas and sends absolute yaw/pitch snapshots to the
+## server at 15 Hz. The camera is anchored to the `m_head` bone every visual
+## frame and the shared look pitch is applied through
+## `character_model.set_spine_rotation`. Yaw and pitch are replicated via
+## `replicated_yaw`/`replicated_pitch`, so the head tilt and the camera stay in
+## sync across peers without extra network messages.
 ##
 ## The root and the actual `CharacterBody3D` both carry `_wired_player_body`:
 ## `move_and_slide` reports the collider child, while package lookups usually
@@ -31,6 +34,13 @@ const LOOK_SEND_INTERVAL_MSEC := 66
 @export var body: CharacterBody3D = null
 @export var camera: Camera3D = null
 
+@export var character_model: Node
+
+## Horizontal speed above this counts as moving. Below it the replicated
+## velocity is treated as standing still, so friction leftovers do not keep
+## the run animation playing.
+const MOVEMENT_IDLE_SPEED := 0.15
+
 const LOOK := "look"
 const DASH_ACTION := "dash"
 
@@ -50,7 +60,6 @@ var _dash_time_left := 0.0
 var _dash_cooldown_left := 0.0
 var _dash_dir := Vector3.FORWARD
 var _jump_was_down := false
-
 
 func _wired_ready() -> void:
 	if body == null:
@@ -79,6 +88,8 @@ func _wired_ready() -> void:
 		player.set_anchor_position_3d(body.position)
 	if is_local_player() and camera != null:
 		camera.make_current()
+	if is_local_player():
+		character_model.make_first_person_vision()
 
 
 ## Client only: capture the pointer on click, release it on Escape and turn
@@ -212,7 +223,6 @@ func _on_look(sender_peer: int, payload: Dictionary) -> void:
 	if body != null:
 		body.rotation.y = _yaw
 
-
 ## Server side: start a dash in the current wish direction.
 func _on_dash(sender_peer: int, _payload: Dictionary) -> void:
 	if not is_server() or player == null or sender_peer != player.peer_id:
@@ -236,12 +246,13 @@ func _wired_physics_process(delta: float) -> void:
 	if _dash_time_left > 0.0:
 		horizontal = Vector2(_dash_dir.x, _dash_dir.z) * dash_speed
 	elif wish.length_squared() > 0.0:
-		horizontal = Vector2(wish.x, wish.z) * speed
-	else:
-		horizontal.x = move_toward(horizontal.x, 0.0, friction * delta)
-		horizontal.y = move_toward(horizontal.y, 0.0, friction * delta)
+		horizontal += Vector2(wish.x, wish.z) * speed
+	
+	horizontal /= 2.0
+	
 	body.velocity.x = horizontal.x
 	body.velocity.z = horizontal.y
+	
 	var jump_down := bool(player.input.get("jump", false))
 	if jump_edge(body.is_on_floor(), jump_down, _jump_was_down):
 		body.velocity.y = jump_velocity
@@ -261,19 +272,45 @@ func _wired_visual_process(_delta: float) -> void:
 	if body == null:
 		return
 	body.rotation.y = visual_yaw()
-	if camera != null:
-		camera.rotation.x = visual_pitch()
+	# Rotate the spine/head by the shared look pitch. `visual_pitch()` is local
+	# for the owner and replicated for remote peers, so every peer draws the
+	# same head tilt without extra network messages.
+	if character_model != null:
+		character_model.set_spine_rotation(Vector3(-visual_pitch(), 0, 0))
 	var avatar := body.get_node_or_null("Mesh") as MeshInstance3D
 	if avatar != null:
 		avatar.visible = not is_local_player()
 	if player != null:
 		player.set_anchor_position_3d(body.position)
-	if is_local_player():
+	_update_movement_animation()
+	if is_local_player() and camera != null and character_model != null:
+		# Anchor the camera to the m_head bone every frame and layer the shared
+		# pitch on top of the head's base orientation.
+		var head_pose = character_model.get_head_global_pose()
+		var pitch_basis := Basis.from_euler(Vector3(visual_pitch(), 0, 0))
+		camera.global_position = head_pose.origin
+		camera.transform.basis = pitch_basis
 		if not look_is_active(_look_captured, Input.mouse_mode, OS.has_feature("web")):
 			_look_captured = false
 			# When the pointer is no longer captured we also discard any pending look delta
 			_look_dirty = false
 		_send_look_if_due()
+
+
+## Owning client only. The server simulates the body and replicates its
+## velocity, so the local player can derive walk/idle from that velocity
+## without reading its own input. Only the horizontal part counts: a jump
+## in place must stay idle.
+func _update_movement_animation() -> void:
+	if character_model == null or body == null:
+		return
+	var horizontal := Vector2(body.velocity.x, body.velocity.z)
+	if horizontal.length_squared() > MOVEMENT_IDLE_SPEED * MOVEMENT_IDLE_SPEED:
+		character_model.set_movement_running()
+		var dir = body.to_local(body.global_position + body.velocity)
+		character_model.set_movement_direction(Vector2(dir.x, -dir.z).normalized())
+	else:
+		character_model.set_movement_idle()
 
 
 func _send_look_if_due() -> void:
@@ -292,6 +329,7 @@ func _current_move() -> Vector2:
 		return Vector2.ZERO
 	var raw: Variant = player.input.get("move", Vector2.ZERO)
 	var move := Vector2.ZERO
+	
 	if raw is Vector2:
 		var vector: Vector2 = raw
 		move = vector
@@ -306,6 +344,29 @@ func _wired_replicated_properties() -> PackedStringArray:
 	return PackedStringArray([
 		"Body:position",
 		"Body:velocity",
+		":replicated_yaw",
+		":replicated_pitch",
+	])
+
+
+## Properties smoothed on remote peers so movement and look don't snap between
+## network ticks. `Body:velocity` is intentionally excluded: it drives the
+## run/idle animation, not the visual transform.
+func _wired_interpolated_properties() -> PackedStringArray:
+	return PackedStringArray([
+		"Body:position",
+		":replicated_yaw",
+		":replicated_pitch",
+	])
+
+
+## Look angles are interpolated along the shortest arc (`-PI`..`PI`) so the
+## camera/head doesn't spin the long way when yaw wraps from `PI` to `-PI`.
+## `Body:position` is a plain Vector3 and interpolates component-wise.
+func _wired_angle_properties() -> PackedStringArray:
+	return PackedStringArray([
+		":replicated_yaw",
+		":replicated_pitch",
 	])
 
 
