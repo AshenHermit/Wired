@@ -360,6 +360,16 @@ func _wired_interpolated_properties() -> PackedStringArray:
 	])
 
 
+## Look angles are interpolated along the shortest arc (`-PI`..`PI`) so the
+## camera/head doesn't spin the long way when yaw wraps from `PI` to `-PI`.
+## `Body:position` is a plain Vector3 and interpolates component-wise.
+func _wired_angle_properties() -> PackedStringArray:
+	return PackedStringArray([
+		":replicated_yaw",
+		":replicated_pitch",
+	])
+
+
 ## Persists the full 3D body transform, velocity and look direction: a restart
 ## must resume in the same place and looking the same way.
 func _wired_save_state() -> Dictionary:

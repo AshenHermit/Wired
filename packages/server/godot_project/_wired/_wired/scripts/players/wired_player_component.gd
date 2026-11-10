@@ -37,9 +37,10 @@ var authority_mode: String = AUTHORITY_SERVER
 ## Registry option: the component exists only on its owner's peer.
 var local_only := false
 
-## Speed at which replicated properties are smoothed on non-authoritative
+## Default speed at which replicated properties are smoothed on non-authoritative
 ## peers instead of snapping to replicated values. Higher = snappier but less
-## smooth. `0` disables interpolation entirely.
+## smooth. `0` disables interpolation entirely. Override `_wired_interpolation_speed()`
+## per property for different speeds.
 @export var interpolation_speed: float = 10.0
 
 ## Last smoothed visual value per interpolated property key. Used as the lerp
@@ -254,6 +255,20 @@ func _wired_interpolated_properties() -> PackedStringArray:
 	return PackedStringArray()
 
 
+## Interpolation speed for a single interpolated property. Override this to give
+## different properties different speeds (e.g. position fast, look angles slow).
+## Falls back to the `interpolation_speed` export.
+func _wired_interpolation_speed(property: String) -> float:
+	return interpolation_speed
+
+
+## Property paths whose float values represent angles and should be interpolated
+## along the shortest arc (`-PI`..`PI`) instead of as plain floats. Defaults to
+## empty: floats are interpolated as-is unless listed here.
+func _wired_angle_properties() -> PackedStringArray:
+	return PackedStringArray()
+
+
 func _wired_save_state() -> Dictionary:
 	return {}
 
@@ -295,15 +310,21 @@ func _wired_resolve_property(property: String) -> Array:
 ## `_wired_interpolated_properties()`. Runs after `_wired_visual_process` so
 ## packages can still override visuals first; the sim owner (server) is skipped
 ## because it simulates authoritatively.
+##
+## Per-property speed comes from `_wired_interpolation_speed(property)`;
+## angle-vs-plain-float handling comes from `_wired_angle_properties()`.
 func _wired_apply_interpolation(delta: float) -> void:
 	if _is_simulation_owner():
 		return
 	var properties := _wired_interpolated_properties()
-	if properties.is_empty() or interpolation_speed <= 0.0:
+	if properties.is_empty():
 		return
-	var step := delta * interpolation_speed
+	var angle_properties := _wired_angle_properties()
 	for property: String in properties:
 		if property.is_empty():
+			continue
+		var speed := _wired_interpolation_speed(property)
+		if speed <= 0.0:
 			continue
 		var resolved := _wired_resolve_property(property)
 		var target_node: Node = resolved[0]
@@ -316,24 +337,50 @@ func _wired_apply_interpolation(delta: float) -> void:
 		if current == target:
 			_wired_visual_current[key] = target
 			continue
-		var lerped := _wired_lerp_value(current, target, step)
+		var step := delta * speed
+		var lerped := _wired_lerp_value(current, target, step, angle_properties.has(property))
 		target_node.set(prop_name, lerped)
 		_wired_visual_current[key] = lerped
 
 
-## Linearly interpolates between two values. Vectors use `lerp`; floats are
-## treated as angles and interpolated along the shortest arc (`-PI`..`PI`).
-func _wired_lerp_value(from: Variant, to: Variant, t: float) -> Variant:
+## Linearly interpolates one property on `target_node` toward `target` by
+## `step` (`delta * speed`). Package authors can call this directly from their
+## own `_wired_visual_process` for full control.
+##
+## - `Vector3` / `Vector2` → component-wise `lerp`
+## - `float` / `int` → plain float lerp unless `is_angle` is true, in which case
+##   the shortest angular arc (`-PI`..`PI`) is used
+## - anything else → snapped to `target`
+func _wired_lerp_property(target_node: Node, prop_name: String, target: Variant, step: float, is_angle: bool = false) -> void:
+	if target_node == null:
+		return
+	var current: Variant = target_node.get(prop_name)
+	if current == target:
+		return
+	var lerped := _wired_lerp_value(current, target, step, is_angle)
+	target_node.set(prop_name, lerped)
+
+
+## Linearly interpolates between two values.
+##
+## - `Vector3` / `Vector2` → component-wise `lerp`
+## - `float` / `int` → plain float lerp unless `is_angle` is true, in which case
+##   the shortest angular arc (`-PI`..`PI`) is used
+## - anything else → `to` is returned
+func _wired_lerp_value(from: Variant, to: Variant, t: float, is_angle: bool = false) -> Variant:
 	if from is Vector3 and to is Vector3:
 		return from.lerp(to, t)
 	if from is Vector2 and to is Vector2:
 		return from.lerp(to, t)
 	if from is float or from is int:
-		return _wired_lerp_angle(float(from), float(to), t)
+		if is_angle:
+			return _wired_lerp_angle(float(from), float(to), t)
+		return lerpf(float(from), float(to), t)
 	return to
 
 
 ## Interpolates one angle toward another along the shortest arc.
+## Package authors can call this directly.
 func _wired_lerp_angle(from: float, to: float, t: float) -> float:
 	var diff := wrapf(to - from, -PI, PI)
 	return wrapf(from + diff * t, -PI, PI)
