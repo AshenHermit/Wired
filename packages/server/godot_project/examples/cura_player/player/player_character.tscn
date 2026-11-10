@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://c35lbml1jftn0"]
 
-[ext_resource type="Script" uid="uid://dvwjfv8nfrqhh" path="res://packages/cura_player/player/character.gd" id="1_58pw5"]
+[ext_resource type="Script" uid="uid://djww33b31cm6h" path="res://packages/cura_player/player/character.gd" id="1_58pw5"]
 [ext_resource type="PackedScene" uid="uid://dgrfkn3pspn0r" path="res://packages/cura_player/player/player_model_ready.tscn" id="2_1fs67"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_nsyls"]
@@ -25,3 +25,6 @@ shape = SubResource("CapsuleShape3D_nsyls")
 
 [node name="Camera" type="Camera3D" parent="Body" unique_id=2021528673]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
+
+[node name="OmniLight3D" type="OmniLight3D" parent="Body" unique_id=1575406402]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.4903935, -0.2858177)
