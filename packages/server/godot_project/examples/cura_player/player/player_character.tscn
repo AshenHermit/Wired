@@ -1,29 +1,27 @@
 [gd_scene format=3 uid="uid://c35lbml1jftn0"]
 
-[ext_resource type="Script" path="character.gd" id="1_58pw5"]
+[ext_resource type="Script" uid="uid://dvwjfv8nfrqhh" path="res://packages/cura_player/player/character.gd" id="1_58pw5"]
+[ext_resource type="PackedScene" uid="uid://dgrfkn3pspn0r" path="res://packages/cura_player/player/player_model_ready.tscn" id="2_1fs67"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_nsyls"]
 radius = 0.4
 height = 1.8
 
-[sub_resource type="CapsuleMesh" id="CapsuleMesh_avatar"]
-radius = 0.4
-height = 1.8
-
-[node name="PlayerCharacter" type="Node" unique_id=859364420 node_paths=PackedStringArray("body", "camera")]
+[node name="PlayerCharacter" type="Node" unique_id=859364420 node_paths=PackedStringArray("body", "camera", "character_model")]
 script = ExtResource("1_58pw5")
 body = NodePath("Body")
 camera = NodePath("Body/Camera")
+character_model = NodePath("Body/dude_ready")
 
 [node name="Body" type="CharacterBody3D" parent="." unique_id=950524739]
+collision_layer = 0
+
+[node name="dude_ready" parent="Body" unique_id=1425646971 instance=ExtResource("2_1fs67")]
+transform = Transform3D(-1, 0, -8.742278e-08, 0, 1, 0, 8.742278e-08, 0, -1, 0, 0, 0)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Body" unique_id=1029278657]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
 shape = SubResource("CapsuleShape3D_nsyls")
-
-[node name="Mesh" type="MeshInstance3D" parent="Body" unique_id=2021528674]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
-mesh = SubResource("CapsuleMesh_avatar")
 
 [node name="Camera" type="Camera3D" parent="Body" unique_id=2021528673]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)

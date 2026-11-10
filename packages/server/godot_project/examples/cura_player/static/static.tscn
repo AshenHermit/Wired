@@ -1,16 +1,16 @@
 [gd_scene format=3 uid="uid://bec5fnmvmllyd"]
 
-[ext_resource type="Texture2D" path="77d6fb9b270ee55638a31f62438ec91e.jpg" id="1_rohop"]
+[ext_resource type="Texture2D" uid="uid://cm2wl8vf5akij" path="res://packages/cura_player/static/77d6fb9b270ee55638a31f62438ec91e.jpg" id="1_rohop"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_xddtg"]
-size = Vector3(10, 1, 10)
+size = Vector3(100, 1, 100)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_n282m"]
 albedo_texture = ExtResource("1_rohop")
-uv1_scale = Vector3(9.22, 9.22, 9.22)
+uv1_scale = Vector3(50, 50, 50)
 
 [sub_resource type="BoxMesh" id="BoxMesh_rohop"]
-size = Vector3(10, 1, 10)
+size = Vector3(100, 1, 100)
 
 [node name="Static" type="Node" unique_id=1231112994]
 

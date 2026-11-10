@@ -4,7 +4,7 @@ extends WiredPlayerComponent
 ##
 ## Server authority: the server reads the core 30 Hz input snapshot, derives
 ## the wish direction from the look yaw, simulates `Body` with `move_and_slide`
-## and replicates `Body:position`/`Body:velocity` plus the look angles.
+## and replicates `Body:pфмosition`/`Body:velocity` plus the look angles.
 ##
 ## Mouse look is client-authoritative and immediate: the owning client rotates
 ## `Body`/`Camera` from mouse deltas and sends absolute yaw/pitch snapshots to
@@ -31,6 +31,13 @@ const LOOK_SEND_INTERVAL_MSEC := 66
 @export var body: CharacterBody3D = null
 @export var camera: Camera3D = null
 
+@export var character_model: Node
+
+## Horizontal speed above this counts as moving. Below it the replicated
+## velocity is treated as standing still, so friction leftovers do not keep
+## the run animation playing.
+const MOVEMENT_IDLE_SPEED := 0.15
+
 const LOOK := "look"
 const DASH_ACTION := "dash"
 
@@ -50,7 +57,6 @@ var _dash_time_left := 0.0
 var _dash_cooldown_left := 0.0
 var _dash_dir := Vector3.FORWARD
 var _jump_was_down := false
-
 
 func _wired_ready() -> void:
 	if body == null:
@@ -79,6 +85,8 @@ func _wired_ready() -> void:
 		player.set_anchor_position_3d(body.position)
 	if is_local_player() and camera != null:
 		camera.make_current()
+	if is_local_player():
+		character_model.make_first_person_vision()
 
 
 ## Client only: capture the pointer on click, release it on Escape and turn
@@ -212,7 +220,6 @@ func _on_look(sender_peer: int, payload: Dictionary) -> void:
 	if body != null:
 		body.rotation.y = _yaw
 
-
 ## Server side: start a dash in the current wish direction.
 func _on_dash(sender_peer: int, _payload: Dictionary) -> void:
 	if not is_server() or player == null or sender_peer != player.peer_id:
@@ -269,11 +276,27 @@ func _wired_visual_process(_delta: float) -> void:
 	if player != null:
 		player.set_anchor_position_3d(body.position)
 	if is_local_player():
+		camera.global_position = character_model.get_head_global_pose().origin
+		_update_movement_animation()
 		if not look_is_active(_look_captured, Input.mouse_mode, OS.has_feature("web")):
 			_look_captured = false
 			# When the pointer is no longer captured we also discard any pending look delta
 			_look_dirty = false
 		_send_look_if_due()
+
+
+## Owning client only. The server simulates the body and replicates its
+## velocity, so the local player can derive walk/idle from that velocity
+## without reading its own input. Only the horizontal part counts: a jump
+## in place must stay idle.
+func _update_movement_animation() -> void:
+	if character_model == null or body == null:
+		return
+	var horizontal := Vector2(body.velocity.x, body.velocity.z)
+	if horizontal.length_squared() > MOVEMENT_IDLE_SPEED * MOVEMENT_IDLE_SPEED:
+		character_model.set_movement_running()
+	else:
+		character_model.set_movement_idle()
 
 
 func _send_look_if_due() -> void:
@@ -292,6 +315,7 @@ func _current_move() -> Vector2:
 		return Vector2.ZERO
 	var raw: Variant = player.input.get("move", Vector2.ZERO)
 	var move := Vector2.ZERO
+	
 	if raw is Vector2:
 		var vector: Vector2 = raw
 		move = vector

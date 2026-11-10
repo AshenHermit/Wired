@@ -3,20 +3,19 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cm2wl8vf5akij"
-path.s3tc="res://.godot/imported/77d6fb9b270ee55638a31f62438ec91e.jpg-58470249f511a1a8c1575b3a3d41f8e9.s3tc.ctex"
+path="res://.godot/imported/77d6fb9b270ee55638a31f62438ec91e.jpg-58470249f511a1a8c1575b3a3d41f8e9.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
-"vram_texture": true
+"vram_texture": false
 }
 
 [deps]
 
 source_file="res://packages/cura_player/static/77d6fb9b270ee55638a31f62438ec91e.jpg"
-dest_files=["res://.godot/imported/77d6fb9b270ee55638a31f62438ec91e.jpg-58470249f511a1a8c1575b3a3d41f8e9.s3tc.ctex"]
+dest_files=["res://.godot/imported/77d6fb9b270ee55638a31f62438ec91e.jpg-58470249f511a1a8c1575b3a3d41f8e9.ctex"]
 
 [params]
 
-compress/mode=2
+compress/mode=0
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7
@@ -25,7 +24,7 @@ compress/rdo_quality_loss=0.0
 compress/hdr_compression=1
 compress/normal_map=0
 compress/channel_pack=0
-mipmaps/generate=true
+mipmaps/generate=false
 mipmaps/limit=-1
 mipmaps/preserve_alpha_test_coverage=false
 mipmaps/alpha_test_threshold=0.5
@@ -41,4 +40,4 @@ process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
-detect_3d/compress_to=0
+detect_3d/compress_to=1
