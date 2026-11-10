@@ -34,41 +34,6 @@ class_name PlayersManager
 
 const DEFAULT_AUTHORITY := "server"
 const DEFAULT_PLAYER_ID := 1
-const SPAWN_OFFSET_STEP_2D := 48.0
-const SPAWN_OFFSET_STEP_3D := 48.0
-## A slot is owned only by a live player, so a reconnect after the previous
-## player left reuses the intended marker instead of walking one step further.
-## A spawn point also has to be free of bodies: a CharacterBody2D spawned inside
-## a crate is depenetrated by the first `move_and_slide`, which looks like a
-## teleport. The search shifts the slot in deterministic steps and falls back to
-## the marker only when every candidate is blocked.
-const SPAWN_CLEARANCE_RADIUS := 16.0
-const SPAWN_OFFSETS_2D := [
-	Vector2(0, 0),
-	Vector2(1, 0),
-	Vector2(-1, 0),
-	Vector2(0, -1),
-	Vector2(0, 1),
-	Vector2(1, -1),
-	Vector2(-1, -1),
-	Vector2(1, 1),
-	Vector2(-1, 1),
-	Vector2(2, 0),
-	Vector2(-2, 0),
-]
-const SPAWN_OFFSETS_3D := [
-	Vector3(0, 0, 0),
-	Vector3(1, 0, 0),
-	Vector3(-1, 0, 0),
-	Vector3(0, 0, 1),
-	Vector3(0, 0, -1),
-	Vector3(1, 0, 1),
-	Vector3(-1, 0, 1),
-	Vector3(1, 0, -1),
-	Vector3(-1, 0, -1),
-	Vector3(2, 0, 0),
-	Vector3(-2, 0, 0),
-]
 ## Set on a player root this peer created from a late-join snapshot instead of
 ## receiving it from the spawner. Nothing else owns its lifetime here.
 const META_SNAPSHOT_REPAIR := "_wired_snapshot_repair"
@@ -659,134 +624,43 @@ func _spawn_data(peer_id: int, slot: int) -> Dictionary:
 	}
 
 
-## Lowest slot not owned by a live player. A reconnect after the only player
-## left therefore reuses the first marker instead of taking the next offset.
+## All players spawn at the base marker (slot 0). No offset between players.
 func _claim_spawn_slot(peer_id: int) -> int:
-	var used: Dictionary = {}
-	for other_peer: Variant in _spawned:
-		if int(other_peer) == peer_id:
-			continue
-		var slot: Variant = _spawn_slots.get(other_peer)
-		if slot != null:
-			used[int(slot)] = true
-	var slot := 0
-	while used.has(slot):
-		slot += 1
-	_spawn_slots[peer_id] = slot
-	return slot
+	_spawn_slots[peer_id] = 0
+	return 0
 
 
 func _release_spawn_slot(peer_id: int) -> void:
 	_spawn_slots.erase(peer_id)
 
 
-## Deterministic candidate search around the marker. The first free position is
-## used, so a body already standing on the marker (a persisted crate, another
-## player) never receives the new character inside itself.
+## All players spawn at the base marker. No clearance shifting — every player
+## gets the same base position.
 func _clear_spawn_position_2d(base: Vector2, slot: int) -> Vector2:
-	var space := _space_state_2d()
-	if space == null:
-		return base
-	for offset: Vector2 in SPAWN_OFFSETS_2D:
-		var candidate := base + offset * SPAWN_OFFSET_STEP_2D
-		if _is_spawn_clear_2d(space, candidate):
-			if candidate != base:
-				print(
-					"WIRED_PLAYER_SPAWN_SHIFTED slot=%d axis=2d base=%s position=%s"
-					% [slot, base, candidate]
-				)
-			return candidate
-	push_warning(
-		"WIRED_PLAYER_SPAWN_BLOCKED slot=%d axis=2d base=%s" % [slot, base]
-	)
 	return base
 
 
 func _clear_spawn_position_3d(base: Vector3, slot: int) -> Vector3:
-	var space := _space_state_3d()
-	if space == null:
-		return base
-	for offset: Vector3 in SPAWN_OFFSETS_3D:
-		var candidate := base + offset * SPAWN_OFFSET_STEP_3D
-		if _is_spawn_clear_3d(space, candidate):
-			if candidate != base:
-				print(
-					"WIRED_PLAYER_SPAWN_SHIFTED slot=%d axis=3d base=%s position=%s"
-					% [slot, base, candidate]
-				)
-			return candidate
-	push_warning(
-		"WIRED_PLAYER_SPAWN_BLOCKED slot=%d axis=3d base=%s" % [slot, base]
-	)
 	return base
 
 
-func _is_spawn_clear_2d(
-	space: PhysicsDirectSpaceState2D, position: Vector2
-) -> bool:
-	var params := PhysicsShapeQueryParameters2D.new()
-	var shape := CircleShape2D.new()
-	shape.radius = SPAWN_CLEARANCE_RADIUS
-	params.shape = shape
-	params.transform = Transform2D(0.0, position)
-	params.collide_with_bodies = true
-	params.collide_with_areas = false
-	return space.intersect_shape(params, 1).is_empty()
 
 
-func _is_spawn_clear_3d(
-	space: PhysicsDirectSpaceState3D, position: Vector3
-) -> bool:
-	var params := PhysicsShapeQueryParameters3D.new()
-	var shape := SphereShape3D.new()
-	shape.radius = SPAWN_CLEARANCE_RADIUS
-	params.shape = shape
-	params.transform = Transform3D(Basis.IDENTITY, position)
-	params.collide_with_bodies = true
-	params.collide_with_areas = false
-	return space.intersect_shape(params, 1).is_empty()
 
-
-func _space_state_2d() -> PhysicsDirectSpaceState2D:
-	var viewport := get_viewport()
-	if viewport == null or viewport.world_2d == null:
-		return null
-	return viewport.world_2d.direct_space_state
-
-
-func _space_state_3d() -> PhysicsDirectSpaceState3D:
-	var viewport := get_viewport()
-	if viewport == null or viewport.world_3d == null:
-		return null
-	return viewport.world_3d.direct_space_state
-
-
-## Markers are indexed by the live spawn slot. When a world has fewer markers
-## than players, later players share the first marker with a small deterministic
-## offset instead of stacking on one point. `_claim_spawn_slot` releases the
-## slot when its player leaves, so a reconnect does not drift one step per try.
+## All players spawn at the base marker (slot 0). No offset between players.
 func _spawn_position_2d(index: int) -> Vector2:
 	var world := _static_world()
 	if world == null or not world.has_method("get_spawn_position_2d"):
 		return Vector2.ZERO
-	var position: Vector2 = world.call("get_spawn_position_2d", index)
-	if position == Vector2.ZERO and index > 0:
-		var origin: Vector2 = world.call("get_spawn_position_2d", 0)
-		if origin != Vector2.ZERO:
-			position = origin + Vector2(SPAWN_OFFSET_STEP_2D * index, 0.0)
-	return position
+	return world.call("get_spawn_position_2d", 0)
 
 
+## All players spawn at the base marker (slot 0). No offset between players.
 func _spawn_position_3d(index: int) -> Vector3:
 	var world := _static_world()
 	if world == null or not world.has_method("get_spawn_position_3d"):
 		return Vector3.ZERO
-	var position: Vector3 = world.call("get_spawn_position_3d", index)
-	if position == Vector3.ZERO and index > 0:
-		var origin: Vector3 = world.call("get_spawn_position_3d", 0)
-		if origin != Vector3.ZERO:
-			position = origin + Vector3(SPAWN_OFFSET_STEP_3D * index, 0.0, 0.0)
-	return position
+	return world.call("get_spawn_position_3d", 0)
 
 
 ## The autoload node itself; looked up by path rather than through the `Global`
