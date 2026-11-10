@@ -33,6 +33,13 @@ var persistent: bool = true
 ## spawn_data}`. Set before the node enters the tree.
 var spawn_data: Dictionary = {}
 
+## Speed at which replicated properties are smoothed on clients instead of
+## snapping to replicated values. `0` disables interpolation entirely.
+@export var interpolation_speed: float = 10.0
+
+## Last smoothed visual value per interpolated property key.
+var _wired_visual_current: Dictionary = {}
+
 
 ## Fills the identity fields. Called by `DynamicWorldContainer.spawn_function`
 ## before the spawner parents the entity.
@@ -52,6 +59,10 @@ func _ready() -> void:
 	_wired_apply_spawn(spawn_data)
 	if not _is_server():
 		_wired_freeze_on_client()
+
+
+func _process(delta: float) -> void:
+	_wired_apply_interpolation(delta)
 
 
 ## Builds the replication node for the properties this entity exposes. Paths are
@@ -155,9 +166,91 @@ func _wired_replicated_properties() -> PackedStringArray:
 	return PackedStringArray()
 
 
+## Property paths that should be interpolated (smoothed) on clients instead of
+## snapping to replicated values. Same format as `_wired_replicated_properties()`.
+func _wired_interpolated_properties() -> PackedStringArray:
+	return PackedStringArray()
+
+
 func _wired_save_state() -> Dictionary:
 	return {}
 
 
 func _wired_load_state(_state: Dictionary) -> void:
 	pass
+
+
+# --- interpolation ----------------------------------------------------------
+
+## Resolves a replicated property path into `[target_node, property_name]`.
+## Paths follow the same format as `_wired_replicated_properties()`:
+## - `"RigidBody2D:position"` → node relative to this entity, property `position`
+## - `":some_prop"` → property on this entity itself
+func _wired_resolve_property(property: String) -> Array:
+	var root: Node = self
+	var target_node: Node = root
+	var prop_name: String = ""
+	if property.begins_with(":"):
+		prop_name = property.substr(1, property.length() - 1)
+		target_node = root
+	else:
+		var separator := property.find(":")
+		if separator >= 0:
+			var node_path_str := property.substr(0, separator)
+			prop_name = property.substr(separator + 1, property.length() - separator - 1)
+			if not node_path_str.is_empty():
+				target_node = root.get_node_or_null(NodePath(node_path_str))
+			if target_node == null:
+				target_node = root
+				prop_name = property
+		else:
+			prop_name = property
+			target_node = root
+	return [target_node, prop_name]
+
+
+## Applies smooth interpolation to every property declared in
+## `_wired_interpolated_properties()`. The server is skipped because it
+## simulates authoritatively.
+func _wired_apply_interpolation(delta: float) -> void:
+	if _is_server():
+		return
+	var properties := _wired_interpolated_properties()
+	if properties.is_empty() or interpolation_speed <= 0.0:
+		return
+	var step := delta * interpolation_speed
+	for property: String in properties:
+		if property.is_empty():
+			continue
+		var resolved := _wired_resolve_property(property)
+		var target_node: Node = resolved[0]
+		var prop_name: String = resolved[1]
+		if target_node == null:
+			continue
+		var target: Variant = target_node.get(prop_name)
+		var key := property
+		var current: Variant = _wired_visual_current.get(key, target)
+		if current == target:
+			_wired_visual_current[key] = target
+			continue
+		var lerped := _wired_lerp_value(current, target, step)
+		target_node.set(prop_name, lerped)
+		_wired_visual_current[key] = lerped
+
+
+## Linearly interpolates between two values. Vectors use `lerp`; floats are
+## treated as angles and interpolated along the shortest arc (`-PI`..`PI`).
+func _wired_lerp_value(from: Variant, to: Variant, t: float) -> Variant:
+	if from is Vector3 and to is Vector3:
+		return from.lerp(to, t)
+	if from is Vector2 and to is Vector2:
+		return from.lerp(to, t)
+	if from is float or from is int:
+		return _wired_lerp_angle(float(from), float(to), t)
+	return to
+
+
+## Interpolates one angle toward another along the shortest arc.
+func _wired_lerp_angle(from: float, to: float, t: float) -> float:
+	var diff := wrapf(to - from, -PI, PI)
+	return wrapf(from + diff * t, -PI, PI)
