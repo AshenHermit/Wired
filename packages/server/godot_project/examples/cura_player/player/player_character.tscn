@@ -1,16 +1,18 @@
 [gd_scene format=3 uid="uid://c35lbml1jftn0"]
 
-[ext_resource type="Script" uid="uid://djww33b31cm6h" path="res://packages/cura_player/player/character.gd" id="1_58pw5"]
+[ext_resource type="Script" uid="uid://c1wue0xsmrlyn" path="res://packages/cura_player/player/character.gd" id="1_58pw5"]
 [ext_resource type="PackedScene" uid="uid://dgrfkn3pspn0r" path="res://packages/cura_player/player/player_model_ready.tscn" id="2_1fs67"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_nsyls"]
 radius = 0.4
 height = 1.8
 
-[node name="PlayerCharacter" type="Node" unique_id=859364420 node_paths=PackedStringArray("body", "camera", "character_model")]
+[node name="PlayerCharacter" type="Node" unique_id=859364420 node_paths=PackedStringArray("body", "camera_container", "arm_camera_container", "character_model")]
 script = ExtResource("1_58pw5")
+friction = 200.0
 body = NodePath("Body")
-camera = NodePath("Body/Camera")
+camera_container = NodePath("Body/Node3D")
+arm_camera_container = NodePath("Body/Node3D/SubViewportContainer/SubViewport")
 character_model = NodePath("Body/dude_ready")
 
 [node name="Body" type="CharacterBody3D" parent="." unique_id=950524739]
@@ -23,8 +25,24 @@ transform = Transform3D(-1, 0, -8.742278e-08, 0, 1, 0, 8.742278e-08, 0, -1, 0, 0
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
 shape = SubResource("CapsuleShape3D_nsyls")
 
-[node name="Camera" type="Camera3D" parent="Body" unique_id=2021528673]
+[node name="Node3D" type="Node3D" parent="Body" unique_id=314110351]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
+
+[node name="SubViewportContainer" type="SubViewportContainer" parent="Body/Node3D" unique_id=404892132]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+stretch = true
+
+[node name="SubViewport" type="SubViewport" parent="Body/Node3D/SubViewportContainer" unique_id=1800012508]
+transparent_bg = true
+handle_input_locally = false
+canvas_cull_mask = 4293918752
+size = Vector2i(960, 540)
+render_target_update_mode = 4
 
 [node name="OmniLight3D" type="OmniLight3D" parent="Body" unique_id=1575406402]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.4903935, -0.2858177)
+layers = 33
