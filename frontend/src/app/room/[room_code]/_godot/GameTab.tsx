@@ -19,6 +19,10 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { apiErrorBody, apiErrorResponse } from "@/i18n/api-error";
 import { useAppMessage, type AppMessage } from "@/i18n/message";
+import {
+  emitPackageProgress,
+  packagePercent,
+} from "@/lib/editorBridgeEvents";
 import { API_PREFIX } from "@/utils/variables";
 import { readAccessToken } from "@/utils/auth-cookie";
 import {
@@ -27,6 +31,7 @@ import {
   postGameConfigure,
   postGamePing,
 } from "@/godot/bridge/game-bridge";
+import { GameProgressToast } from "./GameProgressToast";
 
 type GamePhase =
   | "checking"
@@ -446,6 +451,82 @@ export function packagesFailed(packages: RoomPackagesStatus): boolean {
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
+type PackageEventTracker = {
+  /** Package id -> display name, filled from the room status and bridge events. */
+  names: Map<string, string>;
+  /** Packages whose initial loading toast was already announced. */
+  announced: Set<string>;
+};
+
+/**
+ * Announces a loading toast for every active package once, so the tab is not
+ * silent while the Web client is still starting. Completion is deliberately not
+ * derived from the server runtime: the runtime applies packages long before the
+ * browser does, and claiming 100% there is what made the screen look ready while
+ * the client was still downloading.
+ *
+ * A runtime failure is still reported immediately: it is the same failure the
+ * client would hit, and it needs to be visible before the frame starts.
+ */
+function emitPackageStatusEvents(
+  packages: RoomPackagesStatus,
+  failureMessage: string,
+  tracker: PackageEventTracker,
+): void {
+  const active = new Set(
+    activePackages(packages).map(({ packageId }) => packageId),
+  );
+  for (const entry of packages.packages) {
+    if (!active.has(entry.packageId)) {
+      continue;
+    }
+    const packageId = String(entry.packageId);
+    tracker.names.set(packageId, entry.name);
+    if (entry.runtime.state === "failed") {
+      emitPackageProgress({
+        packageId,
+        name: entry.name,
+        percent: 0,
+        status: "error",
+        errorMessage: entry.runtime.error ?? failureMessage,
+      });
+      continue;
+    }
+    if (tracker.announced.has(packageId)) {
+      continue;
+    }
+    tracker.announced.add(packageId);
+    emitPackageProgress({
+      packageId,
+      name: entry.name,
+      percent: 0,
+      status: "loading",
+    });
+  }
+}
+
+function finiteNumber(value: unknown): number {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function eventPackageId(value: unknown): string {
+  const id = finiteNumber(value);
+  return id > 0 ? String(id) : "";
+}
+
+function eventPackageName(
+  rawName: unknown,
+  packageId: string,
+  names: Map<string, string>,
+  fallback: (id: string) => string,
+): string {
+  if (typeof rawName === "string" && rawName.trim()) {
+    return rawName;
+  }
+  return names.get(packageId) ?? fallback(packageId);
+}
+
 /** Reads the runtime state and the packages the room expects to see applied. */
 async function readRuntimeState(roomId: number) {
   const [status, packages] = await Promise.all([
@@ -459,8 +540,11 @@ async function readRuntimeState(roomId: number) {
 function reportRuntimeProgress(
   status: GameRoomRuntimeStatus,
   packages: RoomPackagesStatus,
+  failureMessage: string,
+  tracker: PackageEventTracker,
   onProgress: (message: AppMessage) => void,
 ): void {
+  emitPackageStatusEvents(packages, failureMessage, tracker);
   const active = activePackages(packages);
   const applied = active.filter(({ packageId, revision }) => {
     const entry = packages.packages.find((pkg) => pkg.packageId === packageId);
@@ -476,6 +560,9 @@ function reportRuntimeProgress(
 interface RuntimeWaitOptions {
   /** Set when the effect that started the wait was torn down. */
   signal: AbortSignal;
+  /** Translated fallback for a package failure the runtime left unexplained. */
+  failureMessage: string;
+  tracker: PackageEventTracker;
   onProgress: (message: AppMessage) => void;
 }
 
@@ -490,11 +577,11 @@ interface RuntimeWaitOptions {
 async function waitForRuntimeUntil(
   roomId: number,
   deadline: number,
-  { signal, onProgress }: RuntimeWaitOptions,
+  { signal, failureMessage, tracker, onProgress }: RuntimeWaitOptions,
 ): Promise<void> {
   for (;;) {
     const { status, packages } = await readRuntimeState(roomId);
-    reportRuntimeProgress(status, packages, onProgress);
+    reportRuntimeProgress(status, packages, failureMessage, tracker, onProgress);
     if (signal.aborted) {
       return;
     }
@@ -535,6 +622,27 @@ export function GameTab({ room }: { room: Room }) {
   const t = useTranslations("Game");
   const common = useTranslations("Common");
   const messageText = "raw" in message ? message.raw : format(message);
+
+  // The runtime poll lives in effects that must not depend on the translation
+  // function: a locale change would cancel an in-flight ticket request. The ref
+  // keeps the localized failure text current without re-running them.
+  const failureMessageRef = React.useRef(t("packagesFailed"));
+  const packageFallbackNameRef = React.useRef((id: string) =>
+    t("packageFallbackName", { id }),
+  );
+  React.useEffect(() => {
+    failureMessageRef.current = t("packagesFailed");
+    packageFallbackNameRef.current = (id) =>
+      t("packageFallbackName", { id });
+  }, [t]);
+
+  // Shared between the runtime poll and the iframe message listener. The poll
+  // announces each package once; the listener replaces that toast with the
+  // client's own byte progress and terminal state.
+  const packageTrackerRef = React.useRef<PackageEventTracker>({
+    names: new Map(),
+    announced: new Set(),
+  });
 
   const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
   const lastFrameMessageAtRef = React.useRef(0);
@@ -623,11 +731,20 @@ export function GameTab({ room }: { room: Room }) {
     const describeRuntime = (
       status: GameRoomRuntimeStatus,
       packages: RoomPackagesStatus,
-    ) => reportRuntimeProgress(status, packages, waitMessage);
+    ) =>
+      reportRuntimeProgress(
+        status,
+        packages,
+        failureMessageRef.current,
+        packageTrackerRef.current,
+        waitMessage,
+      );
 
     const waitForRuntime = (deadline: number) =>
       waitForRuntimeUntil(room.id, deadline, {
         signal: abort.signal,
+        failureMessage: failureMessageRef.current,
+        tracker: packageTrackerRef.current,
         onProgress: waitMessage,
       });
 
@@ -802,17 +919,81 @@ export function GameTab({ room }: { room: Room }) {
           if (!value || typeof value !== "object") {
             break;
           }
-          const typed = value as { type?: unknown; players?: unknown };
+          const typed = value as {
+            type?: unknown;
+            players?: unknown;
+            package_id?: unknown;
+            name?: unknown;
+            loaded_bytes?: unknown;
+            total_bytes?: unknown;
+            status?: unknown;
+            ok?: unknown;
+            error?: unknown;
+          };
           if (typeof typed.type !== "string") {
             break;
           }
-          dispatch({
-            type: "event",
-            name: typed.type,
-            players: Array.isArray(typed.players)
-              ? typed.players.length
-              : undefined,
-          });
+          const isPackageEvent =
+            typed.type === "package_progress" ||
+            typed.type === "package_sync";
+          if (!isPackageEvent) {
+            dispatch({
+              type: "event",
+              name: typed.type,
+              players: Array.isArray(typed.players)
+                ? typed.players.length
+                : undefined,
+            });
+          }
+
+          // The Web client downloads and applies every package itself before
+          // it opens the game socket. These events are the only source of the
+          // visitor's real transfer progress.
+          if (isPackageEvent) {
+            const packageId = eventPackageId(typed.package_id);
+            if (!packageId) {
+              break;
+            }
+            const tracker = packageTrackerRef.current;
+            const name = eventPackageName(
+              typed.name,
+              packageId,
+              tracker.names,
+              packageFallbackNameRef.current,
+            );
+            tracker.names.set(packageId, name);
+            const failed =
+              typed.type === "package_progress"
+                ? typed.status === "error"
+                : typed.ok !== true;
+            if (failed) {
+              emitPackageProgress({
+                packageId,
+                name,
+                percent: 0,
+                status: "error",
+                errorMessage:
+                  typeof typed.error === "string" && typed.error.trim()
+                    ? typed.error
+                    : failureMessageRef.current,
+              });
+            } else {
+              const complete =
+                typed.type === "package_sync" ||
+                typed.status === "complete";
+              emitPackageProgress({
+                packageId,
+                name,
+                percent: complete
+                  ? 100
+                  : packagePercent(
+                      finiteNumber(typed.loaded_bytes),
+                      finiteNumber(typed.total_bytes),
+                    ),
+                status: complete ? "complete" : "loading",
+              });
+            }
+          }
           break;
         }
       }
@@ -877,6 +1058,10 @@ export function GameTab({ room }: { room: Room }) {
       onClick={focusFrame}
       tabIndex={-1}
     >
+      {/* Package progress is rendered by the global Sonner <Toaster />, so this
+          only subscribes to the bridge channel and never covers the frame. */}
+      <GameProgressToast />
+
       {exportReady && (
         <iframe
           key={attempt}

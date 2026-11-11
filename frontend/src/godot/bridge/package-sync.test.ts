@@ -227,7 +227,11 @@ describe("overwritePackageRevision", () => {
     expect(api.getRevisionFile).toHaveBeenCalledWith(5, 4, "scripts/hero.gd");
     expect(result.written).toEqual(["scripts/hero.gd"]);
     // The editor folder is addressed by the manifest slug, not the package id.
-    expect(files.replaceContents).toHaveBeenCalledWith("hero", expect.any(Map));
+    expect(files.replaceContents).toHaveBeenCalledWith(
+      "hero",
+      expect.any(Map),
+      expect.objectContaining({ onFileWritten: expect.any(Function) })
+    );
     expect(tree.get("hero")?.get("scripts/hero.gd")).toBe("extends Node");
   });
 
@@ -419,7 +423,11 @@ describe("reconcilePackageRevision", () => {
     );
 
     expect(result.status).toBe("applied");
-    expect(files.replaceContents).toHaveBeenCalledWith("hero", expect.any(Map));
+    expect(files.replaceContents).toHaveBeenCalledWith(
+      "hero",
+      expect.any(Map),
+      expect.objectContaining({ onFileWritten: expect.any(Function) })
+    );
     expect(tree.get("hero")?.get("hero.gd")).toBe("published");
     expect(vi.mocked(files.snapshot).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(files.replaceContents).mock.invocationCallOrder[0]

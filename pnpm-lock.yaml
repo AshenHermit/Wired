@@ -74,6 +74,9 @@ importers:
       lucide-react:
         specifier: ^0.553.0
         version: 0.553.0(react@19.2.0)
+      mitt:
+        specifier: ^3.0.1
+        version: 3.0.1
       motion:
         specifier: ^12.23.26
         version: 12.23.26(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
@@ -5373,6 +5376,9 @@ packages:
   minipass@7.1.2:
     resolution: {integrity: sha512-qOOzS1cBTWYF4BH8fVePDBOO9iptMnGUEZwNc/cMWnTV2nVLZ7VoNWEPHkYczZA0pdoA7dl6e7FL659nX9S2aw==}
     engines: {node: '>=16 || 14 >=14.17'}
+
+  mitt@3.0.1:
+    resolution: {integrity: sha512-vKivATfr97l2/QBCYAkXYDbrIWPM2IIKEl7YPhjCvKlG3kE2gm+uBo6nEXK3M5/Ffh/FLpKExzOQ3JJoJGFKBw==}
 
   mkdirp@0.5.6:
     resolution: {integrity: sha512-FP+p8RB8OWpF3YZBCrP5gtADmtXApB5AMLn+vdyA+PyxCjrCs00mjyUozssO33cwDeT3wNGdLxJ5M//YqtHAJw==}
@@ -12660,6 +12666,8 @@ snapshots:
   minimist@1.2.8: {}
 
   minipass@7.1.2: {}
+
+  mitt@3.0.1: {}
 
   mkdirp@0.5.6:
     dependencies:

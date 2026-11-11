@@ -256,7 +256,7 @@ func _wired_apply_interpolation(delta: float) -> void:
 			_wired_visual_current[key] = target
 			continue
 		var step := delta * speed
-		var lerped := _wired_lerp_value(current, target, step, angle_properties.has(property))
+		var lerped = _wired_lerp_value(current, target, step, angle_properties.has(property))
 		target_node.set(prop_name, lerped)
 		_wired_visual_current[key] = lerped
 
@@ -275,7 +275,7 @@ func _wired_lerp_property(target_node: Node, prop_name: String, target: Variant,
 	var current: Variant = target_node.get(prop_name)
 	if current == target:
 		return
-	var lerped := _wired_lerp_value(current, target, step, is_angle)
+	var lerped = _wired_lerp_value(current, target, step, is_angle)
 	target_node.set(prop_name, lerped)
 
 

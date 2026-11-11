@@ -1,0 +1,14 @@
+[gd_resource type="StandardMaterial3D" format=3 uid="uid://bvkbx2in1s4x7"]
+
+[ext_resource type="Texture2D" uid="uid://mlwq5et4u4nr" path="res://packages/cura_player/player/dude_drwest_niftex_6.png" id="1_uk1j3"]
+[ext_resource type="Texture2D" uid="uid://c04jjm22yc6d6" path="res://packages/cura_player/player/dude_drwest_niftex_8.png" id="2_1xrg3"]
+
+[resource]
+resource_name = "NiMultiShader4_283.001"
+transparency = 4
+cull_mode = 2
+albedo_texture = ExtResource("1_uk1j3")
+metallic_specular = 0.0
+normal_enabled = true
+normal_texture = ExtResource("2_1xrg3")
+metadata/_gltf_primary_texture_coord = 0

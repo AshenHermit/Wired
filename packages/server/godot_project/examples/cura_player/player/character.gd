@@ -32,7 +32,8 @@ const LOOK_SEND_INTERVAL_MSEC := 66
 @export var dash_cooldown := 0.6
 
 @export var body: CharacterBody3D = null
-@export var camera: Camera3D = null
+@export var camera_container: Node3D = null
+@export var arm_camera_container: SubViewport = null
 
 @export var character_model: Node
 
@@ -86,11 +87,22 @@ func _wired_ready() -> void:
 		# the persisted position.
 		body.position = player.get_anchor_position_3d()
 		player.set_anchor_position_3d(body.position)
-	if is_local_player() and camera != null:
-		camera.make_current()
+	if is_local_player() and camera_container != null:
+		setup_cameras()
 	if is_local_player():
 		character_model.make_first_person_vision()
 
+var main_camera:Camera3D
+var arms_camera:Camera3D
+
+func setup_cameras():
+	main_camera = Camera3D.new()
+	camera_container.add_child(main_camera)
+	main_camera.cull_mask = 1
+	
+	arms_camera = Camera3D.new()
+	arm_camera_container.add_child(arms_camera)
+	arms_camera.cull_mask = 32
 
 ## Client only: capture the pointer on click, release it on Escape and turn
 ## mouse motion into an immediate local look update.
@@ -157,13 +169,13 @@ func apply_mouse_look(relative: Vector2) -> void:
 		return
 	if not _local_look_started:
 		_local_yaw = body.rotation.y
-		_local_pitch = camera.rotation.x if camera != null else 0.0
+		_local_pitch = camera_container.rotation.x if camera_container != null else 0.0
 		_local_look_started = true
 	_local_yaw = wrapf(_local_yaw - relative.x * mouse_sensitivity, -PI, PI)
 	_local_pitch = clamp_look_pitch(_local_pitch - relative.y * mouse_sensitivity)
 	body.rotation.y = _local_yaw
-	if camera != null:
-		camera.rotation.x = _local_pitch
+	if camera_container != null:
+		camera_container.rotation.x = _local_pitch
 	_look_dirty = true
 
 
@@ -265,6 +277,10 @@ func _wired_physics_process(delta: float) -> void:
 	body.move_and_slide()
 	player.set_anchor_position_3d(body.position)
 
+func _process(delta: float) -> void:
+	super._process(delta)
+	if arms_camera and main_camera:
+		arms_camera.global_transform = main_camera.global_transform
 
 ## Every peer: apply the best available look angles and follow the body with the
 ## camera anchor. The owner keeps local look; remote peers use replicated look.
@@ -283,13 +299,13 @@ func _wired_visual_process(_delta: float) -> void:
 	if player != null:
 		player.set_anchor_position_3d(body.position)
 	_update_movement_animation()
-	if is_local_player() and camera != null and character_model != null:
+	if is_local_player() and camera_container != null and character_model != null:
 		# Anchor the camera to the m_head bone every frame and layer the shared
 		# pitch on top of the head's base orientation.
 		var head_pose = character_model.get_head_global_pose()
 		var pitch_basis := Basis.from_euler(Vector3(visual_pitch(), 0, 0))
-		camera.global_position = head_pose.origin
-		camera.transform.basis = pitch_basis
+		camera_container.global_position = head_pose.origin
+		camera_container.transform.basis = pitch_basis
 		if not look_is_active(_look_captured, Input.mouse_mode, OS.has_feature("web")):
 			_look_captured = false
 			# When the pointer is no longer captured we also discard any pending look delta
@@ -349,9 +365,9 @@ func _wired_replicated_properties() -> PackedStringArray:
 	])
 
 
-## Properties smoothed on remote peers so movement and look don't snap between
-## network ticks. `Body:velocity` is intentionally excluded: it drives the
-## run/idle animation, not the visual transform.
+### Properties smoothed on remote peers so movement and look don't snap between
+### network ticks. `Body:velocity` is intentionally excluded: it drives the
+### run/idle animation, not the visual transform.
 func _wired_interpolated_properties() -> PackedStringArray:
 	return PackedStringArray([
 		"Body:position",
@@ -401,8 +417,8 @@ func _wired_load_state(state: Dictionary) -> void:
 	replicated_yaw = _yaw
 	replicated_pitch = _pitch
 	body.rotation.y = _yaw
-	if camera != null:
-		camera.rotation.x = _pitch
+	if camera_container != null:
+		camera_container.rotation.x = _pitch
 	if player != null:
 		player.set_anchor_position_3d(body.position)
 

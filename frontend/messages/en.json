@@ -391,7 +391,13 @@
     "runtimeReady": "The game server is ready. Requesting a connection…",
     "runtimeApplying": "Applying the room packages ({applied}/{total})…",
     "runtimePreparing": "Preparing the room world…",
-    "runtimeDefault": "Starting the game server…"
+    "runtimeDefault": "Starting the game server…",
+    "packageApplying": "Loading package {name}…",
+    "packageApplied": "Package {name} loaded",
+    "packageApplyFailed": "Could not load package {name}",
+    "packageFallbackName": "Package {id}",
+    "packagePercent": "{percent}%",
+    "packageProgressLabel": "{name}: {percent}% loaded"
   },
   "Errors": {
     "unauthorized": "Please sign in",

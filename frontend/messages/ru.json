@@ -391,7 +391,13 @@
     "runtimeReady": "Сервер игры готов. Запрашиваем подключение…",
     "runtimeApplying": "Применяем пакеты комнаты ({applied}/{total})…",
     "runtimePreparing": "Готовим мир комнаты…",
-    "runtimeDefault": "Запускаем сервер игры…"
+    "runtimeDefault": "Запускаем сервер игры…",
+    "packageApplying": "Загружаем пакет {name}…",
+    "packageApplied": "Пакет {name} загружен",
+    "packageApplyFailed": "Не удалось загрузить пакет {name}",
+    "packageFallbackName": "Пакет {id}",
+    "packagePercent": "{percent}%",
+    "packageProgressLabel": "{name}: загружено {percent}%"
   },
   "Errors": {
     "unauthorized": "Нужно войти в аккаунт",

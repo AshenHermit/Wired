@@ -7,6 +7,7 @@ size = Vector3(100, 1, 100)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_n282m"]
 albedo_texture = ExtResource("1_rohop")
+metallic_specular = 0.0
 uv1_scale = Vector3(50, 50, 50)
 
 [sub_resource type="BoxMesh" id="BoxMesh_rohop"]
@@ -168,10 +169,14 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
 
 [node name="OmniLight3D" type="OmniLight3D" parent="." unique_id=853816569]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.371088, 0)
+layers = 33
 light_energy = 3.0
+shadow_enabled = true
 omni_range = 6.387022
 
 [node name="OmniLight3D2" type="OmniLight3D" parent="." unique_id=296206177]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 11.487312, 3.8403945, 8.657297)
+layers = 33
 light_energy = 3.0
+shadow_enabled = true
 omni_range = 6.2671566

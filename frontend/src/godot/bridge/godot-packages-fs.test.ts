@@ -1,5 +1,9 @@
 import { PackageFileEntry, PackageManifest } from "@wired-io/shared";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  bridgeEvents,
+  type PackageProgressEvent,
+} from "@/lib/editorBridgeEvents";
 import {
   EditorBridgeOperationError,
   type EditorBridgeClient,
@@ -508,5 +512,146 @@ describe("applyPackageRevision", () => {
       `${stagingPath}/scripts/hero.gd`,
       data("extends Node"),
     );
+  });
+});
+
+describe("package progress events", () => {
+  const manifest: PackageManifest = {
+    packageId: 7,
+    slug: "hero",
+    name: "Heroes",
+    revision: 2,
+    files: [],
+    totalSize: 0,
+    publishedAt: "2026-10-31T00:00:00.000Z",
+  };
+
+  afterEach(() => {
+    bridgeEvents.all.clear();
+  });
+
+  /** The published revision every test downloads: two files, 14 bytes. */
+  async function revision(): Promise<{
+    contents: Map<string, Uint8Array>;
+    files: PackageFileEntry[];
+    totalBytes: number;
+  }> {
+    const contents = new Map([
+      ["main.gd", data("main")],
+      ["scenes/a.tscn", data("[gd_scene]")],
+    ]);
+    const files: PackageFileEntry[] = [];
+    let totalBytes = 0;
+    for (const [filepath, bytes] of contents) {
+      totalBytes += bytes.byteLength;
+      files.push({
+        filepath,
+        size: bytes.byteLength,
+        sha256: await sha256Hex(bytes),
+      });
+    }
+    return { contents, files, totalBytes };
+  }
+
+  it("emits a loading event per written file and completes at 100%", async () => {
+    const { contents, files, totalBytes } = await revision();
+    const workspace = makeWorkspace({
+      replace: () => ({ written: [...contents.keys()], deleted: [] }),
+    });
+    const events: PackageProgressEvent[] = [];
+    const listener = (event: PackageProgressEvent) => events.push(event);
+    bridgeEvents.on("packageProgress", listener);
+
+    try {
+      await applyPackageRevision({
+        files: workspace.files,
+        manifest: { ...manifest, files },
+        download: async (filepath) => contents.get(filepath)!,
+      });
+    } finally {
+      bridgeEvents.off("packageProgress", listener);
+    }
+
+    const firstFilePercent = Math.round(
+      (data("main").byteLength / totalBytes) * 100,
+    );
+    expect(events.map((event) => [event.status, event.percent])).toEqual([
+      ["loading", 0],
+      ["loading", firstFilePercent],
+      ["loading", 100],
+      ["complete", 100],
+    ]);
+    for (const event of events) {
+      expect(event.packageId).toBe("7");
+      expect(event.name).toBe("Heroes");
+    }
+  });
+
+  it("reports a failed write as packageError and rethrows", async () => {
+    const { contents, files, totalBytes } = await revision();
+    const failingEngine: PackageEngine = {
+      copyToFS: vi.fn((path: string) => {
+        if (path.endsWith("scenes/a.tscn")) throw new Error("disk full");
+      }),
+    };
+    const workspace = makeWorkspace({}, { getEngine: () => failingEngine });
+    const errorListener = vi.fn<(event: PackageProgressEvent) => void>();
+    bridgeEvents.on("packageError", errorListener);
+
+    try {
+      await expect(
+        applyPackageRevision({
+          files: workspace.files,
+          manifest: { ...manifest, files },
+          download: async (filepath) => contents.get(filepath)!,
+        }),
+      ).rejects.toThrow(/cannot stage scenes\/a.tscn: disk full/);
+    } finally {
+      bridgeEvents.off("packageError", errorListener);
+    }
+
+    expect(errorListener).toHaveBeenCalledTimes(1);
+    expect(errorListener.mock.calls[0][0]).toMatchObject({
+      packageId: "7",
+      name: "Heroes",
+      percent: Math.round((data("main").byteLength / totalBytes) * 100),
+      status: "error",
+      errorMessage: "Package hero: cannot stage scenes/a.tscn: disk full",
+    });
+  });
+
+  it("reports a verification failure without writing anything", async () => {
+    const workspace = makeWorkspace();
+    const errorListener = vi.fn<(event: PackageProgressEvent) => void>();
+    bridgeEvents.on("packageError", errorListener);
+
+    try {
+      await expect(
+        applyPackageRevision({
+          files: workspace.files,
+          manifest: {
+            ...manifest,
+            files: [
+              {
+                filepath: "main.gd",
+                size: data("main").byteLength,
+                sha256: "0".repeat(64),
+              },
+            ],
+          },
+          download: async () => data("main"),
+        }),
+      ).rejects.toThrow(/sha256/i);
+    } finally {
+      bridgeEvents.off("packageError", errorListener);
+    }
+
+    expect(errorListener).toHaveBeenCalledTimes(1);
+    expect(errorListener.mock.calls[0][0]).toMatchObject({
+      packageId: "7",
+      status: "error",
+      percent: 0,
+    });
+    expect(workspace.engine.copyToFS).not.toHaveBeenCalled();
   });
 });

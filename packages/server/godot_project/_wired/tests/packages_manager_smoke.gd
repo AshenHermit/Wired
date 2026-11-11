@@ -32,6 +32,7 @@ const SLUG_ID := 80
 const SLUG_OTHER_ID := 81
 const SLUG_MISSING_ID := 82
 const SLUG_SKIPPED_ID := 83
+const PROGRESS_ID := 90
 
 var _manager: PackagesManager
 # "package:revision" -> runtime manifest dictionary
@@ -45,6 +46,7 @@ var _faults: Dictionary = {}
 var _requests: PackedStringArray = []
 var _applied: Array = []
 var _failed: Array = []
+var _progress: Array = []
 var _failures: PackedStringArray = []
 
 
@@ -72,7 +74,9 @@ func _run() -> void:
 	_manager.request_override = _transport
 	_manager.package_applied.connect(_on_package_applied)
 	_manager.package_failed.connect(_on_package_failed)
+	_manager.package_progress.connect(_on_package_progress)
 	await _test_recursive_sync()
+	await _test_progress_events()
 	await _test_same_revision_refresh()
 	await _test_artifact_key_refresh()
 	await _test_diamond_dependency()
@@ -112,6 +116,10 @@ func _test_interface() -> void:
 	_check(
 		manager.has_signal("package_applied"),
 		"PackagesManager.package_applied signal is missing"
+	)
+	_check(
+		manager.has_signal("package_progress"),
+		"PackagesManager.package_progress signal is missing"
 	)
 	manager.free()
 
@@ -268,6 +276,37 @@ func _test_recursive_sync() -> void:
 		_applied_for(ROOT_ID).get("changed_files", PackedStringArray())
 		== PackedStringArray(["scenes/root.tscn", "scripts/root.gd"]),
 		"the first apply must report every file as changed"
+	)
+
+
+func _test_progress_events() -> void:
+	_publish(PROGRESS_ID, 1, {"scripts/a.gd": "alpha", "scripts/b.gd": "beta"})
+	var total := (
+		"alpha".to_utf8_buffer().size() + "beta".to_utf8_buffer().size()
+	)
+	_progress.clear()
+	var result: Dictionary = await _manager.sync_package(PROGRESS_ID, 1)
+	_check(bool(result.get("ok", false)), "the progress fixture must apply")
+	_check(not _progress.is_empty(), "a package sync must report progress")
+	var first: Dictionary = _progress[0]
+	_check(
+		first.get("status") == "loading" and int(first.get("loaded_bytes", -1)) == 0,
+		"the first progress event must be a zero-byte loading state",
+	)
+	_check(
+		int(first.get("total_bytes", 0)) == total,
+		"the loading event must carry the manifest's total size",
+	)
+	var last: Dictionary = _progress.back()
+	_check(
+		last.get("status") == "complete"
+		and int(last.get("loaded_bytes", 0)) == total
+		and int(last.get("total_bytes", 0)) == total,
+		"the last progress event must be a complete transfer",
+	)
+	_check(
+		last.get("name") == "package-%d" % PROGRESS_ID,
+		"the progress event must carry the package display name",
 	)
 
 
@@ -1384,6 +1423,26 @@ func _on_package_applied(
 
 func _on_package_failed(package_id: int, error: String) -> void:
 	_failed.append({"package_id": package_id, "error": error})
+
+
+func _on_package_progress(
+	package_id: int,
+	name: String,
+	revision: int,
+	loaded_bytes: int,
+	total_bytes: int,
+	status: String,
+	error: String,
+) -> void:
+	_progress.append({
+		"package_id": package_id,
+		"name": name,
+		"revision": revision,
+		"loaded_bytes": loaded_bytes,
+		"total_bytes": total_bytes,
+		"status": status,
+		"error": error,
+	})
 
 
 func _applied_for(package_id: int) -> Dictionary:
