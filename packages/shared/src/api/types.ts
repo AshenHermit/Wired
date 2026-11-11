@@ -421,6 +421,22 @@ export type RoomPackagesStatus = {
 };
 
 /**
+ * Progress of one package being delivered to a running room. `loadedBytes`
+ * and `totalBytes` are byte counts of the transferred payload; `status`
+ * tracks the transfer lifecycle: `loading` while bytes arrive, `complete`
+ * when the full payload is delivered, and `error` if the transfer failed.
+ * `errorMessage` is only present when `status === 'error'`.
+ */
+export type PackageProgressPayload = {
+  packageId: string;
+  name: string;
+  loadedBytes: number;
+  totalBytes: number;
+  status: 'loading' | 'complete' | 'error';
+  errorMessage?: string;
+};
+
+/**
  * One package that takes part in a running game: an unpublished package has no
  * revision to apply, and a disabled one is deliberately out of the room.
  */
