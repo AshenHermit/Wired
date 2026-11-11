@@ -11,11 +11,26 @@ import {
   getGameRoomStatus,
   getRoomPackages,
 } from "@/api/services/godot-game";
+import { emitPackageProgress } from "@/lib/editorBridgeEvents";
 import { GameTab, packagesFailed } from "./GameTab";
 vi.mock("@/api/services/godot-game", () => ({
   createGameConnection: vi.fn(),
   getGameRoomStatus: vi.fn(),
   getRoomPackages: vi.fn(),
+}));
+
+vi.mock("@/lib/editorBridgeEvents", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/editorBridgeEvents")>();
+  return { ...actual, emitPackageProgress: vi.fn() };
+});
+
+vi.mock("sonner", () => ({
+  toast: {
+    loading: vi.fn(),
+    success: vi.fn(),
+    error: vi.fn(),
+  },
 }));
 
 const room = { id: 8 } as Room;
@@ -567,5 +582,134 @@ describe("package readiness helpers", () => {
     ]);
 
     expect(packagesFailed(status)).toBe(false);
+  });
+});
+
+const runningStatus = {
+  roomId: 8,
+  state: "running" as const,
+  endpoint: "ws://127.0.0.1:19100",
+  activePlayers: 0,
+  error: null,
+};
+
+function waitStatus(runtime: RoomPackagesStatus["packages"][number]) {
+  return { roomId: 8, packages: [runtime] };
+}
+
+/**
+ * Sends `wired:game-ready`, which is what starts the runtime wait and its
+ * package polling. The returned view is already past the first poll.
+ */
+async function startRuntimeWait() {
+  const view = renderWithIntl(<GameTab room={room} />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  const iframe = view.container.querySelector("iframe") as HTMLIFrameElement;
+  send(iframe, { source: "wired-game", type: "wired:game-ready", payload: {} });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  return view;
+}
+
+describe("GameTab package progress", () => {
+  beforeEach(() => {
+    vi.mocked(createGameConnection).mockReset();
+    vi.mocked(createGameConnection).mockResolvedValue(connection);
+    vi.mocked(getGameRoomStatus).mockReset();
+    vi.mocked(getGameRoomStatus).mockResolvedValue(runningStatus);
+    vi.mocked(getRoomPackages).mockReset();
+    vi.mocked(emitPackageProgress).mockReset();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, status: 200 }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("reports a waiting package as loading and an applied one as complete", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getRoomPackages).mockResolvedValue(packageStatus("pending"));
+
+    const view = await startRuntimeWait();
+
+    expect(emitPackageProgress).toHaveBeenCalledWith({
+      packageId: "20",
+      name: "Platformer",
+      percent: 0,
+      status: "loading",
+    });
+
+    vi.mocked(getRoomPackages).mockResolvedValue(packageStatus("applied"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+
+    expect(emitPackageProgress).toHaveBeenCalledWith({
+      packageId: "20",
+      name: "Platformer",
+      percent: 100,
+      status: "complete",
+    });
+    expect(createGameConnection).toHaveBeenCalledTimes(1);
+    expect(view.container.textContent).not.toContain("Игра недоступна");
+  });
+
+  it("reports a failed package with the runtime error message", async () => {
+    vi.useFakeTimers();
+    const failed = packageStatus("failed");
+    failed.packages[0].runtime.error = "script error: main.gd:3";
+    vi.mocked(getRoomPackages).mockResolvedValue(failed);
+
+    const view = await startRuntimeWait();
+
+    expect(emitPackageProgress).toHaveBeenCalledWith({
+      packageId: "20",
+      name: "Platformer",
+      percent: 0,
+      status: "error",
+      errorMessage: "script error: main.gd:3",
+    });
+    expect(view.container.textContent).toContain("Игра недоступна");
+  });
+
+  it("falls back to the translated package failure text", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getRoomPackages).mockResolvedValue(packageStatus("failed"));
+
+    await startRuntimeWait();
+
+    expect(emitPackageProgress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        packageId: "20",
+        status: "error",
+        errorMessage:
+          "Не удалось применить пакеты комнаты. Нажмите «Повторить».",
+      }),
+    );
+  });
+
+  it("skips packages that no active package depends on", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getRoomPackages).mockResolvedValue(
+      waitStatus(
+        pkg({
+          packageId: 42,
+          name: "Unpublished",
+          revision: 0,
+          runtime: { state: "pending", revision: 0, error: null, updatedAt: null },
+        }),
+      ),
+    );
+
+    await startRuntimeWait();
+
+    expect(emitPackageProgress).not.toHaveBeenCalled();
   });
 });

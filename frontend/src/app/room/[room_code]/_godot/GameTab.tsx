@@ -19,6 +19,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { apiErrorBody, apiErrorResponse } from "@/i18n/api-error";
 import { useAppMessage, type AppMessage } from "@/i18n/message";
+import { emitPackageProgress } from "@/lib/editorBridgeEvents";
 import { API_PREFIX } from "@/utils/variables";
 import { readAccessToken } from "@/utils/auth-cookie";
 import {
@@ -27,6 +28,7 @@ import {
   postGameConfigure,
   postGamePing,
 } from "@/godot/bridge/game-bridge";
+import { GameProgressToast } from "./GameProgressToast";
 
 type GamePhase =
   | "checking"
@@ -446,6 +448,46 @@ export function packagesFailed(packages: RoomPackagesStatus): boolean {
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
+/**
+ * Announces the state of every active package on the bridge event channel, so
+ * the Game tab can show per-package progress without polling anything itself.
+ *
+ * The runtime reports application, not byte transfer, so a package is either
+ * still loading (`0`), applied (`100`) or failed with the runtime's own error.
+ * A package the runtime has not confirmed yet keeps its previous toast.
+ */
+function emitPackageStatusEvents(
+  packages: RoomPackagesStatus,
+  failureMessage: string,
+): void {
+  const active = new Set(
+    activePackages(packages).map(({ packageId }) => packageId),
+  );
+  for (const entry of packages.packages) {
+    if (!active.has(entry.packageId)) {
+      continue;
+    }
+    const base = { packageId: String(entry.packageId), name: entry.name };
+    if (entry.runtime.state === "failed") {
+      emitPackageProgress({
+        ...base,
+        percent: 0,
+        status: "error",
+        errorMessage: entry.runtime.error ?? failureMessage,
+      });
+      continue;
+    }
+    if (
+      entry.runtime.state === "applied" &&
+      entry.runtime.revision >= entry.revision
+    ) {
+      emitPackageProgress({ ...base, percent: 100, status: "complete" });
+      continue;
+    }
+    emitPackageProgress({ ...base, percent: 0, status: "loading" });
+  }
+}
+
 /** Reads the runtime state and the packages the room expects to see applied. */
 async function readRuntimeState(roomId: number) {
   const [status, packages] = await Promise.all([
@@ -459,8 +501,10 @@ async function readRuntimeState(roomId: number) {
 function reportRuntimeProgress(
   status: GameRoomRuntimeStatus,
   packages: RoomPackagesStatus,
+  failureMessage: string,
   onProgress: (message: AppMessage) => void,
 ): void {
+  emitPackageStatusEvents(packages, failureMessage);
   const active = activePackages(packages);
   const applied = active.filter(({ packageId, revision }) => {
     const entry = packages.packages.find((pkg) => pkg.packageId === packageId);
@@ -476,6 +520,8 @@ function reportRuntimeProgress(
 interface RuntimeWaitOptions {
   /** Set when the effect that started the wait was torn down. */
   signal: AbortSignal;
+  /** Translated fallback for a package failure the runtime left unexplained. */
+  failureMessage: string;
   onProgress: (message: AppMessage) => void;
 }
 
@@ -490,11 +536,11 @@ interface RuntimeWaitOptions {
 async function waitForRuntimeUntil(
   roomId: number,
   deadline: number,
-  { signal, onProgress }: RuntimeWaitOptions,
+  { signal, failureMessage, onProgress }: RuntimeWaitOptions,
 ): Promise<void> {
   for (;;) {
     const { status, packages } = await readRuntimeState(roomId);
-    reportRuntimeProgress(status, packages, onProgress);
+    reportRuntimeProgress(status, packages, failureMessage, onProgress);
     if (signal.aborted) {
       return;
     }
@@ -535,6 +581,14 @@ export function GameTab({ room }: { room: Room }) {
   const t = useTranslations("Game");
   const common = useTranslations("Common");
   const messageText = "raw" in message ? message.raw : format(message);
+
+  // The runtime poll lives in effects that must not depend on the translation
+  // function: a locale change would cancel an in-flight ticket request. The ref
+  // keeps the localized failure text current without re-running them.
+  const failureMessageRef = React.useRef(t("packagesFailed"));
+  React.useEffect(() => {
+    failureMessageRef.current = t("packagesFailed");
+  }, [t]);
 
   const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
   const lastFrameMessageAtRef = React.useRef(0);
@@ -623,11 +677,18 @@ export function GameTab({ room }: { room: Room }) {
     const describeRuntime = (
       status: GameRoomRuntimeStatus,
       packages: RoomPackagesStatus,
-    ) => reportRuntimeProgress(status, packages, waitMessage);
+    ) =>
+      reportRuntimeProgress(
+        status,
+        packages,
+        failureMessageRef.current,
+        waitMessage,
+      );
 
     const waitForRuntime = (deadline: number) =>
       waitForRuntimeUntil(room.id, deadline, {
         signal: abort.signal,
+        failureMessage: failureMessageRef.current,
         onProgress: waitMessage,
       });
 
@@ -877,6 +938,10 @@ export function GameTab({ room }: { room: Room }) {
       onClick={focusFrame}
       tabIndex={-1}
     >
+      {/* Package progress is rendered by the global Sonner <Toaster />, so this
+          only subscribes to the bridge channel and never covers the frame. */}
+      <GameProgressToast />
+
       {exportReady && (
         <iframe
           key={attempt}
