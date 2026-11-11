@@ -1,4 +1,9 @@
 import { PackageFileEntry, PackageManifest } from "@wired-io/shared";
+import {
+  emitPackageProgress,
+  packagePercent,
+  type PackageProgressEvent,
+} from "@/lib/editorBridgeEvents";
 import { sha256Hex } from "@/utils/sha256";
 import { errorMessage } from "@/utils/errors";
 import type { EditorBridgeClient } from "./editor-bridge";
@@ -75,6 +80,15 @@ export type CollectedPackageFile = {
 };
 
 /**
+ * Optional reporting for a directory swap. The file system stays free of
+ * progress UI: it only says how many bytes reached the staging directory, and
+ * the caller decides what to show.
+ */
+export type ReplaceContentsOptions = {
+  onFileWritten?: (writtenBytes: number, totalBytes: number) => void;
+};
+
+/**
  * Editor folder names are package slugs: lowercase latin letters, digits and
  * underscores. Legacy packages created before slugs may still use a numeric
  * slug, which this pattern accepts; the server applies the stricter
@@ -104,6 +118,7 @@ export type PackageFileSystem = {
   replaceContents(
     slug: string,
     contents: Map<string, Uint8Array>,
+    options?: ReplaceContentsOptions,
   ): Promise<{ written: string[]; deleted: string[] }>;
   deletePackage(slug: string): Promise<void>;
   renamePackage(from: string, to: string): Promise<string[]>;
@@ -259,12 +274,17 @@ export function createPackageFileSystem({
      * staging or swapping leaves the previous revision untouched and never
      * reaches `flushFilesystem`.
      */
-    async replaceContents(slug, contents) {
+    async replaceContents(slug, contents, options = {}) {
       assertPackageSlug(slug);
       const staged = [...contents].map(([filepath, data]) => ({
         filepath: assertRelativePackagePath(filepath),
         data,
       }));
+      const totalBytes = staged.reduce(
+        (sum, file) => sum + file.data.byteLength,
+        0,
+      );
+      let writtenBytes = 0;
 
       // Read the write primitive before the plugin creates a staging directory:
       // an editor that was reset between the revision download and this write
@@ -286,6 +306,8 @@ export function createPackageFileSystem({
             `Package ${slug}: cannot stage ${filepath}: ${errorMessage(error)}`,
           );
         }
+        writtenBytes += data.byteLength;
+        options.onFileWritten?.(writtenBytes, totalBytes);
       }
 
       const result = await bridge.call<ReplacePayload>("replace", {
@@ -346,24 +368,57 @@ export async function applyPackageRevision({
 }> {
   const total = manifest.files.length;
   const verified = new Map<string, Uint8Array>();
-  onProgress?.(0, total);
 
-  for (const [index, file] of manifest.files.entries()) {
-    const contents = await download(file.filepath);
-    if (contents.byteLength !== file.size) {
-      throw new GodotFsError(
-        `Package ${manifest.packageId}: size mismatch for ${file.filepath} (expected ${file.size} bytes, got ${contents.byteLength})`,
-      );
+  // The bridge event channel announces the transfer, advances once per written
+  // file and terminates with the final state. A revision can fail before
+  // anything is written (a missing, truncated or mis-hashed download), so the
+  // whole apply is reported, not just the directory swap.
+  const report = (
+    percent: number,
+    status: PackageProgressEvent["status"],
+    failure?: string,
+  ): void => {
+    emitPackageProgress({
+      packageId: String(manifest.packageId),
+      name: manifest.name,
+      percent,
+      status,
+      ...(failure === undefined ? {} : { errorMessage: failure }),
+    });
+  };
+
+  let percent = 0;
+  try {
+    report(percent, "loading");
+    onProgress?.(0, total);
+
+    for (const [index, file] of manifest.files.entries()) {
+      const contents = await download(file.filepath);
+      if (contents.byteLength !== file.size) {
+        throw new GodotFsError(
+          `Package ${manifest.packageId}: size mismatch for ${file.filepath} (expected ${file.size} bytes, got ${contents.byteLength})`,
+        );
+      }
+      const hash = await sha256Hex(contents);
+      if (hash !== file.sha256.toLowerCase()) {
+        throw new GodotFsError(
+          `Package ${manifest.packageId}: sha256 mismatch for ${file.filepath}`,
+        );
+      }
+      verified.set(assertRelativePackagePath(file.filepath), contents);
+      onProgress?.(index + 1, total);
     }
-    const hash = await sha256Hex(contents);
-    if (hash !== file.sha256.toLowerCase()) {
-      throw new GodotFsError(
-        `Package ${manifest.packageId}: sha256 mismatch for ${file.filepath}`,
-      );
-    }
-    verified.set(assertRelativePackagePath(file.filepath), contents);
-    onProgress?.(index + 1, total);
+
+    const result = await files.replaceContents(manifest.slug, verified, {
+      onFileWritten: (writtenBytes, totalBytes) => {
+        percent = packagePercent(writtenBytes, totalBytes);
+        report(percent, "loading");
+      },
+    });
+    report(100, "complete");
+    return result;
+  } catch (error) {
+    report(percent, "error", errorMessage(error));
+    throw error;
   }
-
-  return files.replaceContents(manifest.slug, verified);
 }
