@@ -421,6 +421,10 @@ func _setup_packages(room: String) -> void:
 	_packages.configure(_api_url(), room)
 	if not _packages.package_applied.is_connected(_on_package_applied):
 		_packages.package_applied.connect(_on_package_applied)
+	if not _packages.package_progress.is_connected(_on_package_progress):
+		_packages.package_progress.connect(_on_package_progress)
+	if not _packages.package_failed.is_connected(_on_package_failed):
+		_packages.package_failed.connect(_on_package_failed)
 
 
 ## An applied revision replaces that package's registry entries, its static
@@ -431,6 +435,59 @@ func _on_package_applied(
 	package_id: int, revision: int, _changed_files: PackedStringArray
 ) -> void:
 	_apply_registered_package(package_id, revision)
+
+
+## Forwards byte-level package transfer state from this Web client to the Game
+## tab. The server runtime applies the same revision independently; only this
+## stream describes what the visitor's browser is still downloading.
+func _on_package_progress(
+	package_id: int,
+	name: String,
+	revision: int,
+	loaded_bytes: int,
+	total_bytes: int,
+	status: String,
+	error: String,
+) -> void:
+	_bridge_call(
+		"notifyEvent",
+		[
+			JSON.stringify(
+				{
+					"type": "package_progress",
+					"package_id": package_id,
+					"name": name,
+					"revision": revision,
+					"loaded_bytes": loaded_bytes,
+					"total_bytes": total_bytes,
+					"status": status,
+					"error": error,
+				}
+			)
+		]
+	)
+
+
+## A failed download/apply has no byte progress left to report, but the Game tab
+## still needs a terminal error event instead of a loading toast that never ends.
+func _on_package_failed(package_id: int, error: String) -> void:
+	_bridge_call(
+		"notifyEvent",
+		[
+			JSON.stringify(
+				{
+					"type": "package_progress",
+					"package_id": package_id,
+					"name": "",
+					"revision": 0,
+					"loaded_bytes": 0,
+					"total_bytes": 0,
+					"status": "error",
+					"error": error,
+				}
+			)
+		]
+	)
 
 
 func _apply_registered_package(package_id: int, revision: int) -> void:

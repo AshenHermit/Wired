@@ -392,11 +392,12 @@
     "runtimeApplying": "Применяем пакеты комнаты ({applied}/{total})…",
     "runtimePreparing": "Готовим мир комнаты…",
     "runtimeDefault": "Запускаем сервер игры…",
-    "packageApplying": "Применяем пакет {name}…",
-    "packageApplied": "Пакет {name} применён",
-    "packageApplyFailed": "Не удалось применить пакет {name}",
+    "packageApplying": "Загружаем пакет {name}…",
+    "packageApplied": "Пакет {name} загружен",
+    "packageApplyFailed": "Не удалось загрузить пакет {name}",
+    "packageFallbackName": "Пакет {id}",
     "packagePercent": "{percent}%",
-    "packageProgressLabel": "{name}: применено {percent}%"
+    "packageProgressLabel": "{name}: загружено {percent}%"
   },
   "Errors": {
     "unauthorized": "Нужно войти в аккаунт",

@@ -392,11 +392,12 @@
     "runtimeApplying": "Applying the room packages ({applied}/{total})…",
     "runtimePreparing": "Preparing the room world…",
     "runtimeDefault": "Starting the game server…",
-    "packageApplying": "Applying package {name}…",
-    "packageApplied": "Package {name} applied",
-    "packageApplyFailed": "Could not apply package {name}",
+    "packageApplying": "Loading package {name}…",
+    "packageApplied": "Package {name} loaded",
+    "packageApplyFailed": "Could not load package {name}",
+    "packageFallbackName": "Package {id}",
     "packagePercent": "{percent}%",
-    "packageProgressLabel": "{name}: {percent}% applied"
+    "packageProgressLabel": "{name}: {percent}% loaded"
   },
   "Errors": {
     "unauthorized": "Please sign in",

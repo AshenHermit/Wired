@@ -633,7 +633,7 @@ describe("GameTab package progress", () => {
     vi.useRealTimers();
   });
 
-  it("reports a waiting package as loading and an applied one as complete", async () => {
+  it("starts a waiting package as loading and never completes it from runtime state", async () => {
     vi.useFakeTimers();
     vi.mocked(getRoomPackages).mockResolvedValue(packageStatus("pending"));
 
@@ -651,14 +651,113 @@ describe("GameTab package progress", () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
 
+    // The server applied the package, but this browser has not downloaded it.
+    // Claiming completion here is exactly the bug the client events fix.
+    expect(emitPackageProgress).not.toHaveBeenCalledWith(
+      expect.objectContaining({ packageId: "20", status: "complete" }),
+    );
+    expect(createGameConnection).toHaveBeenCalledTimes(1);
+    expect(view.container.textContent).not.toContain("Игра недоступна");
+  });
+
+  it("renders the browser's own package download percentage", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getRoomPackages).mockResolvedValue(packageStatus("applied"));
+
+    const view = await startRuntimeWait();
+    const iframe = view.container.querySelector("iframe") as HTMLIFrameElement;
+    send(iframe, {
+      source: "wired-game",
+      type: "wired:game-event",
+      payload: {
+        event: {
+          type: "package_progress",
+          package_id: 20,
+          name: "Platformer",
+          revision: 2,
+          loaded_bytes: 3_000_000,
+          total_bytes: 10_000_000,
+          status: "loading",
+          error: "",
+        },
+      },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(emitPackageProgress).toHaveBeenCalledWith({
+      packageId: "20",
+      name: "Platformer",
+      percent: 30,
+      status: "loading",
+    });
+  });
+
+  it("marks a package complete only when the browser reports completion", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getRoomPackages).mockResolvedValue(packageStatus("applied"));
+
+    const view = await startRuntimeWait();
+    const iframe = view.container.querySelector("iframe") as HTMLIFrameElement;
+    send(iframe, {
+      source: "wired-game",
+      type: "wired:game-event",
+      payload: {
+        event: {
+          type: "package_progress",
+          package_id: 20,
+          name: "Platformer",
+          revision: 2,
+          loaded_bytes: 10_000_000,
+          total_bytes: 10_000_000,
+          status: "complete",
+          error: "",
+        },
+      },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
     expect(emitPackageProgress).toHaveBeenCalledWith({
       packageId: "20",
       name: "Platformer",
       percent: 100,
       status: "complete",
     });
-    expect(createGameConnection).toHaveBeenCalledTimes(1);
-    expect(view.container.textContent).not.toContain("Игра недоступна");
+  });
+
+  it("reports a browser package sync failure with the server's error", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getRoomPackages).mockResolvedValue(packageStatus("applied"));
+
+    const view = await startRuntimeWait();
+    const iframe = view.container.querySelector("iframe") as HTMLIFrameElement;
+    send(iframe, {
+      source: "wired-game",
+      type: "wired:game-event",
+      payload: {
+        event: {
+          type: "package_sync",
+          package_id: 20,
+          revision: 2,
+          ok: false,
+          error: "sha256 mismatch for scripts/main.gd",
+        },
+      },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(emitPackageProgress).toHaveBeenCalledWith({
+      packageId: "20",
+      name: "Platformer",
+      percent: 0,
+      status: "error",
+      errorMessage: "sha256 mismatch for scripts/main.gd",
+    });
   });
 
   it("reports a failed package with the runtime error message", async () => {

@@ -41,6 +41,19 @@ class_name PackagesManager
 
 signal package_applied(package_id: int, revision: int, changed_files: PackedStringArray)
 signal package_failed(package_id: int, error: String)
+## Byte-level transfer state of one package on this client. `status` is
+## `loading`, `complete` or `error`; the Game tab renders it as a toast. The
+## signal is emitted on this client only, so a joiner sees its own download, not
+## the server runtime's already-applied revision.
+signal package_progress(
+	package_id: int,
+	name: String,
+	revision: int,
+	loaded_bytes: int,
+	total_bytes: int,
+	status: String,
+	error: String,
+)
 
 const PROTOCOL_VERSION := 1
 const DEFAULT_API_URL := "http://127.0.0.1:3000"
@@ -83,6 +96,10 @@ var _slugs: Dictionary = {}
 var _scene_dependencies: Dictionary = {}
 # package id -> { filepath: sha256 } of the applied runtime artifact
 var _file_hashes: Dictionary = {}
+# package id -> display name and total transfer size, kept so a skipped apply
+# can still tell the Game tab which package it is.
+var _names: Dictionary = {}
+var _total_bytes: Dictionary = {}
 # package id -> Time.get_ticks_msec() while a coroutine applies that package
 var _applying: Dictionary = {}
 ## File-system side of an artifact. The root is resolved lazily, so a room
@@ -125,6 +142,8 @@ func set_room(room_id: String) -> void:
 	_current_artifact_keys.clear()
 	_scene_dependencies.clear()
 	_file_hashes.clear()
+	_names.clear()
+	_total_bytes.clear()
 	_load_slug_index()
 
 
@@ -432,6 +451,7 @@ func _sync_package_chain(
 	# Shared dependencies of a diamond are applied once per top-level sync.
 	var already_applied := int(applied.get(package_id, 0))
 	if already_applied >= revision:
+		_emit_complete(package_id, already_applied)
 		return _skipped(already_applied, current_artifact_key(package_id))
 
 	# Checked before taking the lock: a cycle would otherwise wait on a lock
@@ -463,6 +483,7 @@ func _sync_package_chain(
 	if known_revision > revision or (lock == ApplyLock.WAITED and known_revision == revision):
 		_release_apply_lock(package_id)
 		applied[package_id] = known_revision
+		_emit_complete(package_id, known_revision)
 		return _skipped(known_revision, current_artifact_key(package_id))
 
 	# The runtime manifest names the package's slug, so it is read before any
@@ -494,6 +515,7 @@ func _sync_package_chain(
 	if applied_revision > revision or (lock == ApplyLock.WAITED and applied_revision == revision):
 		_release_apply_lock(package_id)
 		applied[package_id] = applied_revision
+		_emit_complete(package_id, applied_revision)
 		return _skipped(applied_revision, current_artifact_key(package_id))
 	var result := await _sync_package(
 		package_id, revision, chain, applied, manifest, validated
@@ -511,7 +533,11 @@ func _sync_package_chain(
 	var changed: PackedStringArray = result.get(
 		"changed_files", PackedStringArray()
 	)
-	package_applied.emit(package_id, int(result.get("revision", revision)), changed)
+	var published_revision := int(result.get("revision", revision))
+	package_applied.emit(package_id, published_revision, changed)
+	# The synchronous `package_applied` listeners have rebuilt the registry and
+	# world by now, so this is the real "package is usable" boundary.
+	_emit_complete(package_id, published_revision)
 	return result
 
 
@@ -566,6 +592,43 @@ func _chain_contains_package(chain: Array, package_id: int) -> bool:
 	return false
 
 
+## Emits one client-side transfer update. The Game tab ignores an empty package
+## name by falling back to the room's package list, so a skipped package whose
+## manifest was never fetched this run is still rendered.
+func _emit_progress(
+	package_id: int,
+	name: String,
+	revision: int,
+	loaded_bytes: int,
+	total_bytes: int,
+	status: String,
+	error: String = "",
+) -> void:
+	package_progress.emit(
+		package_id,
+		name,
+		revision,
+		maxi(loaded_bytes, 0),
+		maxi(total_bytes, 0),
+		status,
+		error,
+	)
+
+
+## A package already on disk transfers nothing, but the Game tab still needs a
+## terminal event or its loading toast would stay forever.
+func _emit_complete(package_id: int, revision: int) -> void:
+	var total := int(_total_bytes.get(package_id, 0))
+	_emit_progress(
+		package_id,
+		str(_names.get(package_id, "")),
+		revision,
+		total,
+		total,
+		"complete",
+	)
+
+
 ## Successful no-op for a revision that is already applied or superseded.
 func _skipped(revision: int, artifact_key: String = "") -> Dictionary:
 	return {
@@ -593,6 +656,14 @@ func _sync_package(
 	var slug := str(validated.get("slug", ""))
 	var declared: Array = validated.get("files", [])
 	var token := str(validated.get("token", ""))
+	var package_name := str(manifest.get("name", ""))
+	var total_bytes := int(manifest.get("totalSize", 0))
+	if total_bytes <= 0:
+		for item: Dictionary in declared:
+			total_bytes += maxi(0, int(item.get("size", 0)))
+	_names[package_id] = package_name
+	_total_bytes[package_id] = total_bytes
+	_emit_progress(package_id, package_name, revision, 0, total_bytes, "loading")
 
 	# Dependencies first: their files have to exist before a dependent scene is
 	# loaded, and the manifest pins each of them to an exact revision and key.
@@ -608,7 +679,13 @@ func _sync_package(
 
 	# 1. Download and verify everything in memory before touching the disk.
 	var download := await _download_files(
-		package_id, revision, declared, token, artifact_key
+		package_id,
+		revision,
+		declared,
+		token,
+		artifact_key,
+		package_name,
+		total_bytes,
 	)
 	if not bool(download.get("ok", false)):
 		return _failure(str(download.get("error", "")), revision)
@@ -740,14 +817,17 @@ func _download_files(
 	declared: Array,
 	token: String,
 	artifact_key: String,
+	package_name: String,
+	total_bytes: int,
 ) -> Dictionary:
 	var files: Array = []
 	var hashes: Dictionary = {}
+	var loaded_before := 0
 	for item: Dictionary in declared:
 		var filepath := str(item.get("filepath", ""))
 		var expected_size := int(item.get("size", -1))
 		var expected_hash := str(item.get("sha256", ""))
-		var download := await _fetch(
+		var download := await _fetch_with_progress(
 			"/scripting-packages/%d/revisions/%d/runtime-files/%s?room=%d&key=%s&token=%s"
 			% [
 				package_id,
@@ -756,7 +836,16 @@ func _download_files(
 				_room_id(),
 				artifact_key.uri_encode(),
 				token.uri_encode(),
-			]
+			],
+			func(downloaded: int) -> void:
+				_emit_progress(
+					package_id,
+					package_name,
+					revision,
+					mini(total_bytes, loaded_before + maxi(downloaded, 0)),
+					total_bytes,
+					"loading",
+				),
 		)
 		if not download.ok:
 			return {
@@ -779,6 +868,15 @@ func _download_files(
 			}
 		files.append({"filepath": filepath, "body": body})
 		hashes[filepath] = expected_hash
+		loaded_before += maxi(expected_size, 0)
+		_emit_progress(
+			package_id,
+			package_name,
+			revision,
+			mini(loaded_before, total_bytes),
+			total_bytes,
+			"loading",
+		)
 	return {"ok": true, "error": "", "files": files, "hashes": hashes}
 
 
@@ -808,7 +906,15 @@ func _fetch(path: String) -> Dictionary:
 	return await _request(path)
 
 
-func _request(path: String) -> Dictionary:
+## Test seam wrapper that keeps the in-memory transport progress-free but lets
+## the real HTTP transport report downloaded bytes.
+func _fetch_with_progress(path: String, on_progress: Callable) -> Dictionary:
+	if request_override.is_valid():
+		return await _fetch(path)
+	return await _request(path, on_progress)
+
+
+func _request(path: String, on_progress: Callable = Callable()) -> Dictionary:
 	var http := HTTPRequest.new()
 	http.timeout = 30.0
 	# The browser already decompresses gzip responses before Godot sees them.
@@ -823,15 +929,44 @@ func _request(path: String) -> Dictionary:
 	var headers := PackedStringArray()
 	if not api_token.is_empty():
 		headers.append("Authorization: Bearer %s" % api_token)
+	# A dictionary is the mutable cell the signal lambda writes into: GDScript
+	# lambdas capture locals by value, so plain variables would never update.
+	var state := {"response": [], "completed": false}
+	http.request_completed.connect(
+		func(
+			result: int,
+			response_code: int,
+			response_headers: PackedStringArray,
+			body: PackedByteArray
+		) -> void:
+			state["response"] = [result, response_code, response_headers, body]
+			state["completed"] = true
+	)
 	var error := http.request(base_url + path, headers)
 	if error != OK:
 		http.queue_free()
 		return {"ok": false, "status": 0, "error": error_string(error), "body": PackedByteArray()}
-	var response: Array = await http.request_completed
+	var last_reported := -1
+	var last_report_ms := 0
+	while not bool(state["completed"]):
+		if on_progress.is_valid():
+			var downloaded := http.get_downloaded_bytes()
+			if downloaded != last_reported:
+				var now := Time.get_ticks_msec()
+				# 10 updates per second are smooth enough for a toast and keep
+				# the postMessage bridge from carrying one message per frame.
+				if now - last_report_ms >= 100 or downloaded == 0:
+					last_reported = downloaded
+					last_report_ms = now
+					on_progress.call(downloaded)
+		await get_tree().process_frame
+	var response: Array = state["response"]
 	var result := int(response[0])
 	var status := int(response[1])
 	var body: PackedByteArray = response[3]
 	http.queue_free()
+	if on_progress.is_valid():
+		on_progress.call(body.size())
 	if result != HTTPRequest.RESULT_SUCCESS:
 		return {"ok": false, "status": status, "error": "request failed (%d)" % result, "body": PackedByteArray()}
 	if status < 200 or status >= 300:
