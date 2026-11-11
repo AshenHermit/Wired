@@ -60,8 +60,10 @@ func _process(delta: float) -> void:
 		return
 	if _is_simulation_owner():
 		_wired_process(delta)
-	_wired_visual_process(delta)
+	# Интерполяция применяется ДО визуального процесса, чтобы _wired_visual_process
+	# пакета брал уже сглаженные значения (якорь, камера, анимация).
 	_wired_apply_interpolation(delta)
+	_wired_visual_process(delta)
 
 
 func _physics_process(delta: float) -> void:
