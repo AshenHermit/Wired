@@ -64,6 +64,7 @@ function packageStatus(
         name: "Platformer",
         enabled: true,
         revision: 2,
+        sizeBytes: null,
         publishedAt: "2026-01-01T00:00:00.000Z",
         state: "published",
         runtime: {
@@ -512,6 +513,7 @@ function pkg(
     name: "Package",
     enabled: true,
     revision: 1,
+    sizeBytes: null,
     publishedAt: null,
     state: "published",
     runtime: {

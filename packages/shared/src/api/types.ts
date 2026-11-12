@@ -409,6 +409,11 @@ export type PackageSyncStatus = {
   name: string;
   enabled: boolean;
   revision: number;
+  /**
+   * Sum of `files[].size` of the latest published revision of this package.
+   * Dependencies are not included. `null` when no revision is published.
+   */
+  sizeBytes: number | null;
   publishedAt: string | null;
   state: PackageRevisionSyncState;
   runtime: PackageRuntimeSyncStatus;

@@ -148,14 +148,17 @@ export class PackageSyncService
     const statuses: PackageSyncStatus[] = [];
     for (const pkg of packages) {
       const revision = latest.get(pkg.id);
-      statuses.push(
-        this.reporter.toStatus(
+      statuses.push({
+        ...this.reporter.toStatus(
           pkg,
           roomId,
           revision?.revision ?? null,
           revision?.publishedAt ?? null,
         ),
-      );
+        sizeBytes: revision
+          ? revision.files.reduce((sum, file) => sum + file.size, 0)
+          : null,
+      });
     }
     return statuses.sort((a, b) => a.packageId - b.packageId);
   }
