@@ -548,6 +548,26 @@ describe('PackageDeliveryService', () => {
     expect(await readArtifactBytes(5, 3, 7, 'tex.png')).toEqual(png);
   });
 
+  it('excludes import sidecars from the runtime artifact', async () => {
+    definePackage(5, 'Heroes', 7);
+    await writePublished(5, 3, {
+      'hero.gd': 'extends Node',
+      'dude.glb': 'glb',
+      'dude.glb.import':
+        '[remap]\n\nimporter="scene"\n\n[params]\n\n_subresources={  }\n',
+    });
+
+    const manifest = await service.getRuntimeManifest(5, 3, 7);
+
+    expect(manifest.files.map((file) => file.filepath)).toEqual([
+      'dude.glb',
+      'hero.gd',
+    ]);
+    const dir = await artifactDir(5, 3, 7);
+    expect(existsSync(path.resolve(dir, 'dude.glb.import'))).toBe(false);
+    expect(existsSync(path.resolve(dir, 'dude.glb'))).toBe(true);
+  });
+
   describe('resolveRuntimeFile', () => {
     beforeEach(() => {
       definePackage(5, 'Heroes', 7);

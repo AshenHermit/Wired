@@ -446,6 +446,9 @@ export class PackageDeliveryService {
       );
       const files: PackageFileEntry[] = [];
       for (const entry of resolved.rootFiles) {
+        // Editor import presets point at `.godot/imported/...` remaps that only
+        // exist inside an editor; the native runtime derives its own sidecars.
+        if (entry.filepath.endsWith('.import')) continue;
         const data = resolved.bytes.get(entry.filepath)!;
         const rewritten = textByPath.has(entry.filepath)
           ? this.rewriteText(

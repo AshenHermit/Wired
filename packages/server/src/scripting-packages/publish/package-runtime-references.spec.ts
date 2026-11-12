@@ -199,6 +199,7 @@ describe('package runtime references', () => {
     expect(isTextPackageFile('scripts/hero.GD')).toBe(true);
     expect(isTextPackageFile('tex.png')).toBe(false);
     expect(isTextPackageFile('sound.ogg')).toBe(false);
+    expect(isTextPackageFile('dude.glb.import')).toBe(false);
   });
 
   it('rewrites every package prefix to the artifact-keyed runtime location', () => {
