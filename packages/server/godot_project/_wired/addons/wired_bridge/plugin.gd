@@ -38,10 +38,16 @@ const DELETE_SELECTED_ITEM := "Wired: удалить выбранные файл
 var _bridge: Object = null
 var _rescan_callback: Variant = null
 var _request_callback: Variant = null
+var _filesystem: EditorFileSystem = null
+var _restore_queued := false
+var _restoring := false
 
 
 func _enter_tree() -> void:
 	add_tool_menu_item(DELETE_SELECTED_ITEM, _on_delete_selected_pressed)
+	_filesystem = EditorInterface.get_resource_filesystem()
+	if _filesystem != null:
+		_filesystem.filesystem_changed.connect(_on_filesystem_changed)
 	if not OS.has_feature("web"):
 		return
 
@@ -70,6 +76,10 @@ func _enter_tree() -> void:
 
 func _exit_tree() -> void:
 	remove_tool_menu_item(DELETE_SELECTED_ITEM)
+	if _filesystem != null:
+		if _filesystem.filesystem_changed.is_connected(_on_filesystem_changed):
+			_filesystem.filesystem_changed.disconnect(_on_filesystem_changed)
+		_filesystem = null
 	if not OS.has_feature("web"):
 		return
 
@@ -96,6 +106,30 @@ func _scan_filesystem() -> void:
 	if filesystem == null:
 		return
 	filesystem.scan()
+
+
+## Import settings live in the `.import` sidecar, which Godot regenerates with
+## defaults when a model is replaced. Restoring the cached preset here keeps the
+## author's settings without any UI.
+func _on_filesystem_changed() -> void:
+	# Scans can fire in bursts, and restoring reimports: run at most once per pass.
+	if _restore_queued or _restoring:
+		return
+	_restore_queued = true
+	call_deferred("_restore_import_presets")
+
+
+func _restore_import_presets() -> void:
+	_restore_queued = false
+	_restoring = true
+	var restored: Array[String] = []
+	for slug: String in DirAccess.get_directories_at(WiredPackageFs.packages_root()):
+		if not WiredPackageFs.is_valid_slug(slug):
+			continue
+		restored.append_array(WiredPackageFs.restore_import_presets(slug))
+	if not restored.is_empty() and _filesystem != null:
+		_filesystem.reimport_files(PackedStringArray(restored))
+	_restoring = false
 
 
 ## Deletes the selected package files locally. The selection is grouped by
