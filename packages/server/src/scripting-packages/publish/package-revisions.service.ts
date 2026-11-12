@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import type { Readable } from 'node:stream';
 import {
   CreatePackageRevisionPayload,
   PackageFileEntry,
@@ -665,27 +666,41 @@ export class PackageRevisionsService {
     revision: number,
     filepath: string,
   ): Promise<Buffer> {
-    await assertPublishedFile(
+    const row = await assertPublishedFile(
       this.revisionsRepository,
       packageId,
       revision,
       filepath,
     );
-    return this.storage.readPublishedFile(packageId, revision, filepath);
+    return this.storage.readPublishedFile(
+      packageId,
+      revision,
+      filepath,
+      row.commitSha,
+    );
   }
 
   async resolvePublishedFile(
     packageId: number,
     revision: number,
     filepath: string,
-  ): Promise<{ path: string; size: number }> {
-    await assertPublishedFile(
+  ): Promise<{ stream: Readable; size: number }> {
+    const row = await assertPublishedFile(
       this.revisionsRepository,
       packageId,
       revision,
       filepath,
     );
-    return this.storage.resolvePublishedFile(packageId, revision, filepath);
+    const entry = row.files.find(
+      (item: PackageFileEntry) => item.filepath === filepath,
+    );
+    return this.storage.resolvePublishedFile(
+      packageId,
+      revision,
+      filepath,
+      row.commitSha,
+      entry?.size,
+    );
   }
 
   async findRevision(
@@ -760,7 +775,7 @@ async function assertPublishedFile(
   packageId: number,
   revision: number,
   filepath: string,
-): Promise<void> {
+): Promise<ScriptingPackageRevision> {
   const row = await repository.findOne({
     where: { package: { id: packageId }, revision },
   });
@@ -781,4 +796,5 @@ async function assertPublishedFile(
       `File ${filepath} is not declared in revision ${revision}`,
     );
   }
+  return row;
 }

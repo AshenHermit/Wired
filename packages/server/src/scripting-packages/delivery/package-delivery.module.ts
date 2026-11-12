@@ -15,6 +15,7 @@ import { AssetBakeService } from './asset-bake.service';
 import { ChildProcessBakeRunner } from './godot-bake.runner';
 import { GitCommand } from '../storage/git/git-command';
 import { PackageGitRepository } from '../storage/git/package-git-repository';
+import { PackageGitStorageService } from '../storage/package-git-storage.service';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { PackageGitRepository } from '../storage/git/package-git-repository';
     ArtifactBuildRateLimiter,
     GitCommand,
     PackageGitRepository,
+    PackageGitStorageService,
   ],
   controllers: [PackageDeliveryController],
   exports: [

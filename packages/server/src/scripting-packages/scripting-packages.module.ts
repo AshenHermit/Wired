@@ -16,6 +16,7 @@ import { GodotGameModule } from 'src/godot-game/godot-game.module';
 import { UsersService } from 'src/users/users.service';
 import { GitCommand } from './storage/git/git-command';
 import { PackageGitRepository } from './storage/git/package-git-repository';
+import { PackageGitStorageService } from './storage/package-git-storage.service';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { PackageGitRepository } from './storage/git/package-git-repository';
     UsersService,
     GitCommand,
     PackageGitRepository,
+    PackageGitStorageService,
   ],
   // `WorkshopController` must come first: `GET /scripting-packages/workshop`
   // would otherwise be matched by the authoring `GET /scripting-packages/:id`

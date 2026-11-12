@@ -306,6 +306,13 @@ export class PackageGitRepository implements OnModuleInit {
     return found;
   }
 
+  async blobSize(packageId: number, oid: string): Promise<number> {
+    const output = await this.command.run(['cat-file', '-s', oid], {
+      cwd: this.repoDir(packageId),
+    });
+    return Number(output.toString().trim());
+  }
+
   async readRef(packageId: number, ref: string): Promise<string | null> {
     try {
       const output = await this.command.run(

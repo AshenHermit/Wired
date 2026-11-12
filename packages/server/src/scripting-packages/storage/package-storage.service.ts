@@ -4,10 +4,12 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PackageFileEntry } from '@wired-io/shared';
 import { randomBytes } from 'node:crypto';
-import { existsSync } from 'fs';
+import { Readable } from 'node:stream';
+import { createReadStream, existsSync } from 'fs';
 import {
   copyFile,
   mkdir,
@@ -21,6 +23,7 @@ import {
 import path from 'path';
 import { AppConfigService } from 'src/config/config.service';
 import { sha256File, sha256Hex } from './package-hash';
+import { PackageGitStorageService } from './package-git-storage.service';
 import { resolvePackagePath } from './package-path';
 import { errorMessage } from 'src/common/errors';
 
@@ -79,7 +82,11 @@ export interface RevisionRewrite {
 export class PackageStorageService {
   private readonly logger = new Logger(PackageStorageService.name);
 
-  constructor(private readonly configService: AppConfigService) {}
+  constructor(
+    private readonly configService: AppConfigService,
+    @Optional()
+    private readonly gitStorage?: PackageGitStorageService,
+  ) {}
 
   private get rootDir(): string {
     return this.configService.storage.packagesFilesDir;
@@ -347,6 +354,119 @@ export class PackageStorageService {
     packageId: number,
     revision: number,
     filepath: string,
+    commitSha: string | null = null,
+    declaredSize?: number,
+  ): Promise<{ stream: Readable; size: number }> {
+    const commit = await this.resolveGitCommit(packageId, revision, commitSha);
+    if (commit) {
+      const stream = await this.gitStorage!.openFile(
+        packageId,
+        revision,
+        filepath,
+        commit,
+      );
+      const size =
+        declaredSize ??
+        (await this.gitStorage!.fileSize(
+          packageId,
+          revision,
+          filepath,
+          commit,
+        ));
+      return { stream, size };
+    }
+    const file = await this.resolveLegacyPublishedFile(
+      packageId,
+      revision,
+      filepath,
+    );
+    return { stream: createReadStream(file.path), size: file.size };
+  }
+
+  async readPublishedFile(
+    packageId: number,
+    revision: number,
+    filepath: string,
+    commitSha: string | null = null,
+  ): Promise<Buffer> {
+    const commit = await this.resolveGitCommit(packageId, revision, commitSha);
+    if (commit) {
+      return this.gitStorage!.readFile(packageId, revision, filepath, commit);
+    }
+    const file = await this.resolveLegacyPublishedFile(
+      packageId,
+      revision,
+      filepath,
+    );
+    try {
+      return await readFile(file.path);
+    } catch {
+      throw new NotFoundException(`File ${filepath} is not published`);
+    }
+  }
+
+  async readPublishedFiles(
+    packageId: number,
+    revision: number,
+    filepaths: string[],
+    commitSha: string | null = null,
+  ): Promise<Map<string, Buffer>> {
+    if (filepaths.length === 0) {
+      return new Map();
+    }
+    const commit = await this.resolveGitCommit(packageId, revision, commitSha);
+    if (commit) {
+      return this.gitStorage!.readFiles(
+        packageId,
+        revision,
+        filepaths,
+        commit,
+      );
+    }
+    const result = new Map<string, Buffer>();
+    for (const filepath of filepaths) {
+      result.set(
+        filepath,
+        await this.readPublishedFile(packageId, revision, filepath, commitSha),
+      );
+    }
+    return result;
+  }
+
+  async readPublishedTextFiles(
+    packageId: number,
+    revision: number,
+    filepaths: string[],
+    commitSha: string | null = null,
+  ): Promise<Map<string, string>> {
+    const files = await this.readPublishedFiles(
+      packageId,
+      revision,
+      filepaths,
+      commitSha,
+    );
+    const result = new Map<string, string>();
+    for (const [filepath, data] of files) {
+      result.set(filepath, data.toString('utf8'));
+    }
+    return result;
+  }
+
+  private async resolveGitCommit(
+    packageId: number,
+    revision: number,
+    commitSha: string | null,
+  ): Promise<string | null> {
+    if (!this.gitStorage) {
+      return null;
+    }
+    return this.gitStorage.resolveCommit(packageId, revision, commitSha);
+  }
+
+  private async resolveLegacyPublishedFile(
+    packageId: number,
+    revision: number,
+    filepath: string,
   ): Promise<{ path: string; size: number }> {
     const fullPath = resolvePackagePath(
       this.publishedRevisionDir(packageId, revision),
@@ -362,19 +482,6 @@ export class PackageStorageService {
       if (error instanceof NotFoundException) {
         throw error;
       }
-      throw new NotFoundException(`File ${filepath} is not published`);
-    }
-  }
-
-  async readPublishedFile(
-    packageId: number,
-    revision: number,
-    filepath: string,
-  ): Promise<Buffer> {
-    const file = await this.resolvePublishedFile(packageId, revision, filepath);
-    try {
-      return await readFile(file.path);
-    } catch {
       throw new NotFoundException(`File ${filepath} is not published`);
     }
   }

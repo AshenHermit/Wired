@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { Readable } from 'node:stream';
 import {
   PackageFileEntry,
   PackageManifest,
@@ -69,7 +70,7 @@ describe('ScriptingPackagesController revisions API', () => {
       getManifestForRevision: jest.fn(),
       readPublishedFile: jest.fn(async () => Buffer.from('abc')),
       resolvePublishedFile: jest.fn(async () => ({
-        path: __filename,
+        stream: Readable.from(Buffer.from('abc')),
         size: 3,
       })),
     };

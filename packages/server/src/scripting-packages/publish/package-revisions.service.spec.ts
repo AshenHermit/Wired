@@ -558,7 +558,13 @@ describe('PackageRevisionsService', () => {
       await expect(
         service.resolvePublishedFile(7, 3, 'a.txt'),
       ).resolves.toEqual({ path: '/tmp/a.txt', size: 1 });
-      expect(storage.resolvePublishedFile).toHaveBeenCalledWith(7, 3, 'a.txt');
+      expect(storage.resolvePublishedFile).toHaveBeenCalledWith(
+        7,
+        3,
+        'a.txt',
+        undefined,
+        1,
+      );
     });
 
     it('rejects files that are not declared in the revision', async () => {
