@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,5 +25,24 @@ describe('AssetBakeCache', () => {
 
     expect(cache.get('a.scn')).toBeNull();
     expect(cache.get('b.scn')?.equals(Buffer.from('bbb'))).toBe(true);
+  });
+
+  it('различает пресеты с разными материалами', () => {
+    const cache = new AssetBakeCache(dir, 1024);
+    const source = Buffer.from('glb');
+    const preset = '[remap]\n\nimporter="scene"\n';
+
+    const first = cache.keyFor(source, preset, [Buffer.from('red material')]);
+    const second = cache.keyFor(source, preset, [Buffer.from('blue material')]);
+
+    expect(first).not.toBe(second);
+  });
+
+  it('пишет файл атомарно, не оставляя временных копий', async () => {
+    const cache = new AssetBakeCache(dir, 1024);
+
+    await cache.put('a.scn', Buffer.from('aaa'));
+
+    expect(readdirSync(dir)).toEqual(['a.scn']);
   });
 });

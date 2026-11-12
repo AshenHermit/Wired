@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import type { PackageFileEntry } from '@wired-io/shared';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -60,9 +61,6 @@ class FakeRunner implements BakeRunner {
     if (this.delayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.delayMs));
     }
-    if (this.stdout.length > 0) {
-      return { exitCode: 1, stdout: this.stdout, stderr: this.stderr };
-    }
     const jobs = JSON.parse(readFileSync(options.jobsPath, 'utf8')) as {
       jobs: Array<{ output: string }>;
     };
@@ -72,10 +70,14 @@ class FakeRunner implements BakeRunner {
       writeFileSync(target, this.payload);
       return { output: job.output, size: this.payload.length };
     });
+    const stdout =
+      this.stdout.length > 0
+        ? this.stdout
+        : `WIRED_BAKE_OK ${JSON.stringify({ results })}`;
     return {
-      exitCode: 0,
-      stdout: `WIRED_BAKE_OK ${JSON.stringify({ results })}`,
-      stderr: '',
+      exitCode: this.stdout.length > 0 ? 1 : 0,
+      stdout,
+      stderr: this.stderr,
     };
   }
 }
@@ -111,11 +113,23 @@ describe('AssetBakeService.planJobs', () => {
     expect(() => service.planJobs(closure, 'hero')).toThrow(/unsupported_asset_format.*model\.gltf/);
   });
 
-  it('отказывает на ссылке из зависимости на её же .glb', () => {
+  it('разрешает библиотеке ссылаться на свой же .glb', () => {
     const closure = makeClosure({
       dependencyTextFiles: new Map([
         [9, [{ filepath: 'scene.tscn', text: 'path="res://packages/lib/model.glb"' }]],
       ]),
+      slugByPackage: new Map([
+        [5, 'hero'],
+        [9, 'lib'],
+      ]),
+    });
+
+    expect(service.planJobs(closure, 'hero')).toEqual([]);
+  });
+
+  it('отказывает на ссылке корня на .glb зависимости', () => {
+    const closure = makeClosure({
+      textFiles: [{ filepath: 'main.tscn', text: 'path="res://packages/lib/model.glb"' }],
       slugByPackage: new Map([
         [5, 'hero'],
         [9, 'lib'],
@@ -159,7 +173,7 @@ describe('AssetBakeService.bake', () => {
 
   const closure = () =>
     makeClosure({
-      files: ['player/dude.glb'],
+      files: ['player/dude.glb', 'player/other.glb'],
       presetFiles: { 'player/dude.glb.import': '[remap]\n\nimporter="scene"\n' },
     });
 
@@ -208,5 +222,32 @@ describe('AssetBakeService.bake', () => {
     await expect(
       createService().bake(closure(), 'hero', [{ ...jobs[0], output: 'big.scn' }]),
     ).rejects.toThrow(/baked_file_too_large/);
+  });
+
+  it('держит maxConcurrency: вторая запечка ждёт первую', async () => {
+    runner.delayMs = 20;
+    const service = createService();
+    const otherJobs: BakeJob[] = [
+      { source: 'player/other.glb', output: 'player/other.glb.scn', preset: null },
+    ];
+
+    const first = service.bake(closure(), 'hero', jobs);
+    const second = service.bake(closure(), 'hero', otherJobs);
+    await first;
+    expect(runner.calls).toBe(1);
+    await second;
+    expect(runner.calls).toBe(2);
+  });
+
+  it('пишет предупреждения инструмента в лог', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    runner.stdout = `WIRED_BAKE_OK ${JSON.stringify({
+      results: [{ output: 'player/dude.glb.scn', warnings: ['animation "Ghost" is missing'] }],
+    })}`;
+
+    await createService().bake(closure(), 'hero', jobs);
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ghost'));
+    warn.mockRestore();
   });
 });

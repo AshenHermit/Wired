@@ -46,6 +46,7 @@ import {
 } from '../publish/package-runtime-references';
 import { PackageReadUrlService } from './package-read-url.service';
 import { AssetBakeService } from './asset-bake.service';
+import { AssetBakeError, type BakeJob } from './asset-bake.types';
 import type { PackageSlugIndex } from '../storage/package-slug-index';
 import { PackageStorageService } from '../storage/package-storage.service';
 
@@ -448,8 +449,14 @@ export class PackageDeliveryService {
       );
       // Raw glTF cannot be loaded by an exported game: bake it into a
       // self-contained scene and point the scenes at that file.
-      const jobs = this.assetBake.planJobs(resolved, slug);
-      const baked = await this.assetBake.bake(resolved, slug, jobs);
+      let jobs: BakeJob[];
+      let baked: Map<string, Buffer>;
+      try {
+        jobs = this.assetBake.planJobs(resolved, slug);
+        baked = await this.assetBake.bake(resolved, slug, jobs);
+      } catch (error) {
+        throw this.assetBakeFailure(error, slug);
+      }
       // Runtime paths carry the artifact directory: `.../packages/<slug>/<revision>-<key>/`.
       const artifactPath = `packages/${slug}/${resolved.revision}-${resolved.artifactKeys.get(resolved.packageId)!}`;
       const assetRewrites = jobs
@@ -550,6 +557,22 @@ export class PackageDeliveryService {
     }
   }
 
+  /** Turns a bake failure into the project's HTTP error envelope. */
+  private assetBakeFailure(error: unknown, slug: string): Error {
+    if (error instanceof AssetBakeError) {
+      return new BadRequestException(
+        {
+          code: error.code,
+          message: error.message,
+          packageSlug: slug,
+          reason: error.reason,
+        },
+        { cause: error },
+      );
+    }
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
   private rewriteText(
     filepath: string,
     text: string,
@@ -581,7 +604,10 @@ export class PackageDeliveryService {
     // Package references are already turned into runtime paths, so the baked
     // scene is matched by its artifact-relative path.
     for (const rewrite of assetRewrites) {
-      target = target.split(rewrite.from).join(rewrite.to);
+      // Whole references only: an authored `dude.glb.scn` must not turn into
+      // `dude.glb.scn.scn`, and a longer name must not be truncated.
+      const escaped = rewrite.from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      target = target.replace(new RegExp(`${escaped}(?![\\w.])`, 'g'), rewrite.to);
     }
     return Buffer.from(target, 'utf8');
   }

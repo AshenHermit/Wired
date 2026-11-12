@@ -6,7 +6,9 @@ import type { ResolvedClosure } from '../publish/package-closure-resolver';
 import type { PackageTextFile } from '../publish/package-runtime-references';
 import type { AssetBakeCache } from './asset-bake-cache';
 import { BAKED_SUFFIX, UNSUPPORTED_ASSET_EXTENSIONS } from './asset-bake.constants';
-import { AssetBakeError, type BakeJob } from './asset-bake.types';
+import { Logger } from '@nestjs/common';
+
+import { AssetBakeError, type BakeJob, type BakeToolResult } from './asset-bake.types';
 import type { BakeRunner } from './godot-bake.runner';
 
 const GLB_EXTENSION = '.glb';
@@ -39,6 +41,8 @@ export type AssetBakeOptions = {
  * scene that points at a file the runtime cannot load.
  */
 export class AssetBakeService {
+  private readonly logger = new Logger('AssetBakeService');
+
   private active = 0;
   private readonly waiting: Array<() => void> = [];
 
@@ -89,7 +93,7 @@ export class AssetBakeService {
       if (source === undefined) {
         throw new AssetBakeError('asset_missing', `asset_missing: ${job.source}`);
       }
-      const key = cache.keyFor(source, job.preset);
+      const key = cache.keyFor(source, job.preset, this.assetBytes(resolved, job.source));
       keys.set(job.output, key);
       const cached = cache.get(key);
       if (cached === null) {
@@ -120,7 +124,8 @@ export class AssetBakeService {
         'utf8',
       );
       await this.importProject(runner, options.timeoutMs, projectDir, misses);
-      await this.runTool(runner, options.timeoutMs, projectDir, jobsPath);
+      const toolResults = await this.runTool(runner, options.timeoutMs, projectDir, jobsPath);
+      this.logWarnings(slug, toolResults);
       const produced = await this.readOutputs(projectDir, slug, misses);
       for (const [output, bytes] of produced) {
         baked.set(output, bytes);
@@ -132,7 +137,11 @@ export class AssetBakeService {
       await cache.prune();
     } finally {
       if (projectDir !== null) {
-        await rm(projectDir, { recursive: true, force: true });
+        // Windows keeps the project locked for a moment after the process tree
+        // dies: a failed cleanup must never mask the real error or leak the slot.
+        await rm(projectDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(
+          () => undefined,
+        );
       }
       this.release();
     }
@@ -151,11 +160,7 @@ export class AssetBakeService {
   }
 
   private assertNoDependencyAssets(resolved: ResolvedClosure, slug: string): void {
-    const texts: PackageTextFile[] = [...resolved.rootTextFiles];
-    for (const files of resolved.dependencyTextFiles.values()) {
-      texts.push(...files);
-    }
-    for (const file of texts) {
+    for (const file of resolved.rootTextFiles) {
       for (const reference of this.assetReferences(file.text)) {
         if (reference.slug === slug) {
           continue;
@@ -164,6 +169,22 @@ export class AssetBakeService {
           'dependency_asset_unsupported',
           `dependency_asset_unsupported: ${file.filepath} -> ${reference.slug}/${reference.filepath}`,
         );
+      }
+    }
+    // A dependency's own artifact bakes its own assets: only references that
+    // leave the owning package can never be satisfied.
+    for (const [packageId, files] of resolved.dependencyTextFiles) {
+      const ownerSlug = resolved.slugByPackage.get(packageId);
+      for (const file of files) {
+        for (const reference of this.assetReferences(file.text)) {
+          if (reference.slug === ownerSlug) {
+            continue;
+          }
+          throw new AssetBakeError(
+            'dependency_asset_unsupported',
+            `dependency_asset_unsupported: ${file.filepath} -> ${reference.slug}/${reference.filepath}`,
+          );
+        }
       }
     }
   }
@@ -225,7 +246,7 @@ export class AssetBakeService {
     timeoutMs: number,
     projectDir: string,
     jobsPath: string,
-  ): Promise<void> {
+  ): Promise<BakeToolResult[]> {
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(
@@ -251,6 +272,7 @@ export class AssetBakeService {
       if (line.startsWith(BAKE_ERROR_PREFIX)) {
         throw new AssetBakeError('bake_failed', this.describeToolErrors(line.slice(BAKE_ERROR_PREFIX.length)));
       }
+      return this.parseToolResults(line.slice(BAKE_OK_PREFIX.length));
     } finally {
       if (timer !== undefined) {
         clearTimeout(timer);
@@ -258,11 +280,33 @@ export class AssetBakeService {
     }
   }
 
+  private parseToolResults(payload: string): BakeToolResult[] {
+    try {
+      const parsed = JSON.parse(payload) as { results?: BakeToolResult[] };
+      return parsed.results ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Unknown animations and unmatched material keys never fail a build, but the
+   * author has to be able to find them in the server log. */
+  private logWarnings(slug: string, results: BakeToolResult[]): void {
+    for (const result of results) {
+      for (const warning of result.warnings ?? []) {
+        this.logger.warn(`${slug}/${result.output}: ${warning}`);
+      }
+    }
+  }
+
   private describeToolErrors(payload: string): string {
-    const parsed = JSON.parse(payload) as {
-      errors?: Array<{ file?: string; reason?: string; message?: string }>;
-    };
-    const errors = parsed.errors ?? [];
+    let errors: Array<{ file?: string; reason?: string; message?: string }> = [];
+    try {
+      const parsed = JSON.parse(payload) as { errors?: typeof errors };
+      errors = parsed.errors ?? [];
+    } catch {
+      return 'bake failed: the tool returned an unreadable error payload';
+    }
     if (errors.length === 0) {
       return 'bake failed';
     }
@@ -308,16 +352,27 @@ export class AssetBakeService {
       this.active += 1;
       return;
     }
-    await new Promise<void>((resolve) => this.waiting.push(resolve));
+    // The waiter takes over a slot that stays counted while it queues: otherwise
+    // a third caller sees room in the gap between wake-up and increment.
     this.active += 1;
+    await new Promise<void>((resolve) => this.waiting.push(resolve));
   }
 
   private release(): void {
-    this.active -= 1;
     const next = this.waiting.shift();
     if (next !== undefined) {
       next();
+      return;
     }
+    this.active -= 1;
+  }
+
+  /** Bytes of sibling files: preset materials and textures change the baked scene. */
+  private assetBytes(resolved: ResolvedClosure, source: string): Buffer[] {
+    return [...resolved.bytes.entries()]
+      .filter(([filepath]) => filepath !== source)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([, bytes]) => bytes);
   }
 }
 

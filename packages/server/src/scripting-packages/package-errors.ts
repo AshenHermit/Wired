@@ -51,6 +51,7 @@ export function packageDependencyError(
  * prose.
  */
 export type PackageErrorCode =
+  | 'package_asset_bake_failed'
   | 'package_artifact_not_found'
   | 'package_artifact_key_missing'
   | 'package_artifact_file_missing'
@@ -68,6 +69,7 @@ export type PackageErrorCode =
  * that report the same failure cannot pick different statuses.
  */
 const STATUS_BY_CODE: Record<PackageErrorCode, HttpStatus> = {
+  package_asset_bake_failed: HttpStatus.BAD_REQUEST,
   package_artifact_not_found: HttpStatus.NOT_FOUND,
   package_artifact_key_missing: HttpStatus.BAD_REQUEST,
   package_artifact_file_missing: HttpStatus.NOT_FOUND,

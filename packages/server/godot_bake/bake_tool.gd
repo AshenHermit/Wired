@@ -169,6 +169,16 @@ static func _embed(resource: Resource, seen: Dictionary) -> Resource:
 		return null
 	if seen.has(resource):
 		return seen[resource]
+	if resource is Texture2D:
+		# Imported textures keep reading pixels from `res://.godot/imported/...`,
+		# which does not exist at runtime: rebuild them from the decoded image.
+		var image: Image = resource.get_image()
+		var texture: Texture2D = null
+		if image != null and not image.is_empty():
+			texture = ImageTexture.create_from_image(image)
+		if texture != null:
+			seen[resource] = texture
+			return texture
 	var copy := resource.duplicate(true)
 	seen[resource] = copy
 	copy.resource_path = ""
