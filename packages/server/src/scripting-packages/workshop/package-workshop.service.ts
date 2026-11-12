@@ -30,12 +30,15 @@ const WORKSHOP_SELECT = `SELECT p.id, p.slug, p.name, p.version, p.description, 
        p."previewImage",
        a.id AS "authorId", a.name AS "authorName", a.email AS "authorEmail",
        a.picture AS "authorPicture", a.service AS "authorService",
-       r.revision, r."publishedAt", p."updatedAt",
+       r.revision, r."publishedAt", r."sizeBytes", p."updatedAt",
        COUNT(*) OVER() AS total
 FROM scripting_package p
 LEFT JOIN "user" a ON a.id = p."authorId"
 JOIN LATERAL (
-  SELECT revision, "publishedAt" FROM scripting_package_revision
+  SELECT revision, "publishedAt",
+         COALESCE((SELECT SUM((f->>'size')::bigint)
+                   FROM jsonb_array_elements(files) AS f), 0) AS "sizeBytes"
+  FROM scripting_package_revision
   WHERE "packageId" = p.id AND status = 'published'
     AND "publishedAt" IS NOT NULL
   ORDER BY revision DESC LIMIT 1
@@ -118,6 +121,7 @@ type WorkshopRow = {
   authorPicture: string;
   authorService: 'email' | 'google' | 'vk' | 'yandex' | 'github';
   revision: number;
+  sizeBytes: string;
   publishedAt: Date;
   updatedAt: Date;
   total: string;
@@ -496,6 +500,7 @@ export class PackageWorkshopService {
       tags: row.tags,
       previewImage: row.previewImage ?? null,
       revision: row.revision,
+      sizeBytes: Number(row.sizeBytes),
       publishedAt: row.publishedAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };

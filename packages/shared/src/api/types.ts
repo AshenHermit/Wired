@@ -236,6 +236,11 @@ export type WorkshopPackageSummary = {
   previewImage?: string | null;
   author?: PublicUser;
   revision: number;
+  /**
+   * Sum of `files[].size` of the listing's published revision. Dependencies
+   * are not included.
+   */
+  sizeBytes: number;
   publishedAt: string;
   updatedAt: string;
 };
