@@ -39,6 +39,8 @@ func _initialize() -> void:
 	_test_import_in_snapshot_and_collect()
 	_test_replace_prefers_staged_import()
 	_test_replace_copies_local_import_for_legacy_revision()
+	_test_import_preset_cache_and_restore()
+	_test_import_preset_cache_removed_for_default_import()
 	_test_prepare_replace()
 	_test_metadata_excluded()
 	_test_replace_empty_staging()
@@ -278,6 +280,81 @@ func _test_replace_copies_local_import_for_legacy_revision() -> void:
 		"локальный пресет скопирован без настроек",
 	)
 	_report("replace keeps the local import sidecar when the revision has none", problems)
+
+
+func _test_import_preset_cache_and_restore() -> void:
+	var problems: Array = []
+	var slug := "hero_presets"
+	var root := WiredPackageFs.package_dir(slug)
+	var preset := "[remap]\n\nimporter=\"scene\"\nuid=\"uid://a\"\n\n[params]\n\n_subresources={\n\"animations\": {\n\"Action\": {\n\"settings/loop_mode\": 1\n}\n}\n}\n"
+	_write(root.path_join("dude.glb"), "model-v1")
+	_write(root.path_join("dude.glb.import"), preset)
+	WiredPackageFs.op_prepare_replace(slug)
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb"), "model-v1")
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb.import"), preset)
+	WiredPackageFs.op_replace(slug)
+
+	var cache_path := root.path_join(WiredPackageFs.IMPORT_PRESETS_DIR).path_join("dude.glb.import")
+	_expect(problems, FileAccess.file_exists(cache_path), "пресет не закэширован при replace")
+	_expect(
+		problems,
+		FileAccess.get_file_as_string(cache_path).begins_with("; applied-sha256="),
+		"нет заголовка applied-sha256",
+	)
+
+	# Godot перегенерировал сайдкар при замене модели
+	_write(root.path_join("dude.glb"), "model-v2")
+	_write(
+		root.path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\nuid=\"uid://a\"\n\n[params]\n\n_subresources={  }\n",
+	)
+	var restored: Array[String] = WiredPackageFs.restore_import_presets(slug)
+	_expect(problems, restored == [root.path_join("dude.glb")], "восстановление вернуло %s" % [restored])
+	_expect(
+		problems,
+		FileAccess.get_file_as_string(root.path_join("dude.glb.import")).contains("loop_mode"),
+		"пресет не возвращён в живой .import",
+	)
+	var second: Array[String] = WiredPackageFs.restore_import_presets(slug)
+	_expect(problems, second.is_empty(), "повторное восстановление сработало без смены исходника")
+
+	# исходник снова сменился, но пользователь осознанно сбросил настройки
+	_write(root.path_join("dude.glb"), "model-v3")
+	_write(
+		root.path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\nuid=\"uid://a\"\n\n[params]\n\n_subresources={  }\n",
+	)
+	var third: Array[String] = WiredPackageFs.restore_import_presets(slug)
+	_expect(problems, third == [root.path_join("dude.glb")], "смена исходника не восстановила пресет")
+
+	# пресет остаётся в кэше после подмены ревизии
+	WiredPackageFs.op_prepare_replace(slug)
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb"), "model-v3")
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb.import"), preset)
+	WiredPackageFs.op_replace(slug)
+	_expect(problems, FileAccess.file_exists(cache_path), "кэш пресетов не пережил подмену ревизии")
+	_expect(
+		problems,
+		not WiredPackageFs.op_snapshot(slug)["files"].has(".wired/import-presets/dude.glb.import"),
+		"кэш пресетов попал в публикуемый snapshot",
+	)
+	_report("import presets are cached and restored once per source version", problems)
+
+
+func _test_import_preset_cache_removed_for_default_import() -> void:
+	var problems: Array = []
+	var slug := "hero_presets_default"
+	var root := WiredPackageFs.package_dir(slug)
+	_write(
+		root.path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={  }\n",
+	)
+	WiredPackageFs.op_prepare_replace(slug)
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb"), "model")
+	WiredPackageFs.op_replace(slug)
+	var cache_path := root.path_join(WiredPackageFs.IMPORT_PRESETS_DIR).path_join("dude.glb.import")
+	_expect(problems, not FileAccess.file_exists(cache_path), "кэш создан из пустого пресета")
+	_report("default import sidecars leave no preset cache", problems)
 
 
 func _test_prepare_replace() -> void:

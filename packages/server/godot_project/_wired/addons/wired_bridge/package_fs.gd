@@ -25,6 +25,12 @@ const DEFAULT_ROOT := "res://packages"
 ## extensions, as `String.get_extension()` returns them.
 const SLUG_REWRITE_EXTENSIONS := ["gd", "tscn", "tres", "import"]
 
+## Local, never published: last known import preset of each model in a package.
+const IMPORT_PRESETS_DIR := ".wired/import-presets"
+
+## First line of a cached preset names the source version it was applied to.
+const IMPORT_PRESET_SHA_PREFIX := "; applied-sha256="
+
 static var root_override: String = ""
 
 static var _slug_regex: RegEx = null
@@ -375,6 +381,8 @@ static func op_replace(package_slug: String) -> Dictionary:
 		if is_editor_metadata(rel_path) or staged.has(rel_path) or old_orphans.has(rel_path):
 			continue
 		deleted.append(rel_path)
+	# Remember what the new revision ships so a replaced model inherits it.
+	_maintain_import_presets(root, package_slug)
 	return {"written": written, "deleted": deleted}
 
 
@@ -500,6 +508,49 @@ static func op_rename(package_slug: String, new_slug: String) -> Dictionary:
 		file.close()
 		rewritten.append(rel_path)
 	return {"rewritten": rewritten}
+
+
+## Re-applies the cached import preset of a model whose source changed but whose
+## sidecar came back with default settings. Runs at most once per source version:
+## the cache records the source sha the preset was applied to.
+## Returns absolute editor paths of the restored sources.
+static func restore_import_presets(package_slug: String) -> Array[String]:
+	var restored: Array[String] = []
+	var invalid := _invalid_slug(package_slug)
+	if not invalid.is_empty():
+		return restored
+	var restore_error := restore_previous_if_needed(package_slug)
+	if not restore_error.is_empty():
+		return restored
+	var root := package_dir(package_slug)
+	if not DirAccess.dir_exists_absolute(root):
+		return restored
+	for rel_path: String in _list_files(root):
+		if is_editor_metadata(rel_path) or not rel_path.ends_with(".import"):
+			continue
+		var source_rel := import_source_rel_path(rel_path)
+		var source_path := root.path_join(source_rel)
+		if not FileAccess.file_exists(source_path):
+			continue
+		var cached := _read_import_preset(_import_preset_cache_path(package_slug, rel_path))
+		var cached_text := str(cached.get("text", ""))
+		if cached_text.is_empty():
+			continue
+		var live_path := root.path_join(rel_path)
+		if not import_preset_is_empty(normalize_import_text(_read_text(live_path))):
+			continue
+		var source_sha := FileAccess.get_sha256(source_path)
+		if str(cached.get("sha", "")) == source_sha:
+			continue
+		var file := FileAccess.open(live_path, FileAccess.WRITE)
+		if file == null:
+			push_warning("не удалось восстановить %s: %s" % [live_path, error_string(FileAccess.get_open_error())])
+			continue
+		file.store_string(cached_text)
+		file.close()
+		_store_import_preset(package_slug, rel_path, source_sha, cached_text)
+		restored.append(source_path)
+	return restored
 
 
 # --- helpers --------------------------------------------------------------
@@ -682,6 +733,68 @@ static func _copy_missing_import_sidecars(root: String, staging: String, staged:
 ## Sidecar path for a package-relative source path.
 static func _sidecar_rel_path(source_rel: String) -> String:
 	return source_rel + ".import"
+
+
+static func _import_preset_cache_path(package_slug: String, sidecar_rel: String) -> String:
+	return package_dir(package_slug).path_join(IMPORT_PRESETS_DIR).path_join(sidecar_rel)
+
+
+## Refreshes the local preset cache from the live tree after a revision swap:
+## a tuned sidecar becomes the cached preset of its source, a default one drops it.
+static func _maintain_import_presets(root: String, package_slug: String) -> void:
+	var live_sidecars := {}
+	for rel_path: String in _list_files(root):
+		if is_editor_metadata(rel_path) or not rel_path.ends_with(".import"):
+			continue
+		var source_path := root.path_join(import_source_rel_path(rel_path))
+		if not FileAccess.file_exists(source_path):
+			continue
+		live_sidecars[rel_path] = true
+		var preset_text := normalize_import_text(_read_text(root.path_join(rel_path)))
+		if import_preset_is_empty(preset_text):
+			_remove_import_preset(package_slug, rel_path)
+			continue
+		_store_import_preset(package_slug, rel_path, FileAccess.get_sha256(source_path), preset_text)
+	# Forget entries whose source or sidecar is gone.
+	var cache_root := package_dir(package_slug).path_join(IMPORT_PRESETS_DIR)
+	for rel_path: String in _list_files(cache_root):
+		if not live_sidecars.has(rel_path):
+			_remove_tree(cache_root.path_join(rel_path))
+
+
+static func _store_import_preset(
+	package_slug: String, sidecar_rel: String, source_sha: String, preset_text: String
+) -> void:
+	var path := _import_preset_cache_path(package_slug, sidecar_rel)
+	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		push_warning("не удалось сохранить пресет %s: %s" % [path, error_string(FileAccess.get_open_error())])
+		return
+	file.store_string(IMPORT_PRESET_SHA_PREFIX + source_sha + "\n" + preset_text)
+	file.close()
+
+
+static func _remove_import_preset(package_slug: String, sidecar_rel: String) -> void:
+	_remove_tree(_import_preset_cache_path(package_slug, sidecar_rel))
+
+
+## Cached preset and the source version it was applied to; empty strings when
+## the entry is missing or malformed.
+static func _read_import_preset(abs_path: String) -> Dictionary:
+	if not FileAccess.file_exists(abs_path):
+		return {"sha": "", "text": ""}
+	var text := _read_text(abs_path)
+	var newline := text.find("\n")
+	if newline < 0:
+		return {"sha": "", "text": ""}
+	var header := text.substr(0, newline).strip_edges()
+	if not header.begins_with(IMPORT_PRESET_SHA_PREFIX):
+		return {"sha": "", "text": ""}
+	return {
+		"sha": header.substr(IMPORT_PRESET_SHA_PREFIX.length()).strip_edges(),
+		"text": text.substr(newline + 1),
+	}
 
 
 ## Recursively removes a file or directory; a missing path is not an error.
