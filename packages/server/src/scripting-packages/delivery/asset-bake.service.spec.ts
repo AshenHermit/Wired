@@ -1,9 +1,14 @@
 import type { PackageFileEntry } from '@wired-io/shared';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 import type { ResolvedClosure } from '../publish/package-closure-resolver';
 import type { PackageTextFile } from '../publish/package-runtime-references';
+import { AssetBakeCache } from './asset-bake-cache';
 import { AssetBakeService } from './asset-bake.service';
-import { AssetBakeError } from './asset-bake.types';
+import { AssetBakeError, type BakeJob } from './asset-bake.types';
+import type { BakeRunner } from './godot-bake.runner';
 
 type ClosureOptions = {
   files?: string[];
@@ -40,6 +45,39 @@ function makeClosure(options: ClosureOptions = {}): ResolvedClosure {
     dependencyTextFiles: options.dependencyTextFiles ?? new Map(),
     directDependencyIds: [],
   };
+}
+
+/** Writes the job outputs into the temp project and answers like the real tool. */
+class FakeRunner implements BakeRunner {
+  calls = 0;
+  stdout = '';
+  stderr = '';
+  delayMs = 0;
+  payload = Buffer.from('baked-scene');
+
+  async run(options: { projectDir: string; jobsPath: string; timeoutMs: number }) {
+    this.calls += 1;
+    if (this.delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+    }
+    if (this.stdout.length > 0) {
+      return { exitCode: 1, stdout: this.stdout, stderr: this.stderr };
+    }
+    const jobs = JSON.parse(readFileSync(options.jobsPath, 'utf8')) as {
+      jobs: Array<{ output: string }>;
+    };
+    const results = jobs.jobs.map((job) => {
+      const target = join(options.projectDir, job.output);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, this.payload);
+      return { output: job.output, size: this.payload.length };
+    });
+    return {
+      exitCode: 0,
+      stdout: `WIRED_BAKE_OK ${JSON.stringify({ results })}`,
+      stderr: '',
+    };
+  }
 }
 
 describe('AssetBakeService.planJobs', () => {
@@ -97,5 +135,78 @@ describe('AssetBakeService.planJobs', () => {
     });
 
     expect(service.planJobs(closure, 'hero')).toEqual([]);
+  });
+});
+
+describe('AssetBakeService.bake', () => {
+  const scnBytes = Buffer.from('baked-scene');
+  let cacheDir: string;
+  let projectDir: string;
+  let runner: FakeRunner;
+  let jobs: BakeJob[];
+
+  const createService = (timeoutMs = 30_000) =>
+    new AssetBakeService(
+      new AssetBakeCache(cacheDir, 1024 * 1024),
+      runner,
+      {
+        projectPath: projectDir,
+        executablePath: 'godot',
+        timeoutMs,
+        maxConcurrency: 1,
+      },
+    );
+
+  const closure = () =>
+    makeClosure({
+      files: ['player/dude.glb'],
+      presetFiles: { 'player/dude.glb.import': '[remap]\n\nimporter="scene"\n' },
+    });
+
+  beforeEach(() => {
+    cacheDir = mkdtempSync(join(tmpdir(), 'asset-bake-cache-spec-'));
+    projectDir = mkdtempSync(join(tmpdir(), 'asset-bake-project-spec-'));
+    writeFileSync(join(projectDir, 'project.godot'), 'config_version=5\n');
+    writeFileSync(join(projectDir, 'bake_tool.gd'), 'class_name WiredBakeTool\n');
+    writeFileSync(join(projectDir, 'wired_bake.gd'), 'extends SceneTree\n');
+    runner = new FakeRunner();
+    jobs = [{ source: 'player/dude.glb', output: 'player/dude.glb.scn', preset: null }];
+  });
+
+  afterEach(() => {
+    rmSync(cacheDir, { recursive: true, force: true });
+    rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  it('на попадании в кэш не запускает процесс', async () => {
+    const service = createService();
+    await service.bake(closure(), 'hero', jobs);
+    const baked = await service.bake(closure(), 'hero', jobs);
+
+    expect(runner.calls).toBe(1);
+    expect(baked.get('player/dude.glb.scn')?.equals(scnBytes)).toBe(true);
+  });
+
+  it('падает с package_asset_bake_failed на WIRED_BAKE_ERROR', async () => {
+    runner.stdout =
+      'WIRED_BAKE_ERROR {"errors":[{"file":"packages/hero/player/dude.glb","reason":"gltf_import_failed","message":"boom"}]}';
+
+    await expect(createService().bake(closure(), 'hero', jobs)).rejects.toThrow(
+      /dude\.glb.*gltf_import_failed.*boom/,
+    );
+  });
+
+  it('убивает процесс по таймауту', async () => {
+    runner.delayMs = 50;
+
+    await expect(createService(10).bake(closure(), 'hero', jobs)).rejects.toThrow(/timeout/);
+  });
+
+  it('отказывает, если запечённый файл больше 64 МиБ', async () => {
+    runner.payload = Buffer.alloc(67_108_865);
+
+    await expect(
+      createService().bake(closure(), 'hero', [{ ...jobs[0], output: 'big.scn' }]),
+    ).rejects.toThrow(/baked_file_too_large/);
   });
 });
