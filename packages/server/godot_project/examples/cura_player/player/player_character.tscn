@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://c35lbml1jftn0"]
 
-[ext_resource type="Script" uid="uid://c1wue0xsmrlyn" path="res://packages/cura_player/player/character.gd" id="1_58pw5"]
+[ext_resource type="Script" uid="uid://dfdknerh8eu2q" path="res://packages/cura_player/player/character.gd" id="1_58pw5"]
 [ext_resource type="PackedScene" uid="uid://dgrfkn3pspn0r" path="res://packages/cura_player/player/player_model_ready.tscn" id="2_1fs67"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_nsyls"]
