@@ -69,6 +69,20 @@ const config: () => AppConfig = () => ({
       process.env.PACKAGES_FILES_DIR ?? 'packages_files',
     ),
   },
+  // Raw glTF cannot be loaded by an exported game, so artifacts bake it into a
+  // self-contained scene with the same headless Godot binary the rooms use.
+  assetBake: {
+    projectPath: resolve(process.env.GODOT_BAKE_PROJECT_PATH ?? './godot_bake'),
+    executablePath: process.env.GODOT_RUNTIME_PATH || downloadedRuntime(),
+    timeoutMs: intFromEnv('GODOT_BAKE_TIMEOUT_MS', 30_000),
+    maxConcurrency: intFromEnv('GODOT_BAKE_MAX_CONCURRENCY', 1),
+    cacheDir: join(
+      storageDir(),
+      process.env.PACKAGES_FILES_DIR ?? 'packages_files',
+      'bake-cache',
+    ),
+    cacheMaxBytes: intFromEnv('GODOT_BAKE_CACHE_MAX_BYTES', 536_870_912),
+  },
   godot: {
     editorPath: resolve(process.env.GODOT_EDITOR_PATH ?? './godot_editor'),
     projectPath: resolve(process.env.GODOT_PROJECT_PATH ?? './godot_project'),
