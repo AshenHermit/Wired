@@ -141,8 +141,10 @@ JavaScriptBridge.eval("window.__wiredEditorBridgeResult(%s)" % payload, true)
 Семантика:
 
 - `snapshot`/`collect` обходят `res://packages/<id>/` рекурсивно и **пропускают**
-  служебные файлы редактора: любой сегмент с `.`, файлы `*.uid`, `*.import`.
-  Это зеркало `isEditorMetadataPath()`.
+  служебные файлы редактора: любой сегмент с `.`, файлы `*.uid`.
+  Это зеркало `isEditorMetadataPath()`. `*.import` метаданными не считается: это
+  содержимое пакета, и он публикуется нормализованным пресетом импорта (без
+  `[deps]` и `[remap] path/metadata/valid`).
 - `collect` считает `sha256` через `HashingContext` и отдаёт содержимое в
   base64 (`Marshalls.raw_to_base64`). Размер и хеш считаются в GDScript, JS
   только декодирует.
@@ -158,8 +160,9 @@ JavaScriptBridge.eval("window.__wiredEditorBridgeResult(%s)" % payload, true)
   его абсолютный путь (`ProjectSettings.globalize_path`). Префикс `.`
   обязателен: скрытые каталоги Godot не импортирует.
 - `replace`: выполняет восстановление, проверяет, что staging существует; копирует в него служебные
-  файлы текущего пакета (`.uid`, `.import`, dotfiles), чтобы не потерять кэш
-  импорта. Если каталога пакета ещё нет (первое скачивание в пустой редактор),
+  файлы текущего пакета (`.uid`, dotfiles), чтобы не потерять кэш
+  импорта. `*.import` приезжает из ревизии как обычный файл; если в ревизии его нет,
+  а локальный пресет был, staging получает его копию. Если каталога пакета ещё нет (первое скачивание в пустой редактор),
   шаг с `.previous` пропускается: staging просто переименовывается в root, а
   `deleted` пуст. Иначе `DirAccess.rename_absolute(root, previous)`, затем
   `rename_absolute(staging, root)`; при ошибке второго шага `previous`

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useTranslations } from "next-intl";
+import { useFormatter, useTranslations } from "next-intl";
 import {
   CheckIcon,
   DownloadIcon,
@@ -45,6 +45,7 @@ import {
   slugHintKey,
 } from "@/components/packages/slug";
 import { useSlugAvailability } from "@/components/packages/use-slug-availability";
+import { formatFileSize } from "@/utils/format-file-size";
 import {
   LocalChangesError,
   NewerRevisionError,
@@ -254,8 +255,11 @@ function PackageCard({
   const format = useAppMessage();
   const t = useTranslations("Packages");
   const rootT = useTranslations();
+  const numberFormat = useFormatter();
   const disabled = !fsReady || action.busy;
   const preview = entry.previewImage;
+  const size =
+    entry.sizeBytes === null ? null : formatFileSize(entry.sizeBytes);
 
   return (
     <li className="rounded-lg border border-border bg-card p-4 text-sm text-foreground">
@@ -292,6 +296,15 @@ function PackageCard({
                   })
                 : t("card.publishedMissing")}
             </span>
+            {size && (
+              <span>
+                {t(size.unit === "kb" ? "card.sizeKb" : "card.sizeMb", {
+                  value: numberFormat.number(size.value, {
+                    maximumFractionDigits: 1,
+                  }),
+                })}
+              </span>
+            )}
             {entry.loaded && entry.loadedRevision !== null && (
               <span>
                 {t(

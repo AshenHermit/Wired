@@ -71,6 +71,7 @@ COPY --from=build /app/packages/server/godot_editor ./packages/server/godot_edit
 COPY --from=build /app/packages/server/godot_runtime ./packages/server/godot_runtime
 COPY --from=build /app/packages/server/godot_project ./packages/server/godot_project
 COPY --from=build /app/packages/server/game_export ./packages/server/game_export
+COPY --from=build /app/packages/server/godot_bake ./packages/server/godot_bake
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
 COPY package.json pnpm-workspace.yaml ./
 COPY packages/shared/package.json ./packages/shared/package.json

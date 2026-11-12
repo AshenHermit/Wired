@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { PackageFileEntry } from '@wired-io/shared';
-import { existsSync, mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { mkdir, readdir, readFile, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -9,6 +9,9 @@ import { ScriptingPackage } from 'src/database/entities/scripting-package.entity
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { sha256Hex } from '../storage/package-hash';
 import { PackageDeliveryService } from './package-delivery.service';
+import { AssetBakeCache } from './asset-bake-cache';
+import { AssetBakeService } from './asset-bake.service';
+import type { BakeRunner } from './godot-bake.runner';
 import { PackageReadUrlService } from './package-read-url.service';
 import { PackageStorageService } from '../storage/package-storage.service';
 
@@ -27,6 +30,26 @@ type RevisionFixture = {
   publishedAt: Date | null;
 };
 
+const BAKED_BYTES = Buffer.from('baked-scene-bytes');
+const PRESET_TEXT = '[remap]\n\nimporter="scene"\n';
+
+/** Writes the baked scene into the throwaway project and answers like the tool. */
+class FakeBakeRunner implements BakeRunner {
+  async run(options: { projectDir: string; jobsPath: string; timeoutMs: number }) {
+    const jobs = JSON.parse(await readFile(options.jobsPath, 'utf8')) as {
+      jobs: Array<{ output: string }>;
+    };
+    const results = [];
+    for (const job of jobs.jobs) {
+      const target = path.join(options.projectDir, job.output);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, BAKED_BYTES);
+      results.push({ output: job.output, size: BAKED_BYTES.length });
+    }
+    return { exitCode: 0, stdout: `WIRED_BAKE_OK ${JSON.stringify({ results })}`, stderr: '' };
+  }
+}
+
 describe('PackageDeliveryService', () => {
   let root: string;
   let storage: PackageStorageService;
@@ -35,6 +58,7 @@ describe('PackageDeliveryService', () => {
   let roomsRepository: { exist: jest.Mock };
   let readUrls: { createToken: jest.Mock };
   let service: PackageDeliveryService;
+  let assetBake: AssetBakeService;
 
   let packages: PackageFixture[];
   let revisions: RevisionFixture[];
@@ -111,12 +135,23 @@ describe('PackageDeliveryService', () => {
       })),
     };
 
+    const toolDir = path.join(root, 'bake-tool');
+    mkdirSync(toolDir, { recursive: true });
+    for (const name of ['project.godot', 'bake_tool.gd', 'wired_bake.gd']) {
+      writeFileSync(path.join(toolDir, name), '\n');
+    }
+    assetBake = new AssetBakeService(
+      new AssetBakeCache(path.join(root, 'bake-cache'), 10_000_000),
+      new FakeBakeRunner(),
+      { projectPath: toolDir, executablePath: 'godot', timeoutMs: 5_000, maxConcurrency: 1 },
+    );
     service = new PackageDeliveryService(
       packagesRepository as never,
       revisionsRepository as never,
       roomsRepository as never,
       storage,
       readUrls as unknown as PackageReadUrlService,
+      assetBake,
     );
   });
 
@@ -548,6 +583,25 @@ describe('PackageDeliveryService', () => {
     expect(await readArtifactBytes(5, 3, 7, 'tex.png')).toEqual(png);
   });
 
+  it('excludes import sidecars from the runtime artifact', async () => {
+    definePackage(5, 'Heroes', 7);
+    await writePublished(5, 3, {
+      'hero.gd': 'extends Node',
+      'dude.glb': 'glb',
+      'dude.glb.import':
+        '[remap]\n\nimporter="scene"\n\n[params]\n\n_subresources={  }\n',
+    });
+
+    const manifest = await service.getRuntimeManifest(5, 3, 7);
+
+    expect(manifest.files.map((file) => file.filepath)).toEqual(['dude.glb.scn', 'hero.gd']);
+    const dir = await artifactDir(5, 3, 7);
+    expect(existsSync(path.resolve(dir, 'dude.glb.import'))).toBe(false);
+    // The baked scene replaces the model: shipping the raw glb as well only
+    // doubles the artifact.
+    expect(existsSync(path.resolve(dir, 'dude.glb'))).toBe(false);
+  });
+
   describe('resolveRuntimeFile', () => {
     beforeEach(() => {
       definePackage(5, 'Heroes', 7);
@@ -829,6 +883,29 @@ describe('PackageDeliveryService', () => {
       await storage.writePinnedDependencies(42, 2, new Map([[99, 1]]));
 
       await expect(service.collectRuntimePackageIds(7)).resolves.toEqual([42]);
+    });
+  });
+
+  describe('asset baking', () => {
+    it('запекает .glb и переписывает ссылку на .scn', async () => {
+      definePackage(5, 'Heroes', 7, 'heroes');
+      await writePublished(5, 3, {
+        'player/model.glb': Buffer.from('glb-bytes'),
+        'player/model.glb.import': Buffer.from(PRESET_TEXT),
+        'player/scene.tscn':
+          '[ext_resource type="PackedScene" path="res://packages/heroes/player/model.glb" id="1"]\n',
+      });
+
+      const manifest = await service.getRuntimeManifest(5, 3, 7);
+      const paths = manifest.files.map((file) => file.filepath);
+      expect(paths).toContain('player/model.glb.scn');
+      expect(paths).not.toContain('player/model.glb.import');
+
+      const scene = (await readArtifactBytes(5, 3, 7, 'player/scene.tscn')).toString('utf8');
+      expect(scene).toContain('/player/model.glb.scn');
+
+      const entry = manifest.files.find((file) => file.filepath === 'player/model.glb.scn')!;
+      expect(entry.size).toBe(BAKED_BYTES.length);
     });
   });
 });

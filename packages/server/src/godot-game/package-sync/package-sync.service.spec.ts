@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { FindOperator, Repository } from 'typeorm';
+import type { PackageFileEntry } from '@wired-io/shared';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { PackageDeliveryService } from 'src/scripting-packages/delivery/package-delivery.service';
@@ -20,7 +21,10 @@ describe('PackageSyncService', () => {
   let revisions: jest.Mocked<
     Pick<Repository<ScriptingPackageRevision>, 'find'>
   >;
-  let published: Map<number, { revision: number; publishedAt: Date }>;
+  let published: Map<
+    number,
+    { revision: number; publishedAt: Date; files: PackageFileEntry[] }
+  >;
   let runtime: {
     sendPackage: jest.Mock;
     sendPackageUnload: jest.Mock;
@@ -46,8 +50,9 @@ describe('PackageSyncService', () => {
     packageId: number,
     revision: number,
     publishedAt = new Date('2026-10-30T09:00:00.000Z'),
+    files: PackageFileEntry[] = [],
   ): void => {
-    published.set(packageId, { revision, publishedAt });
+    published.set(packageId, { revision, publishedAt, files });
   };
 
   beforeEach(() => {
@@ -578,6 +583,25 @@ describe('PackageSyncService', () => {
       [43, 2],
       [44, 11],
     ]);
+  });
+
+  it('reports the total size of the latest published revision', async () => {
+    publishRevision(42, 4, undefined, [
+      { filepath: 'hero.gd', size: 1_500, sha256: 'a' },
+      { filepath: 'hero.tscn', size: 2_000, sha256: 'b' },
+    ]);
+
+    const [status] = await service.getStatuses('7');
+
+    expect(status.sizeBytes).toBe(3_500);
+  });
+
+  it('reports no size for a package without published revisions', async () => {
+    published.delete(42);
+
+    const [status] = await service.getStatuses('7');
+
+    expect(status.sizeBytes).toBeNull();
   });
 
   it('does not query revisions when the room has no packages', async () => {

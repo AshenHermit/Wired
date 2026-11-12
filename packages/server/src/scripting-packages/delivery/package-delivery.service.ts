@@ -45,6 +45,9 @@ import {
   stripExtResourceUids,
 } from '../publish/package-runtime-references';
 import { PackageReadUrlService } from './package-read-url.service';
+import { AssetBakeService } from './asset-bake.service';
+import { BAKED_SUFFIX } from './asset-bake.constants';
+import { AssetBakeError, type BakeJob } from './asset-bake.types';
 import type { PackageSlugIndex } from '../storage/package-slug-index';
 import { PackageStorageService } from '../storage/package-storage.service';
 
@@ -124,6 +127,7 @@ export class PackageDeliveryService {
     private readonly roomsRepository: Repository<Room>,
     private readonly storage: PackageStorageService,
     private readonly readUrls: PackageReadUrlService,
+    private readonly assetBake: AssetBakeService = new AssetBakeService(),
   ) {
     this.resolver = new PackageClosureResolver(
       revisionsRepository,
@@ -444,8 +448,32 @@ export class PackageDeliveryService {
       const textByPath = new Map(
         resolved.rootTextFiles.map((file) => [file.filepath, file.text]),
       );
+      // Raw glTF cannot be loaded by an exported game: bake it into a
+      // self-contained scene and point the scenes at that file.
+      let jobs: BakeJob[];
+      let baked: Map<string, Buffer>;
+      try {
+        jobs = this.assetBake.planJobs(resolved, slug);
+        baked = await this.assetBake.bake(resolved, slug, jobs);
+      } catch (error) {
+        throw this.assetBakeFailure(error, slug);
+      }
+      // Runtime paths carry the artifact directory: `.../packages/<slug>/<revision>-<key>/`.
+      const artifactPath = `packages/${slug}/${resolved.revision}-${resolved.artifactKeys.get(resolved.packageId)!}`;
+      const assetRewrites = jobs
+        .filter((job) => baked.has(job.output))
+        .map((job) => ({
+          from: `${artifactPath}/${job.source}`,
+          to: `${artifactPath}/${job.output}`,
+        }));
       const files: PackageFileEntry[] = [];
       for (const entry of resolved.rootFiles) {
+        // Editor import presets point at `.godot/imported/...` remaps that only
+        // exist inside an editor; the native runtime derives its own sidecars.
+        if (entry.filepath.endsWith('.import')) continue;
+        // The baked scene replaces the raw model: the runtime cannot load it and
+        // no reference should point at it any more, so it is not shipped.
+        if (baked.has(`${entry.filepath}${BAKED_SUFFIX}`)) continue;
         const data = resolved.bytes.get(entry.filepath)!;
         const rewritten = textByPath.has(entry.filepath)
           ? this.rewriteText(
@@ -455,6 +483,7 @@ export class PackageDeliveryService {
               resolved.revisionByPackage,
               resolved.artifactKeys,
               resolved.slugByPackage,
+              assetRewrites,
             )
           : data;
         // Validate every written path symmetrically with the read paths: a
@@ -466,6 +495,16 @@ export class PackageDeliveryService {
           filepath: entry.filepath,
           size: rewritten.byteLength,
           sha256: sha256Hex(rewritten),
+        });
+      }
+      for (const [output, bytes] of baked) {
+        const target = resolvePackagePath(staging, output);
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, bytes);
+        files.push({
+          filepath: output,
+          size: bytes.byteLength,
+          sha256: sha256Hex(bytes),
         });
       }
       // Deterministic codepoint order, independent of the host locale.
@@ -522,6 +561,22 @@ export class PackageDeliveryService {
     }
   }
 
+  /** Turns a bake failure into the project's HTTP error envelope. */
+  private assetBakeFailure(error: unknown, slug: string): Error {
+    if (error instanceof AssetBakeError) {
+      return new BadRequestException(
+        {
+          code: error.code,
+          message: error.message,
+          packageSlug: slug,
+          reason: error.reason,
+        },
+        { cause: error },
+      );
+    }
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
   private rewriteText(
     filepath: string,
     text: string,
@@ -529,6 +584,7 @@ export class PackageDeliveryService {
     revisionByPackage: Map<number, number>,
     artifactKeys: Map<number, string>,
     slugByPackage: Map<number, string>,
+    assetRewrites: ReadonlyArray<{ from: string; to: string }> = [],
   ): Buffer {
     let rewritten: string;
     try {
@@ -548,7 +604,16 @@ export class PackageDeliveryService {
         { cause: error },
       );
     }
-    return Buffer.from(stripExtResourceUids(filepath, rewritten), 'utf8');
+    let target = stripExtResourceUids(filepath, rewritten);
+    // Package references are already turned into runtime paths, so the baked
+    // scene is matched by its artifact-relative path.
+    for (const rewrite of assetRewrites) {
+      // Whole references only: an authored `dude.glb.scn` must not turn into
+      // `dude.glb.scn.scn`, and a longer name must not be truncated.
+      const escaped = rewrite.from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      target = target.replace(new RegExp(`${escaped}(?![\\w.])`, 'g'), rewrite.to);
+    }
+    return Buffer.from(target, 'utf8');
   }
 
   /**

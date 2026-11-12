@@ -56,6 +56,7 @@ function entry(overrides: Partial<RoomPackageEntry> = {}): RoomPackageEntry {
     publishedRevision: 2,
     loadedRevision: 2,
     publishedAt: "2026-10-30T10:00:00.000Z",
+    sizeBytes: null,
     localChanges: [],
     backendState: "ready",
     runtimeState: "applied",
@@ -125,6 +126,7 @@ function workshopPackage(
       picture: "",
     },
     revision: 1,
+    sizeBytes: 0,
     publishedAt: "2026-10-30T10:00:00.000Z",
     updatedAt: "2026-10-30T10:00:00.000Z",
     ...overrides,
@@ -1082,6 +1084,131 @@ describe("PackagesTab", () => {
     expect(screen.getByText("desc")).toBeTruthy();
     expect(screen.getByText("a, b")).toBeTruthy();
     expect(screen.getByText("#hero")).toBeTruthy();
+  });
+
+  it("shows the published revision size in megabytes", () => {
+    render(
+      <PackagesTab
+        onRoomSaved={vi.fn()}
+        room={roomFixture()}
+        roomId={1}
+        canCreatePackages
+        canManagePackages
+        viewerId={42}
+        packages={controller({ entries: [entry({ sizeBytes: 1_468_006 })] })}
+      />,
+    );
+
+    expect(screen.getByText("· 1,4 МБ")).toBeTruthy();
+  });
+
+  it("shows the published revision size in kilobytes", () => {
+    render(
+      <PackagesTab
+        onRoomSaved={vi.fn()}
+        room={roomFixture()}
+        roomId={1}
+        canCreatePackages
+        canManagePackages
+        viewerId={42}
+        packages={controller({ entries: [entry({ sizeBytes: 512_000 })] })}
+      />,
+    );
+
+    expect(screen.getByText("· 500 КБ")).toBeTruthy();
+  });
+
+  it("shows zero size for an empty published revision", () => {
+    render(
+      <PackagesTab
+        onRoomSaved={vi.fn()}
+        room={roomFixture()}
+        roomId={1}
+        canCreatePackages
+        canManagePackages
+        viewerId={42}
+        packages={controller({ entries: [entry({ sizeBytes: 0 })] })}
+      />,
+    );
+
+    expect(screen.getByText("· 0 КБ")).toBeTruthy();
+  });
+
+  it("hides the size when no revision is published", () => {
+    render(
+      <PackagesTab
+        onRoomSaved={vi.fn()}
+        room={roomFixture()}
+        roomId={1}
+        canCreatePackages
+        canManagePackages
+        viewerId={42}
+        packages={controller({
+          entries: [entry({ sizeBytes: null, publishedRevision: null })],
+        })}
+      />,
+    );
+
+    expect(screen.queryByText(/КБ|МБ/)).toBeNull();
+  });
+
+  it("formats the size for the active locale", () => {
+    render(
+      <PackagesTab
+        onRoomSaved={vi.fn()}
+        room={roomFixture()}
+        roomId={1}
+        canCreatePackages
+        canManagePackages
+        viewerId={42}
+        packages={controller({ entries: [entry({ sizeBytes: 1_468_006 })] })}
+      />,
+      { locale: "en" },
+    );
+
+    expect(screen.getByText("· 1.4 MB")).toBeTruthy();
+  });
+
+  it("uses the published size when the editor holds another revision", () => {
+    render(
+      <PackagesTab
+        onRoomSaved={vi.fn()}
+        room={roomFixture()}
+        roomId={1}
+        canCreatePackages
+        canManagePackages
+        viewerId={42}
+        packages={controller({
+          entries: [
+            entry({
+              sizeBytes: 700_000,
+              publishedRevision: 4,
+              loadedRevision: 2,
+            }),
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByText("· 683,6 КБ")).toBeTruthy();
+  });
+
+  it("keeps the size of a disabled package", () => {
+    render(
+      <PackagesTab
+        onRoomSaved={vi.fn()}
+        room={roomFixture()}
+        roomId={1}
+        canCreatePackages
+        canManagePackages
+        viewerId={42}
+        packages={controller({
+          entries: [entry({ sizeBytes: 512_000, enabled: false })],
+        })}
+      />,
+    );
+
+    expect(screen.getByText("· 500 КБ")).toBeTruthy();
   });
 
   it("hints that a workshop slug is taken without blocking creation", async () => {

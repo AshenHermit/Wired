@@ -14,9 +14,9 @@ import type { EditorBridgeClient } from "./editor-bridge";
  * The shell never touches the editor file system directly: every read and
  * write goes through the Wired editor plugin over the request/response bridge.
  * The plugin owns the directory swap (staging directory, rollback to the
- * previous directory) and filters editor metadata (`.uid`, `.import`, dot
- * paths), so this layer only validates package-relative paths and maps bridge
- * payloads into typed values.
+ * previous directory) and filters editor metadata (`.uid`, dot paths), so this
+ * layer only validates package-relative paths and maps bridge payloads into
+ * typed values. Import sidecars (`*.import`) are package content, not metadata.
  *
  * Every path handled here is relative to the managed package directory
  * (`<project>/packages/<slug>`), so a package revision can never read or
@@ -31,16 +31,17 @@ export class GodotFsError extends Error {
 }
 
 /**
- * Files the Godot editor generates next to package sources (`.gd.uid`,
- * `*.import`, `.godot/`). The plugin lists them deliberately (hidden files are
+ * Files the Godot editor owns inside a package (`.gd.uid`, `.godot/`, any
+ * dot-prefixed segment). The plugin lists them deliberately (hidden files are
  * included) and filters them out of `snapshot`, `collect` and `replace`; this
  * predicate mirrors that rule for callers that show a path to the user or
- * decide what a package revision owns.
+ * decide what a package revision owns. `*.import` is package content: it is the
+ * portable import preset of its source.
  */
 export function isEditorMetadataPath(filepath: string): boolean {
   const segments = filepath.split("/");
   if (segments.some((segment) => segment.startsWith("."))) return true;
-  return filepath.endsWith(".uid") || filepath.endsWith(".import");
+  return filepath.endsWith(".uid");
 }
 
 export const PACKAGES_DIR = "packages";

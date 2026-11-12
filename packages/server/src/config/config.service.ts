@@ -39,6 +39,9 @@ export class AppConfigService {
   get godotRuntime() {
     return this.config.godotRuntime;
   }
+  get assetBake() {
+    return this.config.assetBake;
+  }
   get packages() {
     return this.config.packages;
   }

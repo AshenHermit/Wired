@@ -19,8 +19,8 @@ import {
   PackageSlugIndex,
   requirePackageSlug,
 } from '../storage/package-slug-index';
-import { sha256Hex } from '../storage/package-hash';
-import { PackageStorageService } from '../storage/package-storage.service';
+import { ASSET_BAKE_VERSION } from '../delivery/asset-bake.constants';
+import { sha256Hex } from '../storage/package-hash';import { PackageStorageService } from '../storage/package-storage.service';
 
 /** One element of the result of `findDependentRoomPackages`. */
 export type DependentRoomPackage = {
@@ -95,6 +95,8 @@ export class PackageClosureResolver {
       Repository<ScriptingPackage>,
       'find'
     >,
+    /** Changes the artifact key so a pipeline change rebuilds every artifact. */
+    private readonly assetBakeVersion: string | number = ASSET_BAKE_VERSION,
   ) {}
 
   /**
@@ -317,7 +319,8 @@ export class PackageClosureResolver {
         .filter((id) => revisionByPackage.has(id))
         .map((id) => [id, revisionByPackage.get(id)!] as [number, number])
         .sort((a, b) => a[0] - b[0]);
-      keys.set(start, sha256Hex(Buffer.from(JSON.stringify(closure), 'utf8')));
+      const payload = [...closure, ['asset-bake', this.assetBakeVersion]];
+      keys.set(start, sha256Hex(Buffer.from(JSON.stringify(payload), 'utf8')));
     }
     return keys;
   }

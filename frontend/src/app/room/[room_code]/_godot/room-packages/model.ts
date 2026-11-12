@@ -39,6 +39,8 @@ export type RoomPackageEntry = {
   publishedRevision: number | null;
   loadedRevision: number | null;
   publishedAt: string | null;
+  /** Bytes of the latest published revision; `null` when none is published. */
+  sizeBytes: number | null;
   localChanges: string[];
   backendState: PackageRevisionSyncState | null;
   runtimeState: PackageRevisionSyncState | null;
@@ -261,6 +263,7 @@ export function buildEntries(
       publishedRevision,
       loadedRevision,
       publishedAt: remoteState?.publishedAt ?? null,
+      sizeBytes: remoteState?.sizeBytes ?? null,
       localChanges,
       backendState: remoteState?.state ?? null,
       runtimeState: remoteState?.runtime.state ?? null,

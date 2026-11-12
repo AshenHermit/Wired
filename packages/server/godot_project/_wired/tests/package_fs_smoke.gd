@@ -5,8 +5,9 @@ extends SceneTree
 ## `WiredPackageFs` owns `res://packages` inside the editor project: it reports
 ## the current files, stages a replacement, swaps it in atomically, deletes a
 ## package and deletes selected files or directories inside a package. Editor
-## metadata (dot directories, `*.uid`, `*.import`) is never part of the reported
-## tree but must survive a swap.
+## metadata (dot directories and `*.uid`) is never part of the reported tree but
+## must survive a swap. Import sidecars (`*.import`) are package content: they
+## are reported normalized, and sidecars without a source are dropped.
 ##
 ## Packages are addressed by slug: `package_dir(slug)`. In production that
 ## helper returns exactly `res://packages/<slug>`; `op_delete_files` runs
@@ -34,6 +35,15 @@ func _initialize() -> void:
 	_cleanup_root()
 	_test_empty_snapshot()
 	_test_create_dir()
+	_test_import_normalized()
+	_test_import_paths()
+	_test_import_in_snapshot_and_collect()
+	_test_replace_prefers_staged_import()
+	_test_replace_copies_local_import_for_legacy_revision()
+	_test_import_preset_cache_and_restore()
+	_test_import_preset_cache_removed_for_default_import()
+	_test_import_preset_scan_is_fast()
+	_test_restore_skips_package_without_cache()
 	_test_prepare_replace()
 	_test_metadata_excluded()
 	_test_replace_empty_staging()
@@ -48,7 +58,7 @@ func _initialize() -> void:
 	_test_delete_files_selected_file()
 	_test_delete_files_relative_path()
 	_test_delete_files_selected_directory()
-	_test_delete_files_keeps_metadata_of_selected_file()
+	_test_delete_files_removes_sidecar_of_selected_file()
 	_test_delete_files_outside_package()
 	_test_delete_files_traversal()
 	_test_delete_files_missing_path()
@@ -86,6 +96,317 @@ func _test_create_dir() -> void:
 	var exists := WiredPackageFs.op_exists("hero")
 	_expect(problems, exists == {"exists": true}, "op_exists(\"hero\") must be {exists: true}, got %s" % [exists])
 	_report("create_dir creates the package directory", problems)
+
+
+func _test_import_normalized() -> void:
+	var problems: Array = []
+	var raw := """; machine note
+[remap]
+
+importer="scene"
+importer_version=1
+type="PackedScene"
+uid="uid://abc"
+path="res://.godot/imported/dude.glb-deadbeef.scn"
+metadata={
+"imported_formats": ["s3tc_bptc"]
+}
+valid=true
+
+[deps]
+
+source_file="res://packages/hero/dude.glb"
+dest_files=["res://.godot/imported/dude.glb-deadbeef.scn"]
+
+[params]
+
+materials/extract=0
+_subresources={
+"animations": {
+"Action": {
+"settings/loop_mode": 1
+}
+}
+}
+"""
+	var expected := """[remap]
+
+importer="scene"
+importer_version=1
+type="PackedScene"
+uid="uid://abc"
+
+[params]
+
+materials/extract=0
+_subresources={
+"animations": {
+"Action": {
+"settings/loop_mode": 1
+}
+}
+}
+"""
+	var normalized: String = WiredPackageFs.normalize_import_text(raw)
+	_expect(problems, normalized == expected, "нормализованный текст не совпал:\n%s" % normalized)
+	_expect(problems, WiredPackageFs.normalize_import_text(normalized) == normalized, "нормализация не идемпотентна")
+	_expect(
+		problems,
+		not WiredPackageFs.import_preset_is_empty(normalized),
+		"непустой _subresources распознан как пустой",
+	)
+	_expect(
+		problems,
+		WiredPackageFs.import_preset_is_empty(
+			"[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={  }\n"
+		),
+		"пустой _subresources распознан как непустой",
+	)
+	_expect(
+		problems,
+		WiredPackageFs.import_preset_is_empty("[remap]\n\nimporter=\"scene\"\n\n[params]\n"),
+		"отсутствующий _subresources распознан как непустой",
+	)
+	_report("import sidecar is normalized into a portable preset", problems)
+
+
+func _test_import_paths() -> void:
+	var problems: Array = []
+	_expect(
+		problems,
+		WiredPackageFs.import_source_rel_path("a/b.png.import") == "a/b.png",
+		"путь исходника вычислен неверно",
+	)
+	_expect(
+		problems,
+		WiredPackageFs.import_source_rel_path("root.import") == "root",
+		"путь исходника в корне вычислен неверно",
+	)
+	_report("import sidecar source path is derived from the sidecar path", problems)
+
+
+func _test_import_in_snapshot_and_collect() -> void:
+	var problems: Array = []
+	var slug := "hero_import"
+	var root := WiredPackageFs.package_dir(slug)
+	_write(root.path_join("dude.glb"), "glb")
+	_write(
+		root.path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\ntype=\"PackedScene\"\npath=\"res://.godot/imported/x.scn\"\n\n[deps]\n\nsource_file=\"res://packages/hero_import/dude.glb\"\n\n[params]\n\n_subresources={  }\n",
+	)
+	# сирота: исходника нет
+	_write(root.path_join("ghost.import"), "[remap]\n\nimporter=\"scene\"\n")
+
+	var snapshot: Dictionary = WiredPackageFs.op_snapshot(slug)
+	var names: Array = snapshot.get("files", {}).keys()
+	names.sort()
+	_expect(problems, names == ["dude.glb", "dude.glb.import"], "snapshot содержит %s" % [names])
+
+	var collected: Dictionary = WiredPackageFs.op_collect(slug)
+	var entries: Array = collected.get("files", [])
+	var by_path := {}
+	for entry: Dictionary in entries:
+		by_path[str(entry["filepath"])] = entry
+	_expect(problems, not by_path.has("ghost.import"), "сирота попала в collect")
+	var import_entry: Dictionary = by_path.get("dude.glb.import", {})
+	var normalized: String = WiredPackageFs.normalize_import_text(
+		FileAccess.get_file_as_string(root.path_join("dude.glb.import"))
+	)
+	var bytes := normalized.to_utf8_buffer()
+	_expect(
+		problems,
+		int(import_entry.get("size", -1)) == bytes.size(),
+		"размер считается не по нормализованному тексту",
+	)
+	_expect(
+		problems,
+		str(import_entry.get("sha256", "")) == normalized.sha256_text(),
+		"sha collect не совпадает с нормализованным текстом",
+	)
+	_expect(
+		problems,
+		str(snapshot["files"].get("dude.glb.import", "")) == normalized.sha256_text(),
+		"sha snapshot и collect расходятся",
+	)
+	_expect(
+		problems,
+		Marshalls.base64_to_raw(str(import_entry.get("contents_base64", ""))) == bytes,
+		"collect отдаёт не нормализованный текст",
+	)
+	_report("import sidecars are shipped normalized and orphans are dropped", problems)
+
+
+func _test_replace_prefers_staged_import() -> void:
+	var problems: Array = []
+	var slug := "hero_imp_replace"
+	_write(WiredPackageFs.package_dir(slug).path_join("dude.glb"), "old")
+	_write(
+		WiredPackageFs.package_dir(slug).path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={  }\n",
+	)
+	WiredPackageFs.op_prepare_replace(slug)
+	var staging := WiredPackageFs.staging_dir(slug)
+	_write(staging.path_join("dude.glb"), "new")
+	_write(
+		staging.path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={\n\"animations\": {\n\"Action\": {\n\"settings/loop_mode\": 1\n}\n}\n}\n",
+	)
+	var result: Dictionary = WiredPackageFs.op_replace(slug)
+	var live: String = FileAccess.get_file_as_string(
+		WiredPackageFs.package_dir(slug).path_join("dude.glb.import")
+	)
+	_expect(problems, live.contains("loop_mode"), "сайдкар из ревизии перетёрт локальным")
+	_expect(
+		problems,
+		Array(result.get("written", [])).has("dude.glb.import"),
+		"сайдкар не попал в written",
+	)
+	_report("replace keeps the staged import sidecar", problems)
+
+
+func _test_replace_copies_local_import_for_legacy_revision() -> void:
+	var problems: Array = []
+	var slug := "hero_imp_legacy"
+	_write(WiredPackageFs.package_dir(slug).path_join("dude.glb"), "old")
+	_write(
+		WiredPackageFs.package_dir(slug).path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={\n\"animations\": {\n\"Action\": {\n\"settings/loop_mode\": 1\n}\n}\n}\n",
+	)
+	WiredPackageFs.op_prepare_replace(slug)
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb"), "new")
+	WiredPackageFs.op_replace(slug)
+	var live_path := WiredPackageFs.package_dir(slug).path_join("dude.glb.import")
+	_expect(problems, FileAccess.file_exists(live_path), "локальный пресет потерян при ревизии без .import")
+	_expect(
+		problems,
+		FileAccess.get_file_as_string(live_path).contains("loop_mode"),
+		"локальный пресет скопирован без настроек",
+	)
+	_report("replace keeps the local import sidecar when the revision has none", problems)
+
+
+func _test_import_preset_cache_and_restore() -> void:
+	var problems: Array = []
+	var slug := "hero_presets"
+	var root := WiredPackageFs.package_dir(slug)
+	var preset := "[remap]\n\nimporter=\"scene\"\nuid=\"uid://a\"\n\n[params]\n\n_subresources={\n\"animations\": {\n\"Action\": {\n\"settings/loop_mode\": 1\n}\n}\n}\n"
+	_write(root.path_join("dude.glb"), "model-v1")
+	_write(root.path_join("dude.glb.import"), preset)
+	WiredPackageFs.op_prepare_replace(slug)
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb"), "model-v1")
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb.import"), preset)
+	WiredPackageFs.op_replace(slug)
+
+	var cache_path := root.path_join(WiredPackageFs.IMPORT_PRESETS_DIR).path_join("dude.glb.import")
+	_expect(problems, FileAccess.file_exists(cache_path), "пресет не закэширован при replace")
+	_expect(
+		problems,
+		FileAccess.get_file_as_string(cache_path).begins_with("; applied-sha256="),
+		"нет заголовка applied-sha256",
+	)
+
+	# Godot перегенерировал сайдкар при замене модели
+	_write(root.path_join("dude.glb"), "model-v2")
+	_write(
+		root.path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\nuid=\"uid://a\"\n\n[params]\n\n_subresources={  }\n",
+	)
+	var restored: Array[String] = WiredPackageFs.restore_import_presets(slug)
+	_expect(problems, restored == [root.path_join("dude.glb")], "восстановление вернуло %s" % [restored])
+	_expect(
+		problems,
+		FileAccess.get_file_as_string(root.path_join("dude.glb.import")).contains("loop_mode"),
+		"пресет не возвращён в живой .import",
+	)
+	var second: Array[String] = WiredPackageFs.restore_import_presets(slug)
+	_expect(problems, second.is_empty(), "повторное восстановление сработало без смены исходника")
+
+	# исходник снова сменился, но пользователь осознанно сбросил настройки
+	_write(root.path_join("dude.glb"), "model-v3")
+	_write(
+		root.path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\nuid=\"uid://a\"\n\n[params]\n\n_subresources={  }\n",
+	)
+	var third: Array[String] = WiredPackageFs.restore_import_presets(slug)
+	_expect(problems, third == [root.path_join("dude.glb")], "смена исходника не восстановила пресет")
+
+	# пресет остаётся в кэше после подмены ревизии
+	WiredPackageFs.op_prepare_replace(slug)
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb"), "model-v3")
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb.import"), preset)
+	WiredPackageFs.op_replace(slug)
+	_expect(problems, FileAccess.file_exists(cache_path), "кэш пресетов не пережил подмену ревизии")
+	_expect(
+		problems,
+		not WiredPackageFs.op_snapshot(slug)["files"].has(".wired/import-presets/dude.glb.import"),
+		"кэш пресетов попал в публикуемый snapshot",
+	)
+	_report("import presets are cached and restored once per source version", problems)
+
+
+func _test_import_preset_cache_removed_for_default_import() -> void:
+	var problems: Array = []
+	var slug := "hero_presets_default"
+	var root := WiredPackageFs.package_dir(slug)
+	var preset := (
+		"[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={\n\"animations\": {\n\"Action\": {\n\"settings/loop_mode\": 1\n}\n}\n}\n"
+	)
+	_write(root.path_join("dude.glb"), "model-v1")
+	_write(root.path_join("dude.glb.import"), preset)
+	WiredPackageFs.op_prepare_replace(slug)
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb"), "model-v1")
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb.import"), preset)
+	WiredPackageFs.op_replace(slug)
+	var cache_path := root.path_join(WiredPackageFs.IMPORT_PRESETS_DIR).path_join("dude.glb.import")
+	_expect(problems, FileAccess.file_exists(cache_path), "пресет не закэширован при replace")
+
+	# Пользователь осознанно опубликовал сброс настроек: кэш больше не нужен.
+	WiredPackageFs.op_prepare_replace(slug)
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb"), "model-v2")
+	_write(
+		WiredPackageFs.staging_dir(slug).path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={  }\n",
+	)
+	WiredPackageFs.op_replace(slug)
+	_expect(problems, not FileAccess.file_exists(cache_path), "кэш пережил опубликованный сброс")
+	_report("a published reset removes the preset cache", problems)
+
+
+func _test_import_preset_scan_is_fast() -> void:
+	var problems: Array = []
+	var text := _big_import_text()
+	var started := Time.get_ticks_msec()
+	var empty := WiredPackageFs.import_preset_is_empty(text)
+	var elapsed := Time.get_ticks_msec() - started
+	_expect(problems, not empty, "большой пресет распознан как пустой")
+	_expect(problems, elapsed < 1000, "проверка пресета заняла %d мс (бюджет 1000)" % elapsed)
+	_report("import preset scan stays linear on a large sidecar", problems)
+
+
+func _test_restore_skips_package_without_cache() -> void:
+	var problems: Array = []
+	var slug := "hero_presets_nocache"
+	var root := WiredPackageFs.package_dir(slug)
+	_write(root.path_join("dude.glb"), "model")
+	_write(root.path_join("dude.glb.import"), _big_import_text())
+	var started := Time.get_ticks_msec()
+	var restored := WiredPackageFs.restore_import_presets(slug)
+	var elapsed := Time.get_ticks_msec() - started
+	_expect(problems, restored.is_empty(), "нечего восстанавливать без кэша")
+	_expect(problems, elapsed < 500, "проход без кэша занял %d мс (бюджет 500)" % elapsed)
+	_report("restore skips packages without a preset cache", problems)
+
+
+func _big_import_text() -> String:
+	var lines := PackedStringArray()
+	lines.append("[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={")
+	for index in 20000:
+		lines.append(
+			"\"surface_%d\": {\"settings/loop_mode\": 1, \"use_external\": {\"enabled\": true, \"fallback_path\": \"res://packages/cura_player/player/NiMultiShader_%d.tres\"}},"
+			% [index, index]
+		)
+	lines.append("}")
+	return "\n".join(lines)
 
 
 func _test_prepare_replace() -> void:
@@ -159,7 +480,7 @@ func _test_metadata_excluded() -> void:
 		Marshalls.base64_to_raw(String(main_entry.get("contents_base64", ""))) == main_bytes,
 		"collect must return the contents as base64",
 	)
-	_report("editor metadata stays out of snapshot and collect", problems)
+	_report("editor metadata and orphan import sidecars stay out of the tree", problems)
 
 
 func _test_replace_empty_staging() -> void:
@@ -244,7 +565,11 @@ func _test_metadata_preserved() -> void:
 	var result := WiredPackageFs.op_replace("7")
 	_expect(problems, not result.has("error"), "op_replace(\"7\") failed: %s" % [result.get("error", "")])
 	_expect(problems, FileAccess.file_exists(root.path_join(".uid")), ".uid must survive the swap")
-	_expect(problems, FileAccess.file_exists(root.path_join("b.import")), ".import sidecar must survive the swap")
+	_expect(
+		problems,
+		not FileAccess.file_exists(root.path_join("b.import")),
+		"an orphan .import sidecar must not survive the swap",
+	)
 	_expect(
 		problems,
 		FileAccess.file_exists(root.path_join(".import/legacy.res")),
@@ -261,7 +586,7 @@ func _test_metadata_preserved() -> void:
 	_expect(
 		problems,
 		deleted == ["main.gd", "old.gd"],
-		"deleted must exclude editor metadata, got %s" % [deleted],
+		"deleted must exclude editor metadata and orphan sidecars, got %s" % [deleted],
 	)
 	_report("service files survive replace while data files are replaced", problems)
 
@@ -511,7 +836,7 @@ func _test_delete_files_selected_directory() -> void:
 	_report("delete_files removes a selected directory with its metadata", problems)
 
 
-func _test_delete_files_keeps_metadata_of_selected_file() -> void:
+func _test_delete_files_removes_sidecar_of_selected_file() -> void:
 	var problems: Array = []
 	var package_slug := "hero_17"
 	var root := WiredPackageFs.package_dir(package_slug)
@@ -522,12 +847,13 @@ func _test_delete_files_keeps_metadata_of_selected_file() -> void:
 	_write(root.path_join(".config/settings.tres"), "[gd_resource]\n")
 
 	var selected := WiredPackageFs.package_dir(package_slug).path_join("main.gd")
+	var sidecar := WiredPackageFs.package_dir(package_slug).path_join("main.gd.import")
 	var result := WiredPackageFs.op_delete_files(package_slug, [selected])
 	_expect(problems, not result.has("error"), "op_delete_files failed: %s" % [result.get("error", "")])
 	_expect(
 		problems,
-		result.get("deleted", []) == [selected],
-		"deleted must report only the selected file, got %s" % [result.get("deleted", [])],
+		result.get("deleted", []) == [selected, sidecar],
+		"deleted must report the selected file and its sidecar, got %s" % [result.get("deleted", [])],
 	)
 	_expect(problems, not FileAccess.file_exists(root.path_join("main.gd")), "the selected file must be removed")
 	_expect(
@@ -537,15 +863,15 @@ func _test_delete_files_keeps_metadata_of_selected_file() -> void:
 	)
 	_expect(
 		problems,
-		FileAccess.file_exists(root.path_join("main.gd.import")),
-		"the .import sidecar must survive a single-file selection",
+		not FileAccess.file_exists(root.path_join("main.gd.import")),
+		"the .import sidecar is content and must be removed with its source",
 	)
 	_expect(
 		problems,
 		FileAccess.file_exists(root.path_join(".config/settings.tres")),
 		"dot metadata must survive a single-file selection",
 	)
-	_report("delete_files keeps editor metadata when a single file is selected", problems)
+	_report("delete_files removes the import sidecar with a single selected file", problems)
 
 
 func _test_delete_files_outside_package() -> void:

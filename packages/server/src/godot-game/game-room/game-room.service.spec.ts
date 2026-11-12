@@ -72,6 +72,7 @@ const status = (overrides: StatusOverrides = {}): PackageSyncStatus => {
     name: 'Demo',
     enabled: true,
     revision: 2,
+    sizeBytes: null,
     publishedAt: '2026-10-30T09:00:00.000Z',
     state: 'applied',
     runtime: {

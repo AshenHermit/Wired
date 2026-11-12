@@ -27,6 +27,7 @@ function workshopPackage(
       picture: "",
     },
     revision: 3,
+    sizeBytes: 0,
     publishedAt: "2026-10-30T10:00:00.000Z",
     updatedAt: "2026-10-31T10:00:00.000Z",
     ...overrides,
@@ -56,6 +57,39 @@ describe("WorkshopBrowser", () => {
     expect(screen.getByText("1.2.0", { exact: false })).toBeTruthy();
     expect(screen.getByText("ревизия 3")).toBeTruthy();
     expect(screen.getByText("gameplay")).toBeTruthy();
+  });
+
+  it("shows the published revision size", async () => {
+    vi.mocked(packagesApi.listWorkshopPackages).mockResolvedValue({
+      items: [workshopPackage({ sizeBytes: 1_468_006 })],
+      total: 1,
+    });
+
+    render(<WorkshopBrowser />);
+
+    expect(await screen.findByText("1,4 МБ")).toBeTruthy();
+  });
+
+  it("shows zero size for an empty published revision", async () => {
+    vi.mocked(packagesApi.listWorkshopPackages).mockResolvedValue({
+      items: [workshopPackage({ sizeBytes: 0 })],
+      total: 1,
+    });
+
+    render(<WorkshopBrowser />);
+
+    expect(await screen.findByText("0 КБ")).toBeTruthy();
+  });
+
+  it("formats the size for the active locale", async () => {
+    vi.mocked(packagesApi.listWorkshopPackages).mockResolvedValue({
+      items: [workshopPackage({ sizeBytes: 1_468_006 })],
+      total: 1,
+    });
+
+    render(<WorkshopBrowser />, { locale: "en" });
+
+    expect(await screen.findByText("1.4 MB")).toBeTruthy();
   });
 
   it("shows a left thumbnail when the workshop package has a preview", async () => {

@@ -248,6 +248,7 @@ function workshopPackage(
       picture: "",
     },
     revision: 1,
+    sizeBytes: 0,
     publishedAt: "2026-10-30T10:00:00.000Z",
     updatedAt: "2026-10-30T10:00:00.000Z",
   };
@@ -293,6 +294,7 @@ function roomStatus(
       name: id === 5 ? "Demo" : "Other",
       enabled,
       revision,
+      sizeBytes: null,
       publishedAt: revision > 0 ? "2026-10-30T10:00:00.000Z" : null,
       state: "published",
       runtime: { state: "pending", revision, error: null, updatedAt: null },

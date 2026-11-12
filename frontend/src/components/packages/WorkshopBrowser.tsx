@@ -2,12 +2,13 @@
 
 import type { WorkshopPackageSummary } from "@wired-io/shared";
 import { Loader2Icon, SearchIcon, XIcon } from "lucide-react";
-import { useLocale, useTranslations } from "next-intl";
+import { useFormatter, useLocale, useTranslations } from "next-intl";
 import * as React from "react";
 import { PreviewThumbnail } from "@/components/media/PreviewThumbnail";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAppMessage } from "@/i18n/message";
+import { formatFileSize } from "@/utils/format-file-size";
 import { useWorkshopPackages } from "./use-workshop-packages";
 
 type WorkshopBrowserProps = {
@@ -134,7 +135,9 @@ function WorkshopPackageCard({
 }) {
   const t = useTranslations("Workshop");
   const locale = useLocale();
+  const numberFormat = useFormatter();
   const preview = item.previewImage;
+  const size = formatFileSize(item.sizeBytes);
 
   return (
     <article className="rounded-lg border border-border bg-card p-4">
@@ -151,6 +154,13 @@ function WorkshopPackageCard({
             <span className="font-mono">{item.version}</span>
             {item.author ? <span>{item.author.name}</span> : null}
             <span>{t("revision", { revision: item.revision })}</span>
+            <span>
+              {t(size.unit === "kb" ? "sizeKb" : "sizeMb", {
+                value: numberFormat.number(size.value, {
+                  maximumFractionDigits: 1,
+                }),
+              })}
+            </span>
             <span>{new Date(item.publishedAt).toLocaleDateString(locale)}</span>
           </div>
           {item.description ? (

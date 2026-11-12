@@ -74,4 +74,14 @@ export interface AppConfig {
     artifactBuildRateLimit: number;
     artifactBuildRateWindowMs: number;
   };
+  /** Headless glTF bake used while building runtime artifacts. */
+  assetBake: {
+    /** Directory that holds `project.godot`, `bake_tool.gd` and `wired_bake.gd`. */
+    projectPath: string;
+    executablePath: string;
+    timeoutMs: number;
+    maxConcurrency: number;
+    cacheDir: string;
+    cacheMaxBytes: number;
+  };
 }

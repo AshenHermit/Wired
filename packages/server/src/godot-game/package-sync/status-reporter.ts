@@ -19,7 +19,7 @@ export class StatusReporter {
     roomId: string,
     revision: number | null,
     publishedAt: Date | null,
-  ): PackageSyncStatus {
+  ): Omit<PackageSyncStatus, 'sizeBytes'> {
     const base = {
       packageId: pkg.id,
       slug: requirePackageSlug(pkg),

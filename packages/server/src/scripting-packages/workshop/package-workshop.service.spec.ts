@@ -31,6 +31,7 @@ type WorkshopRow = {
   authorPicture: string | null;
   authorService: string | null;
   revision: number;
+  sizeBytes: string;
   publishedAt: Date;
   updatedAt: Date;
   total: string;
@@ -52,6 +53,7 @@ const row: WorkshopRow = {
   authorPicture: 'p',
   authorService: 'google',
   revision: 3,
+  sizeBytes: "3500",
   publishedAt: new Date('2026-01-01T00:00:00Z'),
   updatedAt: new Date('2026-01-02T00:00:00Z'),
   total: '1',
@@ -173,6 +175,7 @@ describe('PackageWorkshopService', () => {
     expect(sql).toContain("status = 'published'");
     expect(sql).toContain('AND "publishedAt" IS NOT NULL');
     expect(sql).toContain('jsonb_array_elements_text');
+    expect(sql).toContain('jsonb_array_elements(files)');
     expect(sql).toContain('p."previewImage"');
     expect(sql.trimEnd().endsWith('LIMIT $2 OFFSET $3')).toBe(true);
   });
@@ -192,6 +195,7 @@ describe('PackageWorkshopService', () => {
       tags: ['2d'],
       previewImage: null,
       revision: 3,
+      sizeBytes: 3500,
       publishedAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-02T00:00:00.000Z',
       // The listing answers anonymous callers: no email, no auth provider.
@@ -252,6 +256,7 @@ describe('PackageWorkshopService', () => {
         tags: ['2d'],
         previewImage: null,
         revision: 3,
+        sizeBytes: 3500,
         publishedAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-02T00:00:00.000Z',
         author: {
