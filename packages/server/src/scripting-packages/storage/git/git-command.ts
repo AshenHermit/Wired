@@ -10,6 +10,7 @@ export type GitRunOptions = {
   input?: Buffer | string;
   timeoutMs?: number;
   maxBuffer?: number;
+  env?: NodeJS.ProcessEnv;
 };
 
 export type GitStreamOptions = Omit<GitRunOptions, 'maxBuffer'>;
@@ -65,13 +66,14 @@ export class GitCommand {
       input,
       timeoutMs = DEFAULT_TIMEOUT_MS,
       maxBuffer = DEFAULT_MAX_BUFFER,
+      env,
     } = options;
 
     return new Promise<Buffer>((resolve, reject) => {
       const child = spawn('git', args, {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: gitEnv(),
+        env: { ...gitEnv(), ...env },
       });
 
       const stdout: Buffer[] = [];
@@ -166,11 +168,11 @@ export class GitCommand {
   }
 
   stream(args: string[], options: GitStreamOptions): Readable {
-    const { cwd, input, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
+    const { cwd, input, timeoutMs = DEFAULT_TIMEOUT_MS, env } = options;
     const child = spawn('git', args, {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: gitEnv(),
+      env: { ...gitEnv(), ...env },
     });
 
     const timer = setTimeout(() => {
