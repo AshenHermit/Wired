@@ -88,6 +88,11 @@ func _test_bakes_with_preset() -> void:
 	var player := scene.get_node_or_null("AnimationPlayer") as AnimationPlayer
 	var idle: Animation = player.get_animation("Idle") if player != null else null
 	_expect(problems, idle != null and idle.loop_mode == Animation.LOOP_LINEAR, "loop_mode не применён")
+	_expect(
+		problems,
+		idle != null and idle.track_get_key_count(0) <= 2,
+		"плотные ключи анимации не оптимизированы: %d" % [idle.track_get_key_count(0) if idle != null else -1]
+	)
 
 	var body := scene.get_node_or_null("Body") as MeshInstance3D
 	var applied := body.get_active_material(0) as StandardMaterial3D if body != null else null
@@ -197,7 +202,10 @@ func _make_glb(path: String) -> void:
 	animation.loop_mode = Animation.LOOP_NONE
 	var track := animation.add_track(Animation.TYPE_VALUE)
 	animation.track_set_path(track, NodePath("Body:position"))
-	animation.track_insert_key(track, 0.0, Vector3.ZERO)
+	# 31 identical keys: a raw GLTFDocument bake keeps every one of them, the
+	# editor importer would collapse them to a single key.
+	for step in 31:
+		animation.track_insert_key(track, step / 30.0, Vector3.ZERO)
 	var library := AnimationLibrary.new()
 	library.add_animation("Idle", animation)
 	player.add_animation_library("", library)

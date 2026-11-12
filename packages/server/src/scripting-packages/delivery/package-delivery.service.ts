@@ -46,6 +46,7 @@ import {
 } from '../publish/package-runtime-references';
 import { PackageReadUrlService } from './package-read-url.service';
 import { AssetBakeService } from './asset-bake.service';
+import { BAKED_SUFFIX } from './asset-bake.constants';
 import { AssetBakeError, type BakeJob } from './asset-bake.types';
 import type { PackageSlugIndex } from '../storage/package-slug-index';
 import { PackageStorageService } from '../storage/package-storage.service';
@@ -470,6 +471,9 @@ export class PackageDeliveryService {
         // Editor import presets point at `.godot/imported/...` remaps that only
         // exist inside an editor; the native runtime derives its own sidecars.
         if (entry.filepath.endsWith('.import')) continue;
+        // The baked scene replaces the raw model: the runtime cannot load it and
+        // no reference should point at it any more, so it is not shipped.
+        if (baked.has(`${entry.filepath}${BAKED_SUFFIX}`)) continue;
         const data = resolved.bytes.get(entry.filepath)!;
         const rewritten = textByPath.has(entry.filepath)
           ? this.rewriteText(

@@ -594,14 +594,12 @@ describe('PackageDeliveryService', () => {
 
     const manifest = await service.getRuntimeManifest(5, 3, 7);
 
-    expect(manifest.files.map((file) => file.filepath)).toEqual([
-      'dude.glb',
-      'dude.glb.scn',
-      'hero.gd',
-    ]);
+    expect(manifest.files.map((file) => file.filepath)).toEqual(['dude.glb.scn', 'hero.gd']);
     const dir = await artifactDir(5, 3, 7);
     expect(existsSync(path.resolve(dir, 'dude.glb.import'))).toBe(false);
-    expect(existsSync(path.resolve(dir, 'dude.glb'))).toBe(true);
+    // The baked scene replaces the model: shipping the raw glb as well only
+    // doubles the artifact.
+    expect(existsSync(path.resolve(dir, 'dude.glb'))).toBe(false);
   });
 
   describe('resolveRuntimeFile', () => {

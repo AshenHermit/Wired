@@ -116,6 +116,9 @@ static func _apply_preset(scene: Node, preset_text: String, project_root: String
 
 	var material_entries := _entries(_block_after(subresources, "materials"))
 	if not material_entries.is_empty():
+		# One `seen` for every material: a texture shared by several materials is
+		# embedded once instead of being copied once per surface.
+		var embedded_seen := {}
 		for key: String in material_entries.keys():
 			var body: String = material_entries[key]
 			if not _bool_value(body, MATERIAL_ENABLED_OPTION, false):
@@ -140,7 +143,7 @@ static func _apply_preset(scene: Node, preset_text: String, project_root: String
 				return result
 			# Внешний ресурс попал бы в .scn как путь res://, который в рантайме
 			# недоступен: материал и его текстуры встраиваются в файл.
-			var embedded := _embed(loaded, {}) as Material
+			var embedded := _embed(loaded, embedded_seen) as Material
 			if not _apply_material(scene, key, embedded):
 				warnings.append("материал не найден в сцене: %s" % key)
 				continue
@@ -157,7 +160,10 @@ static func _apply_material(scene: Node, key: String, material: Material) -> boo
 			var current := mesh.get_active_material(surface)
 			if current == null or current.resource_name != key:
 				continue
-			mesh.set_surface_override_material(surface, material)
+			# Replace the surface material instead of adding an override: the
+			# glTF material and its own texture copy would otherwise stay inside
+			# the mesh and inflate the baked scene several times over.
+			mesh.mesh.surface_set_material(surface, material)
 			found = true
 	return found
 
@@ -179,7 +185,9 @@ static func _embed(resource: Resource, seen: Dictionary) -> Resource:
 		if texture != null:
 			seen[resource] = texture
 			return texture
-	var copy := resource.duplicate(true)
+	# A shallow copy: sub-resources stay the originals so `seen` can hand the
+	# same embedded instance to every material that shares them.
+	var copy := resource.duplicate(false)
 	seen[resource] = copy
 	copy.resource_path = ""
 	for property: Dictionary in copy.get_property_list():
@@ -189,10 +197,11 @@ static func _embed(resource: Resource, seen: Dictionary) -> Resource:
 		if value is Resource:
 			copy.set(property["name"], _embed(value, seen))
 		elif value is Array:
-			var items: Array = value
+			var items: Array = (value as Array).duplicate()
 			for index in items.size():
 				if items[index] is Resource:
 					items[index] = _embed(items[index], seen)
+			copy.set(property["name"], items)
 	return copy
 
 

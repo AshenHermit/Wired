@@ -59,7 +59,9 @@ const jobs = [
   { source: 'player/dude.glb', output: 'player/dude.glb.scn', preset: dudePreset },
 ];
 
-async function inspectBake(bytes: Buffer): Promise<{ loop_modes: number[]; materials: string[] }> {
+async function inspectBake(
+  bytes: Buffer,
+): Promise<{ loop_modes: number[]; materials: string[]; textures: string[] }> {
   const tmpDir = join(toolDir, 'tests', 'tmp');
   const tmpPath = join(tmpDir, `bake-${Date.now()}.scn`);
   mkdirSync(tmpDir, { recursive: true });
@@ -113,6 +115,9 @@ maybe(
 
       expect(scene.loop_modes.filter((mode) => mode === 1)).toHaveLength(expectedLoops);
       expect(scene.materials).toHaveLength(expectedMaterials);
+      // Materials share textures: embedding the same picture once per material
+      // doubles the artifact for no reason.
+      expect(new Set(scene.textures).size).toBe(scene.textures.length);
     } finally {
       rmSync(cacheDir, { recursive: true, force: true });
     }
