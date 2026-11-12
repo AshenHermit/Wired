@@ -87,6 +87,7 @@ describe('PackageRevisionsService', () => {
     resolvePublishedFile: jest.Mock;
     writePinnedDependencies: jest.Mock;
     readPinnedDependencies: jest.Mock;
+    missingFiles: jest.Mock;
   };
   let service: PackageRevisionsService;
   let dispatcher: { revisionPublished: jest.Mock };
@@ -113,6 +114,7 @@ describe('PackageRevisionsService', () => {
         sha256: sha256Hex(data),
       })),
       publishRevision: jest.fn(async (_id, _rev, _files, commit) => commit()),
+      missingFiles: jest.fn(async () => []),
       discardDraft: jest.fn(async () => undefined),
       readPublishedFile: jest.fn(async () => Buffer.from('x')),
       readDraftFile: jest.fn(async () => ''),
@@ -276,6 +278,10 @@ describe('PackageRevisionsService', () => {
         3,
         declared,
         expect.any(Function),
+        expect.objectContaining({
+          name: expect.any(String),
+          email: expect.any(String),
+        }),
       );
       expect(published.status).toBe('published');
       expect(published.publishedAt).toEqual(expect.any(String));

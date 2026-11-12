@@ -13,6 +13,7 @@ import {
   PackageFileEntry,
   PackageManifest,
   PackageRevision,
+  PackageRevisionDraft,
 } from '@wired-io/shared';
 import { In, Repository } from 'typeorm';
 import { errorMessage } from 'src/common/errors';
@@ -81,7 +82,7 @@ export class PackageRevisionsService {
   async createDraft(
     packageId: number,
     payload: CreatePackageRevisionPayload,
-  ): Promise<PackageRevision> {
+  ): Promise<PackageRevisionDraft> {
     await this.locks.assertNotPublishing(packageId);
 
     const pkg = await this.packagesService.findOne(packageId);
@@ -103,7 +104,8 @@ export class PackageRevisionsService {
           files,
         }),
       );
-      return toRevision(saved, packageId);
+      const missing = await this.storage.missingFiles(packageId, saved.files);
+    return { ...toRevision(saved, packageId), missing };
     } catch (error) {
       // Two concurrent drafts compute the same revision number; the unique
       // index rejects one of them. Report a retryable conflict, not a 500.
@@ -172,16 +174,25 @@ export class PackageRevisionsService {
     const pkg = await this.packagesService.findOne(packageId);
 
     // Reject uploads for this package while its bytes are verified and moved.
+    const authorUser = pkg.author as unknown as
+      | { name?: string; email?: string }
+      | undefined;
+    const author = {
+      name: authorUser?.name ?? 'wired',
+      email: authorUser?.email ?? 'packages@wired.local',
+    };
     await this.locks.runWithPublishLocks([packageId], async () => {
       await this.storage.publishRevision(
         packageId,
         revision,
         row.files,
-        async () => {
+        async (commitSha) => {
           row.status = 'published';
           row.publishedAt = new Date();
+          row.commitSha = commitSha;
           await this.revisionsRepository.save(row);
         },
+        author,
       );
     });
 
@@ -287,9 +298,10 @@ export class PackageRevisionsService {
           targetPackageId,
           revision,
           files,
-          async () => {
+          async (commitSha) => {
             saved.status = 'published';
             saved.publishedAt = new Date();
+            saved.commitSha = commitSha;
             await this.revisionsRepository.save(saved);
           },
         );

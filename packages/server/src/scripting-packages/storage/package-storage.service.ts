@@ -24,6 +24,12 @@ import path from 'path';
 import { AppConfigService } from 'src/config/config.service';
 import { sha256File, sha256Hex } from './package-hash';
 import { PackageGitStorageService } from './package-git-storage.service';
+import type { GitAuthor } from './git/package-git-types';
+
+const DEFAULT_GIT_AUTHOR: GitAuthor = {
+  name: 'wired',
+  email: 'packages@wired.local',
+};
 import { resolvePackagePath } from './package-path';
 import { errorMessage } from 'src/common/errors';
 
@@ -247,8 +253,25 @@ export class PackageStorageService {
     packageId: number,
     revision: number,
     declared: PackageFileEntry[],
-    commit: () => Promise<void>,
+    commit: (commitSha: string | null) => Promise<void>,
+    author: GitAuthor = DEFAULT_GIT_AUTHOR,
   ): Promise<void> {
+    if (
+      this.gitStorage &&
+      ((await this.gitStorage.isGitPackage(packageId)) ||
+        this.configService.packages.gitStorage)
+    ) {
+      await this.gitStorage.publish({
+        packageId,
+        revision,
+        declared,
+        stagedDir: this.draftRevisionDir(packageId, revision),
+        author,
+        commitDb: commit,
+      });
+      return;
+    }
+
     const draftDir = this.draftRevisionDir(packageId, revision);
 
     await this.assertMatchesManifest(draftDir, revision, declared);
@@ -279,11 +302,24 @@ export class PackageStorageService {
       // Uploads are rejected while publishing, but re-verify the bytes that
       // will actually be served: a verified draft is not a verified revision.
       await this.assertMatchesManifest(publishedDir, revision, declared);
-      await commit();
+      await commit(null);
     } catch (error) {
       await rename(publishedDir, draftDir).catch(() => undefined);
       throw error;
     }
+  }
+
+  async missingFiles(
+    packageId: number,
+    files: PackageFileEntry[],
+  ): Promise<string[]> {
+    if (this.gitStorage && (await this.gitStorage.isGitPackage(packageId))) {
+      return this.gitStorage.missingFiles(packageId, files);
+    }
+    if (this.configService.packages.gitStorage) {
+      return files.map((file) => file.filepath);
+    }
+    return [];
   }
 
   /**

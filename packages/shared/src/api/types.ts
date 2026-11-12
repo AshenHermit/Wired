@@ -42,6 +42,9 @@ export type PackageRevision = {
   publishedAt: string | null;
 };
 
+/** Revision returned when a draft is created, plus files the server lacks. */
+export type PackageRevisionDraft = PackageRevision & { missing: string[] };
+
 /**
  * The authoritative description of a published package revision. Clients
  * download every file listed here, verify `sha256`, and remove files of the

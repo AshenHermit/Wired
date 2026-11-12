@@ -15,6 +15,7 @@ import { AssetBakeService } from './asset-bake.service';
 import { ChildProcessBakeRunner } from './godot-bake.runner';
 import { GitCommand } from '../storage/git/git-command';
 import { PackageGitRepository } from '../storage/git/package-git-repository';
+import { PackageContentIndex } from '../storage/git/package-content-index';
 import { PackageGitStorageService } from '../storage/package-git-storage.service';
 
 @Module({
@@ -60,6 +61,7 @@ import { PackageGitStorageService } from '../storage/package-git-storage.service
     GitCommand,
     PackageGitRepository,
     PackageGitStorageService,
+    PackageContentIndex,
   ],
   controllers: [PackageDeliveryController],
   exports: [
