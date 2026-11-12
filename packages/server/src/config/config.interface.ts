@@ -70,6 +70,8 @@ export interface AppConfig {
   packages: {
     readSecret: string;
     readTtlSec: number;
+    /** Store published revisions as commits in a per-package bare git repo. */
+    gitStorage: boolean;
     /** Artifact builds allowed per `(package, revision, room)` per window. */
     artifactBuildRateLimit: number;
     artifactBuildRateWindowMs: number;

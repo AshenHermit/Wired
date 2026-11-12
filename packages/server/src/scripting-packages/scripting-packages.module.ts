@@ -14,6 +14,8 @@ import { PackageDeliveryModule } from './delivery/package-delivery.module';
 import { AppConfigModule } from 'src/config/config.module';
 import { GodotGameModule } from 'src/godot-game/godot-game.module';
 import { UsersService } from 'src/users/users.service';
+import { GitCommand } from './storage/git/git-command';
+import { PackageGitRepository } from './storage/git/package-git-repository';
 
 @Module({
   imports: [
@@ -34,6 +36,8 @@ import { UsersService } from 'src/users/users.service';
     PackageWorkshopService,
     PackagePublishLockService,
     UsersService,
+    GitCommand,
+    PackageGitRepository,
   ],
   // `WorkshopController` must come first: `GET /scripting-packages/workshop`
   // would otherwise be matched by the authoring `GET /scripting-packages/:id`

@@ -1,3 +1,4 @@
+import { Injectable } from '@nestjs/common';
 import { spawn } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -56,6 +57,7 @@ function appendLimited(chunks: Buffer[], chunk: Buffer, limit: number): number {
   return current + chunk.length;
 }
 
+@Injectable()
 export class GitCommand {
   run(args: string[], options: GitRunOptions): Promise<Buffer> {
     const {

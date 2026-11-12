@@ -50,4 +50,11 @@ export class ScriptingPackageRevision {
   @ApiProperty({ description: 'date revision published at', nullable: true })
   @Column({ type: 'timestamp', nullable: true, default: null })
   publishedAt: Date | null;
+
+  @ApiProperty({
+    description: 'Commit of the published revision, when stored in git',
+    nullable: true,
+  })
+  @Column({ type: 'varchar', length: 64, nullable: true, default: null })
+  commitSha: string | null;
 }

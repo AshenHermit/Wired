@@ -133,6 +133,7 @@ const config: () => AppConfig = () => ({
       process.env.WIRED_GAME_TICKET_SECRET ??
       '',
     readTtlSec: intFromEnv('WIRED_PACKAGE_READ_TTL_SEC', 900),
+    gitStorage: process.env.WIRED_PACKAGE_GIT_STORAGE === '1',
     artifactBuildRateLimit: intFromEnv('WIRED_ARTIFACT_BUILD_RATE_LIMIT', 10),
     artifactBuildRateWindowMs: intFromEnv(
       'WIRED_ARTIFACT_BUILD_RATE_WINDOW_MS',
