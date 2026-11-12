@@ -59,6 +59,39 @@ describe("WorkshopBrowser", () => {
     expect(screen.getByText("gameplay")).toBeTruthy();
   });
 
+  it("shows the published revision size", async () => {
+    vi.mocked(packagesApi.listWorkshopPackages).mockResolvedValue({
+      items: [workshopPackage({ sizeBytes: 1_468_006 })],
+      total: 1,
+    });
+
+    render(<WorkshopBrowser />);
+
+    expect(await screen.findByText("1,4 МБ")).toBeTruthy();
+  });
+
+  it("shows zero size for an empty published revision", async () => {
+    vi.mocked(packagesApi.listWorkshopPackages).mockResolvedValue({
+      items: [workshopPackage({ sizeBytes: 0 })],
+      total: 1,
+    });
+
+    render(<WorkshopBrowser />);
+
+    expect(await screen.findByText("0 КБ")).toBeTruthy();
+  });
+
+  it("formats the size for the active locale", async () => {
+    vi.mocked(packagesApi.listWorkshopPackages).mockResolvedValue({
+      items: [workshopPackage({ sizeBytes: 1_468_006 })],
+      total: 1,
+    });
+
+    render(<WorkshopBrowser />, { locale: "en" });
+
+    expect(await screen.findByText("1.4 MB")).toBeTruthy();
+  });
+
   it("shows a left thumbnail when the workshop package has a preview", async () => {
     const preview = `/media/${"f".repeat(64)}.png`;
     vi.mocked(packagesApi.listWorkshopPackages).mockResolvedValue({

@@ -128,6 +128,8 @@
     "emptyQuery": "Nothing found for “{query}”",
     "loadMore": "Show more",
     "revision": "revision {revision}",
+    "sizeKb": "{value} KB",
+    "sizeMb": "{value} MB",
     "add": "Add",
     "browserTitle": "Workshop",
     "browserDescription": "Community packages. Adding one creates a copy in this room.",
