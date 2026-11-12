@@ -332,6 +332,9 @@ static func op_replace(package_slug: String) -> Dictionary:
 		var copy_error := _copy_editor_metadata(root, staging, old_files, staged)
 		if not copy_error.is_empty():
 			return {"error": copy_error}
+		# A revision published before sidecars were content has no `.import`: keep
+		# the local preset so replacing a model does not wipe its settings.
+		_copy_missing_import_sidecars(root, staging, staged)
 
 	if had_root:
 		var backup_error := DirAccess.rename_absolute(root, previous)
@@ -391,8 +394,9 @@ static func op_delete(package_slug: String) -> Dictionary:
 
 ## Deletes selected files or directories inside the live package. Every path is
 ## either an editor path under [method package_dir] or package-relative. Missing
-## paths are ignored. Editor metadata next to a selected file is left alone;
-## metadata inside a selected directory is removed with that directory.
+## paths are ignored. Editor metadata next to a selected file (`*.uid`) is left
+## alone; the `*.import` sidecar is content and goes away with its source.
+## Metadata inside a selected directory is removed with that directory.
 static func op_delete_files(package_slug: String, paths: Array) -> Dictionary:
 	var invalid := _invalid_slug(package_slug)
 	if not invalid.is_empty():
@@ -423,7 +427,8 @@ static func op_delete_files(package_slug: String, paths: Array) -> Dictionary:
 	var deleted: Array[String] = []
 	for rel_path: String in rel_paths:
 		var abs_path := root.path_join(rel_path)
-		if not DirAccess.dir_exists_absolute(abs_path) and not FileAccess.file_exists(abs_path):
+		var is_dir := DirAccess.dir_exists_absolute(abs_path)
+		if not is_dir and not FileAccess.file_exists(abs_path):
 			continue
 		var error := _remove_tree(abs_path)
 		if error != OK:
@@ -431,6 +436,15 @@ static func op_delete_files(package_slug: String, paths: Array) -> Dictionary:
 		var editor_path := root.path_join(rel_path)
 		if not deleted.has(editor_path):
 			deleted.append(editor_path)
+		if is_dir:
+			continue
+		var sidecar_path := root.path_join(_sidecar_rel_path(rel_path))
+		if not FileAccess.file_exists(sidecar_path):
+			continue
+		error = DirAccess.remove_absolute(sidecar_path)
+		if error != OK:
+			return {"error": "не удалось удалить %s: %s" % [sidecar_path, error_string(error)]}
+		deleted.append(sidecar_path)
 	return {"deleted": deleted}
 
 
@@ -640,6 +654,34 @@ static func _is_orphan_import_file(root: String, rel_path: String) -> bool:
 	if not rel_path.ends_with(".import"):
 		return false
 	return not FileAccess.file_exists(root.path_join(import_source_rel_path(rel_path)))
+
+
+## Copies the local sidecar of a staged source when the incoming revision has
+## none, so older revisions without `.import` do not reset the author's presets.
+static func _copy_missing_import_sidecars(root: String, staging: String, staged: Dictionary) -> void:
+	for source_rel: String in staged.keys():
+		if is_editor_metadata(source_rel) or source_rel.ends_with(".import"):
+			continue
+		var sidecar_rel := _sidecar_rel_path(source_rel)
+		if staged.has(sidecar_rel):
+			continue
+		var source_path := root.path_join(sidecar_rel)
+		if not FileAccess.file_exists(source_path):
+			continue
+		var target := staging.path_join(sidecar_rel)
+		DirAccess.make_dir_recursive_absolute(target.get_base_dir())
+		var file := FileAccess.open(target, FileAccess.WRITE)
+		if file == null:
+			push_error("не удалось записать %s: %s" % [target, error_string(FileAccess.get_open_error())])
+			continue
+		file.store_buffer(FileAccess.get_file_as_bytes(source_path))
+		file.close()
+		staged[sidecar_rel] = true
+
+
+## Sidecar path for a package-relative source path.
+static func _sidecar_rel_path(source_rel: String) -> String:
+	return source_rel + ".import"
 
 
 ## Recursively removes a file or directory; a missing path is not an error.

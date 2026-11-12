@@ -37,6 +37,8 @@ func _initialize() -> void:
 	_test_import_normalized()
 	_test_import_paths()
 	_test_import_in_snapshot_and_collect()
+	_test_replace_prefers_staged_import()
+	_test_replace_copies_local_import_for_legacy_revision()
 	_test_prepare_replace()
 	_test_metadata_excluded()
 	_test_replace_empty_staging()
@@ -51,7 +53,7 @@ func _initialize() -> void:
 	_test_delete_files_selected_file()
 	_test_delete_files_relative_path()
 	_test_delete_files_selected_directory()
-	_test_delete_files_keeps_metadata_of_selected_file()
+	_test_delete_files_removes_sidecar_of_selected_file()
 	_test_delete_files_outside_package()
 	_test_delete_files_traversal()
 	_test_delete_files_missing_path()
@@ -227,6 +229,55 @@ func _test_import_in_snapshot_and_collect() -> void:
 		"collect отдаёт не нормализованный текст",
 	)
 	_report("import sidecars are shipped normalized and orphans are dropped", problems)
+
+
+func _test_replace_prefers_staged_import() -> void:
+	var problems: Array = []
+	var slug := "hero_imp_replace"
+	_write(WiredPackageFs.package_dir(slug).path_join("dude.glb"), "old")
+	_write(
+		WiredPackageFs.package_dir(slug).path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={  }\n",
+	)
+	WiredPackageFs.op_prepare_replace(slug)
+	var staging := WiredPackageFs.staging_dir(slug)
+	_write(staging.path_join("dude.glb"), "new")
+	_write(
+		staging.path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={\n\"animations\": {\n\"Action\": {\n\"settings/loop_mode\": 1\n}\n}\n}\n",
+	)
+	var result: Dictionary = WiredPackageFs.op_replace(slug)
+	var live: String = FileAccess.get_file_as_string(
+		WiredPackageFs.package_dir(slug).path_join("dude.glb.import")
+	)
+	_expect(problems, live.contains("loop_mode"), "сайдкар из ревизии перетёрт локальным")
+	_expect(
+		problems,
+		Array(result.get("written", [])).has("dude.glb.import"),
+		"сайдкар не попал в written",
+	)
+	_report("replace keeps the staged import sidecar", problems)
+
+
+func _test_replace_copies_local_import_for_legacy_revision() -> void:
+	var problems: Array = []
+	var slug := "hero_imp_legacy"
+	_write(WiredPackageFs.package_dir(slug).path_join("dude.glb"), "old")
+	_write(
+		WiredPackageFs.package_dir(slug).path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={\n\"animations\": {\n\"Action\": {\n\"settings/loop_mode\": 1\n}\n}\n}\n",
+	)
+	WiredPackageFs.op_prepare_replace(slug)
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb"), "new")
+	WiredPackageFs.op_replace(slug)
+	var live_path := WiredPackageFs.package_dir(slug).path_join("dude.glb.import")
+	_expect(problems, FileAccess.file_exists(live_path), "локальный пресет потерян при ревизии без .import")
+	_expect(
+		problems,
+		FileAccess.get_file_as_string(live_path).contains("loop_mode"),
+		"локальный пресет скопирован без настроек",
+	)
+	_report("replace keeps the local import sidecar when the revision has none", problems)
 
 
 func _test_prepare_replace() -> void:
@@ -656,7 +707,7 @@ func _test_delete_files_selected_directory() -> void:
 	_report("delete_files removes a selected directory with its metadata", problems)
 
 
-func _test_delete_files_keeps_metadata_of_selected_file() -> void:
+func _test_delete_files_removes_sidecar_of_selected_file() -> void:
 	var problems: Array = []
 	var package_slug := "hero_17"
 	var root := WiredPackageFs.package_dir(package_slug)
@@ -667,12 +718,13 @@ func _test_delete_files_keeps_metadata_of_selected_file() -> void:
 	_write(root.path_join(".config/settings.tres"), "[gd_resource]\n")
 
 	var selected := WiredPackageFs.package_dir(package_slug).path_join("main.gd")
+	var sidecar := WiredPackageFs.package_dir(package_slug).path_join("main.gd.import")
 	var result := WiredPackageFs.op_delete_files(package_slug, [selected])
 	_expect(problems, not result.has("error"), "op_delete_files failed: %s" % [result.get("error", "")])
 	_expect(
 		problems,
-		result.get("deleted", []) == [selected],
-		"deleted must report only the selected file, got %s" % [result.get("deleted", [])],
+		result.get("deleted", []) == [selected, sidecar],
+		"deleted must report the selected file and its sidecar, got %s" % [result.get("deleted", [])],
 	)
 	_expect(problems, not FileAccess.file_exists(root.path_join("main.gd")), "the selected file must be removed")
 	_expect(
@@ -682,15 +734,15 @@ func _test_delete_files_keeps_metadata_of_selected_file() -> void:
 	)
 	_expect(
 		problems,
-		FileAccess.file_exists(root.path_join("main.gd.import")),
-		"the .import sidecar must survive a single-file selection",
+		not FileAccess.file_exists(root.path_join("main.gd.import")),
+		"the .import sidecar is content and must be removed with its source",
 	)
 	_expect(
 		problems,
 		FileAccess.file_exists(root.path_join(".config/settings.tres")),
 		"dot metadata must survive a single-file selection",
 	)
-	_report("delete_files keeps editor metadata when a single file is selected", problems)
+	_report("delete_files removes the import sidecar with a single selected file", problems)
 
 
 func _test_delete_files_outside_package() -> void:
