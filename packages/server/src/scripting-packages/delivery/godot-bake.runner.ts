@@ -14,6 +14,11 @@ export type BakeRunnerResult = {
 
 export interface BakeRunner {
   run(options: BakeRunnerOptions): Promise<BakeRunnerResult>;
+  /**
+   * Imports the throwaway project. Presets reference `.tres` materials whose
+   * textures exist only as imported resources, so they must be imported first.
+   */
+  importProject?(options: { projectDir: string; timeoutMs: number }): Promise<BakeRunnerResult>;
 }
 
 const BAKE_SCRIPT = 'res://wired_bake.gd';
@@ -23,16 +28,32 @@ export class ChildProcessBakeRunner implements BakeRunner {
   constructor(private readonly executablePath: string) {}
 
   run(options: BakeRunnerOptions): Promise<BakeRunnerResult> {
+    return this.spawnTool(
+      options.projectDir,
+      ['--headless', '--path', options.projectDir, '--script', BAKE_SCRIPT, '--', options.jobsPath],
+      options.timeoutMs,
+    );
+  }
+
+  importProject(options: { projectDir: string; timeoutMs: number }): Promise<BakeRunnerResult> {
+    return this.spawnTool(
+      options.projectDir,
+      ['--headless', '--path', options.projectDir, '--import'],
+      options.timeoutMs,
+    );
+  }
+
+  private spawnTool(
+    projectDir: string,
+    args: string[],
+    timeoutMs: number,
+  ): Promise<BakeRunnerResult> {
     return new Promise((resolve, reject) => {
-      const child = spawn(
-        this.executablePath,
-        ['--headless', '--path', options.projectDir, '--script', BAKE_SCRIPT, '--', options.jobsPath],
-        {
-          cwd: options.projectDir,
-          windowsHide: true,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        },
-      );
+      const child = spawn(this.executablePath, args, {
+        cwd: projectDir,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
       let stdout = '';
       let stderr = '';
       let settled = false;
@@ -50,7 +71,7 @@ export class ChildProcessBakeRunner implements BakeRunner {
           settled = true;
           reject(new Error('bake process timeout'));
         }
-      }, options.timeoutMs);
+      }, timeoutMs);
       child.stdout?.setEncoding('utf8');
       child.stderr?.setEncoding('utf8');
       child.stdout?.on('data', (chunk: string) => {

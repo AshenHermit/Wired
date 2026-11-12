@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+﻿import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -119,6 +119,7 @@ export class AssetBakeService {
         }),
         'utf8',
       );
+      await this.importProject(runner, options.timeoutMs, projectDir, misses);
       await this.runTool(runner, options.timeoutMs, projectDir, jobsPath);
       const produced = await this.readOutputs(projectDir, slug, misses);
       for (const [output, bytes] of produced) {
@@ -199,6 +200,26 @@ export class AssetBakeService {
     }
   }
 
+  /**
+   * A preset can point at `.tres` materials whose textures exist only as
+   * imported resources, so the throwaway project is imported before baking.
+   * A failed import is not fatal: the bake then reports the missing material.
+   */
+  private async importProject(
+    runner: BakeRunner,
+    timeoutMs: number,
+    projectDir: string,
+    jobs: BakeJob[],
+  ): Promise<void> {
+    if (runner.importProject === undefined) {
+      return;
+    }
+    if (!jobs.some((job) => job.preset !== null && job.preset.length > 0)) {
+      return;
+    }
+    await runner.importProject({ projectDir, timeoutMs }).catch(() => undefined);
+  }
+
   private async runTool(
     runner: BakeRunner,
     timeoutMs: number,
@@ -257,7 +278,19 @@ export class AssetBakeService {
   ): Promise<Map<string, Buffer>> {
     const produced = new Map<string, Buffer>();
     for (const job of jobs) {
-      const bytes = await readFile(join(projectDir, 'packages', slug, job.output));
+      const target = join(projectDir, 'packages', slug, job.output);
+      let bytes: Buffer;
+      try {
+        bytes = await readFile(target);
+      } catch {
+        const listing = await readdir(join(projectDir, 'packages', slug)).catch(
+          () => [],
+        );
+        throw new AssetBakeError(
+          'bake_failed',
+          `bake_failed: the tool produced no ${job.output}; the project has ${listing.join(', ')}`,
+        );
+      }
       if (bytes.byteLength > MAX_BAKED_FILE_SIZE) {
         throw new AssetBakeError(
           'baked_file_too_large',
@@ -287,3 +320,4 @@ export class AssetBakeService {
     }
   }
 }
+

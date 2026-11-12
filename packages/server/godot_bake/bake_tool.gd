@@ -120,7 +120,11 @@ static func _apply_preset(scene: Node, preset_text: String, project_root: String
 			var body: String = material_entries[key]
 			if not _bool_value(body, MATERIAL_ENABLED_OPTION, false):
 				continue
-			var path := _string_value(body, MATERIAL_PATH_OPTION)
+			# Godot writes `uid://` into `use_external/path` and keeps a `res://`
+			# fallback next to it; a throwaway project has no uid cache.
+			var path := _string_value(body, "use_external/fallback_path")
+			if path.is_empty():
+				path = _string_value(body, MATERIAL_PATH_OPTION)
 			if path.is_empty():
 				continue
 			var material_path := _resolve(project_root, path)
@@ -192,7 +196,15 @@ static func _find_nodes(root: Node, node_class: String) -> Array:
 
 
 ## Resolves a project-relative or `res://` path against [param project_root].
+## Absolute filesystem paths (the tool's own `jobs.json`) are used as-is, while
+## `res://` paths are re-rooted so a `user://` sandbox can load them.
 static func _resolve(project_root: String, path: String) -> String:
+	if (
+		path.is_absolute_path()
+		and not path.begins_with("res://")
+		and not path.begins_with("user://")
+	):
+		return path
 	if path.begins_with("res://"):
 		path = path.substr("res://".length())
 	return project_root.path_join(path)
