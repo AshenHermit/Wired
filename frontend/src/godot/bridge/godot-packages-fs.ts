@@ -14,9 +14,9 @@ import type { EditorBridgeClient } from "./editor-bridge";
  * The shell never touches the editor file system directly: every read and
  * write goes through the Wired editor plugin over the request/response bridge.
  * The plugin owns the directory swap (staging directory, rollback to the
- * previous directory) and filters editor metadata (`.uid`, `.import`, dot
- * paths), so this layer only validates package-relative paths and maps bridge
- * payloads into typed values.
+ * previous directory) and filters editor metadata (`.uid`, dot paths), so this
+ * layer only validates package-relative paths and maps bridge payloads into
+ * typed values. Import sidecars (`*.import`) are package content, not metadata.
  *
  * Every path handled here is relative to the managed package directory
  * (`<project>/packages/<slug>`), so a package revision can never read or

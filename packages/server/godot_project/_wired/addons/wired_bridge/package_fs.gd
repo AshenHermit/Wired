@@ -458,8 +458,9 @@ static func op_delete_files(package_slug: String, paths: Array) -> Dictionary:
 
 ## Moves a package directory to a new slug and rewrites the slug in its text
 ## files. [method op_collect] and [method op_replace] cannot do this: they drop
-## `*.uid`/`*.import`, so the editor would lose its metadata and regenerate uids.
-## The move is a single rename, so the package keeps its files and metadata.
+## `*.uid` and dot directories, so the editor would lose its metadata and
+## regenerate uids. The move is a single rename, so the package keeps its files
+## and metadata.
 ## Rewritten files are package-relative paths.
 static func op_rename(package_slug: String, new_slug: String) -> Dictionary:
 	var invalid := _invalid_slug(package_slug)
@@ -525,6 +526,10 @@ static func restore_import_presets(package_slug: String) -> Array[String]:
 	var root := package_dir(package_slug)
 	if not DirAccess.dir_exists_absolute(root):
 		return restored
+	# Nothing can be restored before a revision swap cached a preset: keep the
+	# filesystem-changed hook cheap for packages that never went through one.
+	if not DirAccess.dir_exists_absolute(_import_presets_dir(package_slug)):
+		return restored
 	for rel_path: String in _list_files(root):
 		if is_editor_metadata(rel_path) or not rel_path.ends_with(".import"):
 			continue
@@ -536,11 +541,11 @@ static func restore_import_presets(package_slug: String) -> Array[String]:
 		var cached_text := str(cached.get("text", ""))
 		if cached_text.is_empty():
 			continue
-		var live_path := root.path_join(rel_path)
-		if not import_preset_is_empty(normalize_import_text(_read_text(live_path))):
-			continue
 		var source_sha := FileAccess.get_sha256(source_path)
 		if str(cached.get("sha", "")) == source_sha:
+			continue
+		var live_path := root.path_join(rel_path)
+		if not import_preset_is_empty(_read_text(live_path)):
 			continue
 		var file := FileAccess.open(live_path, FileAccess.WRITE)
 		if file == null:
@@ -627,7 +632,8 @@ static func _bracket_delta(line: String) -> int:
 	var delta := 0
 	var in_string := false
 	var escaped := false
-	for character: String in line.split(""):
+	for index in line.length():
+		var character := line[index]
 		if in_string:
 			if escaped:
 				escaped = false
@@ -650,15 +656,15 @@ static func _bracket_delta(line: String) -> int:
 static func _import_option_text(text: String, option: String) -> String:
 	var section := ""
 	var collecting := false
-	var value := ""
+	var parts := PackedStringArray()
 	var balance := 0
 	for raw_line: String in text.split("\n"):
 		var line := raw_line.trim_suffix("\r").strip_edges()
 		if collecting:
-			value += "\n" + line
+			parts.append(line)
 			balance += _bracket_delta(line)
 			if balance <= 0:
-				return value
+				return "\n".join(parts)
 			continue
 		if line.begins_with("[") and line.ends_with("]"):
 			section = line.substr(1, line.length() - 2).strip_edges()
@@ -668,10 +674,11 @@ static func _import_option_text(text: String, option: String) -> String:
 		var separator := line.find("=")
 		if separator < 0:
 			continue
-		value = line.substr(separator + 1).strip_edges()
+		var value := line.substr(separator + 1).strip_edges()
 		balance = _bracket_delta(value)
 		if balance <= 0:
 			return value
+		parts.append(value)
 		collecting = true
 	return ""
 
@@ -735,8 +742,12 @@ static func _sidecar_rel_path(source_rel: String) -> String:
 	return source_rel + ".import"
 
 
+static func _import_presets_dir(package_slug: String) -> String:
+	return package_dir(package_slug).path_join(IMPORT_PRESETS_DIR)
+
+
 static func _import_preset_cache_path(package_slug: String, sidecar_rel: String) -> String:
-	return package_dir(package_slug).path_join(IMPORT_PRESETS_DIR).path_join(sidecar_rel)
+	return _import_presets_dir(package_slug).path_join(sidecar_rel)
 
 
 ## Refreshes the local preset cache from the live tree after a revision swap:
@@ -756,7 +767,7 @@ static func _maintain_import_presets(root: String, package_slug: String) -> void
 			continue
 		_store_import_preset(package_slug, rel_path, FileAccess.get_sha256(source_path), preset_text)
 	# Forget entries whose source or sidecar is gone.
-	var cache_root := package_dir(package_slug).path_join(IMPORT_PRESETS_DIR)
+	var cache_root := _import_presets_dir(package_slug)
 	for rel_path: String in _list_files(cache_root):
 		if not live_sidecars.has(rel_path):
 			_remove_tree(cache_root.path_join(rel_path))

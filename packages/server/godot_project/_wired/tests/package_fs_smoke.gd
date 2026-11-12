@@ -5,8 +5,9 @@ extends SceneTree
 ## `WiredPackageFs` owns `res://packages` inside the editor project: it reports
 ## the current files, stages a replacement, swaps it in atomically, deletes a
 ## package and deletes selected files or directories inside a package. Editor
-## metadata (dot directories, `*.uid`, `*.import`) is never part of the reported
-## tree but must survive a swap.
+## metadata (dot directories and `*.uid`) is never part of the reported tree but
+## must survive a swap. Import sidecars (`*.import`) are package content: they
+## are reported normalized, and sidecars without a source are dropped.
 ##
 ## Packages are addressed by slug: `package_dir(slug)`. In production that
 ## helper returns exactly `res://packages/<slug>`; `op_delete_files` runs
@@ -41,6 +42,8 @@ func _initialize() -> void:
 	_test_replace_copies_local_import_for_legacy_revision()
 	_test_import_preset_cache_and_restore()
 	_test_import_preset_cache_removed_for_default_import()
+	_test_import_preset_scan_is_fast()
+	_test_restore_skips_package_without_cache()
 	_test_prepare_replace()
 	_test_metadata_excluded()
 	_test_replace_empty_staging()
@@ -345,16 +348,65 @@ func _test_import_preset_cache_removed_for_default_import() -> void:
 	var problems: Array = []
 	var slug := "hero_presets_default"
 	var root := WiredPackageFs.package_dir(slug)
-	_write(
-		root.path_join("dude.glb.import"),
-		"[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={  }\n",
+	var preset := (
+		"[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={\n\"animations\": {\n\"Action\": {\n\"settings/loop_mode\": 1\n}\n}\n}\n"
 	)
+	_write(root.path_join("dude.glb"), "model-v1")
+	_write(root.path_join("dude.glb.import"), preset)
 	WiredPackageFs.op_prepare_replace(slug)
-	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb"), "model")
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb"), "model-v1")
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb.import"), preset)
 	WiredPackageFs.op_replace(slug)
 	var cache_path := root.path_join(WiredPackageFs.IMPORT_PRESETS_DIR).path_join("dude.glb.import")
-	_expect(problems, not FileAccess.file_exists(cache_path), "кэш создан из пустого пресета")
-	_report("default import sidecars leave no preset cache", problems)
+	_expect(problems, FileAccess.file_exists(cache_path), "пресет не закэширован при replace")
+
+	# Пользователь осознанно опубликовал сброс настроек: кэш больше не нужен.
+	WiredPackageFs.op_prepare_replace(slug)
+	_write(WiredPackageFs.staging_dir(slug).path_join("dude.glb"), "model-v2")
+	_write(
+		WiredPackageFs.staging_dir(slug).path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={  }\n",
+	)
+	WiredPackageFs.op_replace(slug)
+	_expect(problems, not FileAccess.file_exists(cache_path), "кэш пережил опубликованный сброс")
+	_report("a published reset removes the preset cache", problems)
+
+
+func _test_import_preset_scan_is_fast() -> void:
+	var problems: Array = []
+	var text := _big_import_text()
+	var started := Time.get_ticks_msec()
+	var empty := WiredPackageFs.import_preset_is_empty(text)
+	var elapsed := Time.get_ticks_msec() - started
+	_expect(problems, not empty, "большой пресет распознан как пустой")
+	_expect(problems, elapsed < 1000, "проверка пресета заняла %d мс (бюджет 1000)" % elapsed)
+	_report("import preset scan stays linear on a large sidecar", problems)
+
+
+func _test_restore_skips_package_without_cache() -> void:
+	var problems: Array = []
+	var slug := "hero_presets_nocache"
+	var root := WiredPackageFs.package_dir(slug)
+	_write(root.path_join("dude.glb"), "model")
+	_write(root.path_join("dude.glb.import"), _big_import_text())
+	var started := Time.get_ticks_msec()
+	var restored := WiredPackageFs.restore_import_presets(slug)
+	var elapsed := Time.get_ticks_msec() - started
+	_expect(problems, restored.is_empty(), "нечего восстанавливать без кэша")
+	_expect(problems, elapsed < 500, "проход без кэша занял %d мс (бюджет 500)" % elapsed)
+	_report("restore skips packages without a preset cache", problems)
+
+
+func _big_import_text() -> String:
+	var lines := PackedStringArray()
+	lines.append("[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={")
+	for index in 20000:
+		lines.append(
+			"\"surface_%d\": {\"settings/loop_mode\": 1, \"use_external\": {\"enabled\": true, \"fallback_path\": \"res://packages/cura_player/player/NiMultiShader_%d.tres\"}},"
+			% [index, index]
+		)
+	lines.append("}")
+	return "\n".join(lines)
 
 
 func _test_prepare_replace() -> void:
@@ -428,7 +480,7 @@ func _test_metadata_excluded() -> void:
 		Marshalls.base64_to_raw(String(main_entry.get("contents_base64", ""))) == main_bytes,
 		"collect must return the contents as base64",
 	)
-	_report("editor metadata stays out of snapshot and collect", problems)
+	_report("editor metadata and orphan import sidecars stay out of the tree", problems)
 
 
 func _test_replace_empty_staging() -> void:
