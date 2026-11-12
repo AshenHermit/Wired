@@ -14,7 +14,7 @@
 
 - Целевая версия Godot — 4.5.x. Проверенная матрица: editor 4.5.1, native release 4.5.0, Web export 4.5.1.
 - Поддерживаются только текстовые `.gd`, `.tscn`, `.tres`; raw-изображения (`png`, `jpg`, `jpeg`, `webp`, `bmp`) и аудио (`wav`, `ogg`, `mp3`) конвертируются в runtime-ресурсы.
-- Не использовать `.ctex`, `.remap`, editor `.import` из пакета и `ResourceSaver.FLAG_BUNDLE_RESOURCES` для `user://`. Это проверенно не работает в 4.5.x.
+- Не использовать `.ctex`, `.remap` и editor `.import` **в runtime-артефакте**. Это проверенно не работает в 4.5.x. При этом `*.import` разрешён в ревизии пакета как пресет импорта: `writeArtifact` пропускает такие файлы, потому что путь `res://.godot/imported/...` в рантайме не существует.
 - Сервер переписывает только текст. Бинарные файлы копируются байт-в-байт; невалидный UTF-8 в текстовом файле — ошибка сборки артефакта.
 - Публикуемые пакеты пока публичны. Клиент не получает прав на запись, публикацию, удаление или изменение пакетов. Все write-маршруты остаются на JWT + `assertPackageEditing`.
 - Runtime-токен — только чтение, TTL по умолчанию 900 секунд, привязка к `roomId`, `packageId`, `revision`. Секрет: `WIRED_PACKAGE_READ_SECRET`, fallback `WIRED_GAME_TICKET_SECRET`; секрет никогда не уходит в браузер.
@@ -1029,7 +1029,7 @@ const AUDIO_STREAM_TYPES := {
 - sidecar писать в staging, но `path` указывает на финальный каталог (после rename).
 - `_derive_assets` вызывать после проверки всех хешей и до rename staging → final.
 - При любой ошибке вернуть `{ok:false,error:"asset_derive_failed:<file>"}`; `sync_package` удаляет staging и не меняет current.
-- `.res` и `.import` не добавлять в манифест и не публиковать.
+- Runtime-сайдкары `.res` и `.import`, которые создаёт рантайм, не добавлять в манифест и не публиковать. Editor-`.import` из ревизии пакета в артефакт тоже не копируется: `writeArtifact` пропускает `*.import`.
 
 - [ ] **Step 4: Запустить smoke**
 
