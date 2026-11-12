@@ -34,6 +34,9 @@ func _initialize() -> void:
 	_cleanup_root()
 	_test_empty_snapshot()
 	_test_create_dir()
+	_test_import_normalized()
+	_test_import_paths()
+	_test_import_in_snapshot_and_collect()
 	_test_prepare_replace()
 	_test_metadata_excluded()
 	_test_replace_empty_staging()
@@ -86,6 +89,144 @@ func _test_create_dir() -> void:
 	var exists := WiredPackageFs.op_exists("hero")
 	_expect(problems, exists == {"exists": true}, "op_exists(\"hero\") must be {exists: true}, got %s" % [exists])
 	_report("create_dir creates the package directory", problems)
+
+
+func _test_import_normalized() -> void:
+	var problems: Array = []
+	var raw := """; machine note
+[remap]
+
+importer="scene"
+importer_version=1
+type="PackedScene"
+uid="uid://abc"
+path="res://.godot/imported/dude.glb-deadbeef.scn"
+metadata={
+"imported_formats": ["s3tc_bptc"]
+}
+valid=true
+
+[deps]
+
+source_file="res://packages/hero/dude.glb"
+dest_files=["res://.godot/imported/dude.glb-deadbeef.scn"]
+
+[params]
+
+materials/extract=0
+_subresources={
+"animations": {
+"Action": {
+"settings/loop_mode": 1
+}
+}
+}
+"""
+	var expected := """[remap]
+
+importer="scene"
+importer_version=1
+type="PackedScene"
+uid="uid://abc"
+
+[params]
+
+materials/extract=0
+_subresources={
+"animations": {
+"Action": {
+"settings/loop_mode": 1
+}
+}
+}
+"""
+	var normalized: String = WiredPackageFs.normalize_import_text(raw)
+	_expect(problems, normalized == expected, "нормализованный текст не совпал:\n%s" % normalized)
+	_expect(problems, WiredPackageFs.normalize_import_text(normalized) == normalized, "нормализация не идемпотентна")
+	_expect(
+		problems,
+		not WiredPackageFs.import_preset_is_empty(normalized),
+		"непустой _subresources распознан как пустой",
+	)
+	_expect(
+		problems,
+		WiredPackageFs.import_preset_is_empty(
+			"[remap]\n\nimporter=\"scene\"\n\n[params]\n\n_subresources={  }\n"
+		),
+		"пустой _subresources распознан как непустой",
+	)
+	_expect(
+		problems,
+		WiredPackageFs.import_preset_is_empty("[remap]\n\nimporter=\"scene\"\n\n[params]\n"),
+		"отсутствующий _subresources распознан как непустой",
+	)
+	_report("import sidecar is normalized into a portable preset", problems)
+
+
+func _test_import_paths() -> void:
+	var problems: Array = []
+	_expect(
+		problems,
+		WiredPackageFs.import_source_rel_path("a/b.png.import") == "a/b.png",
+		"путь исходника вычислен неверно",
+	)
+	_expect(
+		problems,
+		WiredPackageFs.import_source_rel_path("root.import") == "root",
+		"путь исходника в корне вычислен неверно",
+	)
+	_report("import sidecar source path is derived from the sidecar path", problems)
+
+
+func _test_import_in_snapshot_and_collect() -> void:
+	var problems: Array = []
+	var slug := "hero_import"
+	var root := WiredPackageFs.package_dir(slug)
+	_write(root.path_join("dude.glb"), "glb")
+	_write(
+		root.path_join("dude.glb.import"),
+		"[remap]\n\nimporter=\"scene\"\ntype=\"PackedScene\"\npath=\"res://.godot/imported/x.scn\"\n\n[deps]\n\nsource_file=\"res://packages/hero_import/dude.glb\"\n\n[params]\n\n_subresources={  }\n",
+	)
+	# сирота: исходника нет
+	_write(root.path_join("ghost.import"), "[remap]\n\nimporter=\"scene\"\n")
+
+	var snapshot: Dictionary = WiredPackageFs.op_snapshot(slug)
+	var names: Array = snapshot.get("files", {}).keys()
+	names.sort()
+	_expect(problems, names == ["dude.glb", "dude.glb.import"], "snapshot содержит %s" % [names])
+
+	var collected: Dictionary = WiredPackageFs.op_collect(slug)
+	var entries: Array = collected.get("files", [])
+	var by_path := {}
+	for entry: Dictionary in entries:
+		by_path[str(entry["filepath"])] = entry
+	_expect(problems, not by_path.has("ghost.import"), "сирота попала в collect")
+	var import_entry: Dictionary = by_path.get("dude.glb.import", {})
+	var normalized: String = WiredPackageFs.normalize_import_text(
+		FileAccess.get_file_as_string(root.path_join("dude.glb.import"))
+	)
+	var bytes := normalized.to_utf8_buffer()
+	_expect(
+		problems,
+		int(import_entry.get("size", -1)) == bytes.size(),
+		"размер считается не по нормализованному тексту",
+	)
+	_expect(
+		problems,
+		str(import_entry.get("sha256", "")) == normalized.sha256_text(),
+		"sha collect не совпадает с нормализованным текстом",
+	)
+	_expect(
+		problems,
+		str(snapshot["files"].get("dude.glb.import", "")) == normalized.sha256_text(),
+		"sha snapshot и collect расходятся",
+	)
+	_expect(
+		problems,
+		Marshalls.base64_to_raw(str(import_entry.get("contents_base64", ""))) == bytes,
+		"collect отдаёт не нормализованный текст",
+	)
+	_report("import sidecars are shipped normalized and orphans are dropped", problems)
 
 
 func _test_prepare_replace() -> void:
@@ -244,7 +385,11 @@ func _test_metadata_preserved() -> void:
 	var result := WiredPackageFs.op_replace("7")
 	_expect(problems, not result.has("error"), "op_replace(\"7\") failed: %s" % [result.get("error", "")])
 	_expect(problems, FileAccess.file_exists(root.path_join(".uid")), ".uid must survive the swap")
-	_expect(problems, FileAccess.file_exists(root.path_join("b.import")), ".import sidecar must survive the swap")
+	_expect(
+		problems,
+		not FileAccess.file_exists(root.path_join("b.import")),
+		"an orphan .import sidecar must not survive the swap",
+	)
 	_expect(
 		problems,
 		FileAccess.file_exists(root.path_join(".import/legacy.res")),
@@ -261,7 +406,7 @@ func _test_metadata_preserved() -> void:
 	_expect(
 		problems,
 		deleted == ["main.gd", "old.gd"],
-		"deleted must exclude editor metadata, got %s" % [deleted],
+		"deleted must exclude editor metadata and orphan sidecars, got %s" % [deleted],
 	)
 	_report("service files survive replace while data files are replaced", problems)
 
