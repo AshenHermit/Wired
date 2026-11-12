@@ -2,8 +2,9 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { Readable } from 'node:stream';
 import { AppConfigService } from 'src/config/config.service';
-import { GitCommand } from './git-command';
+import { GitCommand, GitCommandError } from './git-command';
 import { GitAuthor } from './package-git-types';
 
 export interface GitVersion {
@@ -14,6 +15,10 @@ export interface GitVersion {
 }
 
 const MIN_GIT_MINOR = 29;
+
+export type RefUpdate =
+  | { ref: string; oid: string; expected?: string | null }
+  | { ref: string; delete: true; expected: string };
 
 /**
  * Owns the bare git repository of each package.
@@ -299,6 +304,181 @@ export class PackageGitRepository implements OnModuleInit {
       }
     }
     return found;
+  }
+
+  async readRef(packageId: number, ref: string): Promise<string | null> {
+    try {
+      const output = await this.command.run(
+        ['rev-parse', '--verify', '--quiet', ref],
+        { cwd: this.repoDir(packageId) },
+      );
+      const oid = output.toString().trim();
+      return /^[0-9a-f]{64}$/.test(oid) ? oid : null;
+    } catch (error) {
+      if (error instanceof GitCommandError) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async listRefs(
+    packageId: number,
+    prefix: string,
+  ): Promise<Array<{ ref: string; oid: string }>> {
+    const output = await this.command.run(
+      ['for-each-ref', '--format=%(refname) %(objectname)', prefix],
+      { cwd: this.repoDir(packageId) },
+    );
+    return output
+      .toString()
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const [ref, oid] = line.split(' ');
+        return { ref, oid };
+      });
+  }
+
+  async applyRefUpdates(
+    packageId: number,
+    updates: RefUpdate[],
+  ): Promise<void> {
+    const lines = ['start'];
+    for (const update of updates) {
+      if ('delete' in update) {
+        lines.push(`delete ${update.ref} ${update.expected}`);
+      } else if (update.expected === null) {
+        lines.push(`create ${update.ref} ${update.oid}`);
+      } else if (update.expected === undefined) {
+        lines.push(`update ${update.ref} ${update.oid}`);
+      } else {
+        lines.push(`update ${update.ref} ${update.oid} ${update.expected}`);
+      }
+    }
+    lines.push('prepare', 'commit');
+    await this.command.run(['update-ref', '--stdin'], {
+      cwd: this.repoDir(packageId),
+      input: `${lines.join('\n')}\n`,
+    });
+    this.clearTreeCache(packageId);
+  }
+
+  async forEachBlob(
+    packageId: number,
+    oids: string[],
+    onBlob: (oid: string, data: Buffer) => void | Promise<void>,
+  ): Promise<void> {
+    if (oids.length === 0) {
+      return;
+    }
+    const stream = this.command.stream(['cat-file', '--batch'], {
+      cwd: this.repoDir(packageId),
+      input: `${oids.join('\n')}\n`,
+      timeoutMs: 120_000,
+    });
+    let chunks: Buffer[] = [];
+    let total = 0;
+    let index = 0;
+    let size: number | null = null;
+
+    const drop = (count: number): void => {
+      let remaining = count;
+      while (remaining > 0) {
+        const first = chunks[0];
+        if (first.length <= remaining) {
+          chunks.shift();
+          remaining -= first.length;
+        } else {
+          chunks[0] = first.subarray(remaining);
+          remaining = 0;
+        }
+      }
+      total -= count;
+    };
+
+    const readHeader = (): string | null => {
+      let scanned = 0;
+      for (let i = 0; i < chunks.length; i++) {
+        const newline = chunks[i].indexOf(0x0a);
+        if (newline !== -1) {
+          const parts = chunks.slice(0, i);
+          parts.push(chunks[i].subarray(0, newline));
+          const header = Buffer.concat(parts).toString();
+          drop(scanned + newline + 1);
+          return header;
+        }
+        scanned += chunks[i].length;
+      }
+      return null;
+    };
+
+    for await (const chunk of stream) {
+      const buffer = chunk as Buffer;
+      chunks.push(buffer);
+      total += buffer.length;
+      while (index < oids.length) {
+        if (size === null) {
+          const header = readHeader();
+          if (header === null) {
+            break;
+          }
+          if (header.endsWith(' missing')) {
+            throw new Error('package_storage_missing_object');
+          }
+          const match = /^[0-9a-f]{64} blob (\d+)$/.exec(header);
+          if (!match) {
+            throw new Error(`unexpected cat-file header: ${header}`);
+          }
+          size = Number(match[1]);
+        }
+        if (total < size + 1) {
+          break;
+        }
+        const all = Buffer.concat(chunks);
+        const data = all.subarray(0, size);
+        const rest = all.subarray(size + 1);
+        chunks = rest.length > 0 ? [rest] : [];
+        total = rest.length;
+        await onBlob(oids[index] as string, data);
+        index += 1;
+        size = null;
+      }
+    }
+    if (index !== oids.length) {
+      throw new Error('incomplete cat-file output');
+    }
+  }
+
+  openBlob(packageId: number, oid: string): Readable {
+    return this.command.stream(['cat-file', 'blob', oid], {
+      cwd: this.repoDir(packageId),
+      timeoutMs: 120_000,
+    });
+  }
+
+  async commitDate(packageId: number, oid: string): Promise<Date> {
+    const output = await this.command.run(
+      ['show', '-s', '--format=%cI', oid],
+      { cwd: this.repoDir(packageId) },
+    );
+    return new Date(output.toString().trim());
+  }
+
+  async gc(packageId: number, expire = '2.weeks.ago'): Promise<void> {
+    const cwd = this.repoDir(packageId);
+    await this.command.run(['repack', '-adq'], { cwd, timeoutMs: 120_000 });
+    await this.command.run(['prune', `--expire=${expire}`], {
+      cwd,
+      timeoutMs: 120_000,
+    });
+  }
+
+  async fsck(packageId: number): Promise<void> {
+    await this.command.run(
+      ['fsck', '--connectivity-only', '--no-progress'],
+      { cwd: this.repoDir(packageId), timeoutMs: 120_000 },
+    );
   }
 
   clearTreeCache(packageId: number): void {
