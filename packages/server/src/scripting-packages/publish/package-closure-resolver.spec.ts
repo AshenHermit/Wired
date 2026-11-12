@@ -249,6 +249,15 @@ describe('PackageClosureResolver', () => {
     return resolver;
   }
 
+  function createResolver(assetBakeVersion: string): PackageClosureResolver {
+    return new PackageClosureResolver(
+      revisionsRepository as never,
+      storage,
+      packagesRepository as never,
+      assetBakeVersion,
+    );
+  }
+
   function internals() {
     return resolver as unknown as {
       maxFileCacheBytes: number;
@@ -818,6 +827,18 @@ describe('PackageClosureResolver', () => {
 
       expect(after.get(5)).not.toBe(before.get(5));
       expect(after.get(6)).not.toBe(before.get(6));
+    });
+  });
+
+  describe('artifact key version', () => {
+    it('меняет ключ артефакта при смене ASSET_BAKE_VERSION', async () => {
+      definePackage(5, 'Heroes', 7, 'heroes');
+      await writePublished(5, 1, { 'main.gd': 'extends Node' });
+
+      const first = await createResolver('1').resolve(5, 1, 7);
+      const second = await createResolver('2').resolve(5, 1, 7);
+
+      expect(second.artifactKeys.get(5)).not.toBe(first.artifactKeys.get(5));
     });
   });
 });

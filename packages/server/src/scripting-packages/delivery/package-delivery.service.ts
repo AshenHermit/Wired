@@ -45,6 +45,7 @@ import {
   stripExtResourceUids,
 } from '../publish/package-runtime-references';
 import { PackageReadUrlService } from './package-read-url.service';
+import { AssetBakeService } from './asset-bake.service';
 import type { PackageSlugIndex } from '../storage/package-slug-index';
 import { PackageStorageService } from '../storage/package-storage.service';
 
@@ -124,6 +125,7 @@ export class PackageDeliveryService {
     private readonly roomsRepository: Repository<Room>,
     private readonly storage: PackageStorageService,
     private readonly readUrls: PackageReadUrlService,
+    private readonly assetBake: AssetBakeService = new AssetBakeService(),
   ) {
     this.resolver = new PackageClosureResolver(
       revisionsRepository,
@@ -444,6 +446,18 @@ export class PackageDeliveryService {
       const textByPath = new Map(
         resolved.rootTextFiles.map((file) => [file.filepath, file.text]),
       );
+      // Raw glTF cannot be loaded by an exported game: bake it into a
+      // self-contained scene and point the scenes at that file.
+      const jobs = this.assetBake.planJobs(resolved, slug);
+      const baked = await this.assetBake.bake(resolved, slug, jobs);
+      // Runtime paths carry the artifact directory: `.../packages/<slug>/<revision>-<key>/`.
+      const artifactPath = `packages/${slug}/${resolved.revision}-${resolved.artifactKeys.get(resolved.packageId)!}`;
+      const assetRewrites = jobs
+        .filter((job) => baked.has(job.output))
+        .map((job) => ({
+          from: `${artifactPath}/${job.source}`,
+          to: `${artifactPath}/${job.output}`,
+        }));
       const files: PackageFileEntry[] = [];
       for (const entry of resolved.rootFiles) {
         // Editor import presets point at `.godot/imported/...` remaps that only
@@ -458,6 +472,7 @@ export class PackageDeliveryService {
               resolved.revisionByPackage,
               resolved.artifactKeys,
               resolved.slugByPackage,
+              assetRewrites,
             )
           : data;
         // Validate every written path symmetrically with the read paths: a
@@ -469,6 +484,16 @@ export class PackageDeliveryService {
           filepath: entry.filepath,
           size: rewritten.byteLength,
           sha256: sha256Hex(rewritten),
+        });
+      }
+      for (const [output, bytes] of baked) {
+        const target = resolvePackagePath(staging, output);
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, bytes);
+        files.push({
+          filepath: output,
+          size: bytes.byteLength,
+          sha256: sha256Hex(bytes),
         });
       }
       // Deterministic codepoint order, independent of the host locale.
@@ -532,6 +557,7 @@ export class PackageDeliveryService {
     revisionByPackage: Map<number, number>,
     artifactKeys: Map<number, string>,
     slugByPackage: Map<number, string>,
+    assetRewrites: ReadonlyArray<{ from: string; to: string }> = [],
   ): Buffer {
     let rewritten: string;
     try {
@@ -551,7 +577,13 @@ export class PackageDeliveryService {
         { cause: error },
       );
     }
-    return Buffer.from(stripExtResourceUids(filepath, rewritten), 'utf8');
+    let target = stripExtResourceUids(filepath, rewritten);
+    // Package references are already turned into runtime paths, so the baked
+    // scene is matched by its artifact-relative path.
+    for (const rewrite of assetRewrites) {
+      target = target.split(rewrite.from).join(rewrite.to);
+    }
+    return Buffer.from(target, 'utf8');
   }
 
   /**
