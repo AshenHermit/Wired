@@ -31,16 +31,17 @@ export class GodotFsError extends Error {
 }
 
 /**
- * Files the Godot editor generates next to package sources (`.gd.uid`,
- * `*.import`, `.godot/`). The plugin lists them deliberately (hidden files are
+ * Files the Godot editor owns inside a package (`.gd.uid`, `.godot/`, any
+ * dot-prefixed segment). The plugin lists them deliberately (hidden files are
  * included) and filters them out of `snapshot`, `collect` and `replace`; this
  * predicate mirrors that rule for callers that show a path to the user or
- * decide what a package revision owns.
+ * decide what a package revision owns. `*.import` is package content: it is the
+ * portable import preset of its source.
  */
 export function isEditorMetadataPath(filepath: string): boolean {
   const segments = filepath.split("/");
   if (segments.some((segment) => segment.startsWith("."))) return true;
-  return filepath.endsWith(".uid") || filepath.endsWith(".import");
+  return filepath.endsWith(".uid");
 }
 
 export const PACKAGES_DIR = "packages";

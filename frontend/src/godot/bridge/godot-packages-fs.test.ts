@@ -14,6 +14,7 @@ import {
   assertPackageSlug,
   assertRelativePackagePath,
   createPackageFileSystem,
+  isEditorMetadataPath,
   type PackageEngine,
   type PackageFileSystem,
 } from "./godot-packages-fs";
@@ -316,6 +317,15 @@ describe("PackageFileSystem", () => {
     expect(bridge.call).not.toHaveBeenCalled();
     expect(order).toEqual([]);
     expect(tree.size).toBe(0);
+  });
+
+  it("treats import sidecars as package content", () => {
+    expect(isEditorMetadataPath("player/dude.glb.import")).toBe(false);
+    expect(isEditorMetadataPath("hero.gd.uid")).toBe(true);
+    expect(isEditorMetadataPath(".godot/cache")).toBe(true);
+    expect(isEditorMetadataPath(".wired/import-presets/dude.glb.import")).toBe(
+      true,
+    );
   });
 
   it("keeps editor metadata out of collect", async () => {
