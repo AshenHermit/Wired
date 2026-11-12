@@ -27,6 +27,7 @@ function workshopPackage(
       picture: "",
     },
     revision: 3,
+    sizeBytes: 0,
     publishedAt: "2026-10-30T10:00:00.000Z",
     updatedAt: "2026-10-31T10:00:00.000Z",
     ...overrides,

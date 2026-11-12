@@ -214,6 +214,8 @@
       "versionMissing": "version not specified",
       "published": "· published revision {revision}",
       "publishedMissing": "· no published revisions",
+      "sizeKb": "· {value} KB",
+      "sizeMb": "· {value} MB",
       "loaded": "· editor revision {revision}",
       "loadedUnpublished": "· editor revision is not published",
       "revisionNotLoaded": "revision is not loaded",

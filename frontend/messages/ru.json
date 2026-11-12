@@ -214,6 +214,8 @@
       "versionMissing": "версия не указана",
       "published": "· опубликована ревизия {revision}",
       "publishedMissing": "· опубликованных ревизий нет",
+      "sizeKb": "· {value} КБ",
+      "sizeMb": "· {value} МБ",
       "loaded": "· в редакторе ревизия {revision}",
       "loadedUnpublished": "· в редакторе ревизия не опубликована",
       "revisionNotLoaded": "ревизия не загружена",
