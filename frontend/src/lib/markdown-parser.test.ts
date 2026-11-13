@@ -19,6 +19,21 @@ describe('slugify', () => {
     expect(slugify('test@#$%')).toBe('test');
     expect(slugify('CamelCase')).toBe('camelcase');
   });
+
+  test('transliterates Cyrillic headings', () => {
+    expect(slugify('Что такое пакет')).toBe('chto-takoe-paket');
+    expect(slugify('Начало работы с пакетами Wired')).toBe(
+      'nachalo-raboty-s-paketami-wired',
+    );
+    expect(slugify('Регистрация сущностей и контента')).toBe(
+      'registratsiya-sushchnostey-i-kontenta',
+    );
+  });
+
+  test('falls back to section for non-latin symbols', () => {
+    expect(slugify('🎮')).toBe('section');
+    expect(slugify('🎮', 1)).toBe('section-1');
+  });
 });
 
 describe('parseMarkdownHeadings', () => {
@@ -85,5 +100,10 @@ Content
   test('handles empty markdown', () => {
     expect(parseMarkdownHeadings('')).toEqual([]);
     expect(parseMarkdownHeadings('No headings here')).toEqual([]);
+  });
+
+  test('keeps Cyrillic anchors unique in parseMarkdownHeadings', () => {
+    const headings = parseMarkdownHeadings('## Пакет\n## Пакет\n');
+    expect(headings.map((h) => h.id)).toEqual(['paket', 'paket-1']);
   });
 });
