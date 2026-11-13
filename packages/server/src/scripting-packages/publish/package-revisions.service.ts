@@ -244,12 +244,17 @@ export class PackageRevisionsService {
 
     const files: PackageFileEntry[] = [];
     const contents: Array<{ filepath: string; data: Buffer }> = [];
+    const originals = await this.storage.readPublishedFiles(
+      sourcePackageId,
+      source.revision,
+      source.files.map((file) => file.filepath),
+      source.commitSha ?? null,
+    );
     for (const sourceFile of source.files) {
-      const original = await this.storage.readPublishedFile(
-        sourcePackageId,
-        source.revision,
-        sourceFile.filepath,
-      );
+      const original = originals.get(sourceFile.filepath);
+      if (!original) {
+        throw new ConflictException({ code: 'package_not_published' });
+      }
       const data = transformFile
         ? transformFile(sourceFile.filepath, original)
         : original;
@@ -570,11 +575,22 @@ export class PackageRevisionsService {
   ): Promise<void> {
     try {
       const index = await this.slugIndex();
+      const textPaths = files
+        .filter((file) => isTextPackageFile(file.filepath))
+        .map((file) => file.filepath);
+      const texts =
+        textPaths.length > 0
+          ? await this.storage.readPublishedTextFiles(
+              packageId,
+              revision,
+              textPaths,
+            )
+          : new Map<string, string>();
       const referenced = await this.loadReferencedPackageIds(
         files,
         index,
         scopeRoomId,
-        (filepath) => this.readPublishedText(packageId, revision, filepath),
+        async (filepath) => texts.get(filepath) ?? null,
         packageId,
       );
 
