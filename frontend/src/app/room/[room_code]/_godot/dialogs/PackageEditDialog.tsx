@@ -41,8 +41,10 @@ const MODES: { value: RoomAccessMode; labelKey: "modeAll" | "modeAuthor" | "mode
 /**
  * The only place where package metadata is edited: name, version, slug,
  * description and tags. The slug is validated against the room scope while
- * ignoring the package itself, and a rename that published dependents point to
- * asks for an explicit confirmation before their files are rewritten.
+ * ignoring the package itself. A rename that published dependents point at is
+ * refused once, listed in a warning, and then confirmed only through that
+ * warning's own button: Save stays disabled, so no form submit can silently
+ * rewrite the dependents' files.
  *
  * The server rename and the editor directory rename are two steps: when the
  * directory move fails the panel keeps the server state and offers the
@@ -86,9 +88,14 @@ export function PackageEditDialog({
   const [detailsAttempt, setDetailsAttempt] = React.useState(0);
   /** The full package fetched by `getScriptingPackage`, including access fields. */
   const [pkg, setPkg] = React.useState<ScriptingPackage | null>(null);
-  const [dependents, setDependents] = React.useState<
-    { packageId: number; name: string }[] | null
-  >(null);
+  /**
+   * The slug whose rename the server refused, with the packages that point at
+   * it. Keeping the slug makes the warning expire as soon as the field changes.
+   */
+  const [renameWarning, setRenameWarning] = React.useState<{
+    slug: string;
+    dependents: { packageId: number; name: string }[];
+  } | null>(null);
   const [dirError, setDirError] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<AppMessage | null>(null);
@@ -111,6 +118,12 @@ export function PackageEditDialog({
   });
   const slugState = slugAvailability.state;
 
+  /** The warning only covers the slug it was raised for. */
+  const dependents =
+    renameWarning !== null && renameWarning.slug === slug.trim()
+      ? renameWarning.dependents
+      : null;
+
   React.useEffect(() => {
     if (!open || !entry) return;
     setName(entry.name);
@@ -121,7 +134,7 @@ export function PackageEditDialog({
     setTags(entry.tags);
     setTagsInvalid(false);
     tagsInvalidRef.current = false;
-    setDependents(null);
+    setRenameWarning(null);
     setDirError(false);
     setError(null);
     setSubmitting(false);
@@ -179,6 +192,7 @@ export function PackageEditDialog({
   const canSubmit =
     detailsState === "ready" &&
     slugState === "available" &&
+    dependents === null &&
     name.trim().length > 0 &&
     version.trim().length > 0 &&
     !tagsInvalid &&
@@ -201,7 +215,7 @@ export function PackageEditDialog({
       onOpenChange(false);
     } catch (failure) {
       if (failure instanceof SlugRenameDependentsError) {
-        setDependents(failure.dependents);
+        setRenameWarning({ slug: slug.trim(), dependents: failure.dependents });
       } else if (failure instanceof PackageDirectoryRenameError) {
         setDirError(true);
       } else {
@@ -253,8 +267,10 @@ export function PackageEditDialog({
         <form
           onSubmit={(event) => {
             event.preventDefault();
+            // A rename that rewrites dependents is confirmed only by the
+            // labelled button in the warning, never by Enter or Save.
             if (!canSubmit) return;
-            void save(dependents !== null);
+            void save(false);
           }}
           className="space-y-4"
         >
