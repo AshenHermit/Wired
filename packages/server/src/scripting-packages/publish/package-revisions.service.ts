@@ -30,6 +30,7 @@ import {
   walkPinnedClosure,
 } from './package-dependency-graph';
 import { sha256Hex } from '../storage/package-hash';
+import { PackageGitReconcileService } from './package-git-reconcile.service';
 import { validatePackageRevisionFiles } from '../storage/package-manifest';
 import { PackagePublishLockService } from './package-publish-lock.service';
 import {
@@ -72,6 +73,7 @@ export class PackageRevisionsService {
     private readonly dispatcher: PackageRevisionDispatcher,
     @InjectRepository(ScriptingPackage)
     private readonly packagesRepository: Repository<ScriptingPackage>,
+    private readonly reconcile: PackageGitReconcileService,
   ) {}
 
   /**
@@ -88,6 +90,7 @@ export class PackageRevisionsService {
     const pkg = await this.packagesService.findOne(packageId);
     const files = validatePackageRevisionFiles(payload?.files);
 
+    await this.reconcile.reconcilePackage(packageId);
     await this.discardDrafts(packageId);
 
     const maxRevision = await this.revisionsRepository.maximum('revision', {
@@ -105,7 +108,7 @@ export class PackageRevisionsService {
         }),
       );
       const missing = await this.storage.missingFiles(packageId, saved.files);
-    return { ...toRevision(saved, packageId), missing };
+      return { ...toRevision(saved, packageId), missing };
     } catch (error) {
       // Two concurrent drafts compute the same revision number; the unique
       // index rejects one of them. Report a retryable conflict, not a 500.
@@ -155,6 +158,7 @@ export class PackageRevisionsService {
    * revision is safe: it returns the published revision without touching disk.
    */
   async publish(packageId: number, revision: number): Promise<PackageRevision> {
+    await this.reconcile.reconcilePackage(packageId);
     const row = await this.findRevision(packageId, revision);
 
     if (row.status === 'published') {

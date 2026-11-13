@@ -132,6 +132,7 @@ describe('PackageRevisionsService', () => {
       new PackagePublishLockService(),
       dispatcher as unknown as PackageRevisionDispatcher,
       packagesRepository as never,
+      { reconcilePackage: jest.fn(async () => undefined) } as never,
     );
   });
 
@@ -702,6 +703,7 @@ describe('PackageRevisionsService', () => {
         new PackagePublishLockService(dataSource as unknown as DataSource),
         dispatcher as unknown as PackageRevisionDispatcher,
         packagesRepository as never,
+        { reconcilePackage: jest.fn(async () => undefined) } as never,
       );
     }
 
