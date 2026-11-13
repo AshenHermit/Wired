@@ -53,6 +53,11 @@ import type {
 } from "./model";
 import type { RoomPackagesAction } from "./reducer";
 
+/** Failure policy for actions that report their own errors on the card. */
+const rethrow = (cause: unknown): never => {
+  throw cause;
+};
+
 /**
  * The panel state the explicit package actions read and write.
  *
@@ -343,14 +348,38 @@ export function usePackageActions({
     [setAction],
   );
 
+  /**
+   * Runs one package action: marks the card busy, hands any failure to `fail`
+   * (`rethrow` by default) and always clears the busy flag. Actions whose
+   * failures belong on the card pass a `fail` that calls `failAction`.
+   */
+  const runAction = React.useCallback(
+    <T>(
+      packageId: number,
+      task: () => Promise<T>,
+      fail: (cause: unknown) => never = rethrow,
+    ): Promise<T> =>
+      guarded(async () => {
+        beginAction(packageId);
+        try {
+          return await task();
+        } catch (cause) {
+          return fail(cause);
+        } finally {
+          endAction(packageId);
+        }
+      }),
+    [beginAction, endAction, guarded],
+  );
+
   const applyPublishedRevision = React.useCallback(
     (
       packageId: number,
       options: { force?: boolean } = {},
     ): Promise<void> =>
-      guarded(async () => {
-        beginAction(packageId);
-        try {
+      runAction(
+        packageId,
+        async () => {
           const files = requireFileSystem(filesRef.current);
           const slug = slugOf(packageId);
           const current = await files.snapshot(slug);
@@ -390,19 +419,18 @@ export function usePackageActions({
             },
           });
           await refresh();
-        } catch (cause) {
+        },
+        (cause): never => {
           if (cause instanceof LocalChangesError) throw cause;
-          failAction(
+          return failAction(
             packageId,
             cause,
             { key: "Packages.errors.downloadFailed" },
             "package_download_failed",
           );
-        } finally {
-          endAction(packageId);
-        }
-      }),
-    [beginAction, endAction, filesRef, guarded, refresh, setAction, slugOf],
+        },
+      ),
+    [failAction, filesRef, refresh, runAction, setAction, slugOf],
   );
 
   /**
@@ -524,9 +552,9 @@ export function usePackageActions({
       packageId: number,
       options: { force?: boolean } = {},
     ): Promise<void> =>
-      guarded(async () => {
-        beginAction(packageId);
-        try {
+      runAction(
+        packageId,
+        async () => {
           const files = requireFileSystem(filesRef.current);
           const slug = slugOf(packageId);
           if (!(await files.exists(slug))) {
@@ -549,26 +577,25 @@ export function usePackageActions({
             notice: { key: "Packages.notices.removedFromEditor" },
           });
           await refresh();
-        } catch (cause) {
+        },
+        (cause): never => {
           if (cause instanceof LocalChangesError) throw cause;
-          failAction(
+          return failAction(
             packageId,
             cause,
             { key: "Packages.errors.removeFailed" },
             "package_remove_failed",
           );
-        } finally {
-          endAction(packageId);
-        }
-      }),
-    [beginAction, endAction, filesRef, guarded, refresh, setAction, slugOf],
+        },
+      ),
+    [failAction, filesRef, refresh, runAction, setAction, slugOf],
   );
 
   const setPackageEnabled = React.useCallback(
     (packageId: number, enabled: boolean): Promise<void> =>
-      guarded(async () => {
-        beginAction(packageId);
-        try {
+      runAction(
+        packageId,
+        async () => {
           await updateScriptingPackage(packageId, { enabled });
           setAction(packageId, {
             notice: {
@@ -578,7 +605,8 @@ export function usePackageActions({
             },
           });
           await refresh();
-        } catch (cause) {
+        },
+        (cause): never =>
           failAction(
             packageId,
             cause,
@@ -588,63 +616,56 @@ export function usePackageActions({
                 : "Packages.errors.disableFailed",
             },
             enabled ? "package_enable_failed" : "package_disable_failed",
-          );
-        } finally {
-          endAction(packageId);
-        }
-      }),
-    [beginAction, endAction, guarded, refresh, setAction],
+          ),
+      ),
+    [failAction, refresh, runAction, setAction],
   );
 
   const deletePackageRecord = React.useCallback(
     (packageId: number): Promise<void> =>
-      guarded(async () => {
+      runAction(packageId, async () => {
         const slug = slugOf(packageId);
-        beginAction(packageId);
         try {
-          try {
-            await deleteScriptingPackage(packageId);
-          } catch (cause) {
-            console.error(cause);
-            setAction(packageId, {
-              error: deleteConflictMessage(cause) ?? {
-                key: "Packages.errors.deleteFailed",
-              },
-            });
-            throw new Error("package_delete_failed");
-          }
-
-          // The editor directory is local state, not the package itself: a
-          // failed cleanup must not make the deleted package look present.
-          try {
-            const files = filesRef.current;
-            if (files) {
-              await files.deletePackage(slug);
-              requestEditorRescan();
-            }
-          } catch {
-            // The editor may be gone; the package is already deleted.
-          }
-          snapshotsRef.current.delete(packageId);
-          loadedRef.current.delete(packageId);
-          createdSlugsRef.current.delete(packageId);
-          dispatch({ type: "removed", ids: [packageId] });
-          setAction(packageId, {
-            notice: { key: "Packages.notices.deleted" },
-          });
-          await refresh();
-        } finally {
-          endAction(packageId);
+          await deleteScriptingPackage(packageId);
+        } catch (cause) {
+          failAction(
+            packageId,
+            cause,
+            deleteConflictMessage(cause) ?? {
+              key: "Packages.errors.deleteFailed",
+            },
+            "package_delete_failed",
+          );
         }
+
+        // The editor directory is local state, not the package itself: a
+        // failed cleanup must not make the deleted package look present.
+        try {
+          const files = filesRef.current;
+          if (files) {
+            await files.deletePackage(slug);
+            requestEditorRescan();
+          }
+        } catch {
+          // The editor may be gone; the package is already deleted.
+        }
+        snapshotsRef.current.delete(packageId);
+        loadedRef.current.delete(packageId);
+        createdSlugsRef.current.delete(packageId);
+        dispatch({ type: "removed", ids: [packageId] });
+        setAction(packageId, {
+          notice: { key: "Packages.notices.deleted" },
+        });
+        await refresh();
       }),
-    [beginAction, endAction, filesRef, guarded, refresh, setAction, slugOf],
+    [failAction, filesRef, refresh, runAction, setAction, slugOf],
   );
 
   const adoptPackage = React.useCallback(
     (packageId: number): Promise<void> =>
-      guarded(async () => {
-        beginAction(packageId);
-        try {
+      runAction(
+        packageId,
+        async () => {
           const files = requireFileSystem(filesRef.current);
           const slug = slugOf(packageId);
           if (!(await files.exists(slug))) {
@@ -656,18 +677,16 @@ export function usePackageActions({
             notice: { key: "Packages.notices.adopted" },
           });
           await refresh();
-        } catch (cause) {
+        },
+        (cause): never =>
           failAction(
             packageId,
             cause,
             { key: "Packages.errors.adoptFailed" },
             "package_adopt_failed",
-          );
-        } finally {
-          endAction(packageId);
-        }
-      }),
-    [beginAction, endAction, filesRef, guarded, refresh, setAction, slugOf],
+          ),
+      ),
+    [failAction, filesRef, refresh, runAction, setAction, slugOf],
   );
 
   const emitPackage = React.useCallback(
@@ -696,43 +715,53 @@ export function usePackageActions({
         }
 
         const slug = slugOf(packageId);
-        beginAction(packageId);
-        try {
-          const result = await publishPackageFiles(
-            packageId,
-            slug,
-            files,
-            (current, total) =>
-              setAction(packageId, { progress: { current, total } }),
-          );
-          const snapshot = await files.snapshot(slug);
-          loadedRef.current.set(packageId, {
-            revision: result.revision.revision,
-            files: snapshot,
-          });
-          setAction(packageId, {
-            notice: {
-              key: "Packages.notices.emitPublished",
-              values: {
-                revision: result.revision.revision,
-                uploaded: result.uploaded,
+        await runAction(
+          packageId,
+          async () => {
+            const result = await publishPackageFiles(
+              packageId,
+              slug,
+              files,
+              (current, total) =>
+                setAction(packageId, { progress: { current, total } }),
+            );
+            const snapshot = await files.snapshot(slug);
+            loadedRef.current.set(packageId, {
+              revision: result.revision.revision,
+              files: snapshot,
+            });
+            setAction(packageId, {
+              notice: {
+                key: "Packages.notices.emitPublished",
+                values: {
+                  revision: result.revision.revision,
+                  uploaded: result.uploaded,
+                },
               },
-            },
-          });
-          await refresh();
-        } catch (cause) {
-          if (cause instanceof NewerRevisionError) throw cause;
-          failAction(
-            packageId,
-            cause,
-            { key: "Packages.errors.emitFailed" },
-            "package_emit_failed",
-          );
-        } finally {
-          endAction(packageId);
-        }
+            });
+            await refresh();
+          },
+          (cause): never => {
+            if (cause instanceof NewerRevisionError) throw cause;
+            return failAction(
+              packageId,
+              cause,
+              { key: "Packages.errors.emitFailed" },
+              "package_emit_failed",
+            );
+          },
+        );
       }),
-    [beginAction, endAction, filesRef, guarded, refresh, setAction, slugOf],
+    [
+      failAction,
+      filesRef,
+      guarded,
+      refresh,
+      remoteRef,
+      runAction,
+      setAction,
+      slugOf,
+    ],
   );
 
   return {

@@ -1309,6 +1309,34 @@ describe("useRoomPackages", () => {
     );
   });
 
+  it("marks the card busy while an action runs and clears it on failure", async () => {
+    const { result, unmount } = await startHook();
+    let release: () => void = () => undefined;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(packagesApi.updateScriptingPackage).mockImplementationOnce(
+      () => pending.then(() => Promise.reject(new Error("offline"))),
+    );
+
+    let call: Promise<void> = Promise.resolve();
+    await act(async () => {
+      call = result.current.setPackageEnabled(5, true);
+      await Promise.resolve();
+    });
+    expect(result.current.actionFor(5).busy).toBe(true);
+
+    await act(async () => {
+      release();
+      await expect(call).rejects.toThrow("package_enable_failed:offline");
+    });
+    expect(result.current.actionFor(5)).toMatchObject({
+      busy: false,
+      error: { key: "Packages.errors.enableFailed" },
+    });
+    unmount();
+  });
+
   it("updates only metadata in the entry", async () => {
     vi.mocked(gameApi.getRoomPackages).mockResolvedValue(roomStatus([]));
     vi.mocked(packagesApi.createScriptingPackage).mockResolvedValue(
