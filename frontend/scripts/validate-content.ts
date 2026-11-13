@@ -4,10 +4,7 @@ async function main(): Promise<void> {
   const issues = await validateContent();
 
   if (issues.length > 0) {
-    for (const issue of issues) {
-      console.error(issue);
-    }
-    process.exit(1);
+    throw new Error(`invalid content:\n${issues.join('\n')}`);
   }
 
   console.log('content ok');

@@ -8,13 +8,18 @@ type DocsHubPageProps = {
 };
 
 export default async function DocsHubPage({ searchParams }: DocsHubPageProps) {
-  const { doc } = await searchParams;
+  const [{ doc }, docs, t] = await Promise.all([
+    searchParams,
+    listDocs(),
+    getTranslations('Docs'),
+  ]);
 
   if (doc) {
-    redirect(`/docs/${doc}`);
+    // Legacy links carried the target document in a query string; only forward
+    // known slugs so an unknown value lands on the hub instead of a 404.
+    const known = docs.some((item) => item.slug === doc);
+    redirect(known ? `/docs/${doc}` : '/docs');
   }
-
-  const [docs, t] = await Promise.all([listDocs(), getTranslations('Docs')]);
 
   return (
     <main className="min-h-screen w-screen py-16 px-16">

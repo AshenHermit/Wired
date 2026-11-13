@@ -130,3 +130,29 @@ it('reports an empty docs directory', async () => {
   const issues = await validateContent(root);
   expect(issues).toContain('content/docs: no markdown files found');
 });
+
+it('rejects an impossible calendar date', () => {
+  expect(() =>
+    parseDevlogFile(
+      '2026-11-13-a.md',
+      DEVLOG.replace('date: 2026-11-13', 'date: 2026-02-31'),
+    ),
+  ).toThrow(/invalid date/);
+});
+
+it('reports every broken file instead of stopping at the first', async () => {
+  const root = await makeDir({});
+  await fs.mkdir(path.join(root, 'docs'));
+  await fs.mkdir(path.join(root, 'devlog'));
+  await fs.writeFile(path.join(root, 'docs', 'a.md'), 'no front matter');
+  await fs.writeFile(
+    path.join(root, 'docs', 'b.md'),
+    '---\norder: 1\n---\n\nMissing title',
+  );
+  await fs.writeFile(path.join(root, 'devlog', '2026-11-13-ok.md'), DEVLOG);
+
+  const issues = await validateContent(root);
+  expect(issues).toHaveLength(2);
+  expect(issues.join('\n')).toMatch(/a\.md: missing YAML front matter/);
+  expect(issues.join('\n')).toMatch(/b\.md: title/);
+});

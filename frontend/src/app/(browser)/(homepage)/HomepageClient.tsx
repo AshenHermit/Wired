@@ -1,15 +1,12 @@
 "use client";
 
-import Image from "next/image";
 import { useTranslations } from "next-intl";
-import { useState } from "react";
 import { LoginForm } from "../_components/LoginForm";
 import { useUserStore } from "@/store/user-store";
 import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";

@@ -107,15 +107,35 @@ export function nextHeadingId(text: string, used: Set<string>): string {
  * @returns Array of heading info with auto-generated unique IDs
  */
 export function parseMarkdownHeadings(content: string): HeadingInfo[] {
-  // Match h2 (##) and h3 (###) headings
-  const headingRegex = /^(#{2,3})\s+(.+?)$/gm;
   const headings: HeadingInfo[] = [];
   const usedIds = new Set<string>();
+  let fence: string | null = null;
 
-  let match;
-  while ((match = headingRegex.exec(content)) !== null) {
+  for (const line of content.split(/\r?\n/)) {
+    const fenceMatch = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1][0];
+      if (fence === null) {
+        fence = marker;
+      } else if (fence === marker) {
+        fence = null;
+      }
+      // Lines inside a fenced block are code, never headings.
+      continue;
+    }
+
+    if (fence !== null) {
+      continue;
+    }
+
+    // Match h2 (##) and h3 (###) headings, ignoring an optional closing ###.
+    const match = /^(#{2,3})\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
+    if (!match) {
+      continue;
+    }
+
     const level = match[1].length; // 2 for ##, 3 for ###
-    const text = plainHeadingText(match[2].trim());
+    const text = plainHeadingText(match[2]);
     const id = nextHeadingId(text, usedIds);
     usedIds.add(id);
 

@@ -127,4 +127,18 @@ Content
     );
     expect(ids).toEqual(['setup', 'setup-1', 'setup-2']);
   });
+
+  test('ignores headings inside fenced code blocks', () => {
+    const md = ['## Real', '```md', '## Fake', '```', '### Also real'].join('\n');
+    expect(parseMarkdownHeadings(md).map((h) => h.id)).toEqual([
+      'real',
+      'also-real',
+    ]);
+  });
+
+  test('strips a closing hash sequence from heading text', () => {
+    expect(parseMarkdownHeadings('## Setup ##')).toEqual([
+      { id: 'setup', level: 2, text: 'Setup' },
+    ]);
+  });
 });

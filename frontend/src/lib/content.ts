@@ -86,6 +86,14 @@ function normalizeDate(fileName: string, value: string | Date): string {
     throw new Error(`${fileName}: expected a YYYY-MM-DD date, got "${value}"`);
   }
 
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
+    throw new Error(`${fileName}: invalid date "${value}"`);
+  }
+
   return value;
 }
 
@@ -141,38 +149,89 @@ async function listMarkdownFiles(dir: string): Promise<string[]> {
 
   return names
     .filter((name) => name.endsWith('.md') && !name.startsWith('_'))
-    .sort();
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
-function assertUniqueSlugs<T extends { slug: string }>(
-  entries: T[],
-  fileNames: string[],
-): void {
+type EntryParser<T> = (fileName: string, raw: string) => T;
+
+type LoadedDir<T> = {
+  entries: T[];
+  issues: string[];
+};
+
+type LoadedFile<T> =
+  | { ok: true; fileName: string; entry: T }
+  | { ok: false; issue: string };
+
+/**
+ * Reads and parses every markdown file in `dir`, collecting per-file problems
+ * instead of aborting on the first one. Duplicate slugs are reported against
+ * the file that introduced the first occurrence.
+ */
+async function loadDir<T extends { slug: string }>(
+  dir: string,
+  parse: EntryParser<T>,
+): Promise<LoadedDir<T>> {
+  const fileNames = await listMarkdownFiles(dir);
+  const results = await Promise.all<LoadedFile<T>>(
+    fileNames.map(async (fileName) => {
+      try {
+        return {
+          ok: true,
+          fileName,
+          entry: parse(
+            fileName,
+            await fs.readFile(path.join(dir, fileName), 'utf8'),
+          ),
+        };
+      } catch (error) {
+        return { ok: false, issue: errorMessage(error) };
+      }
+    }),
+  );
+
+  const entries: T[] = [];
+  const issues: string[] = [];
   const seen = new Map<string, string>();
-  entries.forEach((entry, index) => {
-    const previous = seen.get(entry.slug);
-    if (previous) {
-      throw new Error(
-        `duplicate slug: ${entry.slug} in ${previous}, ${fileNames[index]}`,
-      );
+
+  for (const result of results) {
+    if (!result.ok) {
+      issues.push(result.issue);
+      continue;
     }
-    seen.set(entry.slug, fileNames[index]);
-  });
+
+    const previous = seen.get(result.entry.slug);
+    if (previous) {
+      issues.push(
+        `duplicate slug: ${result.entry.slug} in ${previous}, ${result.fileName}`,
+      );
+      continue;
+    }
+
+    seen.set(result.entry.slug, result.fileName);
+    entries.push(result.entry);
+  }
+
+  return { entries, issues };
 }
 
 async function readDir<T extends { slug: string }>(
   dir: string,
-  parse: (fileName: string, raw: string) => T,
+  parse: EntryParser<T>,
 ): Promise<T[]> {
-  const fileNames = await listMarkdownFiles(dir);
-  const entries = await Promise.all(
-    fileNames.map(async (fileName) =>
-      parse(fileName, await fs.readFile(path.join(dir, fileName), 'utf8')),
-    ),
-  );
-
-  assertUniqueSlugs(entries, fileNames);
+  const { entries, issues } = await loadDir(dir, parse);
+  if (issues.length > 0) {
+    throw new Error(issues.join('; '));
+  }
   return entries;
+}
+
+function withoutContent<T extends { content: string }>(
+  entry: T,
+): Omit<T, 'content'> {
+  const { content, ...meta } = entry;
+  void content;
+  return meta;
 }
 
 export async function readDocsDir(dir: string): Promise<Doc[]> {
@@ -191,7 +250,7 @@ export async function readDevlogDir(dir: string): Promise<DevlogEntry[]> {
 
 export async function listDocs(): Promise<DocMeta[]> {
   const docs = await readDocsDir(path.join(CONTENT_ROOT, 'docs'));
-  return docs.map(({ slug, title, order }) => ({ slug, title, order }));
+  return docs.map(withoutContent);
 }
 
 export async function getDoc(slug: string): Promise<Doc | null> {
@@ -201,13 +260,7 @@ export async function getDoc(slug: string): Promise<Doc | null> {
 
 export async function listDevlog(): Promise<DevlogMeta[]> {
   const entries = await readDevlogDir(path.join(CONTENT_ROOT, 'devlog'));
-  return entries.map(({ slug, title, date, summary, version }) => ({
-    slug,
-    title,
-    date,
-    summary,
-    version,
-  }));
+  return entries.map(withoutContent);
 }
 
 export async function getDevlogEntry(
@@ -223,7 +276,7 @@ export async function latestDevlog(limit: number): Promise<DevlogMeta[]> {
 
 async function validateDir<T extends { slug: string }>(
   dir: string,
-  parse: (fileName: string, raw: string) => T,
+  parse: EntryParser<T>,
   label: string,
 ): Promise<string[]> {
   try {
@@ -232,37 +285,18 @@ async function validateDir<T extends { slug: string }>(
     return [`${label}: directory is missing`];
   }
 
-  const issues: string[] = [];
-  let fileNames: string[];
+  let loaded: LoadedDir<T>;
   try {
-    fileNames = await listMarkdownFiles(dir);
+    loaded = await loadDir(dir, parse);
   } catch (error) {
     return [`${label}: ${errorMessage(error)}`];
   }
 
-  if (fileNames.length === 0) {
+  if (loaded.entries.length === 0 && loaded.issues.length === 0) {
     return [`${label}: no markdown files found`];
   }
 
-  const seen = new Map<string, string>();
-  for (const fileName of fileNames) {
-    try {
-      const entry = parse(
-        fileName,
-        await fs.readFile(path.join(dir, fileName), 'utf8'),
-      );
-      const previous = seen.get(entry.slug);
-      if (previous) {
-        issues.push(`duplicate slug: ${entry.slug} in ${previous}, ${fileName}`);
-      } else {
-        seen.set(entry.slug, fileName);
-      }
-    } catch (error) {
-      issues.push(errorMessage(error));
-    }
-  }
-
-  return issues;
+  return loaded.issues;
 }
 
 export async function validateContent(

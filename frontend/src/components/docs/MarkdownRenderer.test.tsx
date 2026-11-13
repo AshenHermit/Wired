@@ -66,6 +66,16 @@ More content here.
     expect(ids).toEqual(['wiredpackageregistration', 'zhirnyy-ssylka']);
   });
 
+  test('ignores headings inside fenced code blocks', () => {
+    render(
+      <MarkdownRenderer content={'## Real\n\n```md\n## Fake\n```\n\n### Also real'} />,
+    );
+    const ids = Array.from(document.querySelectorAll('h2, h3')).map(
+      (h) => h.id,
+    );
+    expect(ids).toEqual(['real', 'also-real']);
+  });
+
   test('every docs sidebar anchor resolves to a unique rendered heading id', async () => {
     const docs = await listDocs();
     expect(docs.length).toBeGreaterThan(0);

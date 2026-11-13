@@ -39,7 +39,7 @@ export default async function DocPage({ params }: DocPageProps) {
           headings={headings}
         />
 
-        <main className="flex-1 overflow-y-auto p-8">
+        <div className="flex-1 overflow-y-auto p-8">
           <div className="w-full mx-auto">
             <Link
               href="/docs"
@@ -52,7 +52,7 @@ export default async function DocPage({ params }: DocPageProps) {
               <MarkdownRenderer content={doc.content} />
             </div>
           </div>
-        </main>
+        </div>
       </div>
     </main>
   );
