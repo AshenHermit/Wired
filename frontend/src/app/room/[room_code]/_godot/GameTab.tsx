@@ -5,7 +5,9 @@ import {
   activePackages,
   isGameConnectionErrorCode,
   packagesApplied,
+  type ActivePackage,
   type GameConnectionErrorCode,
+  type GameRoomConnection,
   type GameRoomRuntimeStatus,
   type RoomPackagesStatus,
 } from "@wired-io/shared";
@@ -567,7 +569,9 @@ interface RuntimeWaitOptions {
 }
 
 /**
- * Waits until the runtime runs the room's active packages.
+ * Waits until the runtime runs the room's active packages and returns the
+ * package state it last observed, so the caller hands the frame exactly the
+ * snapshot the readiness decision was made from instead of reading it again.
  *
  * Returns as soon as the runtime is either ready or in a state the connection
  * POST has to restart (idle, stopped, crashed). `starting` and `stopping` are
@@ -578,32 +582,124 @@ async function waitForRuntimeUntil(
   roomId: number,
   deadline: number,
   { signal, failureMessage, tracker, onProgress }: RuntimeWaitOptions,
-): Promise<void> {
+): Promise<RoomPackagesStatus> {
   for (;;) {
     const { status, packages } = await readRuntimeState(roomId);
     reportRuntimeProgress(status, packages, failureMessage, tracker, onProgress);
     if (signal.aborted) {
-      return;
+      return packages;
     }
     if (packagesFailed(packages)) {
       throw new GameTabError({ key: "Game.packagesFailed" });
     }
-    if (status.state === "running" && packagesApplied(packages)) {
-      return;
-    }
     if (
       status.state === "idle" ||
       status.state === "stopped" ||
-      status.state === "failed"
+      status.state === "failed" ||
+      (status.state === "running" && packagesApplied(packages))
     ) {
-      return;
+      return packages;
     }
     if (Date.now() >= deadline) {
       throw new GameTabError({ key: "Game.waitTimeout" });
     }
     await sleep(RUNTIME_POLL_MS);
     if (signal.aborted) {
-      return;
+      return packages;
+    }
+  }
+}
+
+/** What the frame needs once the runtime is ready to accept it. */
+type GameTicket = {
+  connection: GameRoomConnection;
+  packages: ActivePackage[];
+};
+
+/**
+ * The ticket the frame must receive, the reason it cannot be had, or the news
+ * that the effect that asked for it was torn down.
+ */
+type TicketOutcome =
+  | { kind: "ticket"; ticket: GameTicket }
+  | { kind: "failed"; message: AppMessage }
+  | { kind: "cancelled" };
+
+interface TicketRequestOptions {
+  signal: AbortSignal;
+  failureMessage: string;
+  tracker: PackageEventTracker;
+  onProgress: (message: AppMessage) => void;
+}
+
+/**
+ * Obtains one fresh single-use ticket.
+ *
+ * The POST both starts a stopped runtime and waits for its first package pass,
+ * so a retryable failure means "poll again" until `deadline`. The runtime keeps
+ * being polled while the POST is in flight: a cold start spends most of its
+ * time there, and the overlay has to keep saying so.
+ */
+async function requestGameTicket(
+  roomId: number,
+  deadline: number,
+  options: TicketRequestOptions,
+): Promise<TicketOutcome> {
+  const { signal, onProgress } = options;
+  for (;;) {
+    let packages: RoomPackagesStatus;
+    try {
+      packages = await waitForRuntimeUntil(roomId, deadline, options);
+    } catch (error) {
+      if (!(error instanceof GameTabError)) {
+        throw error;
+      }
+      return { kind: "failed", message: error.appMessage };
+    }
+    if (signal.aborted) {
+      return { kind: "cancelled" };
+    }
+
+    const poller = window.setInterval(() => {
+      void readRuntimeState(roomId)
+        .then(({ status, packages: current }) =>
+          reportRuntimeProgress(
+            status,
+            current,
+            options.failureMessage,
+            options.tracker,
+            onProgress,
+          ),
+        )
+        .catch(() => {
+          // The request itself owns the real error.
+        });
+    }, RUNTIME_POLL_MS);
+
+    try {
+      const connection = await createGameConnection(roomId);
+      if (signal.aborted) {
+        return { kind: "cancelled" };
+      }
+      return {
+        kind: "ticket",
+        ticket: { connection, packages: activePackages(packages) },
+      };
+    } catch (error) {
+      if (signal.aborted) {
+        return { kind: "cancelled" };
+      }
+      const failure = describeConnectionFailure(error);
+      if (!failure.retryable) {
+        return { kind: "failed", message: failure.message };
+      }
+      if (Date.now() >= deadline) {
+        return { kind: "failed", message: { key: "Game.waitTimeout" } };
+      }
+      onProgress(failure.message);
+      await sleep(failure.retryAfterMs);
+    } finally {
+      window.clearInterval(poller);
     }
   }
 }
@@ -711,129 +807,79 @@ export function GameTab({ room }: { room: Room }) {
   }, [attempt]);
 
   // One ticket per ready frame. `ticketRequest` is cleared by every action that
-  // invalidates the pending request, which cancels this effect. A cold runtime
-  // start is not an error: poll its state and retry until it is ready, then
-  // hand the fresh ticket to the frame.
+  // invalidates the pending request, which cancels this effect. Obtaining the
+  // ticket (including every retry) lives in `requestGameTicket`; this effect
+  // only hands the winner to the frame.
   React.useEffect(() => {
     const request = state.ticketRequest;
     if (request === null) {
       return;
     }
-    let cancelled = false;
     const abort = new AbortController();
 
-    const waitMessage = (message: AppMessage) => {
-      if (!cancelled) {
-        dispatch({ type: "connection-wait", attempt: request, message });
-      }
-    };
-
-    const describeRuntime = (
-      status: GameRoomRuntimeStatus,
-      packages: RoomPackagesStatus,
-    ) =>
-      reportRuntimeProgress(
-        status,
-        packages,
-        failureMessageRef.current,
-        packageTrackerRef.current,
-        waitMessage,
-      );
-
-    const waitForRuntime = (deadline: number) =>
-      waitForRuntimeUntil(room.id, deadline, {
-        signal: abort.signal,
-        failureMessage: failureMessageRef.current,
-        tracker: packageTrackerRef.current,
-        onProgress: waitMessage,
-      });
-
     void (async () => {
-      const deadline = Date.now() + CONNECTION_WAIT_MS;
+      let outcome: TicketOutcome;
       try {
-        for (;;) {
-          await waitForRuntime(deadline);
-          if (cancelled) return;
-
-          // The POST is what starts a stopped runtime and waits for its first
-          // package pass. Keep the overlay informative while it is in flight.
-          const poller = window.setInterval(() => {
-            void readRuntimeState(room.id)
-              .then(({ status, packages }) => describeRuntime(status, packages))
-              .catch(() => {
-                // The request itself owns the real error.
-              });
-          }, RUNTIME_POLL_MS);
-
-          try {
-            const packageStatus = await getRoomPackages(room.id);
-            const packages = activePackages(packageStatus);
-            const connection = await createGameConnection(room.id);
-            if (cancelled) {
-              return;
-            }
-            const frame = iframeRef.current;
-            if (!frame?.contentWindow) {
-              dispatch({
-                type: "ticket-failed",
-                message: { key: "Game.frameMissing" },
-              });
-              return;
-            }
-            dispatch({ type: "configured-sent", attempt: request });
-            postGameConfigure(frame, {
-              endpoint: connection.endpoint,
-              ticket: connection.ticket,
-              room: connection.roomId,
-              // The Web build cannot guess the backend: it is proxied under the
-              // same prefix that serves the Game tab.
-              apiBase: `${window.location.origin}${API_PREFIX}`,
-              apiToken: readAccessToken() ?? "",
-              packages,
-            });
-            return;
-          } catch (error) {
-            if (cancelled) {
-              return;
-            }
-            const failure = describeConnectionFailure(error);
-            if (!failure.retryable || Date.now() >= deadline) {
-              dispatch({
-                type: "ticket-failed",
-                message: failure.retryable
-                  ? { key: "Game.waitTimeout" }
-                  : failure.message,
-              });
-              return;
-            }
-            waitMessage(failure.message);
-            await sleep(failure.retryAfterMs);
-          } finally {
-            window.clearInterval(poller);
-          }
-          if (cancelled) {
-            return;
-          }
-        }
+        outcome = await requestGameTicket(
+          room.id,
+          Date.now() + CONNECTION_WAIT_MS,
+          {
+            signal: abort.signal,
+            failureMessage: failureMessageRef.current,
+            tracker: packageTrackerRef.current,
+            onProgress: (message) => {
+              if (!abort.signal.aborted) {
+                dispatch({
+                  type: "connection-wait",
+                  attempt: request,
+                  message,
+                });
+              }
+            },
+          },
+        );
       } catch (error) {
-        if (cancelled) {
+        if (abort.signal.aborted) {
           return;
         }
         console.error(error);
         dispatch({
           type: "ticket-failed",
-          message:
-            error instanceof GameTabError
-              ? error.appMessage
-              : { key: "Game.ticketFailed" },
+          message: { key: "Game.ticketFailed" },
         });
+        return;
       }
+      if (outcome.kind === "cancelled") {
+        return;
+      }
+      if (outcome.kind === "failed") {
+        dispatch({ type: "ticket-failed", message: outcome.message });
+        return;
+      }
+
+      const frame = iframeRef.current;
+      if (!frame?.contentWindow) {
+        dispatch({
+          type: "ticket-failed",
+          message: { key: "Game.frameMissing" },
+        });
+        return;
+      }
+      const { connection, packages } = outcome.ticket;
+      dispatch({ type: "configured-sent", attempt: request });
+      postGameConfigure(frame, {
+        endpoint: connection.endpoint,
+        ticket: connection.ticket,
+        room: connection.roomId,
+        // The Web build cannot guess the backend: it is proxied under the
+        // same prefix that serves the Game tab.
+        apiBase: `${window.location.origin}${API_PREFIX}`,
+        apiToken: readAccessToken() ?? "",
+        packages,
+      });
     })();
 
-    return () => {
-      cancelled = true;
-      abort.abort();
-    };
+    return () => abort.abort();
   }, [room.id, state.ticketRequest]);
 
   // A frame that never reports readiness is an explicit error, not a spinner

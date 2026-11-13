@@ -54,6 +54,7 @@ function apiError(status: number, code: string) {
 
 function packageStatus(
   runtimeState: "pending" | "applied" | "failed",
+  revision = 2,
 ): RoomPackagesStatus {
   return {
     roomId: 8,
@@ -63,13 +64,13 @@ function packageStatus(
         slug: "platformer",
         name: "Platformer",
         enabled: true,
-        revision: 2,
+        revision,
         sizeBytes: null,
         publishedAt: "2026-01-01T00:00:00.000Z",
         state: "published",
         runtime: {
           state: runtimeState,
-          revision: 2,
+          revision,
           error: null,
           updatedAt: "2026-01-01T00:00:00.000Z",
         },
@@ -220,6 +221,36 @@ describe("GameTab bridge", () => {
       expect(container.textContent).toContain("Игроков: 1");
     });
     expect(container.querySelector("iframe")).not.toBeNull();
+  });
+
+  it("hands the frame the package snapshot the readiness check approved", async () => {
+    const request = deferred<typeof connection>();
+    vi.mocked(createGameConnection).mockReturnValue(request.promise);
+    // A newer revision shows up after the readiness check. The frame must get the
+    // set that check approved, not one the runtime never applied.
+    vi.mocked(getRoomPackages)
+      .mockResolvedValueOnce(packageStatus("applied", 2))
+      .mockResolvedValue(packageStatus("applied", 7));
+    const { iframe } = await mountGame();
+    const postMessage = vi.spyOn(iframe.contentWindow!, "postMessage");
+
+    send(iframe, { source: "wired-game", type: "wired:game-ready", payload: {} });
+    await waitFor(() => {
+      expect(createGameConnection).toHaveBeenCalledTimes(1);
+    });
+
+    request.resolve(connection);
+    await waitFor(() => {
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "wired:configure",
+          payload: expect.objectContaining({
+            packages: [{ packageId: 20, revision: 2 }],
+          }),
+        }),
+        window.location.origin,
+      );
+    });
   });
 
   it("retranslates the current status without replacing the frame", async () => {
