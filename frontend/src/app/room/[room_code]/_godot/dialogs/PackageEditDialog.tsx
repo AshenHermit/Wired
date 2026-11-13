@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/animate-ui/components/radix/dialog";
-import { slugHintClass, slugHintKey } from "@/components/packages/slug";
+import { SlugField } from "@/components/packages/slug-field";
 import { useSlugAvailability } from "@/components/packages/use-slug-availability";
 import { TagInput } from "@/components/packages/TagInput";
 import { ImageUploadField } from "@/components/media/ImageUploadField";
@@ -73,7 +73,6 @@ export function PackageEditDialog({
   const t = useTranslations("Packages");
   const settingsT = useTranslations("RoomAccess");
   const common = useTranslations("Common");
-  const slugT = useTranslations();
   const format = useAppMessage();
   const [version, setVersion] = React.useState("");
   const [slug, setSlug] = React.useState("");
@@ -176,10 +175,6 @@ export function PackageEditDialog({
     () => contributors.filter((user) => accessUserIds.includes(user.id)),
     [contributors, accessUserIds],
   );
-
-  const handleSlugChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setSlug(event.target.value.toLowerCase());
-  };
 
   const canSubmit =
     detailsState === "ready" &&
@@ -301,35 +296,16 @@ export function PackageEditDialog({
                 placeholder={t("editDialog.versionPlaceholder")}
               />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="package-edit-slug">Slug</Label>
-              <Input
-                id="package-edit-slug"
-                value={slug}
-                onChange={handleSlugChange}
-                disabled={submitting}
-                placeholder={t("editDialog.slugPlaceholder")}
-                autoComplete="off"
-                spellCheck={false}
-                autoCapitalize="none"
-              />
-              {slugHintKey(slugState) && (
-                <p className={`text-xs ${slugHintClass(slugState)}`}>
-                  {slugT(slugHintKey(slugState)!)}
-                </p>
-              )}
-              {slugState === "error" && (
-                <Button
-                  type="button"
-                  variant="link"
-                  size="sm"
-                  className="h-auto px-0 text-xs"
-                  onClick={slugAvailability.retry}
-                >
-                  {t("editDialog.checkAgain")}
-                </Button>
-              )}
-            </div>
+            <SlugField
+              id="package-edit-slug"
+              label="Slug"
+              value={slug}
+              onChange={setSlug}
+              disabled={submitting}
+              placeholder={t("editDialog.slugPlaceholder")}
+              availability={slugAvailability}
+              retryLabel={t("editDialog.checkAgain")}
+            />
             <div className="space-y-1.5">
               <Label htmlFor="package-edit-description">
                 {t("editDialog.descriptionLabel")}
