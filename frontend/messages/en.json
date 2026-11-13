@@ -417,5 +417,14 @@
   "Docs": {
     "hubTitle": "Documentation",
     "back": "Back to home"
+  },
+  "Devlog": {
+    "title": "Dev log",
+    "back": "All updates",
+    "empty": "No entries yet",
+    "versionLabel": "Version",
+    "prev": "Previous entry",
+    "next": "Next entry",
+    "notFound": "Entry not found"
   }
 }
