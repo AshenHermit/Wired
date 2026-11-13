@@ -413,5 +413,9 @@
     "bridgeMissing": "The editor bridge did not appear",
     "bridgeUnavailable": "The editor bridge is unavailable",
     "packagesUnavailable": "Packages are unavailable"
+  },
+  "Docs": {
+    "hubTitle": "Documentation",
+    "back": "Back to home"
   }
 }

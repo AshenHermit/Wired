@@ -413,5 +413,9 @@
     "bridgeMissing": "Мост редактора не появился",
     "bridgeUnavailable": "Мост редактора недоступен",
     "packagesUnavailable": "Пакеты недоступны"
+  },
+  "Docs": {
+    "hubTitle": "Документация",
+    "back": "На главную"
   }
 }
