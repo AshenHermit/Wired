@@ -76,6 +76,7 @@ func _run() -> void:
 	_manager.package_failed.connect(_on_package_failed)
 	_manager.package_progress.connect(_on_package_progress)
 	_test_storage_root()
+	_test_artifact_marker_verification()
 	await _test_recursive_sync()
 	await _test_progress_events()
 	await _test_same_revision_refresh()
@@ -112,6 +113,7 @@ func _test_interface() -> void:
 		"scene_dependencies",
 		"instantiate_scene",
 		"_changed_files",
+		"storage_root",
 	]:
 		_check(manager.has_method(method), "PackagesManager.%s() is missing" % method)
 	_check(
@@ -122,6 +124,9 @@ func _test_interface() -> void:
 		manager.has_signal("package_progress"),
 		"PackagesManager.package_progress signal is missing"
 	)
+	var store := ArtifactStore.new(Callable(manager, "packages_root"))
+	for method: String in ["write_marker", "reusable_artifact"]:
+		_check(store.has_method(method), "ArtifactStore.%s() is missing" % method)
 	manager.free()
 
 
@@ -1202,6 +1207,144 @@ func _test_asset_derivation_failure() -> void:
 		_applied_for(ROOT_ID).is_empty(),
 		"a failed derivation must not emit package_applied"
 	)
+
+
+## A cached artifact is only reused when its marker names this exact revision and
+## key and every manifest file still has the size it was written with. The marker
+## may also record the on-disk size of a file whose bytes were rewritten after
+## publishing (a relocated `user://` prefix), and that recorded size is verified
+## against the disk instead of trusted.
+func _test_artifact_marker_verification() -> void:
+	_check(
+		AssetDeriver.derived_files(["art/pic.png"]) == PackedStringArray(
+			["art/pic.png.image.res", "art/pic.png.import"]
+		),
+		"a raw texture must require its derived resource and sidecar",
+	)
+	_check(
+		AssetDeriver.derived_files(
+			["art/pic.png", "art/pic.png.image.res"]
+		).is_empty(),
+		"a declared derived file must not be required twice",
+	)
+	var store := ArtifactStore.new(Callable(_manager, "packages_root"))
+	var slug := "probe"
+	var key := "b".repeat(64)
+	var dir := store.revision_dir(slug, 1, key)
+	_check(not dir.is_empty(), "the probe directory must have a path")
+	DirAccess.make_dir_recursive_absolute(dir)
+	# `FileAccess.open` never creates parent directories.
+	DirAccess.make_dir_recursive_absolute(dir.path_join("scripts"))
+	var body := "probe"
+	var handle := FileAccess.open(dir.path_join("scripts/probe.gd"), FileAccess.WRITE)
+	handle.store_string(body)
+	handle.close()
+	var files: Array = [
+		{"filepath": "scripts/probe.gd", "size": body.length(), "sha256": ""},
+	]
+	_check(
+		not bool(
+			store.reusable_artifact(1, slug, 1, key, files).get("reusable", true)
+		),
+		"an artifact without a marker must not be reusable",
+	)
+	_check(
+		store.write_marker(dir, 1, slug, 1, key, body.length(), files.size()).is_empty(),
+		"the marker must be written",
+	)
+	var hit := store.reusable_artifact(1, slug, 1, key, files)
+	_check(bool(hit.get("reusable", false)), "a complete artifact must be reusable")
+	_check(
+		bool(hit.get("derive_current", false)),
+		"the marker must carry the current derive version",
+	)
+	_check(
+		(hit.get("missing_derived", PackedStringArray()) as PackedStringArray).is_empty(),
+		"an artifact without raw assets derives nothing",
+	)
+	# The manifest says 999 bytes because the file is expected to be relocated;
+	# the marker's stored size is what a later run has to verify.
+	var relocated: Array = [
+		{"filepath": "scripts/probe.gd", "size": 999, "sha256": ""},
+	]
+	_check(
+		store.write_marker(
+			dir,
+			1,
+			slug,
+			1,
+			key,
+			body.length(),
+			files.size(),
+			{"scripts/probe.gd": body.length()},
+		).is_empty(),
+		"the marker with stored sizes must be written",
+	)
+	var relocated_hit := store.reusable_artifact(1, slug, 1, key, relocated)
+	_check(
+		bool(relocated_hit.get("reusable", false)),
+		"a recorded stored size must win over the manifest size",
+	)
+	var stored: Dictionary = relocated_hit.get("stored_sizes", {})
+	_check(
+		int(stored.get("scripts/probe.gd", 0)) == body.length(),
+		"a hit must report the stored sizes, so a rewrite keeps them",
+	)
+	_check(
+		store.write_marker(
+			dir,
+			1,
+			slug,
+			1,
+			key,
+			body.length(),
+			files.size(),
+			{"scripts/probe.gd": body.length() + 1},
+		).is_empty(),
+		"the marker with a wrong stored size must be written",
+	)
+	_check(
+		not bool(
+			store.reusable_artifact(1, slug, 1, key, relocated).get("reusable", true)
+		),
+		"a recorded stored size must still be checked against the disk",
+	)
+	_check(
+		store.write_marker(dir, 1, slug, 1, key, body.length(), files.size()).is_empty(),
+		"the plain marker must be restored",
+	)
+	var marker: Variant = JSON.parse_string(
+		FileAccess.get_file_as_string(dir.path_join(ArtifactStore.MARKER_FILE))
+	)
+	_check(
+		typeof(marker) == TYPE_DICTIONARY
+		and not (marker as Dictionary).has("storedSizes"),
+		"a marker without stored sizes must not carry the key",
+	)
+	_check(
+		not bool(
+			store.reusable_artifact(1, slug, 2, key, files).get("reusable", true)
+		),
+		"a marker of another revision must not match",
+	)
+	_check(
+		not bool(
+			store.reusable_artifact(
+				1, slug, 1, "c".repeat(64), files
+			).get("reusable", true)
+		),
+		"a marker of another artifact key must not match",
+	)
+	handle = FileAccess.open(dir.path_join("scripts/probe.gd"), FileAccess.WRITE)
+	handle.store_string("probe-too-long")
+	handle.close()
+	_check(
+		not bool(
+			store.reusable_artifact(1, slug, 1, key, files).get("reusable", true)
+		),
+		"a file of the wrong size must not be reused",
+	)
+	store.remove_tree(dir)
 
 
 # --- fixture transport ----------------------------------------------------

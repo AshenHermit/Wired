@@ -21,6 +21,10 @@ const AUDIO_STREAM_TYPES := {
 	"ogg": "AudioStreamOggVorbis",
 	"mp3": "AudioStreamMP3",
 }
+## Bumped on any change of the derivation rules (extensions, suffixes, sidecar
+## contents). The marker of a cached artifact stores it, so an older cache is
+## re-derived instead of serving files the new rules no longer describe.
+const VERSION := 1
 
 ## Extension -> `{kind, suffix, type}`. `kind` selects the derivation helper,
 ## `suffix` names the derived file next to the raw one and `type` is the
@@ -100,6 +104,29 @@ static func derivations() -> Dictionary:
 		}
 	_derivations = table
 	return _derivations
+
+
+## Names derived next to the raw files of `filepaths`: `<file><suffix>` and
+## `<file>.import`, skipping any name the artifact already declares (the skip
+## rule of `derive()`). The `.import` remap is per raw file, so a declared
+## derived resource skips the pair.
+static func derived_files(filepaths: Array) -> PackedStringArray:
+	var table := derivations()
+	var declared := {}
+	for filepath: Variant in filepaths:
+		declared[str(filepath)] = true
+	var names := PackedStringArray()
+	for filepath: Variant in filepaths:
+		var path := str(filepath)
+		var derivation: Dictionary = table.get(path.get_extension().to_lower(), {})
+		if derivation.is_empty():
+			continue
+		var suffix := str(derivation.get("suffix", ""))
+		if declared.has(path + suffix) or declared.has(path + ".import"):
+			continue
+		names.append(path + suffix)
+		names.append(path + ".import")
+	return names
 
 
 ## Saves the texture of a raw image file. Returns false when the bytes are not

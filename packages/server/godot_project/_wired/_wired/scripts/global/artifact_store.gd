@@ -30,6 +30,10 @@ class_name ArtifactStore
 
 const STAGING_DIR := ".staging"
 const PREVIOUS_DIR := ".previous"
+## Written into an artifact directory after everything else, so a directory that
+## carries it is a completed apply and not a partially written one.
+const MARKER_FILE := ".wired-artifact.json"
+const MARKER_FORMAT_VERSION := 1
 ## The backend slug contract. It becomes a path segment, so it is validated
 ## before it is joined to the packages root.
 const SLUG_PATTERN := "^[a-z0-9_]{1,64}$"
@@ -156,6 +160,134 @@ func swap(slug: String, revision: int, artifact_key: String) -> String:
 	return ""
 
 
+## Records the identity and the on-disk shape of a completed artifact. Written
+## after every other file, so its presence is what tells a later run that the
+## directory is whole.
+##
+## `stored_sizes` maps a manifest filepath to the size the file actually has on
+## disk, for the bytes rewritten after the manifest was published (a relocated
+## `user://` prefix). An empty map leaves the marker byte-identical to one
+## written before that map existed. Returns an empty string on success.
+func write_marker(
+	dir: String,
+	package_id: int,
+	slug: String,
+	revision: int,
+	artifact_key: String,
+	total_size: int,
+	file_count: int,
+	stored_sizes: Dictionary = {},
+) -> String:
+	if dir.is_empty():
+		return "invalid marker directory"
+	var marker := {
+		"formatVersion": MARKER_FORMAT_VERSION,
+		"packageId": package_id,
+		"slug": slug,
+		"revision": revision,
+		"artifactKey": artifact_key,
+		"totalSize": total_size,
+		"fileCount": file_count,
+		"deriveVersion": AssetDeriver.VERSION,
+	}
+	if not stored_sizes.is_empty():
+		marker["storedSizes"] = stored_sizes
+	var path := dir.path_join(MARKER_FILE)
+	var handle := FileAccess.open(path, FileAccess.WRITE)
+	if handle == null:
+		return "cannot write %s: %s" % [path, error_string(FileAccess.get_open_error())]
+	handle.store_string(JSON.stringify(marker))
+	var write_error := handle.get_error()
+	handle.close()
+	if write_error != OK:
+		return "cannot write %s: %s" % [path, error_string(write_error)]
+	return ""
+
+
+## Whether `dir` already holds exactly what `files` describes: a marker of this
+## package, slug, revision and artifact key, and every file at the size it was
+## written with.
+##
+## A hit still reports what the marker says about derivation, so a caller can
+## finish a stale artifact without downloading it again. Every result carries
+## `dir` (a miss has to be replaced by an ordinary `swap`) and `stored_sizes`
+## (so a marker rewrite keeps the relocated sizes).
+func reusable_artifact(
+	package_id: int, slug: String, revision: int, artifact_key: String, files: Array
+) -> Dictionary:
+	var result := {
+		"reusable": false,
+		"dir": "",
+		"derive_current": false,
+		"missing_derived": PackedStringArray(),
+		"stored_sizes": {},
+		"error": "",
+	}
+	if artifact_key.is_empty():
+		result["error"] = "no_key"
+		return result
+	var dir := revision_dir(slug, revision, artifact_key)
+	result["dir"] = dir
+	if dir.is_empty():
+		result["error"] = "invalid_slug"
+		return result
+	if not DirAccess.dir_exists_absolute(dir):
+		result["error"] = "missing"
+		return result
+	var marker_path := dir.path_join(MARKER_FILE)
+	if not FileAccess.file_exists(marker_path):
+		result["error"] = "marker_missing"
+		return result
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(marker_path))
+	if typeof(parsed) != TYPE_DICTIONARY:
+		result["error"] = "marker_missing"
+		return result
+	var marker: Dictionary = parsed
+	if int(marker.get("formatVersion", 0)) != MARKER_FORMAT_VERSION:
+		result["error"] = "marker_format"
+		return result
+	if (
+		int(marker.get("packageId", 0)) != package_id
+		or str(marker.get("slug", "")) != slug
+		or int(marker.get("revision", 0)) != revision
+		or str(marker.get("artifactKey", "")) != artifact_key
+	):
+		result["error"] = "marker_mismatch"
+		return result
+	# A malformed map is ignored: the manifest sizes then decide, and a marker
+	# whose sizes cannot be read must not make an artifact reusable.
+	var raw_sizes: Variant = marker.get("storedSizes", {})
+	var stored_sizes: Dictionary = (
+		raw_sizes if typeof(raw_sizes) == TYPE_DICTIONARY else {}
+	)
+	result["stored_sizes"] = stored_sizes
+	var filepaths := PackedStringArray()
+	for file: Dictionary in files:
+		var filepath := str(file.get("filepath", ""))
+		if filepath.is_empty():
+			result["error"] = "file_size"
+			return result
+		filepaths.append(filepath)
+		var expected_size := int(
+			stored_sizes.get(filepath, int(file.get("size", -1)))
+		)
+		if _file_size(dir.path_join(filepath)) != expected_size:
+			result["error"] = "file_size"
+			return result
+	var missing := PackedStringArray()
+	for name: String in AssetDeriver.derived_files(filepaths):
+		if not FileAccess.file_exists(dir.path_join(name)):
+			missing.append(name)
+	return {
+		"reusable": true,
+		"dir": dir,
+		"derive_current": int(marker.get("deriveVersion", 0)) == AssetDeriver.VERSION,
+		"missing_derived": missing,
+		"stored_sizes": stored_sizes,
+		"error": "",
+	}
+
+
 ## Keeps the applied artifact and the newest other revision on disk. Older
 ## artifacts of the same revision are removed: their bytes belong to a closure
 ## that is no longer pinned. Deriving the previous revision from the directory
@@ -226,3 +358,13 @@ func remove_tree(path: String) -> void:
 		else:
 			DirAccess.remove_absolute(child)
 	DirAccess.remove_absolute(path)
+
+
+## Size of a file on disk, or -1 when it cannot be opened.
+static func _file_size(path: String) -> int:
+	var handle := FileAccess.open(path, FileAccess.READ)
+	if handle == null:
+		return -1
+	var size := handle.get_length()
+	handle.close()
+	return size
