@@ -37,6 +37,7 @@ const CACHE_ID := 100
 const CACHE_LIB_ID := 101
 const DERIVE_ID := 110
 const FLUSH_ID := 120
+const FLUSH_CACHED_ID := 121
 ## 1×1 PNG, so a cached revision really has a raw asset with derived files.
 const TINY_PNG := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
@@ -828,8 +829,10 @@ func _test_cache_reuse_after_restart() -> void:
 
 func _test_cache_rejects_corrupt_artifact() -> void:
 	var path := _manager.runtime_path(CACHE_ID, 1, "scripts/cache.gd")
+	# Same length as the published body: only the recorded hash can tell that the
+	# bytes changed, a size check would reuse the corruption.
 	var handle := FileAccess.open(path, FileAccess.WRITE)
-	handle.store_string("bad")
+	handle.store_string("cache-v2")
 	handle.close()
 	var restarted := _restarted_manager()
 	_requests.clear()
@@ -946,6 +949,22 @@ func _test_flush_storage_clears_dirty_state() -> void:
 		"purging an applied package must mark the storage dirty",
 	)
 	_manager.flush_storage()
+	_check(not _manager._storage_dirty, "a purge must be flushed like an apply")
+	# Applying an unchanged artifact must not write anything: the marker, the
+	# slug index and the pruning window are already current, so a reload of an
+	# untouched package costs no IndexedDB sync at all.
+	_publish(FLUSH_CACHED_ID, 1, {"scripts/flush_cached.gd": "v1"})
+	var applied: Dictionary = await _manager.sync_package(FLUSH_CACHED_ID, 1)
+	_check(bool(applied.get("ok", false)), "the cached flush fixture must apply")
+	_manager.flush_storage()
+	var restarted := _restarted_manager()
+	var cached: Dictionary = await restarted.sync_package(FLUSH_CACHED_ID, 1)
+	_check(bool(cached.get("cached", false)), "the flush fixture must hit the cache")
+	_check(
+		not restarted._storage_dirty,
+		"a pure cache hit must not dirty the browser file system",
+	)
+	restarted.free()
 
 
 ## A package with no slug yet must not resolve, enumerate or delete a path: an
@@ -1415,6 +1434,7 @@ func _test_artifact_marker_verification() -> void:
 	var store := ArtifactStore.new(Callable(_manager, "packages_root"))
 	var slug := "probe"
 	var key := "b".repeat(64)
+	var identity := ArtifactStore.ArtifactIdentity.new(1, slug, 1, key)
 	var dir := store.revision_dir(slug, 1, key)
 	_check(not dir.is_empty(), "the probe directory must have a path")
 	DirAccess.make_dir_recursive_absolute(dir)
@@ -1427,25 +1447,32 @@ func _test_artifact_marker_verification() -> void:
 	var files: Array = [
 		{"filepath": "scripts/probe.gd", "size": body.length(), "sha256": ""},
 	]
+	var hashes := {"scripts/probe.gd": FileAccess.get_sha256(dir.path_join("scripts/probe.gd"))}
 	_check(
 		not bool(
-			store.reusable_artifact(1, slug, 1, key, files).get("reusable", true)
+			store.reusable_artifact(identity, files, AssetDeriver.VERSION).get(
+				"reusable", true
+			)
 		),
 		"an artifact without a marker must not be reusable",
 	)
 	_check(
-		store.write_marker(dir, 1, slug, 1, key, body.length(), files.size()).is_empty(),
+		store.write_marker(dir, identity, AssetDeriver.VERSION, hashes).is_empty(),
 		"the marker must be written",
 	)
-	var hit := store.reusable_artifact(1, slug, 1, key, files)
+	var hit := store.reusable_artifact(identity, files, AssetDeriver.VERSION)
 	_check(bool(hit.get("reusable", false)), "a complete artifact must be reusable")
 	_check(
 		bool(hit.get("derive_current", false)),
 		"the marker must carry the current derive version",
 	)
+	var stale_rules := store.reusable_artifact(
+		identity, files, AssetDeriver.VERSION + 1
+	)
 	_check(
-		(hit.get("missing_derived", PackedStringArray()) as PackedStringArray).is_empty(),
-		"an artifact without raw assets derives nothing",
+		bool(stale_rules.get("reusable", false))
+		and not bool(stale_rules.get("derive_current", true)),
+		"a newer derive version must reuse the bytes but ask for a repair",
 	)
 	# The manifest says 999 bytes because the file is expected to be relocated;
 	# the marker's stored size is what a later run has to verify.
@@ -1455,17 +1482,16 @@ func _test_artifact_marker_verification() -> void:
 	_check(
 		store.write_marker(
 			dir,
-			1,
-			slug,
-			1,
-			key,
-			body.length(),
-			files.size(),
+			identity,
+			AssetDeriver.VERSION,
+			hashes,
 			{"scripts/probe.gd": body.length()},
 		).is_empty(),
 		"the marker with stored sizes must be written",
 	)
-	var relocated_hit := store.reusable_artifact(1, slug, 1, key, relocated)
+	var relocated_hit := store.reusable_artifact(
+		identity, relocated, AssetDeriver.VERSION
+	)
 	_check(
 		bool(relocated_hit.get("reusable", false)),
 		"a recorded stored size must win over the manifest size",
@@ -1478,24 +1504,23 @@ func _test_artifact_marker_verification() -> void:
 	_check(
 		store.write_marker(
 			dir,
-			1,
-			slug,
-			1,
-			key,
-			body.length(),
-			files.size(),
+			identity,
+			AssetDeriver.VERSION,
+			hashes,
 			{"scripts/probe.gd": body.length() + 1},
 		).is_empty(),
 		"the marker with a wrong stored size must be written",
 	)
 	_check(
 		not bool(
-			store.reusable_artifact(1, slug, 1, key, relocated).get("reusable", true)
+			store.reusable_artifact(identity, relocated, AssetDeriver.VERSION).get(
+				"reusable", true
+			)
 		),
 		"a recorded stored size must still be checked against the disk",
 	)
 	_check(
-		store.write_marker(dir, 1, slug, 1, key, body.length(), files.size()).is_empty(),
+		store.write_marker(dir, identity, AssetDeriver.VERSION, hashes).is_empty(),
 		"the plain marker must be restored",
 	)
 	var marker: Variant = JSON.parse_string(
@@ -1508,14 +1533,20 @@ func _test_artifact_marker_verification() -> void:
 	)
 	_check(
 		not bool(
-			store.reusable_artifact(1, slug, 2, key, files).get("reusable", true)
+			store.reusable_artifact(
+				ArtifactStore.ArtifactIdentity.new(1, slug, 2, key),
+				files,
+				AssetDeriver.VERSION,
+			).get("reusable", true)
 		),
 		"a marker of another revision must not match",
 	)
 	_check(
 		not bool(
 			store.reusable_artifact(
-				1, slug, 1, "c".repeat(64), files
+				ArtifactStore.ArtifactIdentity.new(1, slug, 1, "c".repeat(64)),
+				files,
+				AssetDeriver.VERSION,
 			).get("reusable", true)
 		),
 		"a marker of another artifact key must not match",
@@ -1525,9 +1556,24 @@ func _test_artifact_marker_verification() -> void:
 	handle.close()
 	_check(
 		not bool(
-			store.reusable_artifact(1, slug, 1, key, files).get("reusable", true)
+			store.reusable_artifact(identity, files, AssetDeriver.VERSION).get(
+				"reusable", true
+			)
 		),
 		"a file of the wrong size must not be reused",
+	)
+	# A file that kept its length but changed content must be caught by the
+	# recorded hash: a size check alone would cache the corruption forever.
+	handle = FileAccess.open(dir.path_join("scripts/probe.gd"), FileAccess.WRITE)
+	handle.store_string("pr0be")
+	handle.close()
+	_check(
+		not bool(
+			store.reusable_artifact(identity, files, AssetDeriver.VERSION).get(
+				"reusable", true
+			)
+		),
+		"a file written back with the same size must be rejected",
 	)
 	store.remove_tree(dir)
 
@@ -1887,7 +1933,7 @@ func _artifact_dirs(package_id: int) -> PackedStringArray:
 	if dir == null:
 		return names
 	for name: String in dir.get_directories():
-		if _manager._revision_of_dir_name(name) > 0:
+		if ArtifactStore.revision_of_dir_name(name) > 0:
 			names.append(name)
 	names.sort()
 	return names

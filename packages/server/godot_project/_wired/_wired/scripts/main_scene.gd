@@ -940,6 +940,10 @@ func _pump_package_ops() -> void:
 		"unload":
 			_apply_package_removal(package_id, bool(op.get("purge", false)))
 	_package_ops_busy = false
+	# The queue is settled, so this is the end of the batch: one browser
+	# file-system sync covers every apply and every purge it performed.
+	if _packages != null and _package_ops_queue.is_empty():
+		_packages.flush_storage()
 	# The mutex is free again: when nothing else is queued, this may have been
 	# the last package of the startup chain and the parked records can spawn.
 	_restore_dynamic_if_ready()
