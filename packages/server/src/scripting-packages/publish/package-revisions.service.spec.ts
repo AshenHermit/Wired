@@ -196,6 +196,18 @@ describe('PackageRevisionsService', () => {
       );
     });
 
+    it('reports files the package git repository does not have yet', async () => {
+      repository.maximum.mockResolvedValue(4);
+      storage.missingFiles.mockResolvedValueOnce(['b.txt']);
+
+      const revision = await service.createDraft(7, {
+        files: [file('a.txt', 'a'), file('b.txt', 'b')],
+      });
+
+      expect(storage.missingFiles).toHaveBeenCalledWith(7, revision.files);
+      expect(revision.missing).toEqual(['b.txt']);
+    });
+
     it('supersedes unfinished drafts of the same package', async () => {
       repository.find.mockResolvedValue([draftRow(1, []), draftRow(2, [])]);
 
@@ -286,6 +298,30 @@ describe('PackageRevisionsService', () => {
       expect(published.status).toBe('published');
       expect(published.publishedAt).toEqual(expect.any(String));
       expect(dispatcher.revisionPublished).toHaveBeenCalledWith(7, 3);
+    });
+
+    it('stores the commit sha returned by the storage layer', async () => {
+      const declared = [file('a.txt', 'a')];
+      const row = draftRow(3, declared);
+      repository.findOne.mockResolvedValue(row);
+      repository.save.mockImplementation(async (value) => value);
+      storage.publishRevision.mockImplementationOnce(
+        async (
+          _id: number,
+          _rev: number,
+          _files: unknown,
+          commit: (sha: string | null) => Promise<void>,
+        ) => commit('abc123'),
+      );
+
+      await service.publish(7, 3);
+
+      expect(repository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'published',
+          commitSha: 'abc123',
+        }),
+      );
     });
 
     it('records the dependency revisions resolved at publish time', async () => {
