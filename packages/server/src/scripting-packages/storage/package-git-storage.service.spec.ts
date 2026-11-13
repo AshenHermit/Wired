@@ -250,4 +250,67 @@ describe('PackageGitStorageService', () => {
       await repo.readRef(1, 'refs/pending/publish/2'),
     ).toBeTruthy();
   });
+
+  const rewrittenScene = 'res://packages/old/main.tscn';
+
+  const commitScene = (revision: number): Promise<string> =>
+    commit(1, revision, [{ path: 'main.tscn', content: rewrittenScene }]);
+
+  const slugTransform = (_filepath: string, data: Buffer): Buffer =>
+    Buffer.from(
+      data.toString('utf8').split('packages/old/').join('packages/new/'),
+    );
+
+  it('rewrites published revisions as new commits and moves tags', async () => {
+    const tag1 = await commitScene(1);
+    const tag2 = await commitScene(2);
+
+    const rewrite = await storage.beginRewrite(
+      [
+        { packageId: 1, revision: 1, kind: 'published', commitSha: tag1 },
+        { packageId: 1, revision: 2, kind: 'published', commitSha: tag2 },
+      ],
+      slugTransform,
+    );
+
+    expect(
+      rewrite.results.map((result) => result.commitSha),
+    ).toEqual([
+      expect.stringMatching(/^[0-9a-f]{64}$/),
+      expect.stringMatching(/^[0-9a-f]{64}$/),
+    ]);
+    expect(rewrite.results[0].commitSha).not.toBe(tag1);
+    expect(rewrite.results[1].commitSha).not.toBe(tag2);
+
+    await rewrite.commit();
+
+    expect(await repo.readRef(1, 'refs/tags/revisions/1')).not.toBe(tag1);
+    const moved = await repo.readRef(1, 'refs/tags/revisions/2');
+    expect(moved).toBe(rewrite.results[1].commitSha);
+    expect(await repo.readRef(1, 'refs/heads/main')).toBe(moved);
+    expect(await repo.readRef(1, 'refs/pending/rewrite/2')).toBeNull();
+
+    const files = await storage.readPublishedFiles(1, 2, ['main.tscn'], moved);
+    expect(files.get('main.tscn')!.toString()).toContain('packages/new/');
+  });
+
+  it('restores the tags when the database transaction fails', async () => {
+    const tag1 = await commitScene(1);
+    const tag2 = await commitScene(2);
+
+    const rewrite = await storage.beginRewrite(
+      [
+        { packageId: 1, revision: 1, kind: 'published', commitSha: tag1 },
+        { packageId: 1, revision: 2, kind: 'published', commitSha: tag2 },
+      ],
+      slugTransform,
+    );
+    await rewrite.abort();
+
+    expect(await repo.readRef(1, 'refs/tags/revisions/1')).toBe(tag1);
+    expect(await repo.readRef(1, 'refs/tags/revisions/2')).toBe(tag2);
+    expect(await repo.readRef(1, 'refs/pending/rewrite/1')).toBeNull();
+    const files = await storage.readPublishedFiles(1, 1, ['main.tscn'], tag1);
+    expect(files.get('main.tscn')!.toString()).toBe(rewrittenScene);
+  });
 });

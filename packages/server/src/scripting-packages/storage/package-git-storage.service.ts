@@ -11,10 +11,13 @@ import { readdir, rm, stat } from 'fs/promises';
 import { join } from 'path';
 import { Readable } from 'node:stream';
 import { errorMessage } from 'src/common/errors';
-import { sha256File } from './package-hash';
+import { sha256File, sha256Hex } from './package-hash';
 import { PackageContentIndex } from './git/package-content-index';
 import type { GitAuthor } from './git/package-git-types';
-import { PackageGitRepository } from './git/package-git-repository';
+import {
+  PackageGitRepository,
+  type RefUpdate,
+} from './git/package-git-repository';
 
 export interface PublishRevisionInput {
   packageId: number;
@@ -23,6 +26,32 @@ export interface PublishRevisionInput {
   stagedDir: string;
   author: GitAuthor;
   commitDb: (commitSha: string) => Promise<void>;
+}
+
+export interface RewriteRevisionInput {
+  packageId: number;
+  revision: number;
+  commitSha: string | null;
+  transform: (filepath: string, data: Buffer) => Buffer;
+  author: GitAuthor;
+  /**
+   * Maps the commit the revision was built on (the previous published
+   * revision) to the commit that replaced it in this rewrite, so a batch of
+   * rewritten revisions stays a linear history.
+   */
+  parentCommitSha?: (previous: string | null) => string | null;
+}
+
+export interface RewrittenRevision {
+  files: PackageFileEntry[];
+  commitSha: string;
+  /** Commit the revision had before the rewrite. */
+  sourceCommit: string;
+}
+
+export interface RewritePromotion {
+  revision: number;
+  commitSha: string;
 }
 
 @Injectable()
@@ -164,6 +193,145 @@ export class PackageGitStorageService {
     );
     await rm(stagedDir, { recursive: true, force: true }).catch(() => undefined);
     return commit;
+  }
+
+  /**
+   * Rewrites every file of a published revision into a new commit.
+   *
+   * The new commit is parked on `refs/pending/rewrite/<n>`: the tags and
+   * `main` only move in {@link promoteRewrites} after the database describes
+   * the rewritten files, so an aborted rename leaves the published history
+   * untouched. Returns `null` when the revision has no git commit and the
+   * caller should fall back to the legacy directory rewrite.
+   */
+  async rewritePublishedRevision(
+    input: RewriteRevisionInput,
+  ): Promise<RewrittenRevision | null> {
+    const { packageId, revision, commitSha, transform, author } = input;
+    const sourceCommit = await this.resolveCommit(
+      packageId,
+      revision,
+      commitSha,
+    );
+    if (!sourceCommit) {
+      return null;
+    }
+    const tree = await this.repo.listTree(packageId, sourceCommit);
+    const paths = [...tree.keys()].sort();
+    const current = await this.readFiles(
+      packageId,
+      revision,
+      paths,
+      sourceCommit,
+    );
+    const blobs: Array<{ path: string; data: Buffer }> = [];
+    const files: PackageFileEntry[] = [];
+    for (const filepath of paths) {
+      const data = transform(filepath, current.get(filepath)!);
+      blobs.push({ path: filepath, data });
+      files.push({
+        filepath,
+        size: data.byteLength,
+        sha256: sha256Hex(data),
+      });
+    }
+    const oids = await this.repo.writeBlobs(packageId, blobs);
+    const rewrittenTree = await this.repo.writeTree(
+      packageId,
+      paths.map((filepath) => ({
+        path: filepath,
+        oid: this.requireOid(oids, filepath),
+      })),
+    );
+    const previous = await this.previousCommit(packageId, revision);
+    const parent = input.parentCommitSha
+      ? input.parentCommitSha(previous)
+      : previous;
+    const next = await this.repo.createCommit(
+      packageId,
+      rewrittenTree,
+      parent,
+      author,
+      `rewrite revision ${revision}`,
+      new Date(),
+    );
+
+    const pending = rewriteRef(revision);
+    const stale = await this.repo.readRef(packageId, pending);
+    if (stale) {
+      await this.repo.applyRefUpdates(packageId, [
+        { ref: pending, delete: true, expected: stale },
+      ]);
+    }
+    await this.repo.applyRefUpdates(packageId, [
+      { ref: pending, oid: next, expected: null },
+    ]);
+
+    this.index?.register(
+      packageId,
+      files.map((file) => ({
+        filepath: file.filepath,
+        sha256: file.sha256,
+        oid: this.requireOid(oids, file.filepath),
+      })),
+    );
+    return { files, commitSha: next, sourceCommit };
+  }
+
+  /**
+   * Moves the tags and `main` onto the rewritten commits and drops the
+   * pending refs in one transaction. Every expected value is read first, so a
+   * concurrent publish makes the whole promotion fail instead of mixing old
+   * and new revisions.
+   */
+  async promoteRewrites(
+    packageId: number,
+    entries: readonly RewritePromotion[],
+  ): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+    const sorted = [...entries].sort(
+      (left, right) => left.revision - right.revision,
+    );
+    const updates: RefUpdate[] = [];
+    for (const entry of sorted) {
+      const tag = `refs/tags/revisions/${entry.revision}`;
+      updates.push({
+        ref: tag,
+        oid: entry.commitSha,
+        expected: await this.repo.readRef(packageId, tag),
+      });
+      const pending = rewriteRef(entry.revision);
+      const current = await this.repo.readRef(packageId, pending);
+      if (current) {
+        updates.push({ ref: pending, delete: true, expected: current });
+      }
+    }
+    const newest = sorted[sorted.length - 1];
+    updates.push({
+      ref: 'refs/heads/main',
+      oid: newest.commitSha,
+      expected: await this.repo.readRef(packageId, 'refs/heads/main'),
+    });
+    await this.repo.applyRefUpdates(packageId, updates);
+  }
+
+  /** Drops pending rewrite refs; the objects they pointed at are GC'd later. */
+  async discardRewrites(
+    packageId: number,
+    entries: readonly RewritePromotion[],
+  ): Promise<void> {
+    for (const entry of entries) {
+      const pending = rewriteRef(entry.revision);
+      const current = await this.repo.readRef(packageId, pending);
+      if (!current) {
+        continue;
+      }
+      await this.repo.applyRefUpdates(packageId, [
+        { ref: pending, delete: true, expected: current },
+      ]);
+    }
   }
 
   async readFile(
@@ -350,6 +518,10 @@ export class PackageGitStorageService {
     }
     return commit;
   }
+}
+
+function rewriteRef(revision: number): string {
+  return `refs/pending/rewrite/${revision}`;
 }
 
 async function listFilesRecursive(dir: string): Promise<string[]> {

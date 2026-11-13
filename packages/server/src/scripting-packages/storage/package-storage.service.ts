@@ -51,6 +51,8 @@ export interface RevisionTarget {
   packageId: number;
   revision: number;
   kind: RevisionKind;
+  /** Published git revision to rewrite; absent for legacy and draft targets. */
+  commitSha?: string | null;
 }
 
 /**
@@ -65,6 +67,8 @@ export interface RevisionRewrite {
   readonly results: Array<{
     target: RevisionTarget;
     files: PackageFileEntry[];
+    /** New commit for a git-backed published revision; `null` otherwise. */
+    commitSha?: string | null;
   }>;
   commit(): Promise<void>;
   abort(): Promise<void>;
@@ -555,18 +559,77 @@ export class PackageStorageService {
    * originals stay in place until `commit`, so a failure can restore them
    * instead of leaving a half-rewritten tree behind. A failure while rewriting
    * aborts whatever had already moved before the error leaves this method.
+   *
+   * A published revision that lives in git is rewritten as a new commit parked
+   * on `refs/pending/rewrite/<n>`; `commit` moves the tags and `main` onto it
+   * and `abort` drops the pending ref, so the published history is untouched
+   * until the database update succeeded. Legacy and draft revisions are
+   * rewritten in place beside their backup as before.
    */
   async beginRewrite(
     targets: readonly RevisionTarget[],
     transform: (filepath: string, data: Buffer) => Buffer,
   ): Promise<RevisionRewrite> {
-    const attempted: RevisionTarget[] = [];
     const results: RevisionRewrite['results'] = [];
+    const legacyAttempted: RevisionTarget[] = [];
+    const gitRewrites: Array<{ target: RevisionTarget; commitSha: string }> =
+      [];
+    // Old commit -> rewritten commit, so a batch keeps the original history
+    // shape even when only some revisions are rewritten.
+    const replacements = new Map<string, string>();
+
+    const gitTargets: RevisionTarget[] = [];
+    const legacyTargets: RevisionTarget[] = [];
+    for (const target of targets) {
+      if (target.kind === 'published' && this.gitStorage) {
+        gitTargets.push(target);
+      } else {
+        legacyTargets.push(target);
+      }
+    }
+    // Parents have to exist before their children in a rewritten history.
+    gitTargets.sort(
+      (left, right) =>
+        left.packageId - right.packageId || left.revision - right.revision,
+    );
+
     try {
-      for (const target of targets) {
+      for (const target of gitTargets) {
+        const rewritten = await this.gitStorage!.rewritePublishedRevision({
+          packageId: target.packageId,
+          revision: target.revision,
+          commitSha: target.commitSha ?? null,
+          transform,
+          author: DEFAULT_GIT_AUTHOR,
+          parentCommitSha: (previous) =>
+            previous ? (replacements.get(previous) ?? previous) : null,
+        });
+        if (!rewritten) {
+          // No git history for this revision: its published bytes are still a
+          // legacy directory.
+          legacyAttempted.push(target);
+          const files = await this.rewriteRevision(
+            target.packageId,
+            target.revision,
+            target.kind,
+            transform,
+          );
+          if (files) results.push({ target, files });
+          continue;
+        }
+        replacements.set(rewritten.sourceCommit, rewritten.commitSha);
+        gitRewrites.push({ target, commitSha: rewritten.commitSha });
+        results.push({
+          target,
+          files: rewritten.files,
+          commitSha: rewritten.commitSha,
+        });
+      }
+
+      for (const target of legacyTargets) {
         // Recorded before the rewrite so a target that fails part way through
         // still gets its backup restored.
-        attempted.push(target);
+        legacyAttempted.push(target);
         const files = await this.rewriteRevision(
           target.packageId,
           target.revision,
@@ -576,14 +639,45 @@ export class PackageStorageService {
         if (files) results.push({ target, files });
       }
     } catch (error) {
-      await this.abortRewrites(attempted);
+      await this.discardGitRewrites(gitRewrites);
+      await this.abortRewrites(legacyAttempted);
       throw error;
     }
     return {
       results,
-      commit: () => this.finishRewrites(attempted),
-      abort: () => this.abortRewrites(attempted),
+      commit: async () => {
+        await this.promoteGitRewrites(gitRewrites);
+        await this.finishRewrites(legacyAttempted);
+      },
+      abort: async () => {
+        await this.discardGitRewrites(gitRewrites);
+        await this.abortRewrites(legacyAttempted);
+      },
     };
+  }
+
+  /** Moves the tags and `main` of every package touched by the rewrite. */
+  private async promoteGitRewrites(
+    rewrites: ReadonlyArray<{ target: RevisionTarget; commitSha: string }>,
+  ): Promise<void> {
+    for (const [packageId, entries] of groupRewrites(rewrites)) {
+      await this.gitStorage!.promoteRewrites(packageId, entries);
+    }
+  }
+
+  /** Drops pending rewrite refs left by an aborted rename. */
+  private async discardGitRewrites(
+    rewrites: ReadonlyArray<{ target: RevisionTarget; commitSha: string }>,
+  ): Promise<void> {
+    for (const [packageId, entries] of groupRewrites(rewrites)) {
+      await this.gitStorage!
+        .discardRewrites(packageId, entries)
+        .catch((cause) =>
+          this.logger.warn(
+            `rewrite ref cleanup failed for package ${packageId}: ${errorMessage(cause)}`,
+          ),
+        );
+    }
   }
 
   /**
@@ -765,4 +859,20 @@ export class PackageStorageService {
     await walk(dir, '');
     return result.sort();
   }
+}
+
+/** One promotion list per package, in the order the fields were inserted. */
+function groupRewrites(
+  rewrites: ReadonlyArray<{ target: RevisionTarget; commitSha: string }>,
+): Map<number, Array<{ revision: number; commitSha: string }>> {
+  const grouped = new Map<
+    number,
+    Array<{ revision: number; commitSha: string }>
+  >();
+  for (const { target, commitSha } of rewrites) {
+    const entries = grouped.get(target.packageId) ?? [];
+    entries.push({ revision: target.revision, commitSha });
+    grouped.set(target.packageId, entries);
+  }
+  return grouped;
 }

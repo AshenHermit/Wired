@@ -1710,6 +1710,7 @@ describe('ScriptingPackagesService slug rename', () => {
         const results: Array<{
           target: (typeof targets)[number];
           files: Array<{ filepath: string; size: number; sha256: string }>;
+          commitSha: string | null;
         }> = [];
         try {
           for (const target of targets) {
@@ -1720,7 +1721,17 @@ describe('ScriptingPackagesService slug rename', () => {
               target.kind,
               transform,
             );
-            if (files) results.push({ target, files });
+            if (files) {
+              results.push({
+                target,
+                files,
+                // Published bytes become a git commit; drafts never do.
+                commitSha:
+                  target.kind === 'published'
+                    ? target.revision.toString(16).padStart(64, '0')
+                    : null,
+              });
+            }
           }
         } catch (error) {
           for (const target of [...attempted].reverse()) {
@@ -1806,6 +1817,20 @@ describe('ScriptingPackagesService slug rename', () => {
     );
     expect(delivery.invalidatePackage).toHaveBeenCalledWith(5);
     expect(dispatcher.packagesChanged).toHaveBeenCalledWith([5]);
+  });
+
+  it('persists the rewritten files and commit sha together', async () => {
+    const { service, revisions } = makeRenameService();
+
+    await service.update(5, { slug: 'hero2' });
+
+    expect(revisions.update).toHaveBeenCalledWith(
+      { id: 101 },
+      expect.objectContaining({
+        files: [{ filepath: 'a.gd', size: 1, sha256: 'x' }],
+        commitSha: '1'.padStart(64, '0'),
+      }),
+    );
   });
 
   it('rewrites published revisions of dependents after confirmation', async () => {

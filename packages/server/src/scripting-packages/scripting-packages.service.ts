@@ -790,6 +790,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
               packageId: pkg.id,
               revision: row.revision,
               kind: row.status,
+              commitSha: row.commitSha ?? null,
             });
           }
         }
@@ -804,6 +805,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
               packageId: dependent.packageId,
               revision: row.revision,
               kind: 'published',
+              commitSha: row.commitSha ?? null,
             });
           }
         }
@@ -814,8 +816,11 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
             rewriteSlugReferences(filepath, data, oldSlug, nextSlug),
         );
         try {
-          const rewritten = new Map<number, PackageFileEntry[]>();
-          for (const { target, files } of rewrite.results) {
+          const rewritten = new Map<
+            number,
+            { files: PackageFileEntry[]; commitSha?: string }
+          >();
+          for (const { target, files, commitSha } of rewrite.results) {
             const row = await revisions.findOneOrFail({
               where: {
                 package: { id: target.packageId },
@@ -824,19 +829,25 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
             });
             // A draft declares only the files uploaded so far: keep that
             // set and refresh the hashes of the files that are on disk.
-            rewritten.set(
-              row.id,
-              target.kind === 'published'
-                ? files
-                : this.mergeRevisionFiles(row.files ?? [], files),
-            );
+            const update: { files: PackageFileEntry[]; commitSha?: string } = {
+              files:
+                target.kind === 'published'
+                  ? files
+                  : this.mergeRevisionFiles(row.files ?? [], files),
+            };
+            // Published bytes now live in a new commit; a draft stays
+            // commit-less and a legacy revision keeps its null sha.
+            if (target.kind === 'published' && commitSha) {
+              update.commitSha = commitSha;
+            }
+            rewritten.set(row.id, update);
           }
 
           const enabledChanged = await this.preparePackageUpdate(pkg, dto);
           pkg.slug = nextSlug;
           await packages.save(pkg);
-          for (const [id, files] of rewritten) {
-            await revisions.update({ id }, { files });
+          for (const [id, update] of rewritten) {
+            await revisions.update({ id }, update);
           }
           return {
             rewrite,

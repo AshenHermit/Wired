@@ -47,6 +47,7 @@ function closureFromCuraPlayer(): ResolvedClosure {
     nameByPackage: new Map([[5, 'Cura Player']]),
     slugByPackage: new Map([[5, 'cura_player']]),
     artifactKeys: new Map([[5, 'test']]),
+    commitByPackage: new Map([[5, null]]),
     directDependencyIds: [],
     rootTextFiles: [],
     dependencyTextFiles: new Map(),
