@@ -1029,6 +1029,13 @@ func _reuse_artifact(
 		"WIRED_PACKAGES_CACHED package=%d revision=%d artifact=%s files=%d"
 		% [package_id, revision, artifact_key.left(12), declared.size()]
 	)
+	# The backend runtime line parser only accepts APPLIED as the confirmation
+	# that a revision is live; without it a cache hit leaves the dispatch
+	# pending until it times out and the Game tab never opens.
+	print(
+		"WIRED_PACKAGES_APPLIED package=%d revision=%d artifact=%s files=%d"
+		% [package_id, revision, artifact_key.left(12), declared.size()]
+	)
 	return {
 		"ok": true,
 		"error": "",

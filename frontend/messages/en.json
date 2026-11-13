@@ -309,7 +309,7 @@
       "disabled": "Package disabled",
       "deleted": "Package deleted from the room",
       "adopted": "The existing directory is now connected to the package. Emit will publish its files.",
-      "emitPublished": "Published revision {revision}: {uploaded} file(s)."
+      "emitPublished": "Published revision {revision}: {files} file(s)."
     },
     "errors": {
       "loginRequired": "Sign in to create packages.",

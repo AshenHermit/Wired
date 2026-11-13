@@ -779,7 +779,9 @@ export function usePackageActions({
               key: "Packages.notices.emitPublished",
               values: {
                 revision: result.revision.revision,
-                uploaded: result.uploaded,
+                // The revision's own file count: identical blobs are already
+                // stored by the server, so `uploaded` can legitimately be 0.
+                files: result.revision.files.length,
               },
             },
           });
