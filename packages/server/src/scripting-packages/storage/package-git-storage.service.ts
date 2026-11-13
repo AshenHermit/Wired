@@ -54,6 +54,19 @@ export interface RewritePromotion {
   commitSha: string;
 }
 
+export interface LegacyRevisionMigration {
+  revision: number;
+  files: PackageFileEntry[];
+  publishedAt: Date | null;
+  /** Legacy `revisions/<n>` directory holding exactly `files`. */
+  dir: string;
+}
+
+const MIGRATION_AUTHOR: GitAuthor = {
+  name: 'wired',
+  email: 'packages@wired.local',
+};
+
 @Injectable()
 export class PackageGitStorageService {
   private readonly logger = new Logger(PackageGitStorageService.name);
@@ -332,6 +345,74 @@ export class PackageGitStorageService {
         { ref: pending, delete: true, expected: current },
       ]);
     }
+  }
+
+  /**
+   * Converts legacy published directories into one commit per revision.
+   *
+   * Revisions are written in ascending order so `main` and the tags describe a
+   * linear history; an existing tag of the same revision is overwritten with
+   * the converted commit, which makes a second migration attempt a no-op
+   * instead of a failure.
+   */
+  async migrateRevisions(
+    packageId: number,
+    items: readonly LegacyRevisionMigration[],
+  ): Promise<Map<number, string>> {
+    const commits = new Map<number, string>();
+    if (items.length === 0) {
+      return commits;
+    }
+    await this.repo.ensureRepo(packageId);
+    let previous: string | null = null;
+    const sorted = [...items].sort(
+      (left, right) => left.revision - right.revision,
+    );
+    for (const item of sorted) {
+      const oids = await this.repo.writeStagedBlobs(
+        packageId,
+        item.files.map((file) => ({
+          path: file.filepath,
+          absolute: join(item.dir, file.filepath),
+        })),
+      );
+      const tree = await this.repo.writeTree(
+        packageId,
+        item.files.map((file) => ({
+          path: file.filepath,
+          oid: this.requireOid(oids, file.filepath),
+        })),
+      );
+      const parent =
+        previous ?? (await this.previousCommit(packageId, item.revision));
+      const commit = await this.repo.createCommit(
+        packageId,
+        tree,
+        parent,
+        MIGRATION_AUTHOR,
+        `revision ${item.revision}`,
+        item.publishedAt ?? new Date(),
+      );
+      const tag = `refs/tags/revisions/${item.revision}`;
+      await this.repo.applyRefUpdates(packageId, [
+        {
+          ref: tag,
+          oid: commit,
+          expected: await this.repo.readRef(packageId, tag),
+        },
+        {
+          ref: 'refs/heads/main',
+          oid: commit,
+          expected: await this.repo.readRef(packageId, 'refs/heads/main'),
+        },
+      ]);
+      previous = commit;
+      commits.set(item.revision, commit);
+    }
+    // The index derived its sha256 -> oid map from the legacy layout; rebuild
+    // it lazily from the new tags instead of trusting stale entries.
+    this.index?.invalidate(packageId);
+    return commits;
   }
 
   async readFile(

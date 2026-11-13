@@ -43,6 +43,18 @@ export type SavedDraftFile = {
   sha256: string;
 };
 
+/** A published revision whose bytes still live in a legacy directory. */
+export interface LegacyRevisionManifest {
+  revision: number;
+  files: PackageFileEntry[];
+  publishedAt: Date | null;
+}
+
+/** A published revision together with the commit replacing its directory. */
+export interface LegacyCleanupRow extends LegacyRevisionManifest {
+  commitSha: string | null;
+}
+
 /** Which revision directory a rewrite works on. */
 export type RevisionKind = 'published' | 'draft';
 
@@ -324,6 +336,76 @@ export class PackageStorageService {
       return files.map((file) => file.filepath);
     }
     return [];
+  }
+
+  /**
+   * Converts the given legacy published directories into git commits.
+   *
+   * Every directory is checked against its declared manifest first, so a
+   * half-written or tampered legacy revision is refused instead of being
+   * imported into the history. Legacy directories stay in place; call
+   * {@link cleanupLegacyRevisions} once the database rows carry the commits.
+   * Returns an empty map when git storage is not in use for this package.
+   */
+  async migratePackage(
+    packageId: number,
+    rows: readonly LegacyRevisionManifest[],
+  ): Promise<Map<number, string>> {
+    if (!this.gitStorage || rows.length === 0) {
+      return new Map();
+    }
+    if (
+      !this.configService.packages.gitStorage &&
+      !(await this.gitStorage.isGitPackage(packageId))
+    ) {
+      return new Map();
+    }
+    const items = [];
+    for (const row of [...rows].sort(
+      (left, right) => left.revision - right.revision,
+    )) {
+      const dir = this.publishedRevisionDir(packageId, row.revision);
+      if (!existsSync(dir)) {
+        throw new Error(
+          `Revision ${row.revision} of package ${packageId} has no legacy directory`,
+        );
+      }
+      await this.assertMatchesManifest(dir, row.revision, row.files);
+      items.push({
+        revision: row.revision,
+        files: row.files,
+        publishedAt: row.publishedAt,
+        dir,
+      });
+    }
+    return this.gitStorage.migrateRevisions(packageId, items);
+  }
+
+  /**
+   * Removes legacy `revisions/<n>` directories whose rows already point at a
+   * commit. Refuses to delete anything while a row has no commit: the bytes
+   * would become unreachable.
+   */
+  async cleanupLegacyRevisions(
+    packageId: number,
+    rows: readonly LegacyCleanupRow[],
+  ): Promise<number> {
+    const unconverted = rows.find((row) => !row.commitSha);
+    if (unconverted) {
+      throw new Error(
+        `Revision ${unconverted.revision} of package ${packageId} is not converted yet; run migrate first`,
+      );
+    }
+    let removed = 0;
+    for (const row of rows) {
+      const dir = this.publishedRevisionDir(packageId, row.revision);
+      if (!existsSync(dir)) {
+        continue;
+      }
+      await this.removeDirectory(dir);
+      removed += 1;
+    }
+    return removed;
   }
 
   /**

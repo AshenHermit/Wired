@@ -186,6 +186,9 @@ export class PackageRevisionsService {
       email: authorUser?.email ?? 'packages@wired.local',
     };
     await this.locks.runWithPublishLocks([packageId], async () => {
+      // A package published before git storage existed is converted on its
+      // first new publication, inside the lock that already guards its bytes.
+      await this.migratePackageLocked(packageId);
       await this.storage.publishRevision(
         packageId,
         revision,
@@ -208,6 +211,61 @@ export class PackageRevisionsService {
     );
     await this.dispatchPublished(packageId, revision);
     return toRevision(row, packageId);
+  }
+
+  /**
+   * Converts every published revision of a package that only exists as a
+   * legacy directory into a git commit and records its sha on the row.
+   *
+   * Idempotent: rows that already carry a commit are skipped, and the legacy
+   * directories are left untouched so the package stays readable until the
+   * operator runs the cleanup command.
+   */
+  async migratePackage(packageId: number): Promise<number> {
+    return this.locks.runWithPublishLocks([packageId], () =>
+      this.migratePackageLocked(packageId),
+    );
+  }
+
+  /** Removes legacy revision directories whose rows already have a commit. */
+  async cleanupLegacyRevisions(packageId: number): Promise<number> {
+    return this.locks.runWithPublishLocks([packageId], async () => {
+      const rows = await this.revisionsRepository.find({
+        where: { package: { id: packageId }, status: 'published' },
+        order: { revision: 'ASC' },
+      });
+      return this.storage.cleanupLegacyRevisions(packageId, rows);
+    });
+  }
+
+  /** {@link migratePackage} without taking the lock; callers already hold it. */
+  private async migratePackageLocked(packageId: number): Promise<number> {
+    await this.reconcile.reconcilePackage(packageId);
+    const rows = await this.revisionsRepository.find({
+      where: { package: { id: packageId }, status: 'published' },
+      order: { revision: 'ASC' },
+    });
+    const pending = rows.filter((row) => !row.commitSha);
+    if (pending.length === 0) {
+      return 0;
+    }
+    const commits = await this.storage.migratePackage(packageId, pending);
+    if (commits.size === 0) {
+      return 0;
+    }
+    await this.revisionsRepository.manager.transaction(async (manager) => {
+      for (const row of pending) {
+        const commitSha = commits.get(row.revision);
+        if (commitSha) {
+          await manager.update(
+            ScriptingPackageRevision,
+            { id: row.id },
+            { commitSha },
+          );
+        }
+      }
+    });
+    return commits.size;
   }
 
   /**

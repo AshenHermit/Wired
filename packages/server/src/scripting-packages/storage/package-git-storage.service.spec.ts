@@ -1,4 +1,6 @@
 import { ConflictException } from '@nestjs/common';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Repository } from 'typeorm';
 import type { AppConfigService } from '../../config/config.service';
 import type { ScriptingPackageRevision } from '../../database/entities/scripting-package-revision.entity';
@@ -312,5 +314,77 @@ describe('PackageGitStorageService', () => {
     expect(await repo.readRef(1, 'refs/pending/rewrite/1')).toBeNull();
     const files = await storage.readPublishedFiles(1, 1, ['main.tscn'], tag1);
     expect(files.get('main.tscn')!.toString()).toBe(rewrittenScene);
+  });
+
+  const legacyDir = (packageId: number, revision: number): string =>
+    join(root, String(packageId), 'revisions', String(revision));
+
+  const legacyRows = (
+    contents: Array<{ revision: number; filepath: string; content: string }>,
+  ) =>
+    contents.map(({ revision, filepath, content }) => ({
+      revision,
+      files: [entry(filepath, content)],
+      publishedAt: new Date(`2024-01-0${revision}T00:00:00Z`),
+    }));
+
+  it('converts legacy revisions into a linear history', async () => {
+    const source = 'extends Node\n// res://packages/old/player.gd';
+    writeLegacyFile(root, 1, 1, 'scripts/player.gd', source);
+    writeLegacyFile(root, 1, 2, 'scripts/player.gd', `${source}\n`);
+    const rows = legacyRows([
+      { revision: 1, filepath: 'scripts/player.gd', content: source },
+      { revision: 2, filepath: 'scripts/player.gd', content: `${source}\n` },
+    ]);
+
+    const commits = await storage.migratePackage(1, rows);
+
+    expect(commits.size).toBe(2);
+    expect(await repo.readRef(1, 'refs/tags/revisions/1')).toBe(
+      commits.get(1),
+    );
+    expect(await repo.readRef(1, 'refs/tags/revisions/2')).toBe(
+      commits.get(2),
+    );
+    expect(await repo.readRef(1, 'refs/heads/main')).toBe(commits.get(2));
+    const second = await repo.listTree(1, commits.get(2)!);
+    expect(second.has('scripts/player.gd')).toBe(true);
+    await expect(
+      storage.readPublishedFile(
+        1,
+        2,
+        'scripts/player.gd',
+        commits.get(2)!,
+      ),
+    ).resolves.toBeInstanceOf(Buffer);
+  });
+
+  it('keeps legacy directories until cleanup', async () => {
+    const source = 'extends Node\n';
+    writeLegacyFile(root, 1, 1, 'a.gd', source);
+    writeLegacyFile(root, 1, 2, 'a.gd', source);
+    const rows = legacyRows([
+      { revision: 1, filepath: 'a.gd', content: source },
+      { revision: 2, filepath: 'a.gd', content: source },
+    ]);
+
+    const commits = await storage.migratePackage(1, rows);
+
+    expect(existsSync(legacyDir(1, 1))).toBe(true);
+    const removed = await storage.cleanupLegacyRevisions(
+      1,
+      rows.map((row) => ({ ...row, commitSha: commits.get(row.revision)! })),
+    );
+    expect(removed).toBe(2);
+    expect(existsSync(legacyDir(1, 1))).toBe(false);
+    expect(existsSync(legacyDir(1, 2))).toBe(false);
+  });
+
+  it('refuses cleanup while a row has no commit', async () => {
+    await expect(
+      storage.cleanupLegacyRevisions(1, [
+        { revision: 1, files: [], publishedAt: null, commitSha: null },
+      ]),
+    ).rejects.toThrow(/not converted/);
   });
 });
