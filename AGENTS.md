@@ -4,7 +4,7 @@ Wired is a browser-based Godot game platform: Next.js frontend + NestJS API/asse
 
 ## Repo map
 
-- `frontend/` — Next.js 16 App Router, React 19, Tailwind v4, shadcn/ui (`components.json`, new-york style, animate-ui registry). `(browser)` group holds login/home; `room/[room_code]/(godot)/` holds the editor, Packages tab, Game tab, and the bridge/sync modules.
+- `frontend/` — Next.js 16 App Router, React 19, Tailwind v4, shadcn/ui (`components.json`, new-york style, animate-ui registry). `(browser)` group holds login/home; `room/[room_code]/(godot)/` holds the editor, Packages tab, Game tab, and the bridge/sync modules. `frontend/content/{docs,devlog}/` holds the markdown sources for the documentation and dev log pages (`/docs`, `/devlog`), read server-side by `src/lib/content.ts`.
 - `packages/server/` — NestJS 11 + TypeORM/Postgres, Swagger at `/api/docs`. Entrypoints: `src/main.ts`, `src/app.module.ts`. Modules: `auth`, `users`, `rooms`, `scripting-packages`, `godot-editor-provider`, `godot-game` (room runtime, tickets, package sync, WebSocket proxy, game export). `godot-game` is not a stub.
 - `packages/shared/` — API types/payloads (`src/api/types.ts`) plus runtime constants (`GAME_ROOMS_TYPES`, …). `build` emits CommonJS `dist` because the server imports values at runtime; server/frontend tests and dev resolve it through tsconfig paths, so no build is needed to run tests or `start:dev`.
 - `packages/server/godot_editor/`, `godot_runtime/`, `game_export/`, `storage/` are gitignored artifacts: `pnpm fetch:editor` / `fetch:runtime` / `fetch:templates` install the pinned official Godot **4.8-beta2** (versions, sizes and sha512 pinned in `packages/server/scripts/fetch-*.mjs`; runtime writes `godot_runtime/runtime.json`). `packages/server/godot_project/_wired/` is a committed asset: the shared base project for every room.
@@ -41,6 +41,7 @@ pnpm --filter server check-types         # tsc --noEmit (tests also typecheck vi
 pnpm --filter server build               # nest build; prebuild builds @wired-io/shared
 pnpm --filter frontend build             # next build --webpack
 pnpm --filter frontend lint              # eslint, no auto-fix
+pnpm --filter frontend validate:content  # bad front matter fails; runs automatically in `prebuild`
 pnpm --filter server lint                # eslint --fix
 pnpm export:game                         # rebuild the Godot Web export
 pnpm build                               # recursive: shared + server + frontend
@@ -50,7 +51,7 @@ pnpm build                               # recursive: shared + server + frontend
 - Single server spec: `pnpm --filter server exec jest create-room.dto.spec`.
 - Opt-in real-Godot integration: `WIRED_GODOT_INTEGRATION=1 GODOT_RUNTIME_PATH=<godot-console.exe> pnpm --filter server exec jest room-runtime.integration --runInBand`.
 - Fetch/export helper unit tests: `pnpm --filter server test:scripts` (node `--test`, `scripts/lib/*.test.mjs`; not run by CI).
-- Frontend tests: `pnpm --filter frontend test` (Vitest + jsdom, co-located `src/**/*.test.{ts,tsx}`; 10 files / 160 tests). Single file: `pnpm --filter frontend exec vitest run GameTab`.
+- Frontend tests: `pnpm --filter frontend test` (Vitest + jsdom, co-located `src/**/*.test.{ts,tsx}`; 46 files / 380 tests). Single file: `pnpm --filter frontend exec vitest run GameTab`.
 - `pnpm export:game` reads `packages/server/.env` for `GODOT_RUNTIME_PATH`/`GODOT_RUNTIME_PROJECT_PATH`; without an explicit path it uses the `fetch:runtime` install. It fails fast if the executable, templates or `project.godot` are missing.
 - Root `pnpm dev` is not a full-stack command (`server` has `start:dev`, not `dev`). Use the two dev commands above.
 - Next uses Webpack intentionally (`--webpack`); don't switch to Turbopack casually.
