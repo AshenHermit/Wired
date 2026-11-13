@@ -240,6 +240,19 @@ godot --headless --path packages/server/godot_project/_wired \
 Ожидаемый признак успеха — строка `*_SMOKE_OK` в выводе (Godot возвращает
 код 1 из-за stderr-предупреждений, это нормально для этих смоуков).
 
+Фактические результаты прогона:
+
+| Смоук | Результат |
+| --- | --- |
+| `packages_manager_smoke` | `PACKAGES_MANAGER_SMOKE_OK` |
+| `artifact_store_smoke` | `ARTIFACT_STORE_SMOKE_OK checks=42` |
+| `package_assets_smoke` | `PACKAGE_ASSETS_SMOKE_OK` |
+| `main_scene_swap_smoke` | `MAIN_SCENE_SWAP_SMOKE_OK checks=41` |
+| `package_entry_smoke` | `PACKAGE_ENTRY_SMOKE_OK checks=9` |
+| `package_registry_smoke` | `PACKAGE_REGISTRY_SMOKE_OK checks=53` |
+| `state_persistence_smoke` | `STATE_PERSISTENCE_SMOKE_OK checks=104` |
+| `package_fs_smoke` | `OK 32 checks` |
+
 Ручной сценарий для web-части (нужен `pnpm export:game` и пинированный
 4.8-beta2):
 
