@@ -67,6 +67,11 @@ export interface HeadingInfo {
   text: string;
 }
 
+/** Heading plus the 1-based source line it came from. */
+export interface ParsedHeading extends HeadingInfo {
+  line: number;
+}
+
 /**
  * Removes inline markdown markup so heading text and its anchor match what
  * ReactMarkdown renders (code, links, emphasis).
@@ -106,12 +111,12 @@ export function nextHeadingId(text: string, used: Set<string>): string {
  * @param content - Raw markdown content
  * @returns Array of heading info with auto-generated unique IDs
  */
-export function parseMarkdownHeadings(content: string): HeadingInfo[] {
-  const headings: HeadingInfo[] = [];
+export function parseMarkdownHeadings(content: string): ParsedHeading[] {
+  const headings: ParsedHeading[] = [];
   const usedIds = new Set<string>();
   let fence: string | null = null;
 
-  for (const line of content.split(/\r?\n/)) {
+  for (const [index, line] of content.split(/\r?\n/).entries()) {
     const fenceMatch = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
     if (fenceMatch) {
       const marker = fenceMatch[1][0];
@@ -139,7 +144,7 @@ export function parseMarkdownHeadings(content: string): HeadingInfo[] {
     const id = nextHeadingId(text, usedIds);
     usedIds.add(id);
 
-    headings.push({ id, level, text });
+    headings.push({ id, level, text, line: index + 1 });
   }
 
   return headings;

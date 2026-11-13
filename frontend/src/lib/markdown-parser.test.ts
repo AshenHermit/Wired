@@ -53,10 +53,30 @@ API content
 `;
     const headings = parseMarkdownHeadings(md);
     expect(headings).toHaveLength(4);
-    expect(headings[0]).toEqual({ id: 'getting-started', level: 2, text: 'Getting Started' });
-    expect(headings[1]).toEqual({ id: 'installation', level: 3, text: 'Installation' });
-    expect(headings[2]).toEqual({ id: 'configuration', level: 3, text: 'Configuration' });
-    expect(headings[3]).toEqual({ id: 'api-methods', level: 2, text: 'API Methods' });
+    expect(headings[0]).toEqual({
+      id: 'getting-started',
+      level: 2,
+      text: 'Getting Started',
+      line: 2,
+    });
+    expect(headings[1]).toEqual({
+      id: 'installation',
+      level: 3,
+      text: 'Installation',
+      line: 5,
+    });
+    expect(headings[2]).toEqual({
+      id: 'configuration',
+      level: 3,
+      text: 'Configuration',
+      line: 8,
+    });
+    expect(headings[3]).toEqual({
+      id: 'api-methods',
+      level: 2,
+      text: 'API Methods',
+      line: 11,
+    });
   });
 
   test('handles duplicate heading texts by appending counter', () => {
@@ -138,7 +158,7 @@ Content
 
   test('strips a closing hash sequence from heading text', () => {
     expect(parseMarkdownHeadings('## Setup ##')).toEqual([
-      { id: 'setup', level: 2, text: 'Setup' },
+      { id: 'setup', level: 2, text: 'Setup', line: 1 },
     ]);
   });
 });

@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { render, screen } from '@testing-library/react';
 import MarkdownRenderer from '@/components/docs/MarkdownRenderer';
 import { getDoc, listDocs } from '@/lib/content';
@@ -74,6 +75,21 @@ More content here.
       (h) => h.id,
     );
     expect(ids).toEqual(['real', 'also-real']);
+  });
+
+  test('heading ids stay stable when React re-invokes the render pass', () => {
+    const md = '## См. также\n\n## См. также\n\n### Прочее';
+
+    render(
+      <StrictMode>
+        <MarkdownRenderer content={md} />
+      </StrictMode>,
+    );
+
+    const rendered = Array.from(document.querySelectorAll('h2, h3')).map(
+      (heading) => heading.id,
+    );
+    expect(rendered).toEqual(parseMarkdownHeadings(md).map((h) => h.id));
   });
 
   test('every docs sidebar anchor resolves to a unique rendered heading id', async () => {

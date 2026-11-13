@@ -2,7 +2,7 @@
 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { nextHeadingId } from '@/lib/markdown-parser';
+import { parseMarkdownHeadings, slugify } from '@/lib/markdown-parser';
 import { highlightCode } from '@/lib/highlight-plugin';
 
 interface MarkdownRendererProps {
@@ -12,6 +12,7 @@ interface MarkdownRendererProps {
 interface MarkdownNode {
   type: string;
   value?: string;
+  position?: { start?: { line?: number } };
   children?: MarkdownNode[];
 }
 
@@ -26,13 +27,21 @@ function nodeText(node: MarkdownNode | undefined): string {
 }
 
 export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
-  const usedIds = new Set<string>();
+  // Sidebar anchors come from parseMarkdownHeadings, so rendered ids are looked
+  // up by the heading's source line instead of being accumulated in a Set during
+  // render: React may re-invoke render functions (Strict Mode), which turned
+  // every id into "<slug>-1" and broke hash navigation.
+  const idsByLine = new Map(
+    parseMarkdownHeadings(content).map((heading) => [heading.line, heading.id]),
+  );
 
   const headingId = (node: MarkdownNode | undefined, children: unknown) => {
-    const text = nodeText(node) || String(children);
-    const id = nextHeadingId(text, usedIds);
-    usedIds.add(id);
-    return id;
+    const line = node?.position?.start?.line;
+    const knownId = line === undefined ? undefined : idsByLine.get(line);
+    if (knownId) {
+      return knownId;
+    }
+    return slugify(nodeText(node) || String(children));
   };
 
   return (
