@@ -267,6 +267,60 @@ describe('PackageClosureResolver', () => {
     };
   }
 
+  describe('git-backed closure', () => {
+    it('reads each revision with a single batch call', async () => {
+      definePackage(1, 'Root', 7);
+      definePackage(2, 'Dep', 7);
+      await writePublished(1, 1, {
+        'main.gd': 'preload("res://packages/2/lib.gd")',
+        'extra.gd': 'extends Node',
+      });
+      await writePublished(2, 1, { 'lib.gd': 'extends Node' });
+      const batch = jest.spyOn(storage, 'readPublishedFiles');
+
+      await resolver.resolve(1, 1, 7);
+
+      expect(batch.mock.calls.length).toBeLessThanOrEqual(2);
+      expect(batch.mock.calls[0][2].length).toBeGreaterThan(1);
+    });
+
+    it('changes the artifact key when the commit changes', () => {
+      const revisionsMap = new Map([[1, 1]]);
+      const references = new Map([[1, new Set<number>()]]);
+
+      const first = resolver.computeArtifactKeys(
+        revisionsMap,
+        references,
+        new Map([[1, 'abc']]),
+      );
+      const second = resolver.computeArtifactKeys(
+        revisionsMap,
+        references,
+        new Map([[1, 'def']]),
+      );
+
+      expect(first.get(1)).not.toBe(second.get(1));
+    });
+
+    it('keeps legacy keys stable without a commit', () => {
+      const revisionsMap = new Map([[1, 1]]);
+      const references = new Map([[1, new Set<number>()]]);
+
+      const first = resolver.computeArtifactKeys(
+        revisionsMap,
+        references,
+        new Map([[1, null]]),
+      );
+      const second = resolver.computeArtifactKeys(
+        revisionsMap,
+        references,
+        new Map([[1, null]]),
+      );
+
+      expect(first.get(1)).toBe(second.get(1));
+    });
+  });
+
   describe('findDependentRoomPackages', () => {
     it('finds room packages that reference the published package transitively', async () => {
       definePackage(5, 'Library', null);
@@ -604,8 +658,8 @@ describe('PackageClosureResolver', () => {
       const resolved = await resolver.resolve(5, 3, 7);
 
       expect(readSpy.mock.calls).toEqual([
-        [5, 3, 'main.gd'],
-        [6, 9, 'lib.gd'],
+        [5, 3, 'main.gd', null],
+        [6, 9, 'lib.gd', null],
       ]);
       expect([...resolved.bytes.keys()]).toEqual(['main.gd']);
     });

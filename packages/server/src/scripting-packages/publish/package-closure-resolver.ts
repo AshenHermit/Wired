@@ -37,6 +37,7 @@ export type LoadedRevision = {
   name: string;
   slug: string;
   room: { id: number } | null;
+  commitSha: string | null;
 };
 
 /** A package's latest usable published revision, as seen by the scan. */
@@ -54,6 +55,7 @@ export type ResolvedClosure = {
   roomId: number;
   publishedAt: string;
   revisionByPackage: Map<number, number>;
+  commitByPackage: Map<number, string | null>;
   nameByPackage: Map<number, string>;
   /** package id -> slug, for the artifact path alias of this closure. */
   slugByPackage: Map<number, string>;
@@ -282,10 +284,12 @@ export class PackageClosureResolver {
         this.loadRevision(id, exactRevision, roomId),
       readFileBytes: (id, targetRevision, filepath) =>
         this.readFileBytes(id, targetRevision, filepath),
+      readFiles: (id, targetRevision, filepaths, commitSha) =>
+        this.readFiles(id, targetRevision, filepaths, commitSha),
       readPinnedDependencies: (id, targetRevision) =>
         this.storage.readPinnedDependencies(id, targetRevision),
-      computeArtifactKeys: (revisions, references) =>
-        this.computeArtifactKeys(revisions, references),
+      computeArtifactKeys: (revisions, references, commits) =>
+        this.computeArtifactKeys(revisions, references, commits),
     });
     return builder.run(revision);
   }
@@ -301,6 +305,7 @@ export class PackageClosureResolver {
   computeArtifactKeys(
     revisionByPackage: ReadonlyMap<number, number>,
     referencesByPackage: ReadonlyMap<number, ReadonlySet<number>>,
+    commitByPackage: ReadonlyMap<number, string | null> = new Map(),
   ): Map<number, string> {
     const keys = new Map<number, string>();
     for (const start of revisionByPackage.keys()) {
@@ -319,7 +324,13 @@ export class PackageClosureResolver {
         .filter((id) => revisionByPackage.has(id))
         .map((id) => [id, revisionByPackage.get(id)!] as [number, number])
         .sort((a, b) => a[0] - b[0]);
-      const payload = [...closure, ['asset-bake', this.assetBakeVersion]];
+      const payload = [
+        ...closure.map(([id, value]) => [
+          id,
+          commitByPackage.get(id) ?? `legacy:${value}`,
+        ]),
+        ['asset-bake', this.assetBakeVersion],
+      ];
       keys.set(start, sha256Hex(Buffer.from(JSON.stringify(payload), 'utf8')));
     }
     return keys;
@@ -377,6 +388,7 @@ export class PackageClosureResolver {
       name: row.package.name,
       slug: requirePackageSlug(row.package),
       room,
+      commitSha: row.commitSha ?? null,
     };
   }
 
@@ -437,6 +449,78 @@ export class PackageClosureResolver {
    * out of the graph: publication is where that error is reported, since a scan
    * must not fail on one package.
    */
+  private async readFiles(
+    packageId: number,
+    revision: number,
+    filepaths: string[],
+    commitSha: string | null,
+  ): Promise<Map<string, Buffer>> {
+    const result = new Map<string, Buffer>();
+    const missing: string[] = [];
+    for (const filepath of filepaths) {
+      const cached = this.fileBytes.get(
+        `${packageId}:${revision}:${filepath}`,
+      );
+      if (cached) {
+        result.set(filepath, cached);
+      } else {
+        missing.push(filepath);
+      }
+    }
+    if (missing.length > 0) {
+      const loaded = await this.storage.readPublishedFiles(
+        packageId,
+        revision,
+        missing,
+        commitSha,
+      );
+      for (const filepath of missing) {
+        const data = loaded.get(filepath);
+        if (!data) {
+          throw new NotFoundException(
+            `File ${filepath} not found in revision ${revision}`,
+          );
+        }
+        result.set(filepath, data);
+        this.cacheFile(packageId, revision, filepath, data);
+      }
+    }
+    const ordered = new Map<string, Buffer>();
+    for (const filepath of filepaths) {
+      const data = result.get(filepath);
+      if (data) {
+        ordered.set(filepath, data);
+      }
+    }
+    return ordered;
+  }
+
+  private cacheFile(
+    packageId: number,
+    revision: number,
+    filepath: string,
+    data: Buffer,
+  ): void {
+    if (data.byteLength > this.maxFileCacheBytes) {
+      return;
+    }
+    const key = `${packageId}:${revision}:${filepath}`;
+    while (
+      this.fileCacheBytes + data.byteLength > this.maxFileCacheBytes &&
+      this.fileBytes.size > 0
+    ) {
+      const oldest = this.fileBytes.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      const removed = this.fileBytes.get(oldest);
+      this.fileBytes.delete(oldest);
+      this.fileCacheBytes -= removed?.byteLength ?? 0;
+    }
+    this.fileBytes.set(key, data);
+    this.fileCacheBytes += data.byteLength;
+  }
+
   private async collectRevisionReferences(
     packageId: number,
     entry: { revision: number; files: PackageFileEntry[] },
@@ -485,6 +569,12 @@ interface ClosureBuilderPorts {
     revision: number,
     filepath: string,
   ): Promise<Buffer>;
+  readFiles(
+    packageId: number,
+    revision: number,
+    filepaths: string[],
+    commitSha: string | null,
+  ): Promise<Map<string, Buffer>>;
   readPinnedDependencies(
     packageId: number,
     revision: number,
@@ -492,6 +582,7 @@ interface ClosureBuilderPorts {
   computeArtifactKeys(
     revisionByPackage: ReadonlyMap<number, number>,
     referencesByPackage: ReadonlyMap<number, ReadonlySet<number>>,
+    commitByPackage: ReadonlyMap<number, string | null>,
   ): Map<number, string>;
 }
 
@@ -520,6 +611,8 @@ class ClosureBuilder {
   private rootBytes = new Map<string, Buffer>();
   private root: LoadedRevision | null = null;
 
+  private readonly commitByPackage = new Map<number, string | null>();
+
   constructor(private readonly ports: ClosureBuilderPorts) {}
 
   /** Resolves `exactRevision` of the root and everything it pulls in. */
@@ -539,11 +632,13 @@ class ClosureBuilder {
       roomId,
       publishedAt: root.publishedAt,
       revisionByPackage: this.revisionByPackage,
+      commitByPackage: this.commitByPackage,
       nameByPackage: this.nameByPackage,
       slugByPackage: this.slugByPackage,
       artifactKeys: this.ports.computeArtifactKeys(
         this.revisionByPackage,
         this.referencesByPackage,
+        this.commitByPackage,
       ),
       rootFiles: root.files,
       bytes: this.rootBytes,
@@ -586,6 +681,7 @@ class ClosureBuilder {
       this.ports.roomId,
     );
     this.revisionByPackage.set(id, loaded.revision);
+    this.commitByPackage.set(id, loaded.commitSha);
     this.visiting.push(id);
     this.nameByPackage.set(id, loaded.name);
     this.slugByPackage.set(id, loaded.slug);
@@ -612,21 +708,30 @@ class ClosureBuilder {
     const isRoot = id === this.ports.rootId;
     const bytes = new Map<string, Buffer>();
     const textFiles: PackageTextFile[] = [];
+    const candidates = loaded.files.filter(
+      (entry) => isRoot || isTextPackageFile(entry.filepath),
+    );
+    const contents =
+      candidates.length > 0
+        ? await this.ports.readFiles(
+            id,
+            loaded.revision,
+            candidates.map((entry) => entry.filepath),
+            loaded.commitSha,
+          )
+        : new Map<string, Buffer>();
 
-    for (const entry of loaded.files) {
-      const wantsText = isTextPackageFile(entry.filepath);
-      if (!isRoot && !wantsText) {
-        continue;
+    for (const entry of candidates) {
+      const data = contents.get(entry.filepath);
+      if (!data) {
+        throw new NotFoundException(
+          `File ${entry.filepath} not found in revision ${loaded.revision}`,
+        );
       }
-      const data = await this.ports.readFileBytes(
-        id,
-        loaded.revision,
-        entry.filepath,
-      );
       if (isRoot) {
         bytes.set(entry.filepath, data);
       }
-      if (wantsText) {
+      if (isTextPackageFile(entry.filepath)) {
         textFiles.push({
           filepath: entry.filepath,
           text: this.decodeText(entry.filepath, data),

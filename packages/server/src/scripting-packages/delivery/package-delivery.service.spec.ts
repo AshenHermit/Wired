@@ -231,7 +231,7 @@ describe('PackageDeliveryService', () => {
       root,
       String(packageId),
       'runtime',
-      'v2',
+      'v3',
       String(roomId),
       String(revision),
     );
@@ -373,7 +373,7 @@ describe('PackageDeliveryService', () => {
     );
   });
 
-  it('builds artifacts under runtime/v2', async () => {
+  it('builds artifacts under runtime/v3', async () => {
     definePackage(7, 'Heroes', 3, 'hero');
     await writePublished(7, 1, { 'hero.gd': 'extends Node' });
 
@@ -387,7 +387,7 @@ describe('PackageDeliveryService', () => {
       }
     ).buildArtifact(7, 1, 3);
 
-    expect(artifact.dir).toContain(path.join('runtime', 'v2'));
+    expect(artifact.dir).toContain(path.join('runtime', 'v3'));
   });
 
   it('rejects a shadowed slug before serving a cached artifact', async () => {
@@ -446,7 +446,7 @@ describe('PackageDeliveryService', () => {
 
     expect(manifest.slug).toBe('hero');
     expect(manifest.artifactKey).not.toBe('b'.repeat(64));
-    expect(resolved.path).toContain(path.join('runtime', 'v2'));
+    expect(resolved.path).toContain(path.join('runtime', 'v3'));
     expect(resolved.path).not.toContain(oldDir);
     expect(await artifactDirs(7, 1, 3)).toHaveLength(1);
   });
@@ -756,7 +756,7 @@ describe('PackageDeliveryService', () => {
         root,
         '5',
         'runtime',
-        'v2',
+        'v3',
         '7',
         '3',
         second.artifactKey,
@@ -855,10 +855,10 @@ describe('PackageDeliveryService', () => {
       const dirs = await artifactDirs(5, 3, 7);
       expect(dirs).toHaveLength(3);
       expect(dirs).toContain(
-        path.join(root, '5', 'runtime', 'v2', '7', '3', keys[4]),
+        path.join(root, '5', 'runtime', 'v3', '7', '3', keys[4]),
       );
       expect(dirs).not.toContain(
-        path.join(root, '5', 'runtime', 'v2', '7', '3', keys[0]),
+        path.join(root, '5', 'runtime', 'v3', '7', '3', keys[0]),
       );
     });
   });
