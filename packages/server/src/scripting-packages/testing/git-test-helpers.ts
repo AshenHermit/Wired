@@ -5,6 +5,11 @@ import type { AppConfigService } from 'src/config/config.service';
 import { GitCommand } from '../storage/git/git-command';
 import { PackageGitRepository } from '../storage/git/package-git-repository';
 
+// Windows: запуск git-процесса на нагруженной машине (jest в несколько
+// воркеров) легко выходит за дефолтные 5 с, а прерванный тест оставляет
+// процесс, который держит каталог и ломает cleanup.
+jest.setTimeout(30_000);
+
 export interface TestRepository {
   repo: PackageGitRepository;
   root: string;
@@ -24,7 +29,15 @@ export function makeRepository(gitStorage = true): TestRepository {
   return {
     repo: new PackageGitRepository(config, new GitCommand()),
     root,
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    // Windows: git может ещё держать handle на файлы репозитория после
+    // завершения команды, поэтому удаление ретраится.
+    cleanup: () =>
+      rmSync(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 100,
+      }),
   };
 }
 

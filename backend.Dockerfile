@@ -64,6 +64,10 @@ FROM base AS final
 ENV NODE_ENV=production \
     PORT=3000
 WORKDIR /app
+# Хранилище пакетов работает поверх git (bare-репозиторий SHA-256 на пакет).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=prod-deps /app/packages/server/node_modules ./packages/server/node_modules
 COPY --from=build /app/packages/server/dist ./packages/server/dist

@@ -20,7 +20,8 @@ import {
   requirePackageSlug,
 } from '../storage/package-slug-index';
 import { ASSET_BAKE_VERSION } from '../delivery/asset-bake.constants';
-import { sha256Hex } from '../storage/package-hash';import { PackageStorageService } from '../storage/package-storage.service';
+import { sha256Hex } from '../storage/package-hash';
+import { PackageStorageService } from '../storage/package-storage.service';
 
 /** One element of the result of `findDependentRoomPackages`. */
 export type DependentRoomPackage = {
@@ -458,9 +459,7 @@ export class PackageClosureResolver {
     const result = new Map<string, Buffer>();
     const missing: string[] = [];
     for (const filepath of filepaths) {
-      const cached = this.fileBytes.get(
-        `${packageId}:${revision}:${filepath}`,
-      );
+      const cached = this.fileBytes.get(`${packageId}:${revision}:${filepath}`);
       if (cached) {
         result.set(filepath, cached);
       } else {
