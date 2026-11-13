@@ -218,102 +218,6 @@ export function usePackageActions({
    * exception РІР‚вЂќ the backend rewrites every stored reference, so the editor
    * directory is renamed to match, after the PATCH succeeded.
    */
-  const updatePackageMetadata = React.useCallback(
-    async (
-      packageId: number,
-      patch: UpdateScriptingPackagePayload,
-    ): Promise<ScriptingPackage> => {
-      const payload: UpdateScriptingPackagePayload = {};
-      if (patch.name !== undefined) {
-        const name = patch.name.trim();
-        if (!name) throw new Error("package_metadata_empty");
-        payload.name = name;
-      }
-      if (patch.version !== undefined) {
-        const version = patch.version.trim();
-        if (!version) throw new Error("package_metadata_empty");
-        payload.version = version;
-      }
-      if (patch.slug !== undefined) {
-        const slug = patch.slug.trim();
-        if (!slug) throw new Error("package_metadata_empty");
-        payload.slug = slug;
-      }
-      if (patch.description !== undefined) {
-        payload.description = patch.description.trim();
-      }
-      if (patch.tags !== undefined) {
-        payload.tags = patch.tags;
-      }
-      if (patch.previewImage !== undefined) {
-        payload.previewImage = patch.previewImage;
-      }
-      if (patch.confirmSlugRename !== undefined) {
-        payload.confirmSlugRename = patch.confirmSlugRename;
-      }
-      if (Object.keys(payload).length === 0) {
-        throw new Error("package_metadata_empty");
-      }
-
-      const previousSlug = slugOf(packageId);
-      const renaming =
-        payload.slug !== undefined && payload.slug !== previousSlug;
-      if (renaming && (await isPackageDirOccupied(payload.slug!))) {
-        // The bridge would merge into or refuse the target folder, and the
-        // server rename cannot be undone, so refuse before any request.
-        throw new Error("slug_dir_exists");
-      }
-
-      let updated: ScriptingPackage;
-      try {
-        updated = await updateScriptingPackage(packageId, payload);
-      } catch (cause) {
-        const data = workshopErrorData(cause);
-        if (data?.code === "slug_in_use_by_dependents") {
-          throw new SlugRenameDependentsError(
-            (data.dependents ?? []).map((dependent) => ({
-              packageId: dependent.packageId ?? 0,
-              name: dependent.name ?? `#${dependent.packageId ?? "?"}`,
-            })),
-          );
-        }
-        console.error(cause);
-        setAction(packageId, {
-          error: { key: "Packages.errors.updateMetadataFailed" },
-        });
-        throw new Error("package_update_failed");
-      }
-      dispatch({ type: "updated", package: updated });
-      // The slug is addressable before the state mirror re-renders.
-      createdSlugsRef.current.set(packageId, updated.slug);
-
-      if (renaming) {
-        const files = filesRef.current;
-        if (files && (await files.exists(previousSlug))) {
-          try {
-            await files.renamePackage(previousSlug, updated.slug);
-          } catch (cause) {
-            if (cause instanceof EditorBridgeError) throw cause;
-            throw new PackageDirectoryRenameError(
-              packageId,
-              previousSlug,
-              updated.slug,
-              cause,
-            );
-          }
-        }
-        // Rescan only once the directory carries its new name.
-        requestEditorRescan();
-      }
-
-      // A successful retry must not leave the previous failure on the card.
-      setAction(packageId, { error: null });
-      await refresh();
-      return updated;
-    },
-    [filesRef, isPackageDirOccupied, refresh, setAction, slugOf],
-  );
-
   /** Moves the editor directory after a slug change that already happened. */
   const renamePackageDir = React.useCallback(
     async (
@@ -388,6 +292,117 @@ export function usePackageActions({
       throw new Error(`${code}:${errorMessage(cause)}`);
     },
     [setAction],
+  );
+
+  const updatePackageMetadata = React.useCallback(
+    async (
+      packageId: number,
+      patch: UpdateScriptingPackagePayload,
+    ): Promise<ScriptingPackage> => {
+      beginAction(packageId);
+      try {
+        const payload: UpdateScriptingPackagePayload = {};
+        if (patch.name !== undefined) {
+          const name = patch.name.trim();
+          if (!name) throw new Error("package_metadata_empty");
+          payload.name = name;
+        }
+        if (patch.version !== undefined) {
+          const version = patch.version.trim();
+          if (!version) throw new Error("package_metadata_empty");
+          payload.version = version;
+        }
+        if (patch.slug !== undefined) {
+          const slug = patch.slug.trim();
+          if (!slug) throw new Error("package_metadata_empty");
+          payload.slug = slug;
+        }
+        if (patch.description !== undefined) {
+          payload.description = patch.description.trim();
+        }
+        if (patch.tags !== undefined) {
+          payload.tags = patch.tags;
+        }
+        if (patch.previewImage !== undefined) {
+          payload.previewImage = patch.previewImage;
+        }
+        if (patch.confirmSlugRename !== undefined) {
+          payload.confirmSlugRename = patch.confirmSlugRename;
+        }
+        if (Object.keys(payload).length === 0) {
+          throw new Error("package_metadata_empty");
+        }
+
+        const previousSlug = slugOf(packageId);
+        const renaming =
+          payload.slug !== undefined && payload.slug !== previousSlug;
+        if (renaming && (await isPackageDirOccupied(payload.slug!))) {
+          // The bridge would merge into or refuse the target folder, and the
+          // server rename cannot be undone, so refuse before any request.
+          throw new Error("slug_dir_exists");
+        }
+
+        let updated: ScriptingPackage;
+        try {
+          updated = await updateScriptingPackage(packageId, payload);
+        } catch (cause) {
+          const data = workshopErrorData(cause);
+          if (data?.code === "slug_in_use_by_dependents") {
+            throw new SlugRenameDependentsError(
+              (data.dependents ?? []).map((dependent) => ({
+                packageId: dependent.packageId ?? 0,
+                name: dependent.name ?? `#${dependent.packageId ?? "?"}`,
+              })),
+            );
+          }
+          return failAction(
+            packageId,
+            cause,
+            { key: "Packages.errors.updateMetadataFailed" },
+            "package_update_failed",
+          );
+        }
+        dispatch({ type: "updated", package: updated });
+        // The slug is addressable before the state mirror re-renders.
+        createdSlugsRef.current.set(packageId, updated.slug);
+
+        if (renaming) {
+          const files = filesRef.current;
+          if (files && (await files.exists(previousSlug))) {
+            try {
+              await files.renamePackage(previousSlug, updated.slug);
+            } catch (cause) {
+              if (cause instanceof EditorBridgeError) throw cause;
+              throw new PackageDirectoryRenameError(
+                packageId,
+                previousSlug,
+                updated.slug,
+                cause,
+              );
+            }
+          }
+          // Rescan only once the directory carries its new name.
+          requestEditorRescan();
+        }
+
+        // A successful retry must not leave the previous failure on the card.
+        setAction(packageId, { error: null });
+        await refresh();
+        return updated;
+      } finally {
+        endAction(packageId);
+      }
+    },
+    [
+      beginAction,
+      endAction,
+      failAction,
+      filesRef,
+      isPackageDirOccupied,
+      refresh,
+      setAction,
+      slugOf,
+    ],
   );
 
   const applyPublishedRevision = React.useCallback(

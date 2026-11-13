@@ -484,7 +484,14 @@ describe('RoomsService', () => {
   describe('updateAccess', () => {
     it('validates that all provided user IDs exist before updating', async () => {
       const usersService = {
-        findById: jest.fn((id) => Promise.resolve(id === 5 ? { id: 5 } : null)),
+        assertUsersExist: jest.fn(async (ids: number[]) => {
+          const missing = ids.filter((id) => id !== 5 && id !== 15);
+          if (missing.length > 0) {
+            throw new BadRequestException(
+              `The following user IDs do not exist: ${missing.join(', ')}`,
+            );
+          }
+        }),
       };
 
       const roomsRepository = {
@@ -523,7 +530,14 @@ describe('RoomsService', () => {
 
     it('rejects with a list of all invalid user IDs', async () => {
       const usersService = {
-        findById: jest.fn((id) => Promise.resolve(id === 5 ? { id: 5 } : null)),
+        assertUsersExist: jest.fn(async (ids: number[]) => {
+          const missing = ids.filter((id) => id !== 5 && id !== 15);
+          if (missing.length > 0) {
+            throw new BadRequestException(
+              `The following user IDs do not exist: ${missing.join(', ')}`,
+            );
+          }
+        }),
       };
 
       const roomsRepository = {
@@ -567,7 +581,7 @@ describe('RoomsService', () => {
 
     it('allows updateAccess when all provided user IDs exist', async () => {
       const usersService = {
-        findById: jest.fn((id) => Promise.resolve({ id })),
+        assertUsersExist: jest.fn(async () => undefined),
       };
 
       const roomsRepository = {
@@ -603,7 +617,7 @@ describe('RoomsService', () => {
 
     it('allows updateAccess with no user IDs provided', async () => {
       const usersService = {
-        findById: jest.fn(),
+        assertUsersExist: jest.fn(async () => undefined),
       };
 
       const roomsRepository = {
@@ -633,13 +647,13 @@ describe('RoomsService', () => {
 
       await expect(service.updateAccess(1, dto, user)).resolves.toBeDefined();
 
-      expect(usersService.findById).not.toHaveBeenCalled();
+      expect(usersService.assertUsersExist).toHaveBeenCalledWith([]);
       expect(roomsRepository.save).toHaveBeenCalled();
     });
 
     it('skips validation when user ID arrays are empty', async () => {
       const usersService = {
-        findById: jest.fn(),
+        assertUsersExist: jest.fn(async () => undefined),
       };
 
       const roomsRepository = {
@@ -670,12 +684,12 @@ describe('RoomsService', () => {
 
       await expect(service.updateAccess(1, dto, user)).resolves.toBeDefined();
 
-      expect(usersService.findById).not.toHaveBeenCalled();
+      expect(usersService.assertUsersExist).toHaveBeenCalledWith([]);
     });
 
     it('deduplicates user IDs when validating', async () => {
       const usersService = {
-        findById: jest.fn((id) => Promise.resolve({ id })),
+        assertUsersExist: jest.fn(async () => undefined),
       };
 
       const roomsRepository = {
@@ -706,16 +720,23 @@ describe('RoomsService', () => {
 
       await expect(service.updateAccess(1, dto, user)).resolves.toBeDefined();
 
-      // Each unique user ID should be validated once, not multiple times
-      // With Set deduplication, we expect 3 unique IDs: 5, 15
-      expect(usersService.findById).toHaveBeenCalledTimes(2);
-      expect(usersService.findById).toHaveBeenCalledWith(5);
-      expect(usersService.findById).toHaveBeenCalledWith(15);
+      // Deduplication lives in UsersService.assertUsersExist; the room service
+      // hands it every id of every access list.
+      expect(usersService.assertUsersExist).toHaveBeenCalledWith([
+        5, 5, 15, 15, 5,
+      ]);
     });
 
     it('validates readUserIds and rejects unknown IDs', async () => {
       const usersService = {
-        findById: jest.fn((id) => Promise.resolve(id === 5 ? { id: 5 } : null)),
+        assertUsersExist: jest.fn(async (ids: number[]) => {
+          const missing = ids.filter((id) => id !== 5 && id !== 15);
+          if (missing.length > 0) {
+            throw new BadRequestException(
+              `The following user IDs do not exist: ${missing.join(', ')}`,
+            );
+          }
+        }),
       };
 
       const roomsRepository = {
@@ -753,7 +774,7 @@ describe('RoomsService', () => {
 
     it('persists readAccess and readUserIds when valid', async () => {
       const usersService = {
-        findById: jest.fn((id) => Promise.resolve({ id })),
+        assertUsersExist: jest.fn(async () => undefined),
       };
 
       const roomsRepository = {

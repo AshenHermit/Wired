@@ -35,87 +35,74 @@ function isAuthor(
 }
 
 /**
+ * The shared tail of every access policy: `all` admits any authenticated user,
+ * `users` requires an exact match in the policy list, and `author` (or an
+ * unknown mode) adds nobody beyond the owners the caller already checked.
+ */
+function matchesAccess(
+  access: RoomAccessMode | null | undefined,
+  ids: number[] | null | undefined,
+  userId: number | null | undefined,
+): boolean {
+  if (access === "all") {
+    return userId != null;
+  }
+
+  if (access === "users") {
+    return userId != null && (ids ?? []).includes(userId);
+  }
+
+  return false;
+}
+
+/**
  * Mirrors the server's room package-management rule: the room author is always
- * allowed, an `all` policy admits any authenticated user, and a `users` policy
- * requires an exact match in the room's `packageManagementUserIds`.
+ * allowed, and the configured policy may admit further users.
  */
 export function canManageRoomPackages(
   room: RoomAccessSubject,
   userId: number | null | undefined,
 ): boolean {
-  if (isAuthor(room, userId)) {
-    return true;
-  }
-
-  const access = room.packageManagementAccess;
-
-  if (access === "all") {
-    return userId != null;
-  }
-
-  if (access === "users") {
-    return (
-      userId != null && (room.packageManagementUserIds ?? []).includes(userId)
-    );
-  }
-
-  // 'author' mode (or anything else) only allows the author, already handled.
-  return false;
+  return (
+    isAuthor(room, userId) ||
+    matchesAccess(
+      room.packageManagementAccess,
+      room.packageManagementUserIds,
+      userId,
+    )
+  );
 }
 
 /**
  * Mirrors the server's room package-creation rule: the room author is always
- * allowed, an `all` policy admits any authenticated user, and a `users` policy
- * requires an exact match in the room's `packageCreationUserIds`.
+ * allowed, and the configured policy may admit further users.
  */
 export function canCreateRoomPackages(
   room: RoomAccessSubject,
   userId: number | null | undefined,
 ): boolean {
-  if (isAuthor(room, userId)) {
-    return true;
-  }
-
-  const access = room.packageCreationAccess;
-
-  if (access === "all") {
-    return userId != null;
-  }
-
-  if (access === "users") {
-    return (
-      userId != null && (room.packageCreationUserIds ?? []).includes(userId)
-    );
-  }
-
-  // 'author' mode (or anything else) only allows the author, already handled.
-  return false;
+  return (
+    isAuthor(room, userId) ||
+    matchesAccess(
+      room.packageCreationAccess,
+      room.packageCreationUserIds,
+      userId,
+    )
+  );
 }
 
 /**
- * Mirrors the server's room read rule: the room author is always allowed,
- * an `all` policy admits any authenticated user, and a `users` policy
- * requires an exact match in the room's `readUserIds`.
+ * Mirrors the server's room read rule: the room author is always allowed, and
+ * the configured policy may admit further users.
  */
 export function canReadRoom(
   room: RoomAccessSubject,
   userId: number | null | undefined,
 ): boolean {
-  if (isAuthor(room, userId)) {
-    return true;
-  }
-
-  const access = room.readAccess;
-
-  if (access === "all") {
-    return userId != null;
-  }
-
-  if (access === "users") {
-    return userId != null && (room.readUserIds ?? []).includes(userId);
-  }
-
-  return false;
+  return (
+    isAuthor(room, userId) ||
+    matchesAccess(room.readAccess, room.readUserIds, userId)
+  );
 }
 
 /**
@@ -143,16 +130,5 @@ export function canEditPackage(
     return true;
   }
 
-  const access = pkg.editingAccess;
-
-  if (access === "all") {
-    return userId != null;
-  }
-
-  if (access === "users") {
-    return userId != null && (pkg.editingUserIds ?? []).includes(userId);
-  }
-
-  // 'author' mode only allows the package author, already handled.
-  return false;
+  return matchesAccess(pkg.editingAccess, pkg.editingUserIds, userId);
 }

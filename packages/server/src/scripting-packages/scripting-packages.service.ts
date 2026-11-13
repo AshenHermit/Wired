@@ -313,10 +313,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     const canManageRoom =
       Boolean(pkg.room) && canManageRoomPackages(pkg.room!, user.id);
 
-    if (
-      !ScriptingPackagesService.ownsPackage(pkg, user) &&
-      !canManageRoom
-    ) {
+    if (!ScriptingPackagesService.ownsPackage(pkg, user) && !canManageRoom) {
       throw new ForbiddenException(
         'You are not allowed to publish this package',
       );
@@ -547,29 +544,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
   ): Promise<ScriptingPackage> {
     const pkg = await this.findOne(id);
 
-    // Validate that all provided user IDs exist
-    const userIdsToValidate = new Set<number>();
-
-    if (dto.editingUserIds && dto.editingUserIds.length > 0) {
-      dto.editingUserIds.forEach((uid) => userIdsToValidate.add(uid));
-    }
-
-    if (userIdsToValidate.size > 0) {
-      const invalidIds: number[] = [];
-
-      for (const userId of userIdsToValidate) {
-        const userExists = await this.usersService.findById(userId);
-        if (!userExists) {
-          invalidIds.push(userId);
-        }
-      }
-
-      if (invalidIds.length > 0) {
-        throw new BadRequestException(
-          `The following user IDs do not exist: ${invalidIds.join(', ')}`,
-        );
-      }
-    }
+    await this.usersService.assertUsersExist(dto.editingUserIds);
 
     // Update only the fields provided in the DTO
     if (dto.editingAccess !== undefined) {

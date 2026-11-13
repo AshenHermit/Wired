@@ -424,21 +424,26 @@ export class PackageClosureResolver {
       revision,
       filepath,
     );
+    this.storeInFileCache(key, data);
+    return data;
+  }
+
+  /** Adds one file to the LRU byte cache, evicting the oldest keys first. */
+  private storeInFileCache(key: string, data: Buffer): void {
     if (data.byteLength > this.maxFileCacheBytes) {
-      return data;
+      return;
     }
     while (this.fileCacheBytes + data.byteLength > this.maxFileCacheBytes) {
       const oldestKey = this.fileBytes.keys().next().value;
       if (oldestKey === undefined) {
         break;
       }
-      const oldest = this.fileBytes.get(oldestKey)!;
+      const oldest = this.fileBytes.get(oldestKey);
       this.fileBytes.delete(oldestKey);
-      this.fileCacheBytes -= oldest.byteLength;
+      this.fileCacheBytes -= oldest?.byteLength ?? 0;
     }
     this.fileBytes.set(key, data);
     this.fileCacheBytes += data.byteLength;
-    return data;
   }
 
   /**
@@ -500,24 +505,7 @@ export class PackageClosureResolver {
     filepath: string,
     data: Buffer,
   ): void {
-    if (data.byteLength > this.maxFileCacheBytes) {
-      return;
-    }
-    const key = `${packageId}:${revision}:${filepath}`;
-    while (
-      this.fileCacheBytes + data.byteLength > this.maxFileCacheBytes &&
-      this.fileBytes.size > 0
-    ) {
-      const oldest = this.fileBytes.keys().next().value;
-      if (oldest === undefined) {
-        break;
-      }
-      const removed = this.fileBytes.get(oldest);
-      this.fileBytes.delete(oldest);
-      this.fileCacheBytes -= removed?.byteLength ?? 0;
-    }
-    this.fileBytes.set(key, data);
-    this.fileCacheBytes += data.byteLength;
+    this.storeInFileCache(`${packageId}:${revision}:${filepath}`, data);
   }
 
   private async collectRevisionReferences(
@@ -599,7 +587,6 @@ class ClosureBuilder {
   private readonly filesByPackage = new Map<number, PackageFileEntry[]>();
   private readonly nameByPackage = new Map<number, string>();
   private readonly slugByPackage = new Map<number, string>();
-  private readonly publishedAtByPackage = new Map<number, string>();
   /** package id -> other package ids its files reference directly. */
   private readonly referencesByPackage = new Map<number, Set<number>>();
   private readonly directDependencyIds: number[] = [];
@@ -684,7 +671,6 @@ class ClosureBuilder {
     this.visiting.push(id);
     this.nameByPackage.set(id, loaded.name);
     this.slugByPackage.set(id, loaded.slug);
-    this.publishedAtByPackage.set(id, loaded.publishedAt);
     this.filesByPackage.set(id, loaded.files);
     return loaded;
   }
