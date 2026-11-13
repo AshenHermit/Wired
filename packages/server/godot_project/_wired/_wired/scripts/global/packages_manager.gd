@@ -9,7 +9,8 @@ class_name PackagesManager
 ## `/wired-cache/wired/rooms` in the Web build, which mounts a second IndexedDB
 ## database for it: the room editor mounts the same database as `/userfs` and
 ## its flushes delete records written by anybody else, so the cache of a game
-## must not share that mount.
+## must not share that mount. A Web mount that fails its probe falls back to the
+## desktop root.
 ##
 ## `user://` is a single directory per Godot project name, so every room runtime
 ## on the machine shares it. The room code is therefore part of the path: two
@@ -69,6 +70,11 @@ const PACKAGES_ROOT := "user://wired/rooms"
 ## mounts and flushes.
 const WEB_CACHE_MOUNT := "/wired-cache"
 const WEB_PACKAGES_ROOT := "/wired-cache/wired/rooms"
+## Probe the Web cache mount has to pass before any apply trusts it.
+const WEB_PROBE_DIR := ".probe"
+const WEB_PROBE_TEXT_FILE := "probe.txt"
+const WEB_PROBE_TEXT_BODY := "wired-cache-probe"
+const WEB_PROBE_RESOURCE_FILE := "probe.res"
 const UNASSIGNED_ROOM := "_unknown"
 ## Slug of every package this room applied, next to its `packages/` directory.
 const SLUG_INDEX_FILE := "package_slugs.json"
@@ -126,6 +132,11 @@ var _sync_order: Array = []
 ## Set when this process changed the package files, so `flush_storage()` syncs
 ## once per batch instead of per package.
 var _storage_dirty := false
+## Set once the Web cache mount was probed, so the check costs no syscall after
+## the first apply.
+var _web_root_checked := false
+## Result of that probe: the Web cache mount is persistent and writable.
+var _web_root_usable := false
 
 
 func _init() -> void:
@@ -199,10 +210,69 @@ func flush_storage() -> void:
 ## own IDBFS mount; when the mount is absent (older export, host page without the
 ## override) `initFS` still creates the directory in MEMFS, so the mount is
 ## probed instead of trusting the platform.
+##
+## The probe runs once per process and is memoised: a mount that exists but
+## cannot persist or cannot serve absolute-path resource I/O would make every
+## apply fail, so such a mount falls back to the desktop root for the rest of the
+## process. A desktop build needs no probe.
 func storage_root() -> String:
-	if OS.has_feature("web") and DirAccess.dir_exists_absolute(WEB_CACHE_MOUNT):
-		return WEB_PACKAGES_ROOT
-	return PACKAGES_ROOT
+	if not OS.has_feature("web"):
+		return PACKAGES_ROOT
+	if not _web_root_checked:
+		_web_root_checked = true
+		_web_root_usable = _probe_web_root()
+		if not _web_root_usable:
+			print("WIRED_PACKAGES_CACHE_ROOT_FALLBACK root=%s" % WEB_PACKAGES_ROOT)
+	return WEB_PACKAGES_ROOT if _web_root_usable else PACKAGES_ROOT
+
+
+## Proves the Web cache mount is usable before the first apply: it exists, a text
+## file survives a write and a read back, and `ResourceSaver`/`ResourceLoader`
+## work on an absolute path under it. The mount is created in MEMFS when the host
+## page has no IDBFS mapping, so an existence check alone would accept a cache
+## that a reload loses.
+func _probe_web_root() -> bool:
+	if not DirAccess.dir_exists_absolute(WEB_CACHE_MOUNT):
+		return false
+	var probe_dir := WEB_PACKAGES_ROOT.path_join(WEB_PROBE_DIR)
+	if DirAccess.make_dir_recursive_absolute(probe_dir) != OK:
+		return false
+	var usable := _probe_text_file(probe_dir) and _probe_resource_file(probe_dir)
+	# Leftovers of a probe are harmless, but they would become part of every
+	# later package-root scan.
+	DirAccess.remove_absolute(probe_dir.path_join(WEB_PROBE_TEXT_FILE))
+	DirAccess.remove_absolute(probe_dir.path_join(WEB_PROBE_RESOURCE_FILE))
+	DirAccess.remove_absolute(probe_dir)
+	return usable
+
+
+## Writes one small text file and reads it back, the operation every staged
+## package file depends on.
+func _probe_text_file(probe_dir: String) -> bool:
+	var path := probe_dir.path_join(WEB_PROBE_TEXT_FILE)
+	var handle := FileAccess.open(path, FileAccess.WRITE)
+	if handle == null:
+		return false
+	handle.store_string(WEB_PROBE_TEXT_BODY)
+	var write_error := handle.get_error()
+	handle.close()
+	if write_error != OK:
+		return false
+	return FileAccess.get_file_as_string(path) == WEB_PROBE_TEXT_BODY
+
+
+## Saves and reloads a tiny resource, because the derived assets of a package are
+## written with `ResourceSaver` and read back with `ResourceLoader` through
+## absolute paths. `ConfigFile` is not a `Resource` in this engine, so the probe
+## uses a plain `Resource` with one metadata entry.
+func _probe_resource_file(probe_dir: String) -> bool:
+	var path := probe_dir.path_join(WEB_PROBE_RESOURCE_FILE)
+	var probe := Resource.new()
+	probe.set_meta("wired_cache_probe", true)
+	if ResourceSaver.save(probe, path) != OK:
+		return false
+	var loaded := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
+	return loaded != null
 
 
 func packages_root() -> String:
@@ -358,10 +428,15 @@ func forget_package(package_id: int, purge: bool = false) -> void:
 	_scene_dependencies.erase(package_id)
 	_file_hashes.erase(package_id)
 	# No slug means no folder was ever resolved for this id: touching a path
-	# would risk deleting the packages root itself.
+	# would risk deleting the packages root itself. A missing folder deletes
+	# nothing, and a browser flush would copy the whole tree for nothing, so only
+	# a purge that really removed files dirties the storage.
 	var slug := str(_slugs.get(package_id, ""))
 	if purge and not slug.is_empty():
-		_remove_tree(_artifacts.package_dir(slug))
+		var dir := _artifacts.package_dir(slug)
+		if DirAccess.dir_exists_absolute(dir):
+			_remove_tree(dir)
+			_storage_dirty = true
 	print(
 		"WIRED_PACKAGES_FORGOTTEN package=%d purge=%s" % [package_id, purge]
 	)
@@ -868,7 +943,10 @@ func _reuse_artifact(
 			func(item: Dictionary) -> String: return str(item.get("filepath", ""))
 		)
 		# The directory is already the final one, so the sidecars point at it.
-		var derive_result := AssetDeriver.derive(dir, dir, paths)
+		# A failed repair keeps what was derived so far: this is the live
+		# directory, and the marker stays unrewritten, so the next sync repairs
+		# again while the previously working files survive a failed download.
+		var derive_result := AssetDeriver.derive(dir, dir, paths, false)
 		if not bool(derive_result.get("ok", false)):
 			# A repair that cannot derive the files is a miss: the caller
 			# downloads, and `swap` replaces the directory of this key.

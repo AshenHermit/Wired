@@ -43,9 +43,14 @@ static var _derivations: Dictionary = {}
 ## published file.
 ##
 ## Returns `{ok: bool, error: String}`. A failure removes everything derived by
-## this call, so the caller can drop staging as a whole.
+## this call unless `cleanup_failed` is false, so a caller that stages into a
+## scratch directory can drop it as a whole. An in-place repair of a cached
+## artifact passes false: its target is the live directory, where deleting the
+## derived files would discard assets that already worked. The repair leaves the
+## marker unrewritten after a failure, so the next sync repairs again, and a
+## failed follow-up download must not leave the package worse than before.
 static func derive(
-	staging: String, final_dir: String, filepaths: Array
+	staging: String, final_dir: String, filepaths: Array, cleanup_failed: bool = true
 ) -> Dictionary:
 	var table := derivations()
 	# Derived names must never replace a file the artifact already declares.
@@ -73,7 +78,8 @@ static func derive(
 			"audio":
 				ok = _derive_audio(staging.path_join(path), target, type)
 		if not ok:
-			_remove_files(derived)
+			if cleanup_failed:
+				_remove_files(derived)
 			return {"ok": false, "error": "asset_derive_failed:%s" % path}
 		# Both names are recorded before the sidecar write, so neither the derived
 		# resource nor a half-written sidecar can survive a failure.
@@ -81,7 +87,8 @@ static func derive(
 		derived.append(target)
 		derived.append(sidecar)
 		if not _write_import(sidecar, type, final_dir.path_join(path + suffix)):
-			_remove_files(derived)
+			if cleanup_failed:
+				_remove_files(derived)
 			return {"ok": false, "error": "asset_derive_failed:%s" % path}
 	return {"ok": true, "error": ""}
 

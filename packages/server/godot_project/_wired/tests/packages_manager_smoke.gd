@@ -938,6 +938,14 @@ func _test_flush_storage_clears_dirty_state() -> void:
 	_check(_manager._storage_dirty, "a successful apply must mark the storage dirty")
 	_manager.flush_storage()
 	_check(not _manager._storage_dirty, "flush_storage must clear the dirty flag")
+	# A purge deletes files, so it must dirty the storage itself: the apply that
+	# downloaded them was flushed just above.
+	_manager.forget_package(FLUSH_ID, true)
+	_check(
+		_manager._storage_dirty,
+		"purging an applied package must mark the storage dirty",
+	)
+	_manager.flush_storage()
 
 
 ## A package with no slug yet must not resolve, enumerate or delete a path: an

@@ -1051,6 +1051,9 @@ func _apply_package_revision(package_id: int, revision: int) -> void:
 		% [package_id, revision]
 	)
 	var result: Dictionary = await _packages.sync_package(package_id, revision)
+	# A live revision is applied outside any batch, so it is persisted here
+	# instead of waiting for a flush that this path never reaches.
+	_packages.flush_storage()
 	if not bool(result.get("ok", false)):
 		# PackagesManager already printed WIRED_PACKAGES_SYNC_FAILED with the
 		# requested revision; the backend owns retries.
@@ -1390,6 +1393,9 @@ func _apply_client_package(package_id: int, revision: int) -> void:
 	# completion boundary: registry/static content and live player components
 	# have already been rebuilt before the acknowledgement below is sent.
 	var result: Dictionary = await _packages.sync_package(package_id, revision)
+	# A hot reload applies one package on its own, outside the startup or
+	# snapshot batch, so this is its own flush point.
+	_packages.flush_storage()
 	var ok := bool(result.get("ok", false))
 	var applied := int(result.get("revision", 0))
 	if applied <= 0:
