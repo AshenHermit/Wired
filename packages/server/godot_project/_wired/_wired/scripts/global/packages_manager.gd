@@ -3,7 +3,13 @@ class_name PackagesManager
 
 ## Downloads published package runtime artifacts from the Wired backend and
 ## materializes them under
-## user://wired/rooms/<room>/packages/<slug>/<revision>-<artifact_key>/.
+## <storage_root>/<room>/packages/<slug>/<revision>-<artifact_key>/.
+##
+## `storage_root()` is `user://wired/rooms` on desktop and
+## `/wired-cache/wired/rooms` in the Web build, which mounts a second IndexedDB
+## database for it: the room editor mounts the same database as `/userfs` and
+## its flushes delete records written by anybody else, so the cache of a game
+## must not share that mount.
 ##
 ## `user://` is a single directory per Godot project name, so every room runtime
 ## on the machine shares it. The room code is therefore part of the path: two
@@ -58,6 +64,11 @@ signal package_progress(
 const PROTOCOL_VERSION := 1
 const DEFAULT_API_URL := "http://127.0.0.1:3000"
 const PACKAGES_ROOT := "user://wired/rooms"
+## The Web build mounts this extra persistent path (see `_wired/web/shell.html`),
+## so the package cache is not part of the `/userfs` database the WASM editor
+## mounts and flushes.
+const WEB_CACHE_MOUNT := "/wired-cache"
+const WEB_PACKAGES_ROOT := "/wired-cache/wired/rooms"
 const UNASSIGNED_ROOM := "_unknown"
 ## Slug of every package this room applied, next to its `packages/` directory.
 const SLUG_INDEX_FILE := "package_slugs.json"
@@ -163,8 +174,18 @@ func set_api_base(url: String) -> bool:
 	return true
 
 
+## Root every package path is built from. The Web build keeps the cache on its
+## own IDBFS mount; when the mount is absent (older export, host page without the
+## override) `initFS` still creates the directory in MEMFS, so the mount is
+## probed instead of trusting the platform.
+func storage_root() -> String:
+	if OS.has_feature("web") and DirAccess.dir_exists_absolute(WEB_CACHE_MOUNT):
+		return WEB_PACKAGES_ROOT
+	return PACKAGES_ROOT
+
+
 func packages_root() -> String:
-	return PACKAGES_ROOT.path_join(room).path_join("packages")
+	return storage_root().path_join(room).path_join("packages")
 
 
 ## Folder of one package, or an empty string when its manifest has not named a
@@ -199,7 +220,7 @@ func runtime_path(
 ## `<room>/package_slugs.json`: the folder slug of every package this room has
 ## applied.
 func _slug_index_path() -> String:
-	return PACKAGES_ROOT.path_join(room).path_join(SLUG_INDEX_FILE)
+	return storage_root().path_join(room).path_join(SLUG_INDEX_FILE)
 
 
 ## Restores the id -> slug mapping of the room. The file only holds data written

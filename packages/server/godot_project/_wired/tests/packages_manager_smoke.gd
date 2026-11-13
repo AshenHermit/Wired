@@ -75,6 +75,7 @@ func _run() -> void:
 	_manager.package_applied.connect(_on_package_applied)
 	_manager.package_failed.connect(_on_package_failed)
 	_manager.package_progress.connect(_on_package_progress)
+	_test_storage_root()
 	await _test_recursive_sync()
 	await _test_progress_events()
 	await _test_same_revision_refresh()
@@ -186,6 +187,25 @@ func _test_room_normalization() -> void:
 	_check(manager.room == "7", "a bridge room of 7.0 must normalize to 7")
 	_check(manager._room_id() == 7, "a normalized room must keep its integer id")
 	manager.free()
+
+
+func _test_storage_root() -> void:
+	_check(
+		_manager.storage_root() == PackagesManager.PACKAGES_ROOT,
+		"a desktop build must keep the user:// packages root",
+	)
+	_check(
+		_manager.packages_root()
+		== _manager.storage_root().path_join(ROOM).path_join("packages"),
+		"the packages root must be derived from storage_root()",
+	)
+	_check(
+		_manager._slug_index_path()
+		== _manager.storage_root().path_join(ROOM).path_join(
+			PackagesManager.SLUG_INDEX_FILE
+		),
+		"the slug index must live next to the packages directory",
+	)
 
 
 func _test_recursive_sync() -> void:
