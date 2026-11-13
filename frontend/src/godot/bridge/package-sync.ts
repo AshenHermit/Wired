@@ -1,5 +1,4 @@
-import { PackageManifest, PackageRevision } from "@wired-io/shared";
-import {
+import { PackageManifest, PackageRevision } from "@wired-io/shared";import {
   createPackageRevision,
   getPackageManifest,
   getRevisionFile,
@@ -42,8 +41,15 @@ export async function publishPackageFiles(
     files: collected.map((file) => file.entry),
   });
 
-  onProgress?.(0, collected.length);
-  for (const [index, file] of collected.entries()) {
+  // The git path reports which files the server already stores; an older
+  // server has no `missing` field, so everything must be uploaded.
+  const missing = draft.missing ? new Set(draft.missing) : null;
+  const pending = missing
+    ? collected.filter((file) => missing.has(file.entry.filepath))
+    : collected;
+
+  onProgress?.(0, pending.length);
+  for (const [index, file] of pending.entries()) {
     const saved = await uploadRevisionFileAsUint8Array(
       packageId,
       draft.revision,
@@ -55,11 +61,11 @@ export async function publishPackageFiles(
         `File ${file.entry.filepath} was stored with different contents: sha256 mismatch`,
       );
     }
-    onProgress?.(index + 1, collected.length);
+    onProgress?.(index + 1, pending.length);
   }
 
   const revision = await publishPackageRevision(packageId, draft.revision);
-  return { revision, uploaded: collected.length };
+  return { revision, uploaded: pending.length };
 }
 
 /** The published revision last applied to this editor, with its file hashes. */

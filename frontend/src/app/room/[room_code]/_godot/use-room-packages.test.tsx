@@ -348,9 +348,10 @@ describe("useRoomPackages", () => {
       available: true,
       global: { available: true },
     });
-    vi.mocked(packagesApi.createPackageRevision).mockResolvedValue(
-      revision(5, 3, "draft"),
-    );
+    vi.mocked(packagesApi.createPackageRevision).mockResolvedValue({
+      ...revision(5, 3, "draft"),
+      missing: [HERO],
+    });
     vi.mocked(packagesApi.uploadRevisionFileAsUint8Array).mockImplementation(
       async (_id, _revision, entry) => ({
         size: entry.size,

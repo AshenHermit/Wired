@@ -1,4 +1,9 @@
-import { PackageFileEntry, PackageManifest, PackageRevision } from "@wired-io/shared";
+import {
+  PackageFileEntry,
+  PackageManifest,
+  PackageRevision,
+  PackageRevisionDraft,
+} from "@wired-io/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type CollectedPackageFile,
@@ -129,6 +134,19 @@ const revision = (revisionNumber: number, status: "draft" | "published"): Packag
   publishedAt: status === "published" ? "2026-10-29T00:01:00.000Z" : null,
 });
 
+/**
+ * A draft response from the git path lists the files the server already has
+ * content for. Omitting `missing` simulates an older server that never
+ * reported it, so every file must be uploaded.
+ */
+const draftResponse = (
+  revisionNumber: number,
+  missing?: string[]
+): PackageRevisionDraft =>
+  missing
+    ? { ...revision(revisionNumber, "draft"), missing }
+    : ({ ...revision(revisionNumber, "draft") } as PackageRevisionDraft);
+
 describe("publishPackageFiles", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -138,7 +156,9 @@ describe("publishPackageFiles", () => {
     const { tree, files } = makeFiles();
     put(tree, "hero", "scripts/hero.gd", "extends Node");
     put(tree, "hero", "scenes/hero.tscn", "[gd_scene]");
-    vi.mocked(api.createPackageRevision).mockResolvedValue(revision(3, "draft"));
+    vi.mocked(api.createPackageRevision).mockResolvedValue(
+      draftResponse(3, ["scenes/hero.tscn", "scripts/hero.gd"])
+    );
     vi.mocked(api.uploadRevisionFileAsUint8Array).mockImplementation(
       async (_packageId, _revision, file) => ({
         size: file.size,
@@ -174,10 +194,58 @@ describe("publishPackageFiles", () => {
     expect(result.uploaded).toBe(2);
   });
 
+  it("uploads only the files the server is missing", async () => {
+    const { tree, files } = makeFiles();
+    put(tree, "hero", "a.txt", "A");
+    put(tree, "hero", "b.txt", "B");
+    vi.mocked(api.createPackageRevision).mockResolvedValue(draftResponse(3, ["b.txt"]));
+    vi.mocked(api.uploadRevisionFileAsUint8Array).mockImplementation(
+      async (_packageId, _revision, file) => ({
+        size: file.size,
+        sha256: file.sha256,
+      })
+    );
+    vi.mocked(api.publishPackageRevision).mockResolvedValue(
+      revision(3, "published")
+    );
+
+    const result = await publishPackageFiles(1, "hero", files);
+
+    expect(api.uploadRevisionFileAsUint8Array).toHaveBeenCalledTimes(1);
+    expect(api.uploadRevisionFileAsUint8Array).toHaveBeenCalledWith(
+      1,
+      3,
+      expect.objectContaining({ filepath: "b.txt" }),
+      expect.anything()
+    );
+    expect(api.publishPackageRevision).toHaveBeenCalledWith(1, 3);
+    expect(result.uploaded).toBe(1);
+  });
+
+  it("uploads everything when the server does not report missing files", async () => {
+    const { tree, files } = makeFiles();
+    put(tree, "hero", "a.txt", "A");
+    put(tree, "hero", "b.txt", "B");
+    vi.mocked(api.createPackageRevision).mockResolvedValue(draftResponse(3));
+    vi.mocked(api.uploadRevisionFileAsUint8Array).mockImplementation(
+      async (_packageId, _revision, file) => ({
+        size: file.size,
+        sha256: file.sha256,
+      })
+    );
+    vi.mocked(api.publishPackageRevision).mockResolvedValue(
+      revision(3, "published")
+    );
+
+    await publishPackageFiles(7, "hero", files);
+
+    expect(api.uploadRevisionFileAsUint8Array).toHaveBeenCalledTimes(2);
+  });
+
   it("stops before publishing when the server stored a different file", async () => {
     const { tree, files } = makeFiles();
     put(tree, "hero", "scripts/hero.gd", "extends Node");
-    vi.mocked(api.createPackageRevision).mockResolvedValue(revision(3, "draft"));
+    vi.mocked(api.createPackageRevision).mockResolvedValue(draftResponse(3));
     vi.mocked(api.uploadRevisionFileAsUint8Array).mockResolvedValue({
       size: 99,
       sha256: "b".repeat(64),
