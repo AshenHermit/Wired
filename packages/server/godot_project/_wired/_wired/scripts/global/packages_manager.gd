@@ -72,6 +72,11 @@ const WEB_PACKAGES_ROOT := "/wired-cache/wired/rooms"
 const UNASSIGNED_ROOM := "_unknown"
 ## Slug of every package this room applied, next to its `packages/` directory.
 const SLUG_INDEX_FILE := "package_slugs.json"
+## Text files the backend rewrites with absolute `user://` package paths.
+const RELOCATABLE_EXTENSIONS := ["tscn", "tres", "gd"]
+## Applies a locally complete artifact instead of downloading it again. The
+## switch exists so the feature can be rolled back without touching the flow.
+const CACHE_REUSE := true
 ## How long a sync waits for another coroutine that is applying the same package.
 const APPLY_LOCK_TIMEOUT_MS := 300_000
 ## A lock held longer than this is leaked: the applying coroutine aborted (an
@@ -186,6 +191,17 @@ func storage_root() -> String:
 
 func packages_root() -> String:
 	return storage_root().path_join(room).path_join("packages")
+
+
+## Replaces the backend's `user://` package prefix with the active storage root.
+## Returns the input unchanged when the prefix is absent.
+static func relocate_artifact_text(
+	text: String, room_id: String, root: String
+) -> String:
+	var prefix := "user://wired/rooms/%s/packages/" % room_id
+	if not text.contains(prefix):
+		return text
+	return text.replace(prefix, "%s/%s/packages/" % [root, room_id])
 
 
 ## Folder of one package, or an empty string when its manifest has not named a
@@ -529,7 +545,7 @@ func _sync_package_chain(
 	# A revision already on disk (or one that another coroutine applied while
 	# this call waited) is not applied again. An older revision never replaces
 	# a newer one; an equal one is only skipped for a caller that had to wait,
-	# because a fresh call must still refresh a changed artifact.
+	# because a fresh call still has to apply an artifact key that changed.
 	var applied_revision := maxi(
 		current_revision(package_id), _artifacts.highest_revision(slug)
 	)
@@ -698,6 +714,15 @@ func _sync_package(
 	if trace_sync_order:
 		_sync_order.append(package_id)
 
+	# A complete artifact of exactly this key needs no bytes: the marker proves
+	# a finished apply and every file is still the size it was written with.
+	if CACHE_REUSE:
+		var cached := _reuse_artifact(
+			package_id, revision, artifact_key, slug, manifest, declared
+		)
+		if not cached.is_empty():
+			return cached
+
 	# 1. Download and verify everything in memory before touching the disk.
 	var download := await _download_files(
 		package_id,
@@ -713,7 +738,23 @@ func _sync_package(
 	var verified: Array = download.get("files", [])
 	var hashes: Dictionary = download.get("hashes", {})
 
-	# 2. Stage the new artifact next to the old one, derive the runtime form of
+	# 2. A downloaded text file may carry absolute `user://` paths of the
+	# backend's own cache; the Web build keeps packages elsewhere, so the body is
+	# rewritten before it is staged. The relocation changes the size, and the
+	# marker has to record what is actually on disk. `hashes` stay the manifest's
+	# hashes, which were verified against the bytes the server sent.
+	var declared_sizes := {}
+	for item: Dictionary in declared:
+		declared_sizes[str(item.get("filepath", ""))] = int(item.get("size", -1))
+	var stored_sizes := {}
+	for file: Dictionary in verified:
+		_relocate_artifact_file(file)
+		var filepath := str(file.get("filepath", ""))
+		var body: PackedByteArray = file.get("body", PackedByteArray())
+		if body.size() != int(declared_sizes.get(filepath, body.size())):
+			stored_sizes[filepath] = body.size()
+
+	# 3. Stage the new artifact next to the old one, derive the runtime form of
 	# its raw images and audio, then swap. The final directory is keyed, so a
 	# refreshed closure never overwrites the bytes of the previous one.
 	var target_dir := _artifacts.revision_dir(slug, revision, artifact_key)
@@ -730,11 +771,27 @@ func _sync_package(
 		# artifact untouched.
 		_artifacts.remove_tree(_artifacts.staging_dir(slug))
 		return _failure(str(derive_result.get("error", "")), revision)
+	# The marker is the last file of the directory: a later run reuses exactly
+	# what a completed apply left behind, and a crash before this line leaves a
+	# directory that can never be mistaken for a whole one.
+	var marker_error := _artifacts.write_marker(
+		_artifacts.staging_dir(slug),
+		package_id,
+		slug,
+		revision,
+		artifact_key,
+		total_bytes,
+		verified.size(),
+		stored_sizes,
+	)
+	if not marker_error.is_empty():
+		_artifacts.remove_tree(_artifacts.staging_dir(slug))
+		return _failure(marker_error, revision)
 	var swap_error := _artifacts.swap(slug, revision, artifact_key)
 	if not swap_error.is_empty():
 		return _failure(swap_error, revision)
 
-	# 3. Publish the new state only after every file is in place. A dependency
+	# 4. Publish the new state only after every file is in place. A dependency
 	# that changed under an unchanged revision still refreshes the scene map and
 	# the hashes here, even when `changed` is empty.
 	var changed := _changed_files(_file_hashes.get(package_id, {}), hashes)
@@ -758,6 +815,73 @@ func _sync_package(
 		"files": verified.map(func(file: Dictionary) -> String: return str(file.filepath)),
 		"changed_files": changed,
 	}
+
+
+## Applies a revision from a verified local artifact. Returns an empty dictionary
+## when the directory is not a match, so the caller downloads normally; `swap`
+## then replaces the directory of that key.
+##
+## `_names` and `_total_bytes` are already published by `_sync_package`, so the
+## progress of a hit reuses them and the Game tab renders the same package.
+func _reuse_artifact(
+	package_id: int,
+	revision: int,
+	artifact_key: String,
+	slug: String,
+	manifest: Dictionary,
+	declared: Array,
+) -> Dictionary:
+	var inspection := _artifacts.reusable_artifact(
+		package_id, slug, revision, artifact_key, declared
+	)
+	if not bool(inspection.get("reusable", false)):
+		return {}
+	var dir := str(inspection.get("dir", ""))
+	if dir.is_empty():
+		return {}
+	var hashes := {}
+	var files := PackedStringArray()
+	for item: Dictionary in declared:
+		var filepath := str(item.get("filepath", ""))
+		hashes[filepath] = str(item.get("sha256", ""))
+		files.append(filepath)
+	var changed := _changed_files(_file_hashes.get(package_id, {}), hashes)
+	_current_revisions[package_id] = revision
+	_current_artifact_keys[package_id] = artifact_key
+	_scene_dependencies[package_id] = PackageManifest.scene_map(manifest)
+	_file_hashes[package_id] = hashes
+	_save_slug_index()
+	_artifacts.prune(slug, revision, dir.get_file())
+	print(
+		"WIRED_PACKAGES_CACHED package=%d revision=%d artifact=%s files=%d"
+		% [package_id, revision, artifact_key.left(12), files.size()]
+	)
+	return {
+		"ok": true,
+		"error": "",
+		"revision": revision,
+		"artifact_key": artifact_key,
+		"files": files,
+		"changed_files": changed,
+		"cached": true,
+	}
+
+
+## Rewrites a downloaded text file in place when the packages root is not the
+## `user://` one the backend assumes.
+func _relocate_artifact_file(file: Dictionary) -> void:
+	var root := storage_root()
+	if root == PACKAGES_ROOT:
+		return
+	var filepath := str(file.get("filepath", ""))
+	if not RELOCATABLE_EXTENSIONS.has(filepath.get_extension().to_lower()):
+		return
+	var body: PackedByteArray = file.get("body", PackedByteArray())
+	var text := body.get_string_from_utf8()
+	var relocated := relocate_artifact_text(text, room, root)
+	if relocated == text:
+		return
+	file["body"] = relocated.to_utf8_buffer()
 
 
 ## Resolves the latest published revision through the raw manifest, so a caller

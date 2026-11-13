@@ -33,6 +33,8 @@ const SLUG_OTHER_ID := 81
 const SLUG_MISSING_ID := 82
 const SLUG_SKIPPED_ID := 83
 const PROGRESS_ID := 90
+const CACHE_ID := 100
+const CACHE_LIB_ID := 101
 
 var _manager: PackagesManager
 # "package:revision" -> runtime manifest dictionary
@@ -87,6 +89,10 @@ func _run() -> void:
 	await _test_missing_manifest()
 	await _test_stale_lock_is_reclaimed()
 	await _test_restart_pruning()
+	_test_relocate_references()
+	await _test_cache_reuse_after_restart()
+	await _test_cache_rejects_corrupt_artifact()
+	await _test_cache_key_change_downloads()
 	await _test_unknown_slug_never_touches_the_packages_root()
 	await _test_slug_index_survives_restart()
 	await _test_skipped_apply_persists_slug_index()
@@ -759,6 +765,100 @@ func _test_restart_pruning() -> void:
 	_check(
 		_revision_dirs(ROOT_ID) == PackedStringArray(["6", "7"]),
 		"a stale revision must not change the revision window"
+	)
+	restarted.free()
+
+
+## The backend rewrites package references in text files to `user://` paths of
+## its own cache, which is not where the Web build mounts the packages root.
+func _test_relocate_references() -> void:
+	var text := 'path="user://wired/rooms/%s/packages/lib/1-abc/art/pic.png"' % ROOM
+	var relocated := PackagesManager.relocate_artifact_text(
+		text, ROOM, "/wired-cache/wired/rooms"
+	)
+	_check(
+		relocated
+		== 'path="/wired-cache/wired/rooms/%s/packages/lib/1-abc/art/pic.png"' % ROOM,
+		"a web root must relocate the backend package prefix",
+	)
+	_check(
+		PackagesManager.relocate_artifact_text(
+			"no package paths here", ROOM, "/wired-cache/wired/rooms"
+		) == "no package paths here",
+		"text without the prefix must be untouched",
+	)
+
+
+## A complete artifact on disk must be applied without downloading again.
+func _test_cache_reuse_after_restart() -> void:
+	_publish(CACHE_ID, 1, {"scripts/cache.gd": "cache-v1", "scenes/cache.tscn": "scene-v1"})
+	var first: Dictionary = await _manager.sync_package(CACHE_ID, 1)
+	_check(bool(first.get("ok", false)), "the first apply must download the artifact")
+	_check(not bool(first.get("cached", false)), "the first apply must not be a cache hit")
+	var restarted := _restarted_manager()
+	_requests.clear()
+	var second: Dictionary = await restarted.sync_package(CACHE_ID, 1)
+	_check(bool(second.get("ok", false)), "a cached artifact must apply after restart")
+	_check(bool(second.get("cached", false)), "a complete artifact must be reported as cached")
+	_check(not _has_request_containing("runtime-files"), "a cache hit must not download files")
+	_check(
+		second.get("changed_files", PackedStringArray()).size() == 2,
+		"a cache hit in a fresh process must report every file as changed",
+	)
+	_check(restarted.current_revision(CACHE_ID) == 1, "a cache hit must publish the revision")
+	_check(
+		not restarted.current_artifact_key(CACHE_ID).is_empty(),
+		"a cache hit must publish the artifact key",
+	)
+	_check(
+		FileAccess.get_file_as_string(
+			restarted.runtime_path(CACHE_ID, 1, "scripts/cache.gd")
+		) == "cache-v1",
+		"a cache hit must expose the applied files",
+	)
+	restarted.free()
+
+
+func _test_cache_rejects_corrupt_artifact() -> void:
+	var path := _manager.runtime_path(CACHE_ID, 1, "scripts/cache.gd")
+	var handle := FileAccess.open(path, FileAccess.WRITE)
+	handle.store_string("bad")
+	handle.close()
+	var restarted := _restarted_manager()
+	_requests.clear()
+	var result: Dictionary = await restarted.sync_package(CACHE_ID, 1)
+	_check(bool(result.get("ok", false)), "a corrupt cache must fall back to a download")
+	_check(not bool(result.get("cached", false)), "a corrupt cache must not be reused")
+	_check(_has_request_containing("runtime-files"), "a corrupt cache must download the files")
+	_check(
+		FileAccess.get_file_as_string(path) == "cache-v1",
+		"the download must restore the corrupted file",
+	)
+	restarted.free()
+
+
+func _test_cache_key_change_downloads() -> void:
+	var previous := _manager.current_artifact_key(CACHE_ID)
+	_publish(CACHE_LIB_ID, 1, {"scripts/cache_lib.gd": "lib-v1"})
+	_publish(
+		CACHE_ID,
+		1,
+		{"scripts/cache.gd": "cache-v1", "scenes/cache.tscn": "scene-v1"},
+		[_dependency(CACHE_LIB_ID, 1)],
+	)
+	var restarted := _restarted_manager()
+	_requests.clear()
+	var result: Dictionary = await restarted.sync_package(CACHE_ID, 1)
+	_check(bool(result.get("ok", false)), "a new artifact key must apply")
+	_check(not bool(result.get("cached", false)), "a new artifact key must not reuse the old bytes")
+	_check(_has_request_containing("runtime-files"), "a new artifact key must download")
+	_check(
+		restarted.current_artifact_key(CACHE_ID) != previous,
+		"the key must change when a dependency is published",
+	)
+	_check(
+		_artifact_dirs(CACHE_ID).size() == 1,
+		"the old keyed directory must be pruned",
 	)
 	restarted.free()
 
@@ -1503,11 +1603,11 @@ func _manifest_key(package_id: int, revision: int) -> String:
 	return key.sha256_text()
 
 
-## Mirrors the server: the key covers the sorted `(packageId, revision)` list
-## reachable from the package, so a transitive publish changes it.
+## Mirrors the server: the key covers the resolved closure including the bytes
+## of every file, so a same-revision rebuild changes it.
 func _closure_key(package_id: int, revision: int, dependencies: Array) -> String:
 	var seen := {}
-	var pairs: Array = []
+	var entries: Array = []
 	var queue: Array = [[package_id, revision, dependencies]]
 	while not queue.is_empty():
 		var item: Array = queue.pop_front()
@@ -1517,7 +1617,11 @@ func _closure_key(package_id: int, revision: int, dependencies: Array) -> String
 		if seen.has(pair_key):
 			continue
 		seen[pair_key] = true
-		pairs.append([id, rev])
+		entries.append({
+			"packageId": id,
+			"revision": rev,
+			"files": _file_digests(id, rev),
+		})
 		var manifest: Dictionary = _manifests.get(pair_key, {})
 		for dependency: Variant in item[2]:
 			var entry: Dictionary = dependency
@@ -1531,11 +1635,27 @@ func _closure_key(package_id: int, revision: int, dependencies: Array) -> String
 				dependency_revision,
 				dependency_manifest.get("dependencies", []),
 			])
-	pairs.sort_custom(
-		func(a: Array, b: Array) -> bool:
-			return a[0] < b[0] or (a[0] == b[0] and a[1] < b[1])
+	entries.sort_custom(
+		func(a: Dictionary, b: Dictionary) -> bool:
+			return a.packageId < b.packageId or (
+				a.packageId == b.packageId and a.revision < b.revision
+			)
 	)
-	return JSON.stringify(pairs).sha256_text()
+	return JSON.stringify(entries).sha256_text()
+
+
+func _file_digests(package_id: int, revision: int) -> Array:
+	var prefix := "%d:%d:" % [package_id, revision]
+	var paths: Array = []
+	for key: Variant in _files:
+		var entry := str(key)
+		if entry.begins_with(prefix):
+			paths.append(entry.substr(prefix.length()))
+	paths.sort()
+	var digests: Array = []
+	for filepath: String in paths:
+		digests.append([filepath, _manager._sha256(_files[prefix + filepath])])
+	return digests
 
 
 # --- async helpers --------------------------------------------------------
@@ -1545,6 +1665,15 @@ func _next_frame() -> void:
 	var loop := Engine.get_main_loop()
 	if loop is SceneTree:
 		await (loop as SceneTree).process_frame
+
+
+## A manager of the same room with no in-memory state, like a page reload.
+func _restarted_manager() -> PackagesManager:
+	var restarted := PackagesManager.new()
+	restarted.configure("http://127.0.0.1:1", ROOM)
+	restarted.request_override = _transport
+	restarted.trace_sync_order = true
+	return restarted
 
 
 func _sync_into(results: Array, index: int, package_id: int) -> void:
