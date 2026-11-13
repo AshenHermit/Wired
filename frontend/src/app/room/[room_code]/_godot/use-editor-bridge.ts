@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { errorMessage } from "@/utils/errors";
 import type { AppMessage } from "@/i18n/message";
 import type { GodotEditorInstance } from "./GodotEditorInstance";
 import {

@@ -5,7 +5,6 @@ import {
 } from '@nestjs/common';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { RoomsService } from './rooms.service';
-import { UsersService } from 'src/users/users.service';
 import { UpdateRoomAccessDto } from './dto/update-room-access.dto';
 
 function packagesServiceStub(

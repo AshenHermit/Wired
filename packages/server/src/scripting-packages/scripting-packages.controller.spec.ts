@@ -11,7 +11,6 @@ import {
   PackageManifest,
   PackageRevision,
 } from '@wired-io/shared';
-import { Response } from 'express';
 import request from 'supertest';
 import { APP_GUARD } from '@nestjs/core';
 import { createValidationPipe } from 'src/common/validation';
