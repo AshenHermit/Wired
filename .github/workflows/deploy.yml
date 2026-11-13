@@ -44,6 +44,9 @@ jobs:
       - name: Тесты фронтенда
         run: pnpm --filter frontend test
 
+      - name: Validate content
+        run: pnpm --filter frontend validate:content
+
       - name: Типы фронтенда
         run: pnpm check-types:frontend
 

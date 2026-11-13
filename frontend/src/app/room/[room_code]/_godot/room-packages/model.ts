@@ -1,13 +1,15 @@
 import type {
   PackageRevisionSyncState,
+  PackageRuntimeSyncState,
   PackageSlugAvailability,
   PackageSyncStatus,
   ScriptingPackage,
+  UpdateScriptingPackagePayload,
   WorkshopPackageMetadata,
   WorkshopPublishResult,
 } from "@wired-io/shared";
 import type { AppMessage } from "@/i18n/message";
-import type { GodotEditorInstance } from "../GodotEditorInstance";
+import type { GodotEditorInstance } from "@/godot/editor/godot-editor-instance";
 import type { PackageFileSystem } from "@/godot/bridge/godot-packages-fs";
 import { changedPackageFiles } from "@/godot/bridge/package-sync";
 import type { PackageBaseline } from "@/godot/bridge/package-sync";
@@ -43,7 +45,12 @@ export type RoomPackageEntry = {
   sizeBytes: number | null;
   localChanges: string[];
   backendState: PackageRevisionSyncState | null;
-  runtimeState: PackageRevisionSyncState | null;
+  /**
+   * Delivery state of the published revision in the room runtime. Narrower than
+   * `backendState`: the runtime only ever reports pending/applied/failed, so
+   * `published`, `ready` and `stale` must not be offered here.
+   */
+  runtimeState: PackageRuntimeSyncState | null;
   runtimeError: string | null;
   clientsReady: number;
   clientsTotal: number;
@@ -63,29 +70,40 @@ export const IDLE_ACTION: PackageActionState = {
   error: null,
 };
 
-export type RoomPackagesController = {
-  entries: RoomPackageEntry[];
-  fsReady: boolean;
-  statusLoaded: boolean;
-  error: AppMessage | null;
-  actions: Record<number, PackageActionState>;
-  actionFor: (packageId: number) => PackageActionState;
-  /**
-   * Called once the editor reported ready. Waits for the editor plugin bridge
-   * in the background and must never delay the editor itself.
-   */
-  afterEditorStart: (editor: GodotEditorInstance) => void;
-  refresh: () => Promise<void>;
-  createPackage: (draft: {
-    name: string;
-    version: string;
-    slug: string;
-  }) => Promise<ScriptingPackage>;
+/**
+ * What the creation form collects. The rest of the payload (description, tags,
+ * dependencies, preview) is edited later through `updatePackageMetadata`.
+ */
+export type CreatePackageDraft = {
+  name: string;
+  version: string;
+  slug: string;
+};
+
+/**
+ * Slugs are room-scoped, so the room is part of the question. The global
+ * workshop scope is reported separately by the response.
+ */
+export type SlugAvailabilityScope = {
+  /** Defaults to the controller's own room. */
+  roomId?: number;
+  /** The package being edited, which must not count as a collision. */
+  excludeId?: number;
+};
+
+/**
+ * Every explicit action the package panel can perform on one room.
+ *
+ * This is the single declaration of the action contract: the hook that
+ * implements it and the controller that exposes it both use this type, so a
+ * signature can no longer drift between the two.
+ */
+export type PackageActions = {
+  createPackage: (draft: CreatePackageDraft) => Promise<ScriptingPackage>;
   /** Asks the backend whether a new package may use this slug. */
   checkSlugAvailability: (
     slug: string,
-    roomId?: number,
-    excludeId?: number,
+    scope?: SlugAvailabilityScope,
   ) => Promise<PackageSlugAvailability>;
   /**
    * Updates the package metadata on the backend. A slug change also renames the
@@ -93,18 +111,8 @@ export type RoomPackagesController = {
    */
   updatePackageMetadata: (
     packageId: number,
-    patch: {
-      name?: string;
-      version?: string;
-      slug?: string;
-      description?: string;
-      tags?: string[];
-      previewImage?: string | null;
-      confirmSlugRename?: boolean;
-    },
+    patch: UpdateScriptingPackagePayload,
   ) => Promise<ScriptingPackage>;
-  /** Whether `packages/<slug>` already exists in the editor with files. */
-  isPackageDirOccupied: (slug: string) => Promise<boolean>;
   /** Retries the directory move after a bridge failure; idempotent. */
   renamePackageDir: (
     packageId: number,
@@ -140,6 +148,27 @@ export type RoomPackagesController = {
     packageId: number,
     slug: string,
   ) => Promise<ScriptingPackage>;
+};
+
+/**
+ * The room package list plus the actions that operate on it. `actionFor` is the
+ * only read access to per-card action state; the map itself stays internal so
+ * callers cannot depend on its identity between renders.
+ */
+export type RoomPackagesController = PackageActions & {
+  entries: RoomPackageEntry[];
+  fsReady: boolean;
+  statusLoaded: boolean;
+  error: AppMessage | null;
+  actionFor: (packageId: number) => PackageActionState;
+  /**
+   * Called once the editor reported ready. Waits for the editor plugin bridge
+   * in the background and must never delay the editor itself.
+   */
+  afterEditorStart: (editor: GodotEditorInstance) => void;
+  refresh: () => Promise<void>;
+  /** Whether `packages/<slug>` already exists in the editor with files. */
+  isPackageDirOccupied: (slug: string) => Promise<boolean>;
 };
 
 export function mergePackages(
@@ -205,6 +234,19 @@ export function packageProjectRoot(editor: GodotEditorInstance): string {
   return `${editor.rootPath}/${projectName}`;
 }
 
+/**
+ * Files that differ from the loaded baseline. A package without a baseline has
+ * no reference point, so every file it has counts as a local change.
+ */
+export function localChangesFor(
+  baseline: PackageBaseline | null,
+  snapshot: Record<string, string>,
+): string[] {
+  return baseline
+    ? changedPackageFiles(baseline.files, snapshot)
+    : Object.keys(snapshot);
+}
+
 export function buildEntries(
   packages: ScriptingPackage[],
   remote: Map<number, PackageSyncStatus>,
@@ -219,9 +261,7 @@ export function buildEntries(
     // `exists` is an asynchronous bridge call now, so `load` awaits it for
     // every package and passes the resulting set here.
     const inEditor = present.has(pkg.id);
-    const localChanges = loadedState
-      ? changedPackageFiles(loadedState.files, snapshot)
-      : Object.keys(snapshot);
+    const localChanges = localChangesFor(loadedState, snapshot);
 
     const enabled = remoteState?.enabled ?? pkg.enabled !== false;
 

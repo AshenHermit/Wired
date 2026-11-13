@@ -135,7 +135,6 @@ export function RoomWorkspace({
               canManagePackages={canManagePackages}
               canCreatePackages={canCreatePackages}
               viewerId={viewerId}
-              roomId={room.id}
               room={room}
               onRoomSaved={onRoomSaved}
             />

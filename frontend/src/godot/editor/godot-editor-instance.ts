@@ -5,6 +5,15 @@ import { GODOT_EDITOR_URL } from "@/utils/variables";
 import { ProjectInfo } from "@wired-io/shared";
 import EventEmitter from "easy-event-emitter";
 
+/**
+ * Browser-side owner of the Godot WASM editor: it creates the engine, feeds the
+ * project files into its file system and restarts it after an editor exit.
+ *
+ * It is deliberately framework-agnostic (no JSX, no React import) and lives
+ * outside the room route so the state layer (`room-packages`) can depend on the
+ * engine handle without importing a route-segment file.
+ */
+
 export interface GodotEngine {
   init(path?: string): Promise<void>;
   start(options: {
@@ -45,16 +54,15 @@ export type EditorEvents = {
 };
 
 export class GodotEditorInstance {
-  video_driver = "";
+  videoDriver = "";
   canvas: HTMLCanvasElement | null = null;
   events: EventEmitter<EditorEvents> = new EventEmitter<EditorEvents>();
   rootPath = "/home/web_user";
   persistentPaths = [this.rootPath];
   editor!: GodotEngine;
-  OnEditorExit: ((code: number) => void) | null = null;
+  onEditorExit: ((code: number) => void) | null = null;
   projectInfo: ProjectInfo | null = null;
 
-  constructor() {}
   async init() {
     this.events.emit("onLoadStatusChange", "loading");
     const editorConfig = this.createEditorConfig();
@@ -128,8 +136,8 @@ export class GodotEditorInstance {
     } else {
       args.push("--project-manager");
     }
-    if (this.video_driver) {
-      args.push("--rendering-driver", this.video_driver);
+    if (this.videoDriver) {
+      args.push("--rendering-driver", this.videoDriver);
     }
     await this.editor.start({ args: args, persistentDrops: true });
     this.events.emit("onLoadStatusChange", "ready");
@@ -172,48 +180,55 @@ export class GodotEditorInstance {
         if (this.canvas) {
           this.setCanvas(this.canvas);
         }
-        this.OnEditorExit?.(0);
+        this.onEditorExit?.(0);
       },
-      onExecute: this.Execute.bind(this),
+      onExecute: this.execute.bind(this),
       persistentPaths: this.persistentPaths,
       emscriptenPoolSize: concurrency,
       godotPoolSize: Math.floor(concurrency / 3), // Ensures at least 4 threads for the pool (see above).
     };
   }
 
-  Execute(args: string[]) {
-    const is_editor = args.some(
+  /**
+   * Engine hook: Godot calls it before starting a session, both for the first
+   * launch and for a restart.
+   */
+  execute(args: string[]) {
+    const isEditor = args.some(
       (value) => value === "--editor" || value === "-e",
     );
-    const is_project_manager = args.includes("--project-manager");
-    const is_game = !is_editor && !is_project_manager;
-    if (this.video_driver) {
-      args.push("--rendering-driver", this.video_driver);
+    const isProjectManager = args.includes("--project-manager");
+    const isGame = !isEditor && !isProjectManager;
+    if (this.videoDriver) {
+      args.push("--rendering-driver", this.videoDriver);
     }
-    if (is_game) {
+    if (isGame) {
       // A game run does not restart the engine when it exits.
-      this.OnEditorExit = null;
+      this.onEditorExit = null;
       return;
     }
 
     // The editor (and the project manager) restart themselves in the same
     // mode after the engine exits. The callback is one-shot: it clears itself
     // before scheduling, so one exit starts exactly one new session.
-    this.OnEditorExit = () => {
-      this.OnEditorExit = null;
-      void this.restart(args, is_project_manager);
+    this.onEditorExit = () => {
+      this.onEditorExit = null;
+      void this.restart(args, { persistentDrops: isProjectManager });
     };
   }
 
-  private async restart(args: string[], persistentDrops: boolean) {
+  /**
+   * Restarts the engine in place. Drag-and-drop survives the restart only in
+   * the project manager; an editor session is restarted without it.
+   */
+  private async restart(
+    args: string[],
+    options: { persistentDrops: boolean }
+  ) {
     // Give the engine a moment to finish tearing the previous session down
-    // before intialising a new instance in the persistent FS.
+    // before initialising a new instance in the persistent FS.
     await new Promise((resolve) => setTimeout(resolve, 100));
     await this.editor.init();
-    await this.editor.start({
-      args,
-      persistentDrops,
-      canvas: this.canvas,
-    });
+    await this.editor.start({ args, ...options, canvas: this.canvas });
   }
 }

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getGodotProjectInfo } from "@/api/services/godot-game";
 import { renderWithIntl } from "@/test/render-with-intl";
 import { GodotEditor } from "./GodotEditor";
-import { GodotEditorInstance } from "./GodotEditorInstance";
+import { GodotEditorInstance } from "@/godot/editor/godot-editor-instance";
 
 vi.mock("@/api/services/godot-game", () => ({
   getGodotProjectInfo: vi.fn(),
@@ -150,11 +150,11 @@ describe("GodotEditor script readiness", () => {
 
     try {
       await editor.init();
-      editor.Execute(["--editor", "--path", "/home/web_user/room-7/wired"]);
-      expect(editor.OnEditorExit).toBeTypeOf("function");
+      editor.execute(["--editor", "--path", "/home/web_user/room-7/wired"]);
+      expect(editor.onEditorExit).toBeTypeOf("function");
 
       await act(async () => {
-        editor.OnEditorExit?.(0);
+        editor.onEditorExit?.(0);
       });
       // The restart waits 100 ms for the previous engine to tear down.
       await act(async () => {
@@ -170,7 +170,7 @@ describe("GodotEditor script readiness", () => {
       });
       // One-shot: the exit handler is gone, so a second exit cannot start yet
       // another engine.
-      expect(editor.OnEditorExit).toBeNull();
+      expect(editor.onEditorExit).toBeNull();
 
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 150));
@@ -189,13 +189,13 @@ describe("GodotEditor script readiness", () => {
     editor.setCanvas(canvas);
 
     try {
-      editor.Execute([]);
-      expect(editor.OnEditorExit).toBeNull();
+      editor.execute([]);
+      expect(editor.onEditorExit).toBeNull();
 
       await editor.init();
-      editor.Execute(["--project-manager"]);
+      editor.execute(["--project-manager"]);
       await act(async () => {
-        editor.OnEditorExit?.(0);
+        editor.onEditorExit?.(0);
       });
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 150));
@@ -224,7 +224,7 @@ describe("GodotEditor script readiness", () => {
     editor.setCanvas(canvas);
     const config = editor.createEditorConfig();
     const exit = vi.fn();
-    editor.OnEditorExit = exit;
+    editor.onEditorExit = exit;
 
     try {
       config.onExit?.();

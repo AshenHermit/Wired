@@ -17,14 +17,9 @@ import {
   DialogTitle,
 } from "@/components/animate-ui/components/radix/dialog";
 import { WorkshopBrowser } from "@/components/packages/WorkshopBrowser";
-import {
-  slugHintClass,
-  slugHintKey,
-} from "@/components/packages/slug";
+import { SlugField } from "@/components/packages/slug-field";
 import { useSlugAvailability } from "@/components/packages/use-slug-availability";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useAppMessage, type AppMessage } from "@/i18n/message";
 import {
   WorkshopActionError,
@@ -369,13 +364,11 @@ export function WorkshopForkDialog({
   open,
   onOpenChange,
   entry,
-  roomId,
   packages,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   entry: RoomPackageEntry | null;
-  roomId: number;
   /** Only the fork actions this dialog drives. */
   packages: Pick<
     RoomPackagesController,
@@ -384,7 +377,6 @@ export function WorkshopForkDialog({
 }) {
   const [slug, setSlug] = React.useState("");
   const t = useTranslations("Workshop");
-  const slugT = useTranslations();
   const common = useTranslations("Common");
   const format = useAppMessage();
   const [submitting, setSubmitting] = React.useState(false);
@@ -399,7 +391,7 @@ export function WorkshopForkDialog({
   const slugAvailability = useSlugAvailability({
     slug,
     enabled: open,
-    check: (candidate) => checkSlugAvailability(candidate, roomId),
+    check: (candidate) => checkSlugAvailability(candidate),
     verdict: (result) =>
       result.available && result.global.available ? "available" : "taken",
   });
@@ -448,38 +440,17 @@ export function WorkshopForkDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="workshop-fork-slug">{t("newSlug")}</Label>
-            <Input
-              id="workshop-fork-slug"
-              value={slug}
-              onChange={(event) => {
-                setSlug(event.target.value.toLowerCase());
-              }}
-              placeholder={t("newSlugPlaceholder")}
-              autoComplete="off"
-              spellCheck={false}
-              autoCapitalize="none"
-              disabled={submitting}
-              autoFocus
-            />
-            {slugHintKey(slugState) && (
-              <p className={`text-xs ${slugHintClass(slugState)}`}>
-                {slugT(slugHintKey(slugState)!)}
-              </p>
-            )}
-            {slugState === "error" && (
-              <Button
-                type="button"
-                variant="link"
-                size="sm"
-                className="h-auto px-0 text-xs"
-                onClick={slugAvailability.retry}
-              >
-                {t("checkAgain")}
-              </Button>
-            )}
-          </div>
+          <SlugField
+            id="workshop-fork-slug"
+            label={t("newSlug")}
+            value={slug}
+            onChange={setSlug}
+            placeholder={t("newSlugPlaceholder")}
+            disabled={submitting}
+            autoFocus
+            availability={slugAvailability}
+            retryLabel={t("checkAgain")}
+          />
 
           {error && (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive">

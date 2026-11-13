@@ -355,7 +355,6 @@ export function useRoomPackages(
     fsReady: transport.fsReady,
     statusLoaded,
     error,
-    actions: state.actions,
     actionFor,
     afterEditorStart: transport.afterEditorStart,
     refresh,

@@ -19,6 +19,21 @@ describe('slugify', () => {
     expect(slugify('test@#$%')).toBe('test');
     expect(slugify('CamelCase')).toBe('camelcase');
   });
+
+  test('transliterates Cyrillic headings', () => {
+    expect(slugify('Что такое пакет')).toBe('chto-takoe-paket');
+    expect(slugify('Начало работы с пакетами Wired')).toBe(
+      'nachalo-raboty-s-paketami-wired',
+    );
+    expect(slugify('Регистрация сущностей и контента')).toBe(
+      'registratsiya-sushchnostey-i-kontenta',
+    );
+  });
+
+  test('falls back to section for non-latin symbols', () => {
+    expect(slugify('🎮')).toBe('section');
+    expect(slugify('🎮', 1)).toBe('section-1');
+  });
 });
 
 describe('parseMarkdownHeadings', () => {
@@ -38,10 +53,30 @@ API content
 `;
     const headings = parseMarkdownHeadings(md);
     expect(headings).toHaveLength(4);
-    expect(headings[0]).toEqual({ id: 'getting-started', level: 2, text: 'Getting Started' });
-    expect(headings[1]).toEqual({ id: 'installation', level: 3, text: 'Installation' });
-    expect(headings[2]).toEqual({ id: 'configuration', level: 3, text: 'Configuration' });
-    expect(headings[3]).toEqual({ id: 'api-methods', level: 2, text: 'API Methods' });
+    expect(headings[0]).toEqual({
+      id: 'getting-started',
+      level: 2,
+      text: 'Getting Started',
+      line: 2,
+    });
+    expect(headings[1]).toEqual({
+      id: 'installation',
+      level: 3,
+      text: 'Installation',
+      line: 5,
+    });
+    expect(headings[2]).toEqual({
+      id: 'configuration',
+      level: 3,
+      text: 'Configuration',
+      line: 8,
+    });
+    expect(headings[3]).toEqual({
+      id: 'api-methods',
+      level: 2,
+      text: 'API Methods',
+      line: 11,
+    });
   });
 
   test('handles duplicate heading texts by appending counter', () => {
@@ -85,5 +120,45 @@ Content
   test('handles empty markdown', () => {
     expect(parseMarkdownHeadings('')).toEqual([]);
     expect(parseMarkdownHeadings('No headings here')).toEqual([]);
+  });
+
+  test('keeps Cyrillic anchors unique in parseMarkdownHeadings', () => {
+    const headings = parseMarkdownHeadings('## Пакет\n## Пакет\n');
+    expect(headings.map((h) => h.id)).toEqual(['paket', 'paket-1']);
+  });
+
+  test('strips inline markup from heading text and id', () => {
+    const headings = parseMarkdownHeadings(
+      '## `WiredPackageRegistration`\n## **Жирный** [ссылка](/x)\n',
+    );
+    expect(headings.map((h) => h.text)).toEqual([
+      'WiredPackageRegistration',
+      'Жирный ссылка',
+    ]);
+    expect(headings.map((h) => h.id)).toEqual([
+      'wiredpackageregistration',
+      'zhirnyy-ssylka',
+    ]);
+  });
+
+  test('keeps generated heading ids unique when slugs collide', () => {
+    const ids = parseMarkdownHeadings('## Setup\n## Setup 1\n## Setup\n').map(
+      (h) => h.id,
+    );
+    expect(ids).toEqual(['setup', 'setup-1', 'setup-2']);
+  });
+
+  test('ignores headings inside fenced code blocks', () => {
+    const md = ['## Real', '```md', '## Fake', '```', '### Also real'].join('\n');
+    expect(parseMarkdownHeadings(md).map((h) => h.id)).toEqual([
+      'real',
+      'also-real',
+    ]);
+  });
+
+  test('strips a closing hash sequence from heading text', () => {
+    expect(parseMarkdownHeadings('## Setup ##')).toEqual([
+      { id: 'setup', level: 2, text: 'Setup', line: 1 },
+    ]);
   });
 });

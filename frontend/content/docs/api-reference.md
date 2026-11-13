@@ -1,4 +1,7 @@
-# Справочник API Wired
+---
+title: Справочник API Wired
+order: 2
+---
 
 ## `WiredPackageRegistration`
 

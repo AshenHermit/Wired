@@ -9,7 +9,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "@/utils/sha256";
 import { EditorBridgeError, EditorBridgeOperationError } from "@/godot/bridge/editor-bridge";
-import type { GodotEditorInstance } from "./GodotEditorInstance";
+import type { GodotEditorInstance } from "@/godot/editor/godot-editor-instance";
 
 vi.mock("@/godot/bridge/godot-packages-fs", async () => {
   const actual =
@@ -1307,6 +1307,34 @@ describe("useRoomPackages", () => {
     expect(vi.mocked(gameApi.getRoomPackages).mock.calls.length).toBe(
       before + 1,
     );
+  });
+
+  it("marks the card busy while an action runs and clears it on failure", async () => {
+    const { result, unmount } = await startHook();
+    let release: () => void = () => undefined;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(packagesApi.updateScriptingPackage).mockImplementationOnce(
+      () => pending.then(() => Promise.reject(new Error("offline"))),
+    );
+
+    let call: Promise<void> = Promise.resolve();
+    await act(async () => {
+      call = result.current.setPackageEnabled(5, true);
+      await Promise.resolve();
+    });
+    expect(result.current.actionFor(5).busy).toBe(true);
+
+    await act(async () => {
+      release();
+      await expect(call).rejects.toThrow("package_enable_failed:offline");
+    });
+    expect(result.current.actionFor(5)).toMatchObject({
+      busy: false,
+      error: { key: "Packages.errors.enableFailed" },
+    });
+    unmount();
   });
 
   it("updates only metadata in the entry", async () => {
