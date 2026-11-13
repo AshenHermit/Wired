@@ -19,7 +19,11 @@ import {
   TriangleAlertIcon,
   UploadIcon,
 } from "lucide-react";
-import type { Room } from "@wired-io/shared";
+import type {
+  PackageRevisionSyncState,
+  PackageRuntimeSyncState,
+  Room,
+} from "@wired-io/shared";
 import { PreviewThumbnail } from "@/components/media/PreviewThumbnail";
 import { Button } from "@/components/ui/button";
 import { useAppMessage, type AppMessage, type MessageKey } from "@/i18n/message";
@@ -72,7 +76,7 @@ const STATUS_CLASS: Record<RoomPackageStatus, string> = {
   disabled: "border-border/60 bg-transparent text-muted-foreground",
 };
 
-const BACKEND_LABEL_KEYS: Record<string, MessageKey> = {
+const BACKEND_LABEL_KEYS: Record<PackageRevisionSyncState, MessageKey> = {
   published: "Packages.backend.published",
   pending: "Packages.backend.pending",
   applied: "Packages.backend.applied",
@@ -81,7 +85,7 @@ const BACKEND_LABEL_KEYS: Record<string, MessageKey> = {
   stale: "Packages.backend.stale",
 };
 
-const RUNTIME_LABEL_KEYS: Record<string, MessageKey> = {
+const RUNTIME_LABEL_KEYS: Record<PackageRuntimeSyncState, MessageKey> = {
   pending: "Packages.runtime.pending",
   applied: "Packages.runtime.applied",
   failed: "Packages.runtime.failed",
@@ -439,17 +443,11 @@ function PackageCard({
           <span>
             {t("card.server")}{" "}
             <span className="text-foreground">
-              {BACKEND_LABEL_KEYS[entry.backendState]
-                ? rootT(BACKEND_LABEL_KEYS[entry.backendState])
-                : entry.backendState}
+              {rootT(BACKEND_LABEL_KEYS[entry.backendState])}
             </span>
           </span>
           {entry.runtimeState && (
-            <span>
-              {RUNTIME_LABEL_KEYS[entry.runtimeState]
-                ? rootT(RUNTIME_LABEL_KEYS[entry.runtimeState])
-                : entry.runtimeState}
-            </span>
+            <span>{rootT(RUNTIME_LABEL_KEYS[entry.runtimeState])}</span>
           )}
           {entry.clientsTotal > 0 && (
             <span>

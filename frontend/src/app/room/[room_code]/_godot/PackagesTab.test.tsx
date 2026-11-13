@@ -109,6 +109,15 @@ function controller(
   return { ...base, ...overrides };
 }
 
+/** The fixture package's card, so a label lookup cannot match the page header. */
+function card(): HTMLElement {
+  const element = screen.getByText("#demo").closest("li");
+  if (!(element instanceof HTMLElement)) {
+    throw new Error("package card not found");
+  }
+  return element;
+}
+
 function workshopPackage(
   overrides: Partial<WorkshopPackageSummary> = {},
 ): WorkshopPackageSummary {
@@ -367,6 +376,53 @@ describe("PackagesTab", () => {
     expect(
       screen.getByText(/Project → Reload Current Project/),
     ).toBeTruthy();
+  });
+
+  it.each([
+    ["published", "published"],
+    ["pending", "pending application"],
+    ["applied", "applied in runtime"],
+    ["ready", "ready on all clients"],
+    ["failed", "application failed"],
+    ["stale", "outdated"],
+  ] as const)("labels the backend state %s", (state, label) => {
+    render(
+      <PackagesTab
+        onRoomSaved={vi.fn()}
+        room={roomFixture()}
+        canCreatePackages
+        canManagePackages
+        viewerId={42}
+        packages={controller({
+          entries: [entry({ backendState: state, runtimeState: null })],
+        })}
+      />,
+      { locale: "en" },
+    );
+
+    // A state without a label has to fail the type check, not leak the raw
+    // enum name into the card.
+    expect(within(card()).getByText(label)).toBeTruthy();
+  });
+
+  it.each([
+    ["pending", "runtime is still applying the revision"],
+    ["applied", "runtime applied the revision"],
+    ["failed", "runtime failed to apply the revision"],
+  ] as const)("labels the runtime state %s", (state, label) => {
+    render(
+      <PackagesTab
+        onRoomSaved={vi.fn()}
+        room={roomFixture()}
+        canCreatePackages
+        canManagePackages
+        viewerId={42}
+        packages={controller({ entries: [entry({ runtimeState: state })] })}
+      />,
+      { locale: "en" },
+    );
+
+    expect(within(card()).getByText(label)).toBeTruthy();
   });
 
   it("asks before replacing local changes and repeats the download", async () => {

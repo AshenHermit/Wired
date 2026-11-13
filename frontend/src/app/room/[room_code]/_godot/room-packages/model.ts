@@ -1,5 +1,6 @@
 import type {
   PackageRevisionSyncState,
+  PackageRuntimeSyncState,
   PackageSlugAvailability,
   PackageSyncStatus,
   ScriptingPackage,
@@ -44,7 +45,12 @@ export type RoomPackageEntry = {
   sizeBytes: number | null;
   localChanges: string[];
   backendState: PackageRevisionSyncState | null;
-  runtimeState: PackageRevisionSyncState | null;
+  /**
+   * Delivery state of the published revision in the room runtime. Narrower than
+   * `backendState`: the runtime only ever reports pending/applied/failed, so
+   * `published`, `ready` and `stale` must not be offered here.
+   */
+  runtimeState: PackageRuntimeSyncState | null;
   runtimeError: string | null;
   clientsReady: number;
   clientsTotal: number;
