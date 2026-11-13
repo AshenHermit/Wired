@@ -72,6 +72,10 @@ export interface AppConfig {
     readTtlSec: number;
     /** Store published revisions as commits in a per-package bare git repo. */
     gitStorage: boolean;
+    /** `git prune --expire` value used by the scheduled maintenance. */
+    gitGcExpire: string;
+    /** How often the scheduled package git maintenance runs. */
+    gitGcIntervalMs: number;
     /** Artifact builds allowed per `(package, revision, room)` per window. */
     artifactBuildRateLimit: number;
     artifactBuildRateWindowMs: number;

@@ -48,6 +48,8 @@ describe('config paths', () => {
       artifactBuildRateLimit: 10,
       artifactBuildRateWindowMs: 60_000,
       gitStorage: false,
+      gitGcExpire: '2.weeks.ago',
+      gitGcIntervalMs: 86_400_000,
     });
   });
 

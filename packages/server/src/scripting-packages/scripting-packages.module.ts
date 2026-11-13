@@ -18,6 +18,7 @@ import { GitCommand } from './storage/git/git-command';
 import { PackageGitRepository } from './storage/git/package-git-repository';
 import { PackageGitStorageService } from './storage/package-git-storage.service';
 import { PackageGitReconcileService } from './publish/package-git-reconcile.service';
+import { PackageGitMaintenanceService } from './publish/package-git-maintenance.service';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { PackageGitReconcileService } from './publish/package-git-reconcile.serv
     PackageGitRepository,
     PackageGitStorageService,
     PackageGitReconcileService,
+    PackageGitMaintenanceService,
   ],
   // `WorkshopController` must come first: `GET /scripting-packages/workshop`
   // would otherwise be matched by the authoring `GET /scripting-packages/:id`

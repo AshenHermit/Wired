@@ -409,6 +409,44 @@ export class PackageStorageService {
   }
 
   /**
+   * Writes a git-backed published revision back into the legacy layout.
+   *
+   * Used by the export command to make a package readable by a deployment
+   * without git storage. Every byte is read from the commit and verified
+   * against the declared manifest before the directory is created.
+   */
+  async exportPublishedRevision(
+    packageId: number,
+    revision: number,
+    files: PackageFileEntry[],
+    commitSha: string,
+  ): Promise<void> {
+    const contents = await this.readPublishedFiles(
+      packageId,
+      revision,
+      files.map((file) => file.filepath),
+      commitSha,
+    );
+    const dir = this.publishedRevisionDir(packageId, revision);
+    await this.removeDirectory(dir);
+    for (const file of files) {
+      const data = contents.get(file.filepath);
+      if (
+        !data ||
+        data.length !== file.size ||
+        sha256Hex(data) !== file.sha256.toLowerCase()
+      ) {
+        throw new Error(
+          `Revision ${revision} of package ${packageId} does not match its manifest at ${file.filepath}`,
+        );
+      }
+      const target = resolvePackagePath(dir, file.filepath);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, data);
+    }
+  }
+
+  /**
    * The uploaded files must be exactly the declared ones, byte for byte.
    */
   private async assertMatchesManifest(

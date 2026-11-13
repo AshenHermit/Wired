@@ -134,6 +134,11 @@ const config: () => AppConfig = () => ({
       '',
     readTtlSec: intFromEnv('WIRED_PACKAGE_READ_TTL_SEC', 900),
     gitStorage: process.env.WIRED_PACKAGE_GIT_STORAGE === '1',
+    gitGcExpire: process.env.WIRED_PACKAGE_GIT_GC_EXPIRE ?? '2.weeks.ago',
+    gitGcIntervalMs: intFromEnv(
+      'WIRED_PACKAGE_GIT_GC_INTERVAL_MS',
+      24 * 60 * 60 * 1000,
+    ),
     artifactBuildRateLimit: intFromEnv('WIRED_ARTIFACT_BUILD_RATE_LIMIT', 10),
     artifactBuildRateWindowMs: intFromEnv(
       'WIRED_ARTIFACT_BUILD_RATE_WINDOW_MS',

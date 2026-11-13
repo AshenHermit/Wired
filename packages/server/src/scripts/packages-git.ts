@@ -4,6 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../app.module';
 import { ScriptingPackageRevision } from '../database/entities/scripting-package-revision.entity';
+import { PackageGitMaintenanceService } from '../scripting-packages/publish/package-git-maintenance.service';
 import { PackageRevisionsService } from '../scripting-packages/publish/package-revisions.service';
 
 const USAGE = `Usage: packages-git <command> --all|--package <id>
@@ -83,6 +84,7 @@ async function main(): Promise<void> {
   });
   try {
     const revisions = app.get(PackageRevisionsService);
+    const maintenance = app.get(PackageGitMaintenanceService);
     const dataSource = app.get(DataSource);
     const packageIds =
       options.packageId !== null
@@ -106,10 +108,19 @@ async function main(): Promise<void> {
           logger.log(`package ${packageId}: ${count} legacy director(ies) removed`);
           break;
         }
-        default:
-          throw new Error(
-            `command "${options.command}" is not available in this build`,
-          );
+        case 'gc':
+          await maintenance.maintainPackage(packageId);
+          logger.log(`package ${packageId}: maintenance complete`);
+          break;
+        case 'export': {
+          const count = await maintenance.exportPackage(packageId);
+          logger.log(`package ${packageId}: ${count} revision(s) exported`);
+          break;
+        }
+        case 'repair':
+          await maintenance.repairPackage(packageId);
+          logger.log(`package ${packageId}: refs repaired`);
+          break;
       }
     }
   } finally {
