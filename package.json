@@ -12,6 +12,7 @@
     "start:server": "pnpm --filter server start:prod",
     "dev:frontend": "pnpm --filter frontend dev",
     "build:frontend": "pnpm --filter frontend build",
+    "prebuild:frontend": "pnpm --filter frontend prebuild",
     "start:frontend": "pnpm --filter frontend start",
     "check-types:frontend": "pnpm --filter frontend check-types",
     "build:shared": "pnpm --filter shared build",
