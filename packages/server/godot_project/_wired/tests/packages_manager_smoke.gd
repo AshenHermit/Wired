@@ -36,6 +36,7 @@ const PROGRESS_ID := 90
 const CACHE_ID := 100
 const CACHE_LIB_ID := 101
 const DERIVE_ID := 110
+const FLUSH_ID := 120
 ## 1×1 PNG, so a cached revision really has a raw asset with derived files.
 const TINY_PNG := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
@@ -106,6 +107,7 @@ func _run() -> void:
 	await _test_concurrent_revisions()
 	await _test_cycle()
 	await _test_asset_derivation_failure()
+	await _test_flush_storage_clears_dirty_state()
 	_finish()
 
 
@@ -117,6 +119,7 @@ func _test_interface() -> void:
 	for method: String in [
 		"fetch_runtime_manifest",
 		"sync_package",
+		"flush_storage",
 		"runtime_path",
 		"current_revision",
 		"current_artifact_key",
@@ -922,6 +925,19 @@ func _test_cache_repairs_derived_files() -> void:
 	)
 	restarted.free()
 	stale.free()
+
+
+## The browser file system is mirrored into IndexedDB, so a batch of applies must
+## sync it once at the end instead of after every package.
+func _test_flush_storage_clears_dirty_state() -> void:
+	_manager.flush_storage()
+	_check(not _manager._storage_dirty, "a flushed manager must not be dirty")
+	_publish(FLUSH_ID, 1, {"scripts/flush.gd": "v1"})
+	var result: Dictionary = await _manager.sync_package(FLUSH_ID, 1)
+	_check(bool(result.get("ok", false)), "the flush fixture must apply")
+	_check(_manager._storage_dirty, "a successful apply must mark the storage dirty")
+	_manager.flush_storage()
+	_check(not _manager._storage_dirty, "flush_storage must clear the dirty flag")
 
 
 ## A package with no slug yet must not resolve, enumerate or delete a path: an

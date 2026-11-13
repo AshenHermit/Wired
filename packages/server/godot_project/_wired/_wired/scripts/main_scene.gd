@@ -641,6 +641,9 @@ func _apply_world_snapshot_owned(snapshot: Dictionary) -> void:
 		# run against the packages that are still downloading.
 		_pending_world_snapshot = snapshot
 		return
+	# The reconcile applied the batch that is on disk now; persisting per package
+	# would copy the whole tree into IndexedDB once per download.
+	_packages.flush_storage()
 	# The reconcile completed without a failed download: the backoff starts from
 	# the first delay again on the next unrelated failure.
 	_package_retry_attempts = 0
@@ -1250,6 +1253,7 @@ func _run_client(cfg: Dictionary) -> void:
 				"WIRED_CLIENT_PACKAGE_PRELOAD_FAILED package=%d revision=%d error=%s"
 				% [package_id, revision, str(preload_result.get("error", ""))]
 			)
+	_packages.flush_storage()
 	print("WIRED_CLIENT_STARTING room=%s url=%s" % [cfg.room, cfg.url])
 	_bridge_status("connecting", str(cfg.url))
 	var err := net.start_client(

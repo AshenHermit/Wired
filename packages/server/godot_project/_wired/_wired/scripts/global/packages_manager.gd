@@ -123,6 +123,9 @@ var _applying: Dictionary = {}
 var _artifacts: ArtifactStore
 ## Test seam, only filled while `trace_sync_order` is true.
 var _sync_order: Array = []
+## Set when this process changed the package files, so `flush_storage()` syncs
+## once per batch instead of per package.
+var _storage_dirty := false
 
 
 func _init() -> void:
@@ -177,6 +180,19 @@ func set_api_base(url: String) -> bool:
 	base_url = value.trim_suffix("/")
 	print("WIRED_PACKAGES_API_OVERRIDE api=%s previous=%s" % [base_url, previous])
 	return true
+
+
+## Persists the browser file system after a batch of applies. IDBFS mirrors the
+## whole in-memory tree into IndexedDB, which is too expensive per package and is
+## skipped while another sync is in flight, so callers flush when their batch is
+## done. A desktop build has nothing to persist.
+func flush_storage() -> void:
+	if not _storage_dirty:
+		return
+	_storage_dirty = false
+	if not OS.has_feature("web"):
+		return
+	JavaScriptBridge.force_fs_sync()
 
 
 ## Root every package path is built from. The Web build keeps the cache on its
@@ -790,6 +806,8 @@ func _sync_package(
 	var swap_error := _artifacts.swap(slug, revision, artifact_key)
 	if not swap_error.is_empty():
 		return _failure(swap_error, revision)
+	# The batch that triggered this apply flushes once at its end.
+	_storage_dirty = true
 
 	# 4. Publish the new state only after every file is in place. A dependency
 	# that changed under an unchanged revision still refreshes the scene map and
@@ -867,6 +885,8 @@ func _reuse_artifact(
 		)
 		if not marker_error.is_empty():
 			return {}
+		# The repaired derived files and the rewritten marker are new bytes.
+		_storage_dirty = true
 	var hashes := {}
 	var files := PackedStringArray()
 	for item: Dictionary in declared:
@@ -880,6 +900,8 @@ func _reuse_artifact(
 	_file_hashes[package_id] = hashes
 	_save_slug_index()
 	_artifacts.prune(slug, revision, dir.get_file())
+	# The apply of a cached artifact removes older directories of the package.
+	_storage_dirty = true
 	print(
 		"WIRED_PACKAGES_CACHED package=%d revision=%d artifact=%s files=%d"
 		% [package_id, revision, artifact_key.left(12), files.size()]
