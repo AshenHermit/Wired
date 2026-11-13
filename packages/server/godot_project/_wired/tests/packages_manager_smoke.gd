@@ -35,6 +35,9 @@ const SLUG_SKIPPED_ID := 83
 const PROGRESS_ID := 90
 const CACHE_ID := 100
 const CACHE_LIB_ID := 101
+const DERIVE_ID := 110
+## 1×1 PNG, so a cached revision really has a raw asset with derived files.
+const TINY_PNG := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
 var _manager: PackagesManager
 # "package:revision" -> runtime manifest dictionary
@@ -93,6 +96,7 @@ func _run() -> void:
 	await _test_cache_reuse_after_restart()
 	await _test_cache_rejects_corrupt_artifact()
 	await _test_cache_key_change_downloads()
+	await _test_cache_repairs_derived_files()
 	await _test_unknown_slug_never_touches_the_packages_root()
 	await _test_slug_index_survives_restart()
 	await _test_skipped_apply_persists_slug_index()
@@ -863,6 +867,63 @@ func _test_cache_key_change_downloads() -> void:
 	restarted.free()
 
 
+## A cached artifact whose derived files are missing or were produced by an older
+## derive version is repaired in place: the raw files are still on disk, so the
+## repair must not download the artifact again.
+func _test_cache_repairs_derived_files() -> void:
+	_publish(
+		DERIVE_ID,
+		1,
+		{"art/tiny.png": Marshalls.base64_to_raw(TINY_PNG), "scripts/derive.gd": "v1"},
+	)
+	var first: Dictionary = await _manager.sync_package(DERIVE_ID, 1)
+	_check(bool(first.get("ok", false)), "a package with a texture must apply")
+	var dir := _manager.revision_dir(DERIVE_ID, 1)
+	var derived_path := dir.path_join("art/tiny.png.image.res")
+	_check(FileAccess.file_exists(derived_path), "the texture must be derived")
+	DirAccess.remove_absolute(derived_path)
+	var restarted := _restarted_manager()
+	_requests.clear()
+	var repaired: Dictionary = await restarted.sync_package(DERIVE_ID, 1)
+	_check(bool(repaired.get("ok", false)), "a missing derived file must be repaired")
+	_check(bool(repaired.get("cached", false)), "a repair must not download the artifact")
+	_check(not _has_request_containing("runtime-files"), "a repair must not download files")
+	_check(
+		FileAccess.file_exists(derived_path),
+		"the repair must recreate the derived resource",
+	)
+	var marker_path := dir.path_join(ArtifactStore.MARKER_FILE)
+	var marker: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(marker_path))
+	# A marker rewritten after a relocation carries the sizes on disk; the repair
+	# rewrites the marker, so those recorded sizes have to survive unchanged.
+	var handle := FileAccess.open(dir.path_join("scripts/derive.gd"), FileAccess.READ)
+	var stored_size := handle.get_length()
+	handle.close()
+	marker["storedSizes"] = {"scripts/derive.gd": stored_size}
+	marker["deriveVersion"] = 0
+	handle = FileAccess.open(marker_path, FileAccess.WRITE)
+	handle.store_string(JSON.stringify(marker))
+	handle.close()
+	var stale := _restarted_manager()
+	_requests.clear()
+	var upgraded: Dictionary = await stale.sync_package(DERIVE_ID, 1)
+	_check(bool(upgraded.get("ok", false)), "an old derive version must still apply")
+	_check(bool(upgraded.get("cached", false)), "an old derive version must be repaired locally")
+	_check(not _has_request_containing("runtime-files"), "an old derive version must not download")
+	var updated: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(marker_path))
+	_check(
+		int(updated.get("deriveVersion", 0)) == AssetDeriver.VERSION,
+		"the repair must record the current derive version",
+	)
+	var kept: Dictionary = updated.get("storedSizes", {})
+	_check(
+		int(kept.get("scripts/derive.gd", 0)) == stored_size,
+		"the repair must keep the stored sizes of the marker",
+	)
+	restarted.free()
+	stale.free()
+
+
 ## A package with no slug yet must not resolve, enumerate or delete a path: an
 ## empty slug used to be the packages root itself.
 func _test_unknown_slug_never_touches_the_packages_root() -> void:
@@ -1546,7 +1607,12 @@ func _publish(
 	paths.sort()
 	var total_size := 0
 	for filepath: Variant in paths:
-		var body: PackedByteArray = str(files[filepath]).to_utf8_buffer()
+		var raw: Variant = files[filepath]
+		var body: PackedByteArray
+		if typeof(raw) == TYPE_PACKED_BYTE_ARRAY:
+			body = raw
+		else:
+			body = str(raw).to_utf8_buffer()
 		var digest := _manager._sha256(body)
 		entries.append({"filepath": str(filepath), "size": body.size(), "sha256": digest})
 		_files["%d:%d:%s" % [package_id, revision, filepath]] = body

@@ -839,6 +839,34 @@ func _reuse_artifact(
 	var dir := str(inspection.get("dir", ""))
 	if dir.is_empty():
 		return {}
+	# A raw asset of the artifact is still on disk, so an artifact that is whole
+	# but lacks a derived file (or was derived by older rules) is finished here
+	# instead of downloaded again.
+	var missing: PackedStringArray = inspection.get(
+		"missing_derived", PackedStringArray()
+	)
+	if not bool(inspection.get("derive_current", false)) or not missing.is_empty():
+		var paths: Array = declared.map(
+			func(item: Dictionary) -> String: return str(item.get("filepath", ""))
+		)
+		# The directory is already the final one, so the sidecars point at it.
+		var derive_result := AssetDeriver.derive(dir, dir, paths)
+		if not bool(derive_result.get("ok", false)):
+			# A repair that cannot derive the files is a miss: the caller
+			# downloads, and `swap` replaces the directory of this key.
+			return {}
+		var marker_error := _artifacts.write_marker(
+			dir,
+			package_id,
+			slug,
+			revision,
+			artifact_key,
+			int(_total_bytes.get(package_id, 0)),
+			declared.size(),
+			inspection.get("stored_sizes", {}),
+		)
+		if not marker_error.is_empty():
+			return {}
 	var hashes := {}
 	var files := PackedStringArray()
 	for item: Dictionary in declared:
