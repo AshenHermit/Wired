@@ -224,13 +224,24 @@ export async function latestDevlog(limit: number): Promise<DevlogMeta[]> {
 async function validateDir<T extends { slug: string }>(
   dir: string,
   parse: (fileName: string, raw: string) => T,
+  label: string,
 ): Promise<string[]> {
+  try {
+    await fs.access(dir);
+  } catch {
+    return [`${label}: directory is missing`];
+  }
+
   const issues: string[] = [];
   let fileNames: string[];
   try {
     fileNames = await listMarkdownFiles(dir);
   } catch (error) {
-    return [`${dir}: ${errorMessage(error)}`];
+    return [`${label}: ${errorMessage(error)}`];
+  }
+
+  if (fileNames.length === 0) {
+    return [`${label}: no markdown files found`];
   }
 
   const seen = new Map<string, string>();
@@ -254,10 +265,12 @@ async function validateDir<T extends { slug: string }>(
   return issues;
 }
 
-export async function validateContent(): Promise<string[]> {
+export async function validateContent(
+  root: string = CONTENT_ROOT,
+): Promise<string[]> {
   const [docsIssues, devlogIssues] = await Promise.all([
-    validateDir(path.join(CONTENT_ROOT, 'docs'), parseDocFile),
-    validateDir(path.join(CONTENT_ROOT, 'devlog'), parseDevlogFile),
+    validateDir(path.join(root, 'docs'), parseDocFile, 'content/docs'),
+    validateDir(path.join(root, 'devlog'), parseDevlogFile, 'content/devlog'),
   ]);
 
   return [...docsIssues, ...devlogIssues];

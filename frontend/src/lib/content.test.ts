@@ -7,6 +7,7 @@ import {
   parseDevlogFile,
   readDevlogDir,
   readDocsDir,
+  validateContent,
 } from '@/lib/content';
 
 const DEVLOG = `---
@@ -113,4 +114,19 @@ it('reports duplicate slugs instead of silently shadowing', async () => {
       '---\ntitle: B\ndate: 2026-11-02\nsummary: s\nversion: 0.4.0\n---\n\nB',
   });
   await expect(readDevlogDir(dir)).rejects.toThrow(/duplicate slug: x/);
+});
+
+it('reports missing content directories instead of passing', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wired-content-'));
+  const issues = await validateContent(root);
+  expect(issues).toContain('content/docs: directory is missing');
+  expect(issues).toContain('content/devlog: directory is missing');
+});
+
+it('reports an empty docs directory', async () => {
+  const root = await makeDir({});
+  await fs.mkdir(path.join(root, 'docs'));
+  await fs.mkdir(path.join(root, 'devlog'));
+  const issues = await validateContent(root);
+  expect(issues).toContain('content/docs: no markdown files found');
 });
