@@ -76,6 +76,7 @@ pnpm build                               # recursive: shared + server + frontend
 ## Conventions
 
 - Conventional Commits (`feat:`, `refactor(server):`, `chore:`) are the norm.
+- The app version is pinned in all four `package.json` files (root, `packages/server`, `packages/shared`, `frontend`) and must stay in sync; a devlog entry's front matter `version` records the app version its change shipped in (template: `frontend/content/devlog/_template.md`); releases are marked with an annotated git tag `vX.Y.Z` (e.g. `v0.5.0`).
 - Server Prettier: single quotes, trailing commas. ESLint is type-aware; server `lint` auto-fixes, frontend `lint` does not.
 - UI copy and docs are largely Russian; match the language and UTF-8 encoding of the file you edit.
 - API contract changes belong in `packages/shared/src/api/types.ts` plus matching server DTOs/entities. There is no codegen.
