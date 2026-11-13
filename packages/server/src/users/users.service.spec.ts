@@ -1,4 +1,8 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { Repository } from 'typeorm';
 import { User } from 'src/database/entities/user.entity';
@@ -7,6 +11,7 @@ import { UsersService } from './users.service';
 interface FakeRepository {
   find: jest.Mock;
   findOne: jest.Mock;
+  findBy: jest.Mock;
   create: jest.Mock;
   save: jest.Mock;
   update: jest.Mock;
@@ -17,6 +22,7 @@ function repository(): FakeRepository {
   return {
     find: jest.fn(),
     findOne: jest.fn(),
+    findBy: jest.fn(async () => []),
     create: jest.fn((values: Partial<User>) => values),
     save: jest.fn(async (values: Partial<User>) => values),
     update: jest.fn(async () => undefined),
@@ -67,6 +73,41 @@ describe('lookups', () => {
       id: 7,
     });
     expect(repo.findOne).toHaveBeenCalledWith({ where: { id: 7 } });
+  });
+});
+
+describe('assertUsersExist', () => {
+  it('does no query for an empty selection', async () => {
+    const repo = repository();
+
+    await expect(
+      serviceWith(repo).assertUsersExist([]),
+    ).resolves.toBeUndefined();
+    expect(repo.findBy).not.toHaveBeenCalled();
+  });
+
+  it('asks for each id once', async () => {
+    const repo = repository();
+    repo.findBy.mockResolvedValue([{ id: 5 }, { id: 15 }]);
+
+    await expect(
+      serviceWith(repo).assertUsersExist([5, 5, 15]),
+    ).resolves.toBeUndefined();
+
+    expect(repo.findBy).toHaveBeenCalledTimes(1);
+    const [where] = repo.findBy.mock.calls[0] as [{ id: { value: number[] } }];
+    expect(where.id.value).toEqual([5, 15]);
+  });
+
+  it('names every id that does not exist', async () => {
+    const repo = repository();
+    repo.findBy.mockResolvedValue([{ id: 5 }]);
+
+    await expect(
+      serviceWith(repo).assertUsersExist([5, 15, 21]),
+    ).rejects.toThrow(
+      new BadRequestException('The following user IDs do not exist: 15, 21'),
+    );
   });
 });
 

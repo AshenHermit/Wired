@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { LoginForm } from "../_components/LoginForm";
 import { useUserStore } from "@/store/user-store";

@@ -1,7 +1,6 @@
 import {
   ExecutionContext,
   Injectable,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { packageError } from '../package-errors';
 import { AuthGuard } from '@nestjs/passport';
@@ -9,7 +8,6 @@ import { Request } from 'express';
 import { AppConfigService } from 'src/config/config.service';
 import { verifyRuntimeServiceToken } from 'src/common/runtime-contracts';
 import type { RequestPrincipal } from 'src/auth/jwt.strategy';
-import type { User } from 'src/database/entities/user.entity';
 import { readPositiveInt } from './request-ids';
 import { createRuntimeServiceUser } from 'src/auth/runtime-service-user';
 

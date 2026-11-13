@@ -3,7 +3,14 @@ class_name PackagesManager
 
 ## Downloads published package runtime artifacts from the Wired backend and
 ## materializes them under
-## user://wired/rooms/<room>/packages/<slug>/<revision>-<artifact_key>/.
+## <storage_root>/<room>/packages/<slug>/<revision>-<artifact_key>/.
+##
+## `storage_root()` is `user://wired/rooms` on desktop and
+## `/wired-cache/wired/rooms` in the Web build, which mounts a second IndexedDB
+## database for it: the room editor mounts the same database as `/userfs` and
+## its flushes delete records written by anybody else, so the cache of a game
+## must not share that mount. A Web mount that fails its probe falls back to the
+## desktop root.
 ##
 ## `user://` is a single directory per Godot project name, so every room runtime
 ## on the machine shares it. The room code is therefore part of the path: two
@@ -58,9 +65,24 @@ signal package_progress(
 const PROTOCOL_VERSION := 1
 const DEFAULT_API_URL := "http://127.0.0.1:3000"
 const PACKAGES_ROOT := "user://wired/rooms"
+## The Web build mounts this extra persistent path (see `_wired/web/shell.html`),
+## so the package cache is not part of the `/userfs` database the WASM editor
+## mounts and flushes.
+const WEB_CACHE_MOUNT := "/wired-cache"
+const WEB_PACKAGES_ROOT := "/wired-cache/wired/rooms"
+## Probe the Web cache mount has to pass before any apply trusts it.
+const WEB_PROBE_DIR := ".probe"
+const WEB_PROBE_TEXT_FILE := "probe.txt"
+const WEB_PROBE_TEXT_BODY := "wired-cache-probe"
+const WEB_PROBE_RESOURCE_FILE := "probe.res"
 const UNASSIGNED_ROOM := "_unknown"
 ## Slug of every package this room applied, next to its `packages/` directory.
 const SLUG_INDEX_FILE := "package_slugs.json"
+## Text files the backend rewrites with absolute `user://` package paths.
+const RELOCATABLE_EXTENSIONS := ["tscn", "tres", "gd"]
+## Applies a locally complete artifact instead of downloading it again. The
+## switch exists so the feature can be rolled back without touching the flow.
+const CACHE_REUSE := true
 ## How long a sync waits for another coroutine that is applying the same package.
 const APPLY_LOCK_TIMEOUT_MS := 300_000
 ## A lock held longer than this is leaked: the applying coroutine aborted (an
@@ -107,6 +129,17 @@ var _applying: Dictionary = {}
 var _artifacts: ArtifactStore
 ## Test seam, only filled while `trace_sync_order` is true.
 var _sync_order: Array = []
+## Set when this process changed the package files, so `flush_storage()` syncs
+## once per batch instead of per package.
+var _storage_dirty := false
+## Set when `_slugs` changed, so an apply that confirms the existing mapping does
+## not rewrite the index (and therefore does not dirty the browser file system).
+var _slug_index_dirty := false
+## Set once the Web cache mount was probed, so the check costs no syscall after
+## the first apply.
+var _web_root_checked := false
+## Result of that probe: the Web cache mount is persistent and writable.
+var _web_root_usable := false
 
 
 func _init() -> void:
@@ -163,8 +196,101 @@ func set_api_base(url: String) -> bool:
 	return true
 
 
+## Persists the browser file system after a batch of applies. IDBFS mirrors the
+## whole in-memory tree into IndexedDB, which is too expensive per package and is
+## skipped while another sync is in flight, so callers flush when their batch is
+## done. A desktop build has nothing to persist.
+func flush_storage() -> void:
+	if not _storage_dirty:
+		return
+	_storage_dirty = false
+	if not OS.has_feature("web"):
+		return
+	JavaScriptBridge.force_fs_sync()
+
+
+## Root every package path is built from. The Web build keeps the cache on its
+## own IDBFS mount; when the mount is absent (older export, host page without the
+## override) `initFS` still creates the directory in MEMFS, so the mount is
+## probed instead of trusting the platform.
+##
+## The probe runs once per process and is memoised: a mount that exists but
+## cannot persist or cannot serve absolute-path resource I/O would make every
+## apply fail, so such a mount falls back to the desktop root for the rest of the
+## process. A desktop build needs no probe.
+func storage_root() -> String:
+	if not OS.has_feature("web"):
+		return PACKAGES_ROOT
+	if not _web_root_checked:
+		_web_root_checked = true
+		_web_root_usable = _probe_web_root()
+		if not _web_root_usable:
+			print("WIRED_PACKAGES_CACHE_ROOT_FALLBACK root=%s" % WEB_PACKAGES_ROOT)
+	return WEB_PACKAGES_ROOT if _web_root_usable else PACKAGES_ROOT
+
+
+## Proves the Web cache mount is usable before the first apply: it exists, a text
+## file survives a write and a read back, and `ResourceSaver`/`ResourceLoader`
+## work on an absolute path under it. The mount is created in MEMFS when the host
+## page has no IDBFS mapping, so an existence check alone would accept a cache
+## that a reload loses.
+func _probe_web_root() -> bool:
+	if not DirAccess.dir_exists_absolute(WEB_CACHE_MOUNT):
+		return false
+	var probe_dir := WEB_PACKAGES_ROOT.path_join(WEB_PROBE_DIR)
+	if DirAccess.make_dir_recursive_absolute(probe_dir) != OK:
+		return false
+	var usable := _probe_text_file(probe_dir) and _probe_resource_file(probe_dir)
+	# Leftovers of a probe are harmless, but they would become part of every
+	# later package-root scan.
+	DirAccess.remove_absolute(probe_dir.path_join(WEB_PROBE_TEXT_FILE))
+	DirAccess.remove_absolute(probe_dir.path_join(WEB_PROBE_RESOURCE_FILE))
+	DirAccess.remove_absolute(probe_dir)
+	return usable
+
+
+## Writes one small text file and reads it back, the operation every staged
+## package file depends on.
+func _probe_text_file(probe_dir: String) -> bool:
+	var path := probe_dir.path_join(WEB_PROBE_TEXT_FILE)
+	var handle := FileAccess.open(path, FileAccess.WRITE)
+	if handle == null:
+		return false
+	handle.store_string(WEB_PROBE_TEXT_BODY)
+	var write_error := handle.get_error()
+	handle.close()
+	if write_error != OK:
+		return false
+	return FileAccess.get_file_as_string(path) == WEB_PROBE_TEXT_BODY
+
+
+## Saves and reloads a tiny resource, because the derived assets of a package are
+## written with `ResourceSaver` and read back with `ResourceLoader` through
+## absolute paths. `ConfigFile` is not a `Resource` in this engine, so the probe
+## uses a plain `Resource` with one metadata entry.
+func _probe_resource_file(probe_dir: String) -> bool:
+	var path := probe_dir.path_join(WEB_PROBE_RESOURCE_FILE)
+	var probe := Resource.new()
+	probe.set_meta("wired_cache_probe", true)
+	if ResourceSaver.save(probe, path) != OK:
+		return false
+	var loaded := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
+	return loaded != null
+
+
 func packages_root() -> String:
-	return PACKAGES_ROOT.path_join(room).path_join("packages")
+	return storage_root().path_join(room).path_join("packages")
+
+
+## Replaces the backend's `user://` package prefix with the active storage root.
+## Returns the input unchanged when the prefix is absent.
+static func relocate_artifact_text(
+	text: String, room_id: String, root: String
+) -> String:
+	var prefix := "user://wired/rooms/%s/packages/" % room_id
+	if not text.contains(prefix):
+		return text
+	return text.replace(prefix, "%s/%s/packages/" % [root, room_id])
 
 
 ## Folder of one package, or an empty string when its manifest has not named a
@@ -199,13 +325,14 @@ func runtime_path(
 ## `<room>/package_slugs.json`: the folder slug of every package this room has
 ## applied.
 func _slug_index_path() -> String:
-	return PACKAGES_ROOT.path_join(room).path_join(SLUG_INDEX_FILE)
+	return storage_root().path_join(room).path_join(SLUG_INDEX_FILE)
 
 
 ## Restores the id -> slug mapping of the room. The file only holds data written
 ## by a previous apply, so anything malformed is ignored instead of trusted.
 func _load_slug_index() -> void:
 	_slugs.clear()
+	_slug_index_dirty = false
 	var path := _slug_index_path()
 	if not FileAccess.file_exists(path):
 		return
@@ -231,12 +358,16 @@ func _remember_slug(package_id: int, slug: String) -> void:
 	if str(_slugs.get(package_id, "")) == slug:
 		return
 	_slugs[package_id] = slug
+	_slug_index_dirty = true
 	_save_slug_index()
 
 
 ## Persists the index atomically: a crash mid-write leaves the previous file
-## intact instead of a truncated mapping a restart cannot read.
-func _save_slug_index() -> void:
+## intact instead of a truncated mapping a restart cannot read. Returns whether
+## it wrote; a write is a real file change, so it dirties the storage too.
+func _save_slug_index() -> bool:
+	if not _slug_index_dirty:
+		return false
 	var path := _slug_index_path()
 	var dir_error := DirAccess.make_dir_recursive_absolute(path.get_base_dir())
 	if dir_error != OK:
@@ -244,7 +375,7 @@ func _save_slug_index() -> void:
 			"WIRED_PACKAGES_SLUG_INDEX_SAVE_FAILED path=%s err=%s"
 			% [path, error_string(dir_error)]
 		)
-		return
+		return false
 	var payload := {}
 	for package_id: Variant in _slugs:
 		payload[str(int(package_id))] = str(_slugs[package_id])
@@ -255,9 +386,17 @@ func _save_slug_index() -> void:
 			"WIRED_PACKAGES_SLUG_INDEX_SAVE_FAILED path=%s err=%s"
 			% [temp, error_string(FileAccess.get_open_error())]
 		)
-		return
+		return false
 	handle.store_string(JSON.stringify(payload))
+	var write_error := handle.get_error()
 	handle.close()
+	if write_error != OK:
+		DirAccess.remove_absolute(temp)
+		push_warning(
+			"WIRED_PACKAGES_SLUG_INDEX_SAVE_FAILED path=%s err=%s"
+			% [temp, error_string(write_error)]
+		)
+		return false
 	var rename_error := DirAccess.rename_absolute(temp, path)
 	if rename_error != OK:
 		DirAccess.remove_absolute(temp)
@@ -265,6 +404,10 @@ func _save_slug_index() -> void:
 			"WIRED_PACKAGES_SLUG_INDEX_SAVE_FAILED path=%s err=%s"
 			% [path, error_string(rename_error)]
 		)
+		return false
+	_slug_index_dirty = false
+	_storage_dirty = true
+	return true
 
 
 ## Revision currently materialized for a package, or 0 when it was never
@@ -305,10 +448,15 @@ func forget_package(package_id: int, purge: bool = false) -> void:
 	_scene_dependencies.erase(package_id)
 	_file_hashes.erase(package_id)
 	# No slug means no folder was ever resolved for this id: touching a path
-	# would risk deleting the packages root itself.
+	# would risk deleting the packages root itself. A missing folder deletes
+	# nothing, and a browser flush would copy the whole tree for nothing, so only
+	# a purge that really removed files dirties the storage.
 	var slug := str(_slugs.get(package_id, ""))
 	if purge and not slug.is_empty():
-		_remove_tree(_artifacts.package_dir(slug))
+		var dir := _artifacts.package_dir(slug)
+		if DirAccess.dir_exists_absolute(dir):
+			_remove_tree(dir)
+			_storage_dirty = true
 	print(
 		"WIRED_PACKAGES_FORGOTTEN package=%d purge=%s" % [package_id, purge]
 	)
@@ -508,7 +656,7 @@ func _sync_package_chain(
 	# A revision already on disk (or one that another coroutine applied while
 	# this call waited) is not applied again. An older revision never replaces
 	# a newer one; an equal one is only skipped for a caller that had to wait,
-	# because a fresh call must still refresh a changed artifact.
+	# because a fresh call still has to apply an artifact key that changed.
 	var applied_revision := maxi(
 		current_revision(package_id), _artifacts.highest_revision(slug)
 	)
@@ -677,6 +825,14 @@ func _sync_package(
 	if trace_sync_order:
 		_sync_order.append(package_id)
 
+	# A complete artifact of exactly this key needs no bytes: the marker proves
+	# a finished apply and every file still has the size and sha256 it was
+	# written with.
+	if CACHE_REUSE:
+		var cached := _reuse_artifact(package_id, revision, manifest, validated)
+		if not cached.is_empty():
+			return cached
+
 	# 1. Download and verify everything in memory before touching the disk.
 	var download := await _download_files(
 		package_id,
@@ -692,7 +848,39 @@ func _sync_package(
 	var verified: Array = download.get("files", [])
 	var hashes: Dictionary = download.get("hashes", {})
 
-	# 2. Stage the new artifact next to the old one, derive the runtime form of
+	# 2. A downloaded text file may carry absolute `user://` paths of the
+	# backend's own cache; the Web build keeps packages elsewhere, so the body is
+	# rewritten before it is staged. The relocation changes the size and the
+	# hash, and the marker has to record the bytes that are actually on disk.
+	# `hashes` stay the manifest's hashes, which were verified against the bytes
+	# the server sent.
+	var declared_sizes := {}
+	for item: Dictionary in declared:
+		declared_sizes[str(item.get("filepath", ""))] = int(item.get("size", -1))
+	var stored_sizes := {}
+	var stored_hashes := {}
+	var unrelocated := 0
+	var relocatable := storage_root() != PACKAGES_ROOT
+	for file: Dictionary in verified:
+		_relocate_artifact_file(file)
+		var filepath := str(file.get("filepath", ""))
+		var body: PackedByteArray = file.get("body", PackedByteArray())
+		if body.size() != int(declared_sizes.get(filepath, body.size())):
+			stored_sizes[filepath] = body.size()
+		stored_hashes[filepath] = _sha256(body)
+		if relocatable and _has_backend_prefix(filepath, body):
+			unrelocated += 1
+	if unrelocated > 0:
+		# The artifact would be cached with paths the Web build cannot resolve,
+		# so surface it instead of serving broken assets until the key changes.
+		push_warning(
+			(
+				"WIRED_PACKAGES_RELOCATE_MISS package=%d files=%d root=%s"
+				% [package_id, unrelocated, storage_root()]
+			)
+		)
+
+	# 3. Stage the new artifact next to the old one, derive the runtime form of
 	# its raw images and audio, then swap. The final directory is keyed, so a
 	# refreshed closure never overwrites the bytes of the previous one.
 	var target_dir := _artifacts.revision_dir(slug, revision, artifact_key)
@@ -709,22 +897,29 @@ func _sync_package(
 		# artifact untouched.
 		_artifacts.remove_tree(_artifacts.staging_dir(slug))
 		return _failure(str(derive_result.get("error", "")), revision)
+	# The marker is the last file of the directory: a later run reuses exactly
+	# what a completed apply left behind, and a crash before this line leaves a
+	# directory that can never be mistaken for a whole one.
+	var marker_error := _artifacts.write_marker(
+		_artifacts.staging_dir(slug),
+		_artifact_identity(package_id, revision, artifact_key, slug),
+		AssetDeriver.VERSION,
+		stored_hashes,
+		stored_sizes,
+	)
+	if not marker_error.is_empty():
+		_artifacts.remove_tree(_artifacts.staging_dir(slug))
+		return _failure(marker_error, revision)
 	var swap_error := _artifacts.swap(slug, revision, artifact_key)
 	if not swap_error.is_empty():
 		return _failure(swap_error, revision)
+	# The batch that triggered this apply flushes once at its end.
+	_storage_dirty = true
 
-	# 3. Publish the new state only after every file is in place. A dependency
+	# 4. Publish the new state only after every file is in place. A dependency
 	# that changed under an unchanged revision still refreshes the scene map and
 	# the hashes here, even when `changed` is empty.
-	var changed := _changed_files(_file_hashes.get(package_id, {}), hashes)
-	_current_revisions[package_id] = revision
-	_current_artifact_keys[package_id] = artifact_key
-	_scene_dependencies[package_id] = PackageManifest.scene_map(manifest)
-	_file_hashes[package_id] = hashes
-	# A restart resolves folders before any manifest arrives, so the slug of
-	# every applied package has to outlive the process.
-	_save_slug_index()
-
+	var changed := _publish_applied(package_id, revision, artifact_key, manifest, hashes)
 	print(
 		"WIRED_PACKAGES_APPLIED package=%d revision=%d artifact=%s files=%d"
 		% [package_id, revision, artifact_key.left(12), verified.size()]
@@ -737,6 +932,148 @@ func _sync_package(
 		"files": verified.map(func(file: Dictionary) -> String: return str(file.filepath)),
 		"changed_files": changed,
 	}
+
+
+## Records an artifact as the one this process applied: revision, key, scene
+## map, file hashes and the persisted slug index. Both the download and the
+## cache-hit path publish exactly the same state, so they share this function.
+## Returns the files whose hash differs from the previous apply.
+func _publish_applied(
+	package_id: int,
+	revision: int,
+	artifact_key: String,
+	manifest: Dictionary,
+	hashes: Dictionary,
+) -> PackedStringArray:
+	var changed := _changed_files(_file_hashes.get(package_id, {}), hashes)
+	_current_revisions[package_id] = revision
+	_current_artifact_keys[package_id] = artifact_key
+	_scene_dependencies[package_id] = PackageManifest.scene_map(manifest)
+	_file_hashes[package_id] = hashes
+	# A restart resolves folders before any manifest arrives, so the slug of
+	# every applied package has to outlive the process.
+	_save_slug_index()
+	return changed
+
+
+func _artifact_identity(
+	package_id: int, revision: int, artifact_key: String, slug: String
+) -> ArtifactStore.ArtifactIdentity:
+	return ArtifactStore.ArtifactIdentity.new(
+		package_id, slug, revision, artifact_key
+	)
+
+
+## Applies a revision from a verified local artifact. Returns an empty dictionary
+## when the directory is not a match, so the caller downloads normally; `swap`
+## then replaces the directory of that key.
+##
+## `_names` and `_total_bytes` are already published by `_sync_package`, so the
+## progress of a hit reuses them and the Game tab renders the same package.
+func _reuse_artifact(
+	package_id: int, revision: int, manifest: Dictionary, validated: Dictionary
+) -> Dictionary:
+	var artifact_key := str(validated.get("artifact_key", ""))
+	var slug := str(validated.get("slug", ""))
+	var declared: Array = validated.get("files", [])
+	var identity := _artifact_identity(package_id, revision, artifact_key, slug)
+	var inspection := _artifacts.reusable_artifact(
+		identity, declared, AssetDeriver.VERSION
+	)
+	if not bool(inspection.get("reusable", false)):
+		return {}
+	var dir := str(inspection.get("dir", ""))
+	if dir.is_empty():
+		return {}
+	var paths: Array = declared.map(
+		func(item: Dictionary) -> String: return str(item.get("filepath", ""))
+	)
+	# A raw asset of the artifact is still on disk, so an artifact that is whole
+	# but lacks a derived file (or was derived by older rules) is finished here
+	# instead of downloaded again.
+	var repaired := not bool(inspection.get("derive_current", false))
+	if not repaired:
+		for name: String in AssetDeriver.derived_files(paths):
+			if not FileAccess.file_exists(dir.path_join(name)):
+				repaired = true
+				break
+	if repaired:
+		# The directory is already the final one, so the sidecars point at it.
+		# A failed repair keeps what was derived so far: this is the live
+		# directory, and the marker stays unrewritten, so the next sync repairs
+		# again while the previously working files survive a failed download.
+		var derive_result := AssetDeriver.derive(dir, dir, paths, false)
+		if not bool(derive_result.get("ok", false)):
+			# A repair that cannot derive the files is a miss: the caller
+			# downloads, and `swap` replaces the directory of this key.
+			return {}
+		var marker_error := _artifacts.write_marker(
+			dir,
+			identity,
+			AssetDeriver.VERSION,
+			inspection.get("stored_hashes", {}),
+			inspection.get("stored_sizes", {}),
+		)
+		if not marker_error.is_empty():
+			return {}
+	var hashes := {}
+	for item: Dictionary in declared:
+		hashes[str(item.get("filepath", ""))] = str(item.get("sha256", ""))
+	var changed := _publish_applied(package_id, revision, artifact_key, manifest, hashes)
+	var removed := _artifacts.prune(slug, revision, dir.get_file())
+	# A cache hit normally changes nothing: the marker, the slug index and the
+	# pruning window are already current. `_save_slug_index` dirties the storage
+	# itself when it really writes, so only a repair or a prune adds bytes here.
+	_storage_dirty = _storage_dirty or repaired or removed > 0
+	print(
+		"WIRED_PACKAGES_CACHED package=%d revision=%d artifact=%s files=%d"
+		% [package_id, revision, artifact_key.left(12), declared.size()]
+	)
+	# The backend runtime line parser only accepts APPLIED as the confirmation
+	# that a revision is live; without it a cache hit leaves the dispatch
+	# pending until it times out and the Game tab never opens.
+	print(
+		"WIRED_PACKAGES_APPLIED package=%d revision=%d artifact=%s files=%d"
+		% [package_id, revision, artifact_key.left(12), declared.size()]
+	)
+	return {
+		"ok": true,
+		"error": "",
+		"revision": revision,
+		"artifact_key": artifact_key,
+		"files": PackedStringArray(
+			declared.map(
+				func(item: Dictionary) -> String: return str(item.get("filepath", ""))
+			)
+		),
+		"changed_files": changed,
+		"cached": true,
+	}
+
+
+## Rewrites a downloaded text file in place when the packages root is not the
+## `user://` one the backend assumes.
+func _relocate_artifact_file(file: Dictionary) -> void:
+	var root := storage_root()
+	if root == PACKAGES_ROOT:
+		return
+	var filepath := str(file.get("filepath", ""))
+	if not RELOCATABLE_EXTENSIONS.has(filepath.get_extension().to_lower()):
+		return
+	var body: PackedByteArray = file.get("body", PackedByteArray())
+	var text := body.get_string_from_utf8()
+	var relocated := relocate_artifact_text(text, room, root)
+	if relocated == text:
+		return
+	file["body"] = relocated.to_utf8_buffer()
+
+
+## Whether a relocatable text file still points into the backend's `user://`
+## cache: the rewrite found nothing to replace, so the path is broken here.
+func _has_backend_prefix(filepath: String, body: PackedByteArray) -> bool:
+	if not RELOCATABLE_EXTENSIONS.has(filepath.get_extension().to_lower()):
+		return false
+	return body.get_string_from_utf8().contains("user://wired/rooms/")
 
 
 ## Resolves the latest published revision through the raw manifest, so a caller
@@ -1030,11 +1367,6 @@ func _sha256(data: PackedByteArray) -> String:
 ## the implementation.
 func _remove_tree(path: String) -> void:
 	_artifacts.remove_tree(path)
-
-
-## Kept as a thin seam for tests that inspect the on-disk layout.
-func _revision_of_dir_name(name: String) -> int:
-	return ArtifactStore.revision_of_dir_name(name)
 
 
 func _failure(message: String, revision: int = 0) -> Dictionary:

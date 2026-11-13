@@ -308,7 +308,7 @@
       "disabled": "Пакет отключён",
       "deleted": "Пакет удалён из комнаты",
       "adopted": "Существующий каталог подключён к пакету. Emit опубликует его файлы.",
-      "emitPublished": "Опубликована ревизия {revision}: {uploaded} файл(ов)."
+      "emitPublished": "Опубликована ревизия {revision}: {files} файл(ов)."
     },
     "errors": {
       "notRoomMember": "Only the room author and its contributors can change its packages.",

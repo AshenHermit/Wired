@@ -33,6 +33,13 @@ const SLUG_OTHER_ID := 81
 const SLUG_MISSING_ID := 82
 const SLUG_SKIPPED_ID := 83
 const PROGRESS_ID := 90
+const CACHE_ID := 100
+const CACHE_LIB_ID := 101
+const DERIVE_ID := 110
+const FLUSH_ID := 120
+const FLUSH_CACHED_ID := 121
+## 1×1 PNG, so a cached revision really has a raw asset with derived files.
+const TINY_PNG := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
 var _manager: PackagesManager
 # "package:revision" -> runtime manifest dictionary
@@ -75,6 +82,8 @@ func _run() -> void:
 	_manager.package_applied.connect(_on_package_applied)
 	_manager.package_failed.connect(_on_package_failed)
 	_manager.package_progress.connect(_on_package_progress)
+	_test_storage_root()
+	_test_artifact_marker_verification()
 	await _test_recursive_sync()
 	await _test_progress_events()
 	await _test_same_revision_refresh()
@@ -85,6 +94,11 @@ func _run() -> void:
 	await _test_missing_manifest()
 	await _test_stale_lock_is_reclaimed()
 	await _test_restart_pruning()
+	_test_relocate_references()
+	await _test_cache_reuse_after_restart()
+	await _test_cache_rejects_corrupt_artifact()
+	await _test_cache_key_change_downloads()
+	await _test_cache_repairs_derived_files()
 	await _test_unknown_slug_never_touches_the_packages_root()
 	await _test_slug_index_survives_restart()
 	await _test_skipped_apply_persists_slug_index()
@@ -94,6 +108,7 @@ func _run() -> void:
 	await _test_concurrent_revisions()
 	await _test_cycle()
 	await _test_asset_derivation_failure()
+	await _test_flush_storage_clears_dirty_state()
 	_finish()
 
 
@@ -105,12 +120,14 @@ func _test_interface() -> void:
 	for method: String in [
 		"fetch_runtime_manifest",
 		"sync_package",
+		"flush_storage",
 		"runtime_path",
 		"current_revision",
 		"current_artifact_key",
 		"scene_dependencies",
 		"instantiate_scene",
 		"_changed_files",
+		"storage_root",
 	]:
 		_check(manager.has_method(method), "PackagesManager.%s() is missing" % method)
 	_check(
@@ -121,6 +138,9 @@ func _test_interface() -> void:
 		manager.has_signal("package_progress"),
 		"PackagesManager.package_progress signal is missing"
 	)
+	var store := ArtifactStore.new(Callable(manager, "packages_root"))
+	for method: String in ["write_marker", "reusable_artifact"]:
+		_check(store.has_method(method), "ArtifactStore.%s() is missing" % method)
 	manager.free()
 
 
@@ -186,6 +206,25 @@ func _test_room_normalization() -> void:
 	_check(manager.room == "7", "a bridge room of 7.0 must normalize to 7")
 	_check(manager._room_id() == 7, "a normalized room must keep its integer id")
 	manager.free()
+
+
+func _test_storage_root() -> void:
+	_check(
+		_manager.storage_root() == PackagesManager.PACKAGES_ROOT,
+		"a desktop build must keep the user:// packages root",
+	)
+	_check(
+		_manager.packages_root()
+		== _manager.storage_root().path_join(ROOM).path_join("packages"),
+		"the packages root must be derived from storage_root()",
+	)
+	_check(
+		_manager._slug_index_path()
+		== _manager.storage_root().path_join(ROOM).path_join(
+			PackagesManager.SLUG_INDEX_FILE
+		),
+		"the slug index must live next to the packages directory",
+	)
 
 
 func _test_recursive_sync() -> void:
@@ -738,6 +777,196 @@ func _test_restart_pruning() -> void:
 	restarted.free()
 
 
+## The backend rewrites package references in text files to `user://` paths of
+## its own cache, which is not where the Web build mounts the packages root.
+func _test_relocate_references() -> void:
+	var text := 'path="user://wired/rooms/%s/packages/lib/1-abc/art/pic.png"' % ROOM
+	var relocated := PackagesManager.relocate_artifact_text(
+		text, ROOM, "/wired-cache/wired/rooms"
+	)
+	_check(
+		relocated
+		== 'path="/wired-cache/wired/rooms/%s/packages/lib/1-abc/art/pic.png"' % ROOM,
+		"a web root must relocate the backend package prefix",
+	)
+	_check(
+		PackagesManager.relocate_artifact_text(
+			"no package paths here", ROOM, "/wired-cache/wired/rooms"
+		) == "no package paths here",
+		"text without the prefix must be untouched",
+	)
+
+
+## A complete artifact on disk must be applied without downloading again.
+func _test_cache_reuse_after_restart() -> void:
+	_publish(CACHE_ID, 1, {"scripts/cache.gd": "cache-v1", "scenes/cache.tscn": "scene-v1"})
+	var first: Dictionary = await _manager.sync_package(CACHE_ID, 1)
+	_check(bool(first.get("ok", false)), "the first apply must download the artifact")
+	_check(not bool(first.get("cached", false)), "the first apply must not be a cache hit")
+	var restarted := _restarted_manager()
+	_requests.clear()
+	var second: Dictionary = await restarted.sync_package(CACHE_ID, 1)
+	_check(bool(second.get("ok", false)), "a cached artifact must apply after restart")
+	_check(bool(second.get("cached", false)), "a complete artifact must be reported as cached")
+	_check(not _has_request_containing("runtime-files"), "a cache hit must not download files")
+	_check(
+		second.get("changed_files", PackedStringArray()).size() == 2,
+		"a cache hit in a fresh process must report every file as changed",
+	)
+	_check(restarted.current_revision(CACHE_ID) == 1, "a cache hit must publish the revision")
+	_check(
+		not restarted.current_artifact_key(CACHE_ID).is_empty(),
+		"a cache hit must publish the artifact key",
+	)
+	_check(
+		FileAccess.get_file_as_string(
+			restarted.runtime_path(CACHE_ID, 1, "scripts/cache.gd")
+		) == "cache-v1",
+		"a cache hit must expose the applied files",
+	)
+	restarted.free()
+
+
+func _test_cache_rejects_corrupt_artifact() -> void:
+	var path := _manager.runtime_path(CACHE_ID, 1, "scripts/cache.gd")
+	# Same length as the published body: only the recorded hash can tell that the
+	# bytes changed, a size check would reuse the corruption.
+	var handle := FileAccess.open(path, FileAccess.WRITE)
+	handle.store_string("cache-v2")
+	handle.close()
+	var restarted := _restarted_manager()
+	_requests.clear()
+	var result: Dictionary = await restarted.sync_package(CACHE_ID, 1)
+	_check(bool(result.get("ok", false)), "a corrupt cache must fall back to a download")
+	_check(not bool(result.get("cached", false)), "a corrupt cache must not be reused")
+	_check(_has_request_containing("runtime-files"), "a corrupt cache must download the files")
+	_check(
+		FileAccess.get_file_as_string(path) == "cache-v1",
+		"the download must restore the corrupted file",
+	)
+	restarted.free()
+
+
+func _test_cache_key_change_downloads() -> void:
+	var previous := _manager.current_artifact_key(CACHE_ID)
+	_publish(CACHE_LIB_ID, 1, {"scripts/cache_lib.gd": "lib-v1"})
+	_publish(
+		CACHE_ID,
+		1,
+		{"scripts/cache.gd": "cache-v1", "scenes/cache.tscn": "scene-v1"},
+		[_dependency(CACHE_LIB_ID, 1)],
+	)
+	var restarted := _restarted_manager()
+	_requests.clear()
+	var result: Dictionary = await restarted.sync_package(CACHE_ID, 1)
+	_check(bool(result.get("ok", false)), "a new artifact key must apply")
+	_check(not bool(result.get("cached", false)), "a new artifact key must not reuse the old bytes")
+	_check(_has_request_containing("runtime-files"), "a new artifact key must download")
+	_check(
+		restarted.current_artifact_key(CACHE_ID) != previous,
+		"the key must change when a dependency is published",
+	)
+	_check(
+		_artifact_dirs(CACHE_ID).size() == 1,
+		"the old keyed directory must be pruned",
+	)
+	restarted.free()
+
+
+## A cached artifact whose derived files are missing or were produced by an older
+## derive version is repaired in place: the raw files are still on disk, so the
+## repair must not download the artifact again.
+func _test_cache_repairs_derived_files() -> void:
+	_publish(
+		DERIVE_ID,
+		1,
+		{"art/tiny.png": Marshalls.base64_to_raw(TINY_PNG), "scripts/derive.gd": "v1"},
+	)
+	var first: Dictionary = await _manager.sync_package(DERIVE_ID, 1)
+	_check(bool(first.get("ok", false)), "a package with a texture must apply")
+	var dir := _manager.revision_dir(DERIVE_ID, 1)
+	var derived_path := dir.path_join("art/tiny.png.image.res")
+	_check(FileAccess.file_exists(derived_path), "the texture must be derived")
+	DirAccess.remove_absolute(derived_path)
+	var restarted := _restarted_manager()
+	_requests.clear()
+	var repaired: Dictionary = await restarted.sync_package(DERIVE_ID, 1)
+	_check(bool(repaired.get("ok", false)), "a missing derived file must be repaired")
+	_check(bool(repaired.get("cached", false)), "a repair must not download the artifact")
+	_check(not _has_request_containing("runtime-files"), "a repair must not download files")
+	_check(
+		FileAccess.file_exists(derived_path),
+		"the repair must recreate the derived resource",
+	)
+	var marker_path := dir.path_join(ArtifactStore.MARKER_FILE)
+	var marker: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(marker_path))
+	# A marker rewritten after a relocation carries the sizes on disk; the repair
+	# rewrites the marker, so those recorded sizes have to survive unchanged.
+	var handle := FileAccess.open(dir.path_join("scripts/derive.gd"), FileAccess.READ)
+	var stored_size := handle.get_length()
+	handle.close()
+	marker["storedSizes"] = {"scripts/derive.gd": stored_size}
+	marker["deriveVersion"] = 0
+	handle = FileAccess.open(marker_path, FileAccess.WRITE)
+	handle.store_string(JSON.stringify(marker))
+	handle.close()
+	var stale := _restarted_manager()
+	_requests.clear()
+	var upgraded: Dictionary = await stale.sync_package(DERIVE_ID, 1)
+	_check(bool(upgraded.get("ok", false)), "an old derive version must still apply")
+	_check(bool(upgraded.get("cached", false)), "an old derive version must be repaired locally")
+	_check(not _has_request_containing("runtime-files"), "an old derive version must not download")
+	var updated: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(marker_path))
+	_check(
+		int(updated.get("deriveVersion", 0)) == AssetDeriver.VERSION,
+		"the repair must record the current derive version",
+	)
+	var kept: Dictionary = updated.get("storedSizes", {})
+	_check(
+		int(kept.get("scripts/derive.gd", 0)) == stored_size,
+		"the repair must keep the stored sizes of the marker",
+	)
+	restarted.free()
+	stale.free()
+
+
+## The browser file system is mirrored into IndexedDB, so a batch of applies must
+## sync it once at the end instead of after every package.
+func _test_flush_storage_clears_dirty_state() -> void:
+	_manager.flush_storage()
+	_check(not _manager._storage_dirty, "a flushed manager must not be dirty")
+	_publish(FLUSH_ID, 1, {"scripts/flush.gd": "v1"})
+	var result: Dictionary = await _manager.sync_package(FLUSH_ID, 1)
+	_check(bool(result.get("ok", false)), "the flush fixture must apply")
+	_check(_manager._storage_dirty, "a successful apply must mark the storage dirty")
+	_manager.flush_storage()
+	_check(not _manager._storage_dirty, "flush_storage must clear the dirty flag")
+	# A purge deletes files, so it must dirty the storage itself: the apply that
+	# downloaded them was flushed just above.
+	_manager.forget_package(FLUSH_ID, true)
+	_check(
+		_manager._storage_dirty,
+		"purging an applied package must mark the storage dirty",
+	)
+	_manager.flush_storage()
+	_check(not _manager._storage_dirty, "a purge must be flushed like an apply")
+	# Applying an unchanged artifact must not write anything: the marker, the
+	# slug index and the pruning window are already current, so a reload of an
+	# untouched package costs no IndexedDB sync at all.
+	_publish(FLUSH_CACHED_ID, 1, {"scripts/flush_cached.gd": "v1"})
+	var applied: Dictionary = await _manager.sync_package(FLUSH_CACHED_ID, 1)
+	_check(bool(applied.get("ok", false)), "the cached flush fixture must apply")
+	_manager.flush_storage()
+	var restarted := _restarted_manager()
+	var cached: Dictionary = await restarted.sync_package(FLUSH_CACHED_ID, 1)
+	_check(bool(cached.get("cached", false)), "the flush fixture must hit the cache")
+	_check(
+		not restarted._storage_dirty,
+		"a pure cache hit must not dirty the browser file system",
+	)
+	restarted.free()
+
+
 ## A package with no slug yet must not resolve, enumerate or delete a path: an
 ## empty slug used to be the packages root itself.
 func _test_unknown_slug_never_touches_the_packages_root() -> void:
@@ -1184,6 +1413,171 @@ func _test_asset_derivation_failure() -> void:
 	)
 
 
+## A cached artifact is only reused when its marker names this exact revision and
+## key and every manifest file still has the size it was written with. The marker
+## may also record the on-disk size of a file whose bytes were rewritten after
+## publishing (a relocated `user://` prefix), and that recorded size is verified
+## against the disk instead of trusted.
+func _test_artifact_marker_verification() -> void:
+	_check(
+		AssetDeriver.derived_files(["art/pic.png"]) == PackedStringArray(
+			["art/pic.png.image.res", "art/pic.png.import"]
+		),
+		"a raw texture must require its derived resource and sidecar",
+	)
+	_check(
+		AssetDeriver.derived_files(
+			["art/pic.png", "art/pic.png.image.res"]
+		).is_empty(),
+		"a declared derived file must not be required twice",
+	)
+	var store := ArtifactStore.new(Callable(_manager, "packages_root"))
+	var slug := "probe"
+	var key := "b".repeat(64)
+	var identity := ArtifactStore.ArtifactIdentity.new(1, slug, 1, key)
+	var dir := store.revision_dir(slug, 1, key)
+	_check(not dir.is_empty(), "the probe directory must have a path")
+	DirAccess.make_dir_recursive_absolute(dir)
+	# `FileAccess.open` never creates parent directories.
+	DirAccess.make_dir_recursive_absolute(dir.path_join("scripts"))
+	var body := "probe"
+	var handle := FileAccess.open(dir.path_join("scripts/probe.gd"), FileAccess.WRITE)
+	handle.store_string(body)
+	handle.close()
+	var files: Array = [
+		{"filepath": "scripts/probe.gd", "size": body.length(), "sha256": ""},
+	]
+	var hashes := {"scripts/probe.gd": FileAccess.get_sha256(dir.path_join("scripts/probe.gd"))}
+	_check(
+		not bool(
+			store.reusable_artifact(identity, files, AssetDeriver.VERSION).get(
+				"reusable", true
+			)
+		),
+		"an artifact without a marker must not be reusable",
+	)
+	_check(
+		store.write_marker(dir, identity, AssetDeriver.VERSION, hashes).is_empty(),
+		"the marker must be written",
+	)
+	var hit := store.reusable_artifact(identity, files, AssetDeriver.VERSION)
+	_check(bool(hit.get("reusable", false)), "a complete artifact must be reusable")
+	_check(
+		bool(hit.get("derive_current", false)),
+		"the marker must carry the current derive version",
+	)
+	var stale_rules := store.reusable_artifact(
+		identity, files, AssetDeriver.VERSION + 1
+	)
+	_check(
+		bool(stale_rules.get("reusable", false))
+		and not bool(stale_rules.get("derive_current", true)),
+		"a newer derive version must reuse the bytes but ask for a repair",
+	)
+	# The manifest says 999 bytes because the file is expected to be relocated;
+	# the marker's stored size is what a later run has to verify.
+	var relocated: Array = [
+		{"filepath": "scripts/probe.gd", "size": 999, "sha256": ""},
+	]
+	_check(
+		store.write_marker(
+			dir,
+			identity,
+			AssetDeriver.VERSION,
+			hashes,
+			{"scripts/probe.gd": body.length()},
+		).is_empty(),
+		"the marker with stored sizes must be written",
+	)
+	var relocated_hit := store.reusable_artifact(
+		identity, relocated, AssetDeriver.VERSION
+	)
+	_check(
+		bool(relocated_hit.get("reusable", false)),
+		"a recorded stored size must win over the manifest size",
+	)
+	var stored: Dictionary = relocated_hit.get("stored_sizes", {})
+	_check(
+		int(stored.get("scripts/probe.gd", 0)) == body.length(),
+		"a hit must report the stored sizes, so a rewrite keeps them",
+	)
+	_check(
+		store.write_marker(
+			dir,
+			identity,
+			AssetDeriver.VERSION,
+			hashes,
+			{"scripts/probe.gd": body.length() + 1},
+		).is_empty(),
+		"the marker with a wrong stored size must be written",
+	)
+	_check(
+		not bool(
+			store.reusable_artifact(identity, relocated, AssetDeriver.VERSION).get(
+				"reusable", true
+			)
+		),
+		"a recorded stored size must still be checked against the disk",
+	)
+	_check(
+		store.write_marker(dir, identity, AssetDeriver.VERSION, hashes).is_empty(),
+		"the plain marker must be restored",
+	)
+	var marker: Variant = JSON.parse_string(
+		FileAccess.get_file_as_string(dir.path_join(ArtifactStore.MARKER_FILE))
+	)
+	_check(
+		typeof(marker) == TYPE_DICTIONARY
+		and not (marker as Dictionary).has("storedSizes"),
+		"a marker without stored sizes must not carry the key",
+	)
+	_check(
+		not bool(
+			store.reusable_artifact(
+				ArtifactStore.ArtifactIdentity.new(1, slug, 2, key),
+				files,
+				AssetDeriver.VERSION,
+			).get("reusable", true)
+		),
+		"a marker of another revision must not match",
+	)
+	_check(
+		not bool(
+			store.reusable_artifact(
+				ArtifactStore.ArtifactIdentity.new(1, slug, 1, "c".repeat(64)),
+				files,
+				AssetDeriver.VERSION,
+			).get("reusable", true)
+		),
+		"a marker of another artifact key must not match",
+	)
+	handle = FileAccess.open(dir.path_join("scripts/probe.gd"), FileAccess.WRITE)
+	handle.store_string("probe-too-long")
+	handle.close()
+	_check(
+		not bool(
+			store.reusable_artifact(identity, files, AssetDeriver.VERSION).get(
+				"reusable", true
+			)
+		),
+		"a file of the wrong size must not be reused",
+	)
+	# A file that kept its length but changed content must be caught by the
+	# recorded hash: a size check alone would cache the corruption forever.
+	handle = FileAccess.open(dir.path_join("scripts/probe.gd"), FileAccess.WRITE)
+	handle.store_string("pr0be")
+	handle.close()
+	_check(
+		not bool(
+			store.reusable_artifact(identity, files, AssetDeriver.VERSION).get(
+				"reusable", true
+			)
+		),
+		"a file written back with the same size must be rejected",
+	)
+	store.remove_tree(dir)
+
+
 # --- fixture transport ----------------------------------------------------
 
 
@@ -1283,7 +1677,12 @@ func _publish(
 	paths.sort()
 	var total_size := 0
 	for filepath: Variant in paths:
-		var body: PackedByteArray = str(files[filepath]).to_utf8_buffer()
+		var raw: Variant = files[filepath]
+		var body: PackedByteArray
+		if typeof(raw) == TYPE_PACKED_BYTE_ARRAY:
+			body = raw
+		else:
+			body = str(raw).to_utf8_buffer()
 		var digest := _manager._sha256(body)
 		entries.append({"filepath": str(filepath), "size": body.size(), "sha256": digest})
 		_files["%d:%d:%s" % [package_id, revision, filepath]] = body
@@ -1340,11 +1739,11 @@ func _manifest_key(package_id: int, revision: int) -> String:
 	return key.sha256_text()
 
 
-## Mirrors the server: the key covers the sorted `(packageId, revision)` list
-## reachable from the package, so a transitive publish changes it.
+## Mirrors the server: the key covers the resolved closure including the bytes
+## of every file, so a same-revision rebuild changes it.
 func _closure_key(package_id: int, revision: int, dependencies: Array) -> String:
 	var seen := {}
-	var pairs: Array = []
+	var entries: Array = []
 	var queue: Array = [[package_id, revision, dependencies]]
 	while not queue.is_empty():
 		var item: Array = queue.pop_front()
@@ -1354,7 +1753,11 @@ func _closure_key(package_id: int, revision: int, dependencies: Array) -> String
 		if seen.has(pair_key):
 			continue
 		seen[pair_key] = true
-		pairs.append([id, rev])
+		entries.append({
+			"packageId": id,
+			"revision": rev,
+			"files": _file_digests(id, rev),
+		})
 		var manifest: Dictionary = _manifests.get(pair_key, {})
 		for dependency: Variant in item[2]:
 			var entry: Dictionary = dependency
@@ -1368,11 +1771,27 @@ func _closure_key(package_id: int, revision: int, dependencies: Array) -> String
 				dependency_revision,
 				dependency_manifest.get("dependencies", []),
 			])
-	pairs.sort_custom(
-		func(a: Array, b: Array) -> bool:
-			return a[0] < b[0] or (a[0] == b[0] and a[1] < b[1])
+	entries.sort_custom(
+		func(a: Dictionary, b: Dictionary) -> bool:
+			return a.packageId < b.packageId or (
+				a.packageId == b.packageId and a.revision < b.revision
+			)
 	)
-	return JSON.stringify(pairs).sha256_text()
+	return JSON.stringify(entries).sha256_text()
+
+
+func _file_digests(package_id: int, revision: int) -> Array:
+	var prefix := "%d:%d:" % [package_id, revision]
+	var paths: Array = []
+	for key: Variant in _files:
+		var entry := str(key)
+		if entry.begins_with(prefix):
+			paths.append(entry.substr(prefix.length()))
+	paths.sort()
+	var digests: Array = []
+	for filepath: String in paths:
+		digests.append([filepath, _manager._sha256(_files[prefix + filepath])])
+	return digests
 
 
 # --- async helpers --------------------------------------------------------
@@ -1382,6 +1801,15 @@ func _next_frame() -> void:
 	var loop := Engine.get_main_loop()
 	if loop is SceneTree:
 		await (loop as SceneTree).process_frame
+
+
+## A manager of the same room with no in-memory state, like a page reload.
+func _restarted_manager() -> PackagesManager:
+	var restarted := PackagesManager.new()
+	restarted.configure("http://127.0.0.1:1", ROOM)
+	restarted.request_override = _transport
+	restarted.trace_sync_order = true
+	return restarted
 
 
 func _sync_into(results: Array, index: int, package_id: int) -> void:
@@ -1505,7 +1933,7 @@ func _artifact_dirs(package_id: int) -> PackedStringArray:
 	if dir == null:
 		return names
 	for name: String in dir.get_directories():
-		if _manager._revision_of_dir_name(name) > 0:
+		if ArtifactStore.revision_of_dir_name(name) > 0:
 			names.append(name)
 	names.sort()
 	return names

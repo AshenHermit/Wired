@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -6,7 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import type { PublicUser } from '@wired-io/shared';
 import { User } from 'src/database/entities/user.entity';
-import { ILike, Repository } from 'typeorm';
+import { ILike, In, Repository } from 'typeorm';
 import { toPublicUser } from 'src/common/public-user';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -46,6 +47,31 @@ export class UsersService {
 
   async findById(id: number): Promise<User | null> {
     return this.usersRepository.findOne({ where: { id } });
+  }
+
+  /**
+   * Access lists may only name users that actually exist. The existence check
+   * belongs to the users module so every endpoint that accepts an access list
+   * rejects the same ids with the same message; one query covers the whole set.
+   */
+  async assertUsersExist(
+    userIds: Iterable<number> | null | undefined,
+  ): Promise<void> {
+    const unique = [...new Set(userIds ?? [])];
+    if (unique.length === 0) {
+      return;
+    }
+    const found = new Set(
+      (await this.usersRepository.findBy({ id: In(unique) })).map(
+        (user) => user.id,
+      ),
+    );
+    const missing = unique.filter((id) => !found.has(id));
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `The following user IDs do not exist: ${missing.join(', ')}`,
+      );
+    }
   }
 
   /**

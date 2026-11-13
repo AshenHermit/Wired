@@ -318,6 +318,10 @@
 
 				engine
 					.startGame({
+						// The package cache lives outside `/userfs`: the room
+						// editor mounts the same IndexedDB database and deletes
+						// foreign records when it flushes.
+						persistentPaths: ['/userfs', '/wired-cache'],
 						onProgress: function (current, total) {
 							if (!statusProgress) return;
 							if (current > 0 && total > 0) {

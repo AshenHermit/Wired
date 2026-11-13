@@ -21,6 +21,10 @@ const AUDIO_STREAM_TYPES := {
 	"ogg": "AudioStreamOggVorbis",
 	"mp3": "AudioStreamMP3",
 }
+## Bumped on any change of the derivation rules (extensions, suffixes, sidecar
+## contents). The marker of a cached artifact stores it, so an older cache is
+## re-derived instead of serving files the new rules no longer describe.
+const VERSION := 1
 
 ## Extension -> `{kind, suffix, type}`. `kind` selects the derivation helper,
 ## `suffix` names the derived file next to the raw one and `type` is the
@@ -39,9 +43,14 @@ static var _derivations: Dictionary = {}
 ## published file.
 ##
 ## Returns `{ok: bool, error: String}`. A failure removes everything derived by
-## this call, so the caller can drop staging as a whole.
+## this call unless `cleanup_failed` is false, so a caller that stages into a
+## scratch directory can drop it as a whole. An in-place repair of a cached
+## artifact passes false: its target is the live directory, where deleting the
+## derived files would discard assets that already worked. The repair leaves the
+## marker unrewritten after a failure, so the next sync repairs again, and a
+## failed follow-up download must not leave the package worse than before.
 static func derive(
-	staging: String, final_dir: String, filepaths: Array
+	staging: String, final_dir: String, filepaths: Array, cleanup_failed: bool = true
 ) -> Dictionary:
 	var table := derivations()
 	# Derived names must never replace a file the artifact already declares.
@@ -69,7 +78,8 @@ static func derive(
 			"audio":
 				ok = _derive_audio(staging.path_join(path), target, type)
 		if not ok:
-			_remove_files(derived)
+			if cleanup_failed:
+				_remove_files(derived)
 			return {"ok": false, "error": "asset_derive_failed:%s" % path}
 		# Both names are recorded before the sidecar write, so neither the derived
 		# resource nor a half-written sidecar can survive a failure.
@@ -77,7 +87,8 @@ static func derive(
 		derived.append(target)
 		derived.append(sidecar)
 		if not _write_import(sidecar, type, final_dir.path_join(path + suffix)):
-			_remove_files(derived)
+			if cleanup_failed:
+				_remove_files(derived)
 			return {"ok": false, "error": "asset_derive_failed:%s" % path}
 	return {"ok": true, "error": ""}
 
@@ -100,6 +111,29 @@ static func derivations() -> Dictionary:
 		}
 	_derivations = table
 	return _derivations
+
+
+## Names derived next to the raw files of `filepaths`: `<file><suffix>` and
+## `<file>.import`, skipping any name the artifact already declares (the skip
+## rule of `derive()`). The `.import` remap is per raw file, so a declared
+## derived resource skips the pair.
+static func derived_files(filepaths: Array) -> PackedStringArray:
+	var table := derivations()
+	var declared := {}
+	for filepath: Variant in filepaths:
+		declared[str(filepath)] = true
+	var names := PackedStringArray()
+	for filepath: Variant in filepaths:
+		var path := str(filepath)
+		var derivation: Dictionary = table.get(path.get_extension().to_lower(), {})
+		if derivation.is_empty():
+			continue
+		var suffix := str(derivation.get("suffix", ""))
+		if declared.has(path + suffix) or declared.has(path + ".import"):
+			continue
+		names.append(path + suffix)
+		names.append(path + ".import")
+	return names
 
 
 ## Saves the texture of a raw image file. Returns false when the bytes are not

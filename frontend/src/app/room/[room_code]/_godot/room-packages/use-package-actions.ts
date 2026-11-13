@@ -101,11 +101,15 @@ export function usePackageActions({
       guarded(async () => {
         const trimmed = name.trim();
         if (!trimmed) {
-          throw new PackagesActionError({ key: "Packages.errors.nameRequired" });
+          throw new PackagesActionError({
+            key: "Packages.errors.nameRequired",
+          });
         }
         const trimmedSlug = slug.trim();
         if (!trimmedSlug) {
-          throw new PackagesActionError({ key: "Packages.errors.slugRequired" });
+          throw new PackagesActionError({
+            key: "Packages.errors.slugRequired",
+          });
         }
         const files = requireFileSystem(filesRef.current);
         if (await isPackageDirOccupied(trimmedSlug)) {
@@ -176,102 +180,6 @@ export function usePackageActions({
    * exception — the backend rewrites every stored reference, so the editor
    * directory is renamed to match, after the PATCH succeeded.
    */
-  const updatePackageMetadata = React.useCallback(
-    async (
-      packageId: number,
-      patch: UpdateScriptingPackagePayload,
-    ): Promise<ScriptingPackage> => {
-      const payload: UpdateScriptingPackagePayload = {};
-      if (patch.name !== undefined) {
-        const name = patch.name.trim();
-        if (!name) throw new Error("package_metadata_empty");
-        payload.name = name;
-      }
-      if (patch.version !== undefined) {
-        const version = patch.version.trim();
-        if (!version) throw new Error("package_metadata_empty");
-        payload.version = version;
-      }
-      if (patch.slug !== undefined) {
-        const slug = patch.slug.trim();
-        if (!slug) throw new Error("package_metadata_empty");
-        payload.slug = slug;
-      }
-      if (patch.description !== undefined) {
-        payload.description = patch.description.trim();
-      }
-      if (patch.tags !== undefined) {
-        payload.tags = patch.tags;
-      }
-      if (patch.previewImage !== undefined) {
-        payload.previewImage = patch.previewImage;
-      }
-      if (patch.confirmSlugRename !== undefined) {
-        payload.confirmSlugRename = patch.confirmSlugRename;
-      }
-      if (Object.keys(payload).length === 0) {
-        throw new Error("package_metadata_empty");
-      }
-
-      const previousSlug = slugOf(packageId);
-      const renaming =
-        payload.slug !== undefined && payload.slug !== previousSlug;
-      if (renaming && (await isPackageDirOccupied(payload.slug!))) {
-        // The bridge would merge into or refuse the target folder, and the
-        // server rename cannot be undone, so refuse before any request.
-        throw new Error("slug_dir_exists");
-      }
-
-      let updated: ScriptingPackage;
-      try {
-        updated = await updateScriptingPackage(packageId, payload);
-      } catch (cause) {
-        const data = workshopErrorData(cause);
-        if (data?.code === "slug_in_use_by_dependents") {
-          throw new SlugRenameDependentsError(
-            (data.dependents ?? []).map((dependent) => ({
-              packageId: dependent.packageId ?? 0,
-              name: dependent.name ?? `#${dependent.packageId ?? "?"}`,
-            })),
-          );
-        }
-        console.error(cause);
-        setAction(packageId, {
-          error: { key: "Packages.errors.updateMetadataFailed" },
-        });
-        throw new Error("package_update_failed");
-      }
-      dispatch({ type: "updated", package: updated });
-      // The slug is addressable before the state mirror re-renders.
-      createdSlugsRef.current.set(packageId, updated.slug);
-
-      if (renaming) {
-        const files = filesRef.current;
-        if (files && (await files.exists(previousSlug))) {
-          try {
-            await files.renamePackage(previousSlug, updated.slug);
-          } catch (cause) {
-            if (cause instanceof EditorBridgeError) throw cause;
-            throw new PackageDirectoryRenameError(
-              packageId,
-              previousSlug,
-              updated.slug,
-              cause,
-            );
-          }
-        }
-        // Rescan only once the directory carries its new name.
-        requestEditorRescan();
-      }
-
-      // A successful retry must not leave the previous failure on the card.
-      setAction(packageId, { error: null });
-      await refresh();
-      return updated;
-    },
-    [filesRef, isPackageDirOccupied, refresh, setAction, slugOf],
-  );
-
   /** Moves the editor directory after a slug change that already happened. */
   const renamePackageDir = React.useCallback(
     async (
@@ -348,6 +256,117 @@ export function usePackageActions({
     [setAction],
   );
 
+  const updatePackageMetadata = React.useCallback(
+    async (
+      packageId: number,
+      patch: UpdateScriptingPackagePayload,
+    ): Promise<ScriptingPackage> => {
+      beginAction(packageId);
+      try {
+        const payload: UpdateScriptingPackagePayload = {};
+        if (patch.name !== undefined) {
+          const name = patch.name.trim();
+          if (!name) throw new Error("package_metadata_empty");
+          payload.name = name;
+        }
+        if (patch.version !== undefined) {
+          const version = patch.version.trim();
+          if (!version) throw new Error("package_metadata_empty");
+          payload.version = version;
+        }
+        if (patch.slug !== undefined) {
+          const slug = patch.slug.trim();
+          if (!slug) throw new Error("package_metadata_empty");
+          payload.slug = slug;
+        }
+        if (patch.description !== undefined) {
+          payload.description = patch.description.trim();
+        }
+        if (patch.tags !== undefined) {
+          payload.tags = patch.tags;
+        }
+        if (patch.previewImage !== undefined) {
+          payload.previewImage = patch.previewImage;
+        }
+        if (patch.confirmSlugRename !== undefined) {
+          payload.confirmSlugRename = patch.confirmSlugRename;
+        }
+        if (Object.keys(payload).length === 0) {
+          throw new Error("package_metadata_empty");
+        }
+
+        const previousSlug = slugOf(packageId);
+        const renaming =
+          payload.slug !== undefined && payload.slug !== previousSlug;
+        if (renaming && (await isPackageDirOccupied(payload.slug!))) {
+          // The bridge would merge into or refuse the target folder, and the
+          // server rename cannot be undone, so refuse before any request.
+          throw new Error("slug_dir_exists");
+        }
+
+        let updated: ScriptingPackage;
+        try {
+          updated = await updateScriptingPackage(packageId, payload);
+        } catch (cause) {
+          const data = workshopErrorData(cause);
+          if (data?.code === "slug_in_use_by_dependents") {
+            throw new SlugRenameDependentsError(
+              (data.dependents ?? []).map((dependent) => ({
+                packageId: dependent.packageId ?? 0,
+                name: dependent.name ?? `#${dependent.packageId ?? "?"}`,
+              })),
+            );
+          }
+          return failAction(
+            packageId,
+            cause,
+            { key: "Packages.errors.updateMetadataFailed" },
+            "package_update_failed",
+          );
+        }
+        dispatch({ type: "updated", package: updated });
+        // The slug is addressable before the state mirror re-renders.
+        createdSlugsRef.current.set(packageId, updated.slug);
+
+        if (renaming) {
+          const files = filesRef.current;
+          if (files && (await files.exists(previousSlug))) {
+            try {
+              await files.renamePackage(previousSlug, updated.slug);
+            } catch (cause) {
+              if (cause instanceof EditorBridgeError) throw cause;
+              throw new PackageDirectoryRenameError(
+                packageId,
+                previousSlug,
+                updated.slug,
+                cause,
+              );
+            }
+          }
+          // Rescan only once the directory carries its new name.
+          requestEditorRescan();
+        }
+
+        // A successful retry must not leave the previous failure on the card.
+        setAction(packageId, { error: null });
+        await refresh();
+        return updated;
+      } finally {
+        endAction(packageId);
+      }
+    },
+    [
+      beginAction,
+      endAction,
+      failAction,
+      filesRef,
+      isPackageDirOccupied,
+      refresh,
+      setAction,
+      slugOf,
+    ],
+  );
+
   /**
    * Runs one package action: marks the card busy, hands any failure to `fail`
    * (`rethrow` by default) and always clears the busy flag. Actions whose
@@ -373,10 +392,7 @@ export function usePackageActions({
   );
 
   const applyPublishedRevision = React.useCallback(
-    (
-      packageId: number,
-      options: { force?: boolean } = {},
-    ): Promise<void> =>
+    (packageId: number, options: { force?: boolean } = {}): Promise<void> =>
       runAction(
         packageId,
         async () => {
@@ -548,10 +564,7 @@ export function usePackageActions({
   );
 
   const removePackageDirectory = React.useCallback(
-    (
-      packageId: number,
-      options: { force?: boolean } = {},
-    ): Promise<void> =>
+    (packageId: number, options: { force?: boolean } = {}): Promise<void> =>
       runAction(
         packageId,
         async () => {
@@ -690,10 +703,7 @@ export function usePackageActions({
   );
 
   const emitPackage = React.useCallback(
-    (
-      packageId: number,
-      options: { force?: boolean } = {},
-    ): Promise<void> =>
+    (packageId: number, options: { force?: boolean } = {}): Promise<void> =>
       guarded(async () => {
         const files = requireFileSystem(filesRef.current);
         const baseline = loadedRef.current.get(packageId);
@@ -702,11 +712,7 @@ export function usePackageActions({
         }
 
         const remote = remoteRef.current.get(packageId);
-        if (
-          !options.force &&
-          remote &&
-          remote.revision > baseline.revision
-        ) {
+        if (!options.force && remote && remote.revision > baseline.revision) {
           throw new NewerRevisionError(
             packageId,
             baseline.revision,
@@ -735,7 +741,9 @@ export function usePackageActions({
                 key: "Packages.notices.emitPublished",
                 values: {
                   revision: result.revision.revision,
-                  uploaded: result.uploaded,
+                  // The revision's own file count: identical blobs are already
+                  // stored by the server, so `uploaded` can legitimately be 0.
+                  files: result.revision.files.length,
                 },
               },
             });
