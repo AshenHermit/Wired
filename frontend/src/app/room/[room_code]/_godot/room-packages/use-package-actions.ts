@@ -25,7 +25,6 @@ import {
 } from "@/godot/bridge/editor-bridge";
 import type { PackageFileSystem } from "@/godot/bridge/godot-packages-fs";
 import {
-  changedPackageFiles,
   publishPackageFiles,
   reconcilePackageRevision,
   type PackageBaseline,
@@ -45,8 +44,13 @@ import {
   workshopErrorMessage,
   workshopFailure,
 } from "./errors";
-import { requireFileSystem } from "./model";
-import type { PackageActionState } from "./model";
+import { localChangesFor, requireFileSystem } from "./model";
+import type {
+  CreatePackageDraft,
+  PackageActionState,
+  PackageActions,
+  SlugAvailabilityScope,
+} from "./model";
 import type { RoomPackagesAction } from "./reducer";
 
 /**
@@ -71,52 +75,6 @@ export interface PackageActionParams {
   inFlightRef: { current: Set<number> };
 }
 
-export interface PackageActions {
-  createPackage: (input: {
-    name: string;
-    version: string;
-    slug: string;
-  }) => Promise<ScriptingPackage>;
-  checkSlugAvailability: (
-    slug: string,
-    targetRoomId?: number,
-    excludeId?: number,
-  ) => Promise<import("@wired-io/shared").PackageSlugAvailability>;
-  updatePackageMetadata: (
-    packageId: number,
-    patch: UpdateScriptingPackagePayload,
-  ) => Promise<ScriptingPackage>;
-  renamePackageDir: (
-    packageId: number,
-    fromSlug: string,
-    toSlug: string,
-  ) => Promise<void>;
-  applyPublishedRevision: (
-    packageId: number,
-    options?: { force?: boolean },
-  ) => Promise<void>;
-  removePackageDirectory: (
-    packageId: number,
-    options?: { force?: boolean },
-  ) => Promise<void>;
-  setPackageEnabled: (packageId: number, enabled: boolean) => Promise<void>;
-  deletePackageRecord: (packageId: number) => Promise<void>;
-  adoptPackage: (packageId: number) => Promise<void>;
-  emitPackage: (
-    packageId: number,
-    options?: { force?: boolean },
-  ) => Promise<void>;
-  copyFromWorkshop: (workshopPackageId: number) => Promise<ScriptingPackage>;
-  publishToWorkshop: (
-    packageId: number,
-    metadata?: WorkshopPackageMetadata,
-  ) => Promise<WorkshopPublishResult>;
-  forkWorkshopPackage: (
-    packageId: number,
-    slug: string,
-  ) => Promise<ScriptingPackage>;
-}
-
 /** Every explicit action the package panel can perform on one room. */
 export function usePackageActions({
   roomId,
@@ -134,15 +92,7 @@ export function usePackageActions({
   inFlightRef,
 }: PackageActionParams): PackageActions {
   const createPackage = React.useCallback(
-    ({
-      name,
-      version,
-      slug,
-    }: {
-      name: string;
-      version: string;
-      slug: string;
-    }): Promise<ScriptingPackage> =>
+    ({ name, version, slug }: CreatePackageDraft): Promise<ScriptingPackage> =>
       guarded(async () => {
         const trimmed = name.trim();
         if (!trimmed) {
@@ -205,10 +155,13 @@ export function usePackageActions({
   const checkSlugAvailability = React.useCallback(
     (
       slug: string,
-      targetRoomId: number = roomId,
-      excludeId?: number,
+      scope: SlugAvailabilityScope = {},
     ): Promise<PackageSlugAvailability> =>
-      checkPackageSlugAvailability(slug, targetRoomId, excludeId),
+      checkPackageSlugAvailability(
+        slug,
+        scope.roomId ?? roomId,
+        scope.excludeId,
+      ),
     [roomId],
   );
 
@@ -400,11 +353,11 @@ export function usePackageActions({
         try {
           const files = requireFileSystem(filesRef.current);
           const slug = slugOf(packageId);
-          const baseline = loadedRef.current.get(packageId) ?? null;
           const current = await files.snapshot(slug);
-          const changed = baseline
-            ? changedPackageFiles(baseline.files, current)
-            : Object.keys(current);
+          const changed = localChangesFor(
+            loadedRef.current.get(packageId) ?? null,
+            current,
+          );
           if (!options.force && changed.length > 0) {
             throw new LocalChangesError(packageId, changed);
           }
@@ -584,9 +537,7 @@ export function usePackageActions({
 
           const baseline = loadedRef.current.get(packageId) ?? null;
           const current = await files.snapshot(slug);
-          const changed = baseline
-            ? changedPackageFiles(baseline.files, current)
-            : Object.keys(current);
+          const changed = localChangesFor(baseline, current);
           if (!options.force && changed.length > 0) {
             throw new LocalChangesError(packageId, changed);
           }

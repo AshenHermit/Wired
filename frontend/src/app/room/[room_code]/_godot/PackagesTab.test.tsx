@@ -75,7 +75,6 @@ function controller(
     fsReady: true,
     statusLoaded: true,
     error: null,
-    actions: {},
     actionFor: () => ({
       busy: false,
       progress: null,
@@ -662,7 +661,7 @@ describe("PackagesTab", () => {
     await waitFor(() =>
       expect(screen.getByText("Slug уже занят")).toBeTruthy(),
     );
-    expect(checkSlugAvailability).toHaveBeenCalledWith("hero", 1);
+    expect(checkSlugAvailability).toHaveBeenCalledWith("hero");
     expect(screen.getByRole("button", { name: "Создать" })).toHaveProperty(
       "disabled",
       true,
@@ -863,7 +862,7 @@ describe("PackagesTab", () => {
 
     await waitFor(() => expect(screen.getByText("Slug свободен")).toBeTruthy());
     expect(checkSlugAvailability).toHaveBeenCalledTimes(2);
-    expect(checkSlugAvailability).toHaveBeenLastCalledWith("hero", 1);
+    expect(checkSlugAvailability).toHaveBeenLastCalledWith("hero");
   });
 
   it("opens from the card menu and saves every field", async () => {
@@ -1619,7 +1618,7 @@ describe("PackagesTab", () => {
     await waitFor(() =>
       expect(screen.getByText("Slug свободен")).toBeTruthy(),
     );
-    expect(checkSlugAvailability).toHaveBeenCalledWith("hero_two", 1);
+    expect(checkSlugAvailability).toHaveBeenCalledWith("hero_two");
 
     const submit = screen.getByRole("button", { name: "Создать fork" });
     await waitFor(() => expect(submit).toHaveProperty("disabled", false));

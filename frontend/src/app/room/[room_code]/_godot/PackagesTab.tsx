@@ -584,7 +584,7 @@ export function PackagesTab({
   const slugAvailability = useSlugAvailability({
     slug,
     enabled: createOpen,
-    check: (candidate) => checkSlugAvailability(candidate, roomId),
+    check: (candidate) => checkSlugAvailability(candidate),
     verdict: (result) => (result.available ? "available" : "taken"),
   });
   const slugState = slugAvailability.state;
@@ -987,7 +987,6 @@ export function PackagesTab({
             if (!open) setForkEntry(null);
           }}
           entry={forkEntry}
-          roomId={roomId}
           packages={packages}
         />
         <RoomAccessSettingsDialog

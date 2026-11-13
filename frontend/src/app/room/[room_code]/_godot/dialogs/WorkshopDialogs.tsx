@@ -369,13 +369,11 @@ export function WorkshopForkDialog({
   open,
   onOpenChange,
   entry,
-  roomId,
   packages,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   entry: RoomPackageEntry | null;
-  roomId: number;
   /** Only the fork actions this dialog drives. */
   packages: Pick<
     RoomPackagesController,
@@ -399,7 +397,7 @@ export function WorkshopForkDialog({
   const slugAvailability = useSlugAvailability({
     slug,
     enabled: open,
-    check: (candidate) => checkSlugAvailability(candidate, roomId),
+    check: (candidate) => checkSlugAvailability(candidate),
     verdict: (result) =>
       result.available && result.global.available ? "available" : "taken",
   });

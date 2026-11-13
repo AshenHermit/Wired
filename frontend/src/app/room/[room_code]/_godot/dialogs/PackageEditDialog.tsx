@@ -107,7 +107,7 @@ export function PackageEditDialog({
     enabled: open && entry !== null,
     unchanged: entry?.slug,
     check: (candidate) =>
-      checkSlugAvailability(candidate, undefined, entry?.packageId),
+      checkSlugAvailability(candidate, { excludeId: entry?.packageId }),
     verdict: (result) => (result.available ? "available" : "taken"),
   });
   const slugState = slugAvailability.state;
