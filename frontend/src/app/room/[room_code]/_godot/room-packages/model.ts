@@ -8,7 +8,7 @@ import type {
   WorkshopPublishResult,
 } from "@wired-io/shared";
 import type { AppMessage } from "@/i18n/message";
-import type { GodotEditorInstance } from "../GodotEditorInstance";
+import type { GodotEditorInstance } from "@/godot/editor/godot-editor-instance";
 import type { PackageFileSystem } from "@/godot/bridge/godot-packages-fs";
 import { changedPackageFiles } from "@/godot/bridge/package-sync";
 import type { PackageBaseline } from "@/godot/bridge/package-sync";

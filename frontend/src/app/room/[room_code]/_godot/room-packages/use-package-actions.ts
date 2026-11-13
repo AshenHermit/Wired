@@ -173,7 +173,7 @@ export function usePackageActions({
   /**
    * Metadata lives in the room package list only: the editor files, the
    * stored status and the runtime state are untouched. A slug change is the
-   * exception РІР‚вЂќ the backend rewrites every stored reference, so the editor
+   * exception — the backend rewrites every stored reference, so the editor
    * directory is renamed to match, after the PATCH succeeded.
    */
   const updatePackageMetadata = React.useCallback(

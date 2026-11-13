@@ -56,7 +56,7 @@ const HANDSHAKE_TIMEOUT_MS = 15_000;
 const STATUS_POLL_MS = 5_000;
 // A cold runtime start has to launch Godot and apply every package revision
 // before the backend can mint a usable ticket. The connection flow waits for
-// that instead of turning a normal startup into "РРіСЂР° РЅРµРґРѕСЃС‚СѓРїРЅР°".
+// that instead of turning a normal startup into "Игра недоступна".
 const CONNECTION_WAIT_MS = 90_000;
 const RUNTIME_POLL_MS = 1_000;
 const CONNECTION_RETRY_MS = 2_000;

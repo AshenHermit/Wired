@@ -9,7 +9,7 @@ import {
   EditorLoadStatus,
   EditorProgressStatus,
   GodotEditorInstance,
-} from "./GodotEditorInstance";
+} from "@/godot/editor/godot-editor-instance";
 import { Spinner } from "@/components/ui/spinner";
 import { getGodotProjectInfo } from "@/api/services/godot-game";
 import {

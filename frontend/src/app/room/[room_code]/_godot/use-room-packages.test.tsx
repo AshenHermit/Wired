@@ -9,7 +9,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "@/utils/sha256";
 import { EditorBridgeError, EditorBridgeOperationError } from "@/godot/bridge/editor-bridge";
-import type { GodotEditorInstance } from "./GodotEditorInstance";
+import type { GodotEditorInstance } from "@/godot/editor/godot-editor-instance";
 
 vi.mock("@/godot/bridge/godot-packages-fs", async () => {
   const actual =
