@@ -106,4 +106,25 @@ Content
     const headings = parseMarkdownHeadings('## Пакет\n## Пакет\n');
     expect(headings.map((h) => h.id)).toEqual(['paket', 'paket-1']);
   });
+
+  test('strips inline markup from heading text and id', () => {
+    const headings = parseMarkdownHeadings(
+      '## `WiredPackageRegistration`\n## **Жирный** [ссылка](/x)\n',
+    );
+    expect(headings.map((h) => h.text)).toEqual([
+      'WiredPackageRegistration',
+      'Жирный ссылка',
+    ]);
+    expect(headings.map((h) => h.id)).toEqual([
+      'wiredpackageregistration',
+      'zhirnyy-ssylka',
+    ]);
+  });
+
+  test('keeps generated heading ids unique when slugs collide', () => {
+    const ids = parseMarkdownHeadings('## Setup\n## Setup 1\n## Setup\n').map(
+      (h) => h.id,
+    );
+    expect(ids).toEqual(['setup', 'setup-1', 'setup-2']);
+  });
 });

@@ -68,6 +68,40 @@ export interface HeadingInfo {
 }
 
 /**
+ * Removes inline markdown markup so heading text and its anchor match what
+ * ReactMarkdown renders (code, links, emphasis).
+ */
+export function plainHeadingText(markdown: string): string {
+  return markdown
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/__(.+?)__/g, '$1')
+    .replace(/~~(.+?)~~/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/_(.+?)_/g, '$1')
+    .trim();
+}
+
+/**
+ * Returns the first slug not present in `used`, appending a counter when a
+ * previously generated id already occupies the slug.
+ */
+export function nextHeadingId(text: string, used: Set<string>): string {
+  const base = slugify(text);
+  let id = base;
+  let counter = 1;
+
+  while (used.has(id)) {
+    id = slugify(text, counter);
+    counter += 1;
+  }
+
+  return id;
+}
+
+/**
  * Parses markdown content and extracts h2/h3 headings with unique IDs
  * @param content - Raw markdown content
  * @returns Array of heading info with auto-generated unique IDs
@@ -76,22 +110,14 @@ export function parseMarkdownHeadings(content: string): HeadingInfo[] {
   // Match h2 (##) and h3 (###) headings
   const headingRegex = /^(#{2,3})\s+(.+?)$/gm;
   const headings: HeadingInfo[] = [];
-  const seenIds = new Map<string, number>(); // Track ID occurrences for duplicates
+  const usedIds = new Set<string>();
 
   let match;
   while ((match = headingRegex.exec(content)) !== null) {
     const level = match[1].length; // 2 for ##, 3 for ###
-    const text = match[2].trim();
-    let id = slugify(text);
-
-    // Handle duplicate IDs by appending counter
-    if (seenIds.has(id)) {
-      const count = seenIds.get(id)!;
-      seenIds.set(id, count + 1);
-      id = slugify(text, count);
-    } else {
-      seenIds.set(id, 1);
-    }
+    const text = plainHeadingText(match[2].trim());
+    const id = nextHeadingId(text, usedIds);
+    usedIds.add(id);
 
     headings.push({ id, level, text });
   }

@@ -2,29 +2,49 @@
 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { parseMarkdownHeadings, slugify } from '@/lib/markdown-parser';
+import { nextHeadingId } from '@/lib/markdown-parser';
 import { highlightCode } from '@/lib/highlight-plugin';
 
 interface MarkdownRendererProps {
   content: string;
 }
 
+interface MarkdownNode {
+  type: string;
+  value?: string;
+  children?: MarkdownNode[];
+}
+
+function nodeText(node: MarkdownNode | undefined): string {
+  if (!node) {
+    return '';
+  }
+  if (node.type === 'text') {
+    return node.value ?? '';
+  }
+  return node.children?.map(nodeText).join('') ?? '';
+}
+
 export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
-  const headings = parseMarkdownHeadings(content);
-  const headingMap = new Map(headings.map(h => [h.text, h.id]));
+  const usedIds = new Set<string>();
+
+  const headingId = (node: MarkdownNode | undefined, children: unknown) => {
+    const text = nodeText(node) || String(children);
+    const id = nextHeadingId(text, usedIds);
+    usedIds.add(id);
+    return id;
+  };
 
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        h2: ({ children }) => {
-          const text = String(children);
-          const id = headingMap.get(text) || slugify(text);
+        h2: ({ children, node }) => {
+          const id = headingId(node, children);
           return <h2 id={id} className="text-2xl font-bold mt-6 mb-4">{children}</h2>;
         },
-        h3: ({ children }) => {
-          const text = String(children);
-          const id = headingMap.get(text) || slugify(text);
+        h3: ({ children, node }) => {
+          const id = headingId(node, children);
           return <h3 id={id} className="text-xl font-semibold mt-4 mb-3">{children}</h3>;
         },
         p: ({ children }) => <p className="mb-4 leading-relaxed">{children}</p>,
