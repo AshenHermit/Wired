@@ -32,7 +32,7 @@
       "rooms": "Rooms",
       "controls": "Controls",
       "packages": "Packages",
-      "docs": "Documentation"
+      "docs": "For Developers"
     },
     "rooms": {
       "title": "Rooms",
@@ -47,13 +47,12 @@
       "description": "Community packages. Search by name, slug, or tag"
     },
     "docs": {
-      "title": "Documentation",
-      "description": "The core wired-io API for writing scripts will be collected here, so you don't have to dig through the sources",
-      "nav": {
-        "gettingStarted": "Getting Started",
-        "apiReference": "API Reference",
-        "entityRegistration": "Entity Registration",
-        "multiplayerGuide": "Multiplayer Guide"
+      "title": "For Developers",
+      "description": "Documentation for package authors and the latest changes to the platform",
+      "devlog": {
+        "title": "Latest updates",
+        "all": "All updates",
+        "empty": "No entries yet"
       },
       "issues": {
         "description": "Report an issue or suggest a feature on the GitHub repository",
