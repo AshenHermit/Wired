@@ -41,7 +41,7 @@
 - Consumes: `serveStaticAsset(root, relativePath, req, res, options)` из `src/common/static-assets.ts`; опция `revalidate: boolean` (ETag `"${size.toString(16)}-${mtimeSec.toString(16)}"`, `Cache-Control: no-cache`, 304 на `If-None-Match`), `noStoreShell: boolean` (`no-store` для `.html`/`.htm`).
 - Produces: ничего (финальная задача); поведение эндпоинтов `GET /godot-editor/*path`, `GET /godot-project/wired/*filepath`.
 
-- [ ] **Step 1: Добавить фикстуры в `beforeAll` спека**
+- [x] **Step 1: Добавить фикстуры в `beforeAll` спека**
 
 В `packages/server/src/godot-editor-provider/godot-editor-provider.controller.spec.ts`, в `beforeAll`, рядом с остальными `writeFile`:
 
@@ -53,7 +53,7 @@
     await writeFile(path.join(projectPath, '_wired', 'index.html'), '<p>x</p>');
 ```
 
-- [ ] **Step 2: Написать failing-тесты в supertest-блоке `describe('HTTP wildcard routing')`**
+- [x] **Step 2: Написать failing-тесты в supertest-блоке `describe('HTTP wildcard routing')`**
 
 Вставить после теста `serves the project manifest from the shared route` (перед закрывающим `});` блока в строке 173). По образцу `game-export.controller.spec.ts:95-116`:
 
@@ -123,12 +123,12 @@
         expect(response.headers['cache-control']).toBeUndefined();
 ```
 
-- [ ] **Step 3: Прогнать тесты, убедиться, что новые падают**
+- [x] **Step 3: Прогнать тесты, убедиться, что новые падают**
 
 Run: `pnpm --filter server exec jest godot-editor-provider`
 Expected: FAIL — три новых теста падают (`cache-control`/`etag` undefined вместо значений, 200 вместо 304); старые зелёные.
 
-- [ ] **Step 4: Включить опции в контроллере**
+- [x] **Step 4: Включить опции в контроллере**
 
 `packages/server/src/godot-editor-provider/godot-editor-provider.controller.ts`, `getEditorFile` — добавить пятый аргумент:
 
@@ -159,17 +159,17 @@ Expected: FAIL — три новых теста падают (`cache-control`/`e
       },
 ```
 
-- [ ] **Step 5: Прогнать тесты, убедиться, что всё зелёное**
+- [x] **Step 5: Прогнать тесты, убедиться, что всё зелёное**
 
 Run: `pnpm --filter server exec jest godot-editor-provider`
 Expected: PASS — все тесты файла, включая три новых и пин манифеста.
 
-- [ ] **Step 6: Полная верификация**
+- [x] **Step 6: Полная верификация**
 
 Run: `pnpm --filter server test && pnpm --filter server check-types && pnpm --filter server lint`
 Expected: тесты все зелёные (в т.ч. game-export — без изменений), typecheck чист, lint без ошибок.
 
-- [ ] **Step 7: Обновить статус дизайн-дока и закоммитить**
+- [x] **Step 7: Обновить статус дизайн-дока и закоммитить**
 
 В `docs/superpowers/specs/2026-11-14-editor-asset-revalidate-design.md`: `Статус: на согласовании` → `Статус: одобрено`.
 
