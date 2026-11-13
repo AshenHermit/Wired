@@ -686,25 +686,30 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       );
     }
 
-    await outcome.rewrite?.commit();
-    for (const packageId of outcome.rewrittenIds) {
-      await this.delivery
-        .invalidatePackage(packageId)
-        .catch((cause) =>
+    try {
+      await outcome.rewrite?.commit();
+    } finally {
+      // The database already describes the rewritten files even when moving
+      // the refs failed; artifacts built from the old bytes must still go.
+      for (const packageId of outcome.rewrittenIds) {
+        await this.delivery
+          .invalidatePackage(packageId)
+          .catch((cause) =>
+            this.logger.warn(
+              `artifact invalidation failed: ${errorMessage(cause)}`,
+            ),
+          );
+      }
+      if (outcome.rewrittenIds.length > 0) {
+        try {
+          await this.dispatcher.packagesChanged(outcome.rewrittenIds);
+        } catch (cause) {
           this.logger.warn(
-            `artifact invalidation failed: ${errorMessage(cause)}`,
-          ),
-        );
-    }
-    if (outcome.rewrittenIds.length > 0) {
-      try {
-        await this.dispatcher.packagesChanged(outcome.rewrittenIds);
-      } catch (cause) {
-        this.logger.warn(
-          `Package ${pkg.id} was renamed but its room was not notified: ${String(
-            cause,
-          )}`,
-        );
+            `Package ${pkg.id} was renamed but its room was not notified: ${String(
+              cause,
+            )}`,
+          );
+        }
       }
     }
     if (outcome.enabledChanged) {

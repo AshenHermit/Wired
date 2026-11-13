@@ -1,6 +1,8 @@
+import { ConflictException } from '@nestjs/common';
 import type { Repository } from 'typeorm';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
 import { makeRepository, TestRepository } from '../testing/git-test-helpers';
+import { PackagePublishLockService } from './package-publish-lock.service';
 import { PackageGitReconcileService } from './package-git-reconcile.service';
 
 const AUTHOR = { name: 'Wired', email: 'packages@wired.local' };
@@ -31,6 +33,7 @@ describe('PackageGitReconcileService', () => {
     save: jest.Mock;
   };
   let service: PackageGitReconcileService;
+  let locks: { runWithPublishLocks: jest.Mock };
 
   beforeEach(async () => {
     context = makeRepository();
@@ -59,9 +62,15 @@ describe('PackageGitReconcileService', () => {
       ),
       save: jest.fn(async (value: ScriptingPackageRevision) => value),
     };
+    locks = {
+      runWithPublishLocks: jest.fn(
+        async (_ids: number[], fn: () => Promise<unknown>) => fn(),
+      ),
+    };
     service = new PackageGitReconcileService(
       context.repo,
       repository as unknown as Repository<ScriptingPackageRevision>,
+      locks as unknown as PackagePublishLockService,
     );
   });
 
@@ -158,5 +167,34 @@ describe('PackageGitReconcileService', () => {
       commit,
     );
     expect(repository.update).not.toHaveBeenCalled();
+  });
+
+  it('runs under the publish lock of the package', async () => {
+    await service.reconcilePackage(1);
+
+    expect(locks.runWithPublishLocks).toHaveBeenCalledWith(
+      [1],
+      expect.any(Function),
+    );
+  });
+
+  it('leaves refs untouched when another instance holds the publish lock', async () => {
+    const commit = await makeCommit('a');
+    await pending(1, commit);
+    revisions = [row(1, 'published', commit)];
+    locks.runWithPublishLocks.mockRejectedValueOnce(
+      new ConflictException('Package 1 is being published'),
+    );
+
+    await expect(service.reconcilePackage(1)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+
+    await expect(
+      context.repo.readRef(1, 'refs/pending/publish/1'),
+    ).resolves.toBe(commit);
+    await expect(
+      context.repo.readRef(1, 'refs/tags/revisions/1'),
+    ).resolves.toBeNull();
   });
 });

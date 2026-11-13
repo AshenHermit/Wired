@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Repository } from 'typeorm';
@@ -11,6 +12,7 @@ import { PackageGitStorageService } from '../storage/package-git-storage.service
 import { PackageStorageService } from '../storage/package-storage.service';
 import { PackageGitReconcileService } from './package-git-reconcile.service';
 import { PackageGitMaintenanceService } from './package-git-maintenance.service';
+import { PackagePublishLockService } from './package-publish-lock.service';
 
 describe('PackageGitMaintenanceService', () => {
   let repo: PackageGitRepository;
@@ -22,6 +24,7 @@ describe('PackageGitMaintenanceService', () => {
   let service: PackageGitMaintenanceService;
   let revisions: Repository<ScriptingPackageRevision>;
   let rows: ScriptingPackageRevision[];
+  let locks: { runWithPublishLocks: jest.Mock };
 
   const author = { name: 'Wired', email: 'packages@wired.local' };
 
@@ -76,13 +79,23 @@ describe('PackageGitMaintenanceService', () => {
       },
     } as unknown as AppConfigService;
     storage = new PackageStorageService(config, gitStorage);
-    reconcile = new PackageGitReconcileService(repo, revisions);
+    reconcile = new PackageGitReconcileService(
+      repo,
+      revisions,
+      new PackagePublishLockService(),
+    );
+    locks = {
+      runWithPublishLocks: jest.fn(
+        async (_ids: number[], fn: () => Promise<unknown>) => fn(),
+      ),
+    };
     service = new PackageGitMaintenanceService(
       config,
       repo,
       storage,
       reconcile,
       revisions,
+      locks as unknown as PackagePublishLockService,
     );
   });
 
@@ -152,6 +165,7 @@ describe('PackageGitMaintenanceService', () => {
       storage,
       reconcile,
       revisions,
+      locks as unknown as PackagePublishLockService,
     );
     try {
       disabledService.onModuleInit();
@@ -159,5 +173,76 @@ describe('PackageGitMaintenanceService', () => {
       spy.mockRestore();
     }
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('maintains a package under its publish lock', async () => {
+    await service.maintainPackage(1);
+
+    expect(locks.runWithPublishLocks).toHaveBeenCalledWith(
+      [1],
+      expect.any(Function),
+    );
+  });
+
+  it('skips maintenance instead of racing a held publish lock', async () => {
+    const oids = await repo.writeBlobs(1, [
+      { path: 'live.gd', data: Buffer.from('live') },
+    ]);
+    const tree = await repo.writeTree(1, [
+      { path: 'live.gd', oid: oids.get('live.gd')! },
+    ]);
+    const live = await repo.createCommit(
+      1,
+      tree,
+      null,
+      author,
+      'live',
+      new Date('2024-01-01T00:00:00Z'),
+    );
+    await repo.applyRefUpdates(1, [
+      { ref: 'refs/tags/revisions/1', oid: live, expected: null },
+    ]);
+    rows.push({
+      revision: 1,
+      status: 'published',
+      commitSha: live,
+      files: [entry('live.gd', 'live')],
+    } as ScriptingPackageRevision);
+    locks.runWithPublishLocks.mockRejectedValueOnce(
+      new ConflictException('Package 1 is being published'),
+    );
+
+    await expect(service.maintainPackage(1)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    await expect(repo.objectExists(1, [live])).resolves.toEqual(new Set([live]));
+  });
+
+  it('continues with other packages when one maintenance run fails', async () => {
+    rows.push(
+      {
+        revision: 1,
+        status: 'published',
+        commitSha: null,
+        files: [],
+        package: { id: 1 },
+      } as unknown as ScriptingPackageRevision,
+      {
+        revision: 1,
+        status: 'published',
+        commitSha: null,
+        files: [],
+        package: { id: 2 },
+      } as unknown as ScriptingPackageRevision,
+    );
+    locks.runWithPublishLocks.mockRejectedValueOnce(
+      new ConflictException('Package 1 is being published'),
+    );
+    const spy = jest.spyOn(service, 'maintainPackage');
+
+    await (service as unknown as { maintainAllPackages(): Promise<void> })
+      .maintainAllPackages();
+
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 });

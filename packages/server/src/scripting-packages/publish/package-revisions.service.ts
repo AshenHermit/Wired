@@ -240,7 +240,7 @@ export class PackageRevisionsService {
 
   /** {@link migratePackage} without taking the lock; callers already hold it. */
   private async migratePackageLocked(packageId: number): Promise<number> {
-    await this.reconcile.reconcilePackage(packageId);
+    await this.reconcile.reconcilePackageLocked(packageId);
     const rows = await this.revisionsRepository.find({
       where: { package: { id: packageId }, status: 'published' },
       order: { revision: 'ASC' },
@@ -361,6 +361,10 @@ export class PackageRevisionsService {
 
       // Reject uploads for the target while its bytes are verified and moved.
       await this.locks.runWithPublishLocks([targetPackageId], async () => {
+        // A copy into a package that still has legacy revisions must extend
+        // its history instead of writing a second root that leaves `main`
+        // pointing at an older commit.
+        await this.migratePackageLocked(targetPackageId);
         await this.storage.publishRevision(
           targetPackageId,
           revision,

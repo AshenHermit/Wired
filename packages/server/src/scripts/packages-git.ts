@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 import { AppModule } from '../app.module';
 import { ScriptingPackageRevision } from '../database/entities/scripting-package-revision.entity';
 import { PackageGitMaintenanceService } from '../scripting-packages/publish/package-git-maintenance.service';
+import { runPackageGitCommand } from '../scripting-packages/publish/package-git-cli';
 import { PackageRevisionsService } from '../scripting-packages/publish/package-revisions.service';
 
 const USAGE = `Usage: packages-git <command> --all|--package <id>
@@ -96,32 +97,20 @@ async function main(): Promise<void> {
       return;
     }
 
-    for (const packageId of packageIds) {
-      switch (options.command) {
-        case 'migrate': {
-          const count = await revisions.migratePackage(packageId);
-          logger.log(`package ${packageId}: ${count} revision(s) migrated`);
-          break;
-        }
-        case 'cleanup': {
-          const count = await revisions.cleanupLegacyRevisions(packageId);
-          logger.log(`package ${packageId}: ${count} legacy director(ies) removed`);
-          break;
-        }
-        case 'gc':
-          await maintenance.maintainPackage(packageId);
-          logger.log(`package ${packageId}: maintenance complete`);
-          break;
-        case 'export': {
-          const count = await maintenance.exportPackage(packageId);
-          logger.log(`package ${packageId}: ${count} revision(s) exported`);
-          break;
-        }
-        case 'repair':
-          await maintenance.repairPackage(packageId);
-          logger.log(`package ${packageId}: refs repaired`);
-          break;
-      }
+    const failures = await runPackageGitCommand(
+      options.command,
+      packageIds,
+      {
+        migrate: (packageId) => revisions.migratePackage(packageId),
+        cleanup: (packageId) => revisions.cleanupLegacyRevisions(packageId),
+        gc: (packageId) => maintenance.maintainPackage(packageId),
+        export: (packageId) => maintenance.exportPackage(packageId),
+        repair: (packageId) => maintenance.repairPackage(packageId),
+      },
+      (message) => logger.log(message),
+    );
+    if (failures > 0) {
+      process.exitCode = 1;
     }
   } finally {
     await app.close();

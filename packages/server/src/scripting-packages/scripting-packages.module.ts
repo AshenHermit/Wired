@@ -1,4 +1,5 @@
 import { Module, forwardRef } from '@nestjs/common';
+import { APP_FILTER } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScriptingPackage } from 'src/database/entities/scripting-package.entity';
 import { ScriptingPackageRevision } from 'src/database/entities/scripting-package-revision.entity';
@@ -19,6 +20,7 @@ import { PackageGitRepository } from './storage/git/package-git-repository';
 import { PackageGitStorageService } from './storage/package-git-storage.service';
 import { PackageGitReconcileService } from './publish/package-git-reconcile.service';
 import { PackageGitMaintenanceService } from './publish/package-git-maintenance.service';
+import { PackageGitExceptionFilter } from './package-git-exception.filter';
 
 @Module({
   imports: [
@@ -44,6 +46,7 @@ import { PackageGitMaintenanceService } from './publish/package-git-maintenance.
     PackageGitStorageService,
     PackageGitReconcileService,
     PackageGitMaintenanceService,
+    { provide: APP_FILTER, useClass: PackageGitExceptionFilter },
   ],
   // `WorkshopController` must come first: `GET /scripting-packages/workshop`
   // would otherwise be matched by the authoring `GET /scripting-packages/:id`

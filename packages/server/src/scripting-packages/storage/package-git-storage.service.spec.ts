@@ -162,6 +162,20 @@ describe('PackageGitStorageService', () => {
     expect(Buffer.concat(chunks).toString()).toBe('extends Node\n');
   });
 
+  it('streams the published blob instead of buffering it', async () => {
+    const sha = await commit(1, 1, [{ path: 'a.txt', content: 'A' }]);
+    const openBlob = jest.spyOn(repo, 'openBlob');
+
+    const stream = await gitStorage.openFile(1, 1, 'a.txt', sha);
+
+    expect(openBlob).toHaveBeenCalledTimes(1);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk as Buffer);
+    }
+    expect(Buffer.concat(chunks).toString()).toBe('A');
+  });
+
   it('reports files whose content is absent from the index', async () => {
     await publish(1, filesA);
 
@@ -386,5 +400,67 @@ describe('PackageGitStorageService', () => {
         { revision: 1, files: [], publishedAt: null, commitSha: null },
       ]),
     ).rejects.toThrow(/not converted/);
+  });
+
+  it('refuses cleanup when the recorded commit is missing from the repository', async () => {
+    writeLegacyFile(root, 1, 1, 'a.gd', 'extends Node\n');
+
+    await expect(
+      storage.cleanupLegacyRevisions(1, [
+        {
+          revision: 1,
+          files: [entry('a.gd', 'extends Node\n')],
+          publishedAt: null,
+          commitSha: 'f'.repeat(64),
+        },
+      ]),
+    ).rejects.toThrow(/has no commit/);
+    expect(existsSync(legacyDir(1, 1))).toBe(true);
+  });
+
+  it('refuses cleanup when a tag does not point at the recorded commit', async () => {
+    writeLegacyFile(root, 1, 1, 'a.gd', 'extends Node\n');
+    await commit(1, 1, [{ path: 'a.gd', content: 'extends Node\n' }]);
+    const other = await commit(1, 2, [{ path: 'a.gd', content: 'other' }]);
+
+    await expect(
+      storage.cleanupLegacyRevisions(1, [
+        {
+          revision: 1,
+          files: [entry('a.gd', 'extends Node\n')],
+          publishedAt: null,
+          commitSha: other,
+        },
+      ]),
+    ).rejects.toThrow(/tag/);
+    expect(existsSync(legacyDir(1, 1))).toBe(true);
+  });
+
+  it('rejects a skipped blob whose object was pruned', async () => {
+    await publish(1, filesA);
+    // Warm the content index before the objects become unreachable.
+    await expect(
+      gitStorage.missingFiles(1, [entry('a.txt', 'A')]),
+    ).resolves.toEqual([]);
+    const tag = await repo.readRef(1, 'refs/tags/revisions/1');
+    const main = await repo.readRef(1, 'refs/heads/main');
+    await repo.applyRefUpdates(1, [
+      { ref: 'refs/tags/revisions/1', delete: true, expected: tag! },
+      { ref: 'refs/heads/main', delete: true, expected: main! },
+    ]);
+    await repo.gc(1, 'now');
+
+    await expect(
+      storage.publishRevision(
+        1,
+        2,
+        [entry('a.txt', 'A')],
+        async () => undefined,
+        author,
+      ),
+    ).rejects.toMatchObject({
+      response: { code: 'package_storage_stale' },
+    });
+    expect(await repo.readRef(1, 'refs/tags/revisions/2')).toBeNull();
   });
 });

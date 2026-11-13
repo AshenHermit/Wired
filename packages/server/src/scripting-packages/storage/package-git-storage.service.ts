@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -140,6 +141,19 @@ export class PackageGitStorageService {
       const resolved = await index.resolveOids(packageId, skipped);
       for (const [filepath, oid] of resolved) {
         oids.set(filepath, oid);
+      }
+      // The index is an in-memory cache of the published trees, so an object
+      // it points at may have been pruned (GC after a rewrite, a restored
+      // volume). Re-checked before the tree is written: a dead oid would fail
+      // `write-tree` with an opaque 500 and stay cached forever.
+      const fromIndex = [...new Set(resolved.values())];
+      const existing = await this.repo.objectExists(packageId, fromIndex);
+      if (fromIndex.some((oid) => !existing.has(oid))) {
+        index.invalidate(packageId);
+        throw new ConflictException({
+          code: 'package_storage_stale',
+          message: 'Package files must be uploaded again',
+        });
       }
     }
 
@@ -493,9 +507,57 @@ export class PackageGitStorageService {
     filepath: string,
     commitSha: string | null = null,
   ): Promise<Readable> {
-    return Readable.from(
-      await this.readFile(packageId, revision, filepath, commitSha),
+    const oid = await this.resolveBlob(
+      packageId,
+      revision,
+      filepath,
+      commitSha,
     );
+    return this.repo.openBlob(packageId, oid);
+  }
+
+  /**
+   * Verifies that every recorded commit is still complete before the legacy
+   * directories that hold the same bytes are deleted: the tag must point at
+   * the recorded commit, the commit must exist, and its tree must contain
+   * every declared file. Otherwise cleanup would destroy the only copy.
+   */
+  async assertRevisionsStored(
+    packageId: number,
+    rows: ReadonlyArray<{
+      revision: number;
+      files: PackageFileEntry[];
+      commitSha?: string | null;
+    }>,
+  ): Promise<void> {
+    for (const row of rows) {
+      if (!row.commitSha) {
+        continue;
+      }
+      const existing = await this.repo.objectExists(packageId, [row.commitSha]);
+      if (!existing.has(row.commitSha)) {
+        throw new Error(
+          `Revision ${row.revision} of package ${packageId} has no commit object; refusing to delete its legacy files`,
+        );
+      }
+      const tag = await this.repo.readRef(
+        packageId,
+        `refs/tags/revisions/${row.revision}`,
+      );
+      if (tag !== row.commitSha) {
+        throw new Error(
+          `Revision ${row.revision} of package ${packageId} has a stale tag; run repair before cleanup`,
+        );
+      }
+      const tree = await this.repo.listTree(packageId, row.commitSha);
+      for (const file of row.files ?? []) {
+        if (!tree.has(file.filepath)) {
+          throw new Error(
+            `Revision ${row.revision} of package ${packageId} is missing ${file.filepath}; refusing to delete its legacy files`,
+          );
+        }
+      }
+    }
   }
 
   async fileSize(

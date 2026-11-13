@@ -396,6 +396,14 @@ export class PackageStorageService {
         `Revision ${unconverted.revision} of package ${packageId} is not converted yet; run migrate first`,
       );
     }
+    if (rows.length > 0) {
+      if (!this.gitStorage) {
+        throw new Error(
+          `Package ${packageId} has git revisions but git storage is not available; refusing to delete its legacy files`,
+        );
+      }
+      await this.gitStorage.assertRevisionsStored(packageId, rows);
+    }
     let removed = 0;
     for (const row of rows) {
       const dir = this.publishedRevisionDir(packageId, row.revision);
@@ -519,12 +527,8 @@ export class PackageStorageService {
   ): Promise<{ stream: Readable; size: number }> {
     const commit = await this.resolveGitCommit(packageId, revision, commitSha);
     if (commit) {
-      const stream = await this.gitStorage!.openFile(
-        packageId,
-        revision,
-        filepath,
-        commit,
-      );
+      // Size first: the blob stream must be consumed without awaiting other
+      // child processes in between, or libuv may drop the buffered pipe data.
       const size =
         declaredSize ??
         (await this.gitStorage!.fileSize(
@@ -533,6 +537,12 @@ export class PackageStorageService {
           filepath,
           commit,
         ));
+      const stream = await this.gitStorage!.openFile(
+        packageId,
+        revision,
+        filepath,
+        commit,
+      );
       return { stream, size };
     }
     const file = await this.resolveLegacyPublishedFile(

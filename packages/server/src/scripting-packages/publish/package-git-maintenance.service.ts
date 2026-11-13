@@ -12,6 +12,7 @@ import { ScriptingPackageRevision } from 'src/database/entities/scripting-packag
 import { PackageGitRepository } from '../storage/git/package-git-repository';
 import { PackageStorageService } from '../storage/package-storage.service';
 import { PackageGitReconcileService } from './package-git-reconcile.service';
+import { PackagePublishLockService } from './package-publish-lock.service';
 
 /**
  * Periodic and on-demand upkeep of the per-package git repositories: finishes
@@ -36,6 +37,7 @@ export class PackageGitMaintenanceService
     private readonly reconcile: PackageGitReconcileService,
     @InjectRepository(ScriptingPackageRevision)
     private readonly revisions: Repository<ScriptingPackageRevision>,
+    private readonly locks: PackagePublishLockService,
   ) {}
 
   onModuleInit(): void {
@@ -58,10 +60,16 @@ export class PackageGitMaintenanceService
 
   /** Reconcile, verify and collect one package's repository. */
   async maintainPackage(packageId: number): Promise<void> {
+    await this.locks.runWithPublishLocks([packageId], () =>
+      this.maintainPackageLocked(packageId),
+    );
+  }
+
+  private async maintainPackageLocked(packageId: number): Promise<void> {
     if (!(await this.repo.hasRepo(packageId))) {
       return;
     }
-    await this.reconcile.reconcilePackage(packageId);
+    await this.reconcile.reconcilePackageLocked(packageId);
     try {
       await this.repo.fsck(packageId);
     } catch (error) {
@@ -106,6 +114,12 @@ export class PackageGitMaintenanceService
    * promoted by the regular reconcile pass.
    */
   async repairPackage(packageId: number): Promise<void> {
+    await this.locks.runWithPublishLocks([packageId], () =>
+      this.repairPackageLocked(packageId),
+    );
+  }
+
+  private async repairPackageLocked(packageId: number): Promise<void> {
     if (!(await this.repo.hasRepo(packageId))) {
       return;
     }
@@ -141,7 +155,7 @@ export class PackageGitMaintenanceService
       ]);
     }
 
-    await this.reconcile.reconcilePackage(packageId);
+    await this.reconcile.reconcilePackageLocked(packageId);
     this.repo.clearTreeCache(packageId);
   }
 
@@ -155,7 +169,15 @@ export class PackageGitMaintenanceService
         (left, right) => left - right,
       );
       for (const packageId of packageIds) {
-        await this.maintainPackage(packageId);
+        try {
+          await this.maintainPackage(packageId);
+        } catch (error) {
+          // A package locked by a publication (or one broken repository) must
+          // not stop the rest of the sweep; the next run retries it.
+          this.logger.error(
+            `Package ${packageId} maintenance skipped: ${errorMessage(error)}`,
+          );
+        }
       }
     } catch (error) {
       this.logger.error(

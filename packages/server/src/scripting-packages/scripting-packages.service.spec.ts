@@ -1623,6 +1623,7 @@ describe('ScriptingPackagesService slug rename', () => {
       }>;
       dependentRows?: Array<{ id: number; name: string }>;
       rewrite?: jest.Mock;
+      commitThrows?: Error;
     } = {},
   ) {
     const pkg = options.pkg ?? {
@@ -1742,6 +1743,9 @@ describe('ScriptingPackagesService slug rename', () => {
         return {
           results,
           commit: async () => {
+            if (options.commitThrows) {
+              throw options.commitThrows;
+            }
             for (const target of attempted) {
               await finishRewrite(
                 target.packageId,
@@ -1814,6 +1818,18 @@ describe('ScriptingPackagesService slug rename', () => {
       1,
       'published',
       expect.any(Function),
+    );
+    expect(delivery.invalidatePackage).toHaveBeenCalledWith(5);
+    expect(dispatcher.packagesChanged).toHaveBeenCalledWith([5]);
+  });
+
+  it('invalidates artifacts even when ref promotion fails', async () => {
+    const { service, delivery, dispatcher } = makeRenameService({
+      commitThrows: new Error('ref failed'),
+    });
+
+    await expect(service.update(5, { slug: 'hero2' })).rejects.toThrow(
+      'ref failed',
     );
     expect(delivery.invalidatePackage).toHaveBeenCalledWith(5);
     expect(dispatcher.packagesChanged).toHaveBeenCalledWith([5]);

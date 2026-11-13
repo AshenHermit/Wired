@@ -137,8 +137,10 @@ const config: () => AppConfig = () => ({
       '',
     readTtlSec: intFromEnv('WIRED_PACKAGE_READ_TTL_SEC', 900),
     // Хранилище ревизий в git. Выкат: сначала образ с флагом 0, затем
-    // `packages:git-migrate -- --all`; после миграции — 1 и перезапуск.
-    // Откат — снова 0: каталоги revisions/<n> живут до `packages:git-cleanup`.
+    // миграция отдельным процессом с `WIRED_PACKAGE_GIT_STORAGE=1`, после
+    // неё — 1 и перезапуск. Откат: `packages:git-export`, остановка и
+    // удаление repo.git; при флаге 0 существующий репозиторий всё равно
+    // читается, поэтому одного флага для отката недостаточно.
     gitStorage: process.env.WIRED_PACKAGE_GIT_STORAGE === '1',
     gitGcExpire: process.env.WIRED_PACKAGE_GIT_GC_EXPIRE ?? '2.weeks.ago',
     gitGcIntervalMs: intFromEnv(

@@ -7,6 +7,7 @@ import {
   PackageGitRepository,
   RefUpdate,
 } from '../storage/git/package-git-repository';
+import { PackagePublishLockService } from './package-publish-lock.service';
 
 /**
  * Repairs the git refs of a package after a crash between the database commit
@@ -28,9 +29,22 @@ export class PackageGitReconcileService {
     private readonly repo: PackageGitRepository,
     @InjectRepository(ScriptingPackageRevision)
     private readonly revisions: Repository<ScriptingPackageRevision>,
+    private readonly locks: PackagePublishLockService,
   ) {}
 
+  /**
+   * Reconciles the package under its publish lock: finishing a pending ref
+   * while a publication is in flight would delete that publication's pending
+   * ref (its row is still a draft) and leave the tag and history diverged.
+   */
   async reconcilePackage(packageId: number): Promise<void> {
+    await this.locks.runWithPublishLocks([packageId], () =>
+      this.reconcilePackageLocked(packageId),
+    );
+  }
+
+  /** {@link reconcilePackage} for callers that already hold the lock. */
+  async reconcilePackageLocked(packageId: number): Promise<void> {
     if (!(await this.repo.hasRepo(packageId))) {
       return;
     }

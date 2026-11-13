@@ -75,6 +75,7 @@ describe('PackageRevisionsService', () => {
     findOne: jest.Mock;
     find: jest.Mock;
     delete: jest.Mock;
+    manager: { transaction: jest.Mock };
   };
   let packagesService: { findOne: jest.Mock };
   let packagesRepository: { find: jest.Mock };
@@ -90,6 +91,8 @@ describe('PackageRevisionsService', () => {
     writePinnedDependencies: jest.Mock;
     readPinnedDependencies: jest.Mock;
     missingFiles: jest.Mock;
+    migratePackage: jest.Mock;
+    cleanupLegacyRevisions: jest.Mock;
   };
   let service: PackageRevisionsService;
   let dispatcher: { revisionPublished: jest.Mock };
@@ -106,6 +109,11 @@ describe('PackageRevisionsService', () => {
       findOne: jest.fn(async () => null),
       find: jest.fn(async () => []),
       delete: jest.fn(async () => ({ affected: 1 })),
+      manager: {
+        transaction: jest.fn(async (fn: (manager: unknown) => Promise<unknown>) =>
+          fn({ update: jest.fn(async () => undefined) }),
+        ),
+      },
     };
     packagesService = { findOne: jest.fn(async () => pkg) };
     packagesRepository = { find: jest.fn(async () => []) };
@@ -128,6 +136,8 @@ describe('PackageRevisionsService', () => {
       })),
       writePinnedDependencies: jest.fn(async () => undefined),
       readPinnedDependencies: jest.fn(async () => null),
+      migratePackage: jest.fn(async () => new Map<number, string>()),
+      cleanupLegacyRevisions: jest.fn(async () => 0),
     };
     service = new PackageRevisionsService(
       repository as never,
@@ -136,7 +146,10 @@ describe('PackageRevisionsService', () => {
       new PackagePublishLockService(),
       dispatcher as unknown as PackageRevisionDispatcher,
       packagesRepository as never,
-      { reconcilePackage: jest.fn(async () => undefined) } as never,
+      {
+        reconcilePackage: jest.fn(async () => undefined),
+        reconcilePackageLocked: jest.fn(async () => undefined),
+      } as never,
     );
   });
 
@@ -707,7 +720,8 @@ describe('PackageRevisionsService', () => {
         new PackagePublishLockService(dataSource as unknown as DataSource),
         dispatcher as unknown as PackageRevisionDispatcher,
         packagesRepository as never,
-        { reconcilePackage: jest.fn(async () => undefined) } as never,
+        { reconcilePackage: jest.fn(async () => undefined),
+          reconcilePackageLocked: jest.fn(async () => undefined) } as never,
       );
     }
 
@@ -796,6 +810,47 @@ describe('PackageRevisionsService', () => {
   });
 
   describe('publishCopiedRevision', () => {
+    it('converts legacy revisions of the copy target before publishing', async () => {
+      const targetPackageId = 12;
+      const script = Buffer.from('extends Node\n');
+      repository.findOne.mockResolvedValue(publishedRow(4, [entry('a.gd', script)]));
+      storage.readPublishedFiles.mockResolvedValue(
+        new Map([['a.gd', script]]),
+      );
+      repository.find.mockResolvedValue([
+        {
+          id: 77,
+          revision: 1,
+          status: 'published',
+          commitSha: null,
+          files: [entry('a.gd', script)],
+          publishedAt: new Date('2026-10-29T11:00:00.000Z'),
+          createdAt: new Date('2026-10-29T10:00:00.000Z'),
+        },
+      ]);
+      storage.migratePackage.mockResolvedValue(
+        new Map([[1, 'c'.repeat(64)]]),
+      );
+      packagesService.findOne.mockResolvedValue({
+        id: targetPackageId,
+        slug: 'hero-copy',
+        room: { id: 3 },
+      });
+
+      await service.publishCopiedRevision({
+        sourcePackageId: 5,
+        targetPackageId,
+      });
+
+      expect(storage.migratePackage).toHaveBeenCalledWith(
+        targetPackageId,
+        [expect.objectContaining({ revision: 1 })],
+      );
+      expect(
+        storage.migratePackage.mock.invocationCallOrder[0],
+      ).toBeLessThan(storage.publishRevision.mock.invocationCallOrder[0]);
+    });
+
     it('copies the latest published revision as revision 1', async () => {
       const sourcePackageId = 5;
       const targetPackageId = 12;
