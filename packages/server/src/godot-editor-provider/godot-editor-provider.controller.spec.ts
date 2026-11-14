@@ -4,6 +4,7 @@ import { Request, Response } from 'express';
 import { mkdtemp, mkdir, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
+import { brotliCompressSync } from 'node:zlib';
 import request from 'supertest';
 import { GODOT_PROJECT_ROUTE } from '@wired-io/shared';
 import { AppConfigService } from 'src/config/config.service';
@@ -36,6 +37,12 @@ describe('GodotEditorProviderController', () => {
     await writeFile(
       path.join(workspace, 'editor', 'engine.js'),
       'console.log(1)',
+    );
+    const bigPayload = Buffer.from('x'.repeat(4096));
+    await writeFile(path.join(workspace, 'editor', 'big.js'), bigPayload);
+    await writeFile(
+      path.join(workspace, 'editor', 'big.js.br'),
+      brotliCompressSync(bigPayload),
     );
     await writeFile(path.join(workspace, 'secret.txt'), 'secret');
     await writeFile(path.join(projectPath, '_wired', 'extensionless'), 'x');
@@ -166,6 +173,36 @@ describe('GodotEditorProviderController', () => {
         await request(app.getHttpServer())
           .get(`/${GODOT_PROJECT_ROUTE}/project.godot`)
           .expect(200);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('serves a precompressed sidecar to brotli clients', async () => {
+      const app = await createApp();
+      try {
+        const response = await request(app.getHttpServer())
+          .get('/godot-editor/big.js')
+          .set('Accept-Encoding', 'br')
+          .expect(200);
+        expect(response.headers['content-encoding']).toBe('br');
+        expect(response.headers['vary']).toContain('Accept-Encoding');
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('revalidates the editor file with an ETag', async () => {
+      const app = await createApp();
+      try {
+        const first = await request(app.getHttpServer())
+          .get('/godot-editor/big.js')
+          .expect(200);
+        expect(first.headers.etag).toBeDefined();
+        await request(app.getHttpServer())
+          .get('/godot-editor/big.js')
+          .set('If-None-Match', first.headers.etag)
+          .expect(304);
       } finally {
         await app.close();
       }

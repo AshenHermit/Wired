@@ -39,6 +39,13 @@ export class GodotEditorProviderController {
       wildcardPath(requestedPath),
       req,
       res,
+      {
+        // Browsers decompress brotli themselves and Godot's runtime never
+        // reads these files, so sidecars are safe here and only here.
+        precompressed: true,
+        // The editor tree is ~40 MB; revalidate instead of re-downloading.
+        revalidate: true,
+      },
     );
   }
 
