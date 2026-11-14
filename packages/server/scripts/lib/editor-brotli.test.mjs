@@ -143,3 +143,33 @@ test('CLI writes sidecars and exits 0', () => {
     assert.equal(existsSync(join(root, 'godot.editor.wasm.br')), true);
   });
 });
+
+test('fetch:editor backfills sidecars on the already-installed early exit', () => {
+  withTempRoot((root) => {
+    const dest = join(root, 'dest');
+    writeSet(dest, {
+      VERSION: '4.8-beta2\n',
+      'godot.editor.js': BIG,
+      'godot.editor.wasm': BIG,
+      'godot.editor.html': BIG,
+    });
+
+    const result = spawnSync(
+      process.execPath,
+      [resolve('scripts/fetch-godot-editor.mjs')],
+      {
+        cwd: resolve(import.meta.dirname, '..', '..'),
+        encoding: 'utf8',
+        env: { ...process.env, GODOT_EDITOR_PATH: dest },
+      },
+    );
+
+    // No download happens: the fake install short-circuits at isEditorInstalled.
+    assert.equal(
+      result.status,
+      0,
+      `fetch:editor failed: ${result.stderr ?? result.error}`,
+    );
+    assert.equal(existsSync(join(dest, 'godot.editor.wasm.br')), true);
+  });
+});
