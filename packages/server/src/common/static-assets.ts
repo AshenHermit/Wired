@@ -35,6 +35,8 @@ export interface StaticAssetOptions {
   revalidate?: boolean;
   /** Keep the HTML shell uncached so a rebuilt tree is picked up immediately. */
   noStoreShell?: boolean;
+  /** Offer fresh `<file>.br` sidecars to clients that accept brotli. */
+  precompressed?: boolean;
   /** Add the COOP/COEP trio. Off only for files that are never a document. */
   crossOriginIsolation?: boolean;
 }
@@ -47,6 +49,27 @@ function matchesEtag(header: string | undefined, etag: string): boolean {
     .split(',')
     .map((value) => value.trim().replace(/^W\//, ''))
     .some((value) => value === etag);
+}
+
+/**
+ * True when the client's Accept-Encoding actually accepts brotli: explicit
+ * `br` with a non-zero q. A wildcard `*` is not treated as brotli (browsers
+ * list `br` explicitly), and `q=0` refuses even after an earlier acceptance.
+ */
+export function acceptsBrotli(header: string | undefined): boolean {
+  if (!header) {
+    return false;
+  }
+  let accepted = false;
+  for (const item of header.split(',')) {
+    const [token, ...params] = item.trim().split(';');
+    if (token.trim().toLowerCase() !== 'br') {
+      continue;
+    }
+    const q = params.map((p) => p.trim()).find((p) => p.startsWith('q='));
+    accepted = q ? parseFloat(q.slice(2)) > 0 : true;
+  }
+  return accepted;
 }
 
 /**
@@ -69,6 +92,7 @@ export async function serveStaticAsset(
     contentType = contentTypeFor,
     revalidate = false,
     noStoreShell = false,
+    precompressed = false,
     crossOriginIsolation = true,
   } = options;
 
@@ -83,6 +107,26 @@ export async function serveStaticAsset(
     throw new NotFoundException('File not found');
   }
 
+  // The negotiated representation: raw by default, `<file>.br` when the
+  // client accepts brotli and a fresh sidecar exists.
+  let servedPath = target;
+  let servedSize = info.size;
+  let servedMtimeMs = info.mtimeMs;
+  let contentEncoding: string | null = null;
+  if (precompressed) {
+    res.set({ Vary: 'Accept-Encoding' });
+    if (acceptsBrotli(req.headers['accept-encoding'])) {
+      const sidecarPath = `${target}.br`;
+      const sidecar = await stat(sidecarPath).catch(() => null);
+      if (sidecar?.isFile() && sidecar.mtimeMs >= info.mtimeMs) {
+        servedPath = sidecarPath;
+        servedSize = sidecar.size;
+        servedMtimeMs = sidecar.mtimeMs;
+        contentEncoding = 'br';
+      }
+    }
+  }
+
   res.set({ 'Content-Type': contentType(target) });
   if (crossOriginIsolation) {
     setCrossOriginIsolation(res);
@@ -90,7 +134,7 @@ export async function serveStaticAsset(
 
   let etag: string | null = null;
   if (revalidate) {
-    etag = `"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
+    etag = `"${servedSize.toString(16)}-${Math.floor(servedMtimeMs).toString(16)}"`;
     const isShell = SHELL_EXTENSIONS.has(extname(target).toLowerCase());
     // Assets are revalidated instead of re-downloaded on every reconnect (the
     // engine is ~36 MB); the shell itself stays uncached so a fresh build wins.
@@ -105,7 +149,13 @@ export async function serveStaticAsset(
     return undefined;
   }
 
-  return new StreamableFile(createReadStream(target), { length: info.size });
+  if (contentEncoding !== null) {
+    res.set({ 'Content-Encoding': contentEncoding });
+  }
+
+  return new StreamableFile(createReadStream(servedPath), {
+    length: servedSize,
+  });
 }
 
 /**
