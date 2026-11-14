@@ -30,6 +30,7 @@ import {
   isEditorInstalled,
 } from './lib/editor-install.mjs';
 import { extractZip } from './lib/unzip.mjs';
+import { compressEditorSidecars } from './lib/editor-brotli.mjs';
 
 const VERSION = '4.8-beta2';
 const ZIP_NAME = `Godot_v${VERSION}_web_editor.zip`;
@@ -86,9 +87,19 @@ function assertCoreFiles(dir) {
   }
 }
 
+function backfillSidecars() {
+  const { written, savedBytes } = compressEditorSidecars({ dir: destDir });
+  log(
+    written.length
+      ? `Sidecars: создано ${written.length} (сэкономлено ${(savedBytes / 1024 / 1024).toFixed(2)} MiB)`
+      : 'Sidecars: актуальны',
+  );
+}
+
 async function main() {
   if (!force && isEditorInstalled({ destDir, version: VERSION, log })) {
     log(`Редактор уже на ${VERSION}`);
+    backfillSidecars();
     return;
   }
 
@@ -108,6 +119,7 @@ async function main() {
   }
 
   assertCoreFiles(destDir);
+  backfillSidecars();
   log(`Готово: ${VERSION}`);
   log(`Каталог редактора: ${destDir}`);
 }
