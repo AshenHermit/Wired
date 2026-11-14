@@ -332,10 +332,9 @@ export class PackageStorageService {
     if (this.gitStorage && (await this.gitStorage.isGitPackage(packageId))) {
       return this.gitStorage.missingFiles(packageId, files);
     }
-    if (this.configService.packages.gitStorage) {
-      return files.map((file) => file.filepath);
-    }
-    return [];
+    // Legacy drafts start empty, so the client has to upload every file; only
+    // a git package can already hold content the draft can reuse.
+    return files.map((file) => file.filepath);
   }
 
   /**

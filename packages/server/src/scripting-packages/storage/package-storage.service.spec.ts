@@ -96,6 +96,21 @@ describe('PackageStorageService', () => {
     });
   });
 
+  describe('missingFiles', () => {
+    it('requires every declared file when git storage is disabled', async () => {
+      const legacy = new PackageStorageService({
+        storage: { packagesFilesDir: root, dir: root },
+        packages: { gitStorage: false },
+      } as unknown as AppConfigService);
+      const hero = Buffer.from('hero');
+      const data = Buffer.from('payload');
+
+      await expect(
+        legacy.missingFiles(7, [entry('hero.gd', hero), entry('a.txt', data)]),
+      ).resolves.toEqual(['hero.gd', 'a.txt']);
+    });
+  });
+
   describe('publishRevision', () => {
     it('publishes a revision only when every declared file is present', async () => {
       const hero = Buffer.from('hero');
