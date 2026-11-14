@@ -39,6 +39,9 @@ export class GodotEditorProviderController {
       wildcardPath(requestedPath),
       req,
       res,
+      // js/wasm must always revalidate so a cached script never pairs with a
+      // new engine build; the standalone shell page stays no-store.
+      { revalidate: true, noStoreShell: true },
     );
   }
 
@@ -96,6 +99,9 @@ export class GodotEditorProviderController {
         contentType: () => 'application/octet-stream',
         // Not document responses: isolation headers would only add noise.
         crossOriginIsolation: false,
+        // There is no shell in the project tree: every file is a payload the
+        // editor FS fetches, so revalidate — never no-store.
+        revalidate: true,
       },
     );
   }

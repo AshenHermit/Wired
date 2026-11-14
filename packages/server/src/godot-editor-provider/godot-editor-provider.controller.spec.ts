@@ -39,6 +39,11 @@ describe('GodotEditorProviderController', () => {
     );
     await writeFile(path.join(workspace, 'secret.txt'), 'secret');
     await writeFile(path.join(projectPath, '_wired', 'extensionless'), 'x');
+    await writeFile(
+      path.join(workspace, 'editor', 'godot.editor.html'),
+      '<!doctype html><title>editor</title>',
+    );
+    await writeFile(path.join(projectPath, '_wired', 'index.html'), '<p>x</p>');
   });
 
   beforeEach(() => {
@@ -156,6 +161,7 @@ describe('GodotEditorProviderController', () => {
         const response = await request(app.getHttpServer())
           .get(`/${GODOT_PROJECT_ROUTE}`)
           .expect(200);
+        expect(response.headers['cache-control']).toBeUndefined();
 
         expect(response.body).toMatchObject({
           name: 'Wired',
@@ -166,6 +172,64 @@ describe('GodotEditorProviderController', () => {
         await request(app.getHttpServer())
           .get(`/${GODOT_PROJECT_ROUTE}/project.godot`)
           .expect(200);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('revalidates editor assets instead of re-downloading the 67 MB wasm', async () => {
+      const app = await createApp();
+
+      try {
+        const first = await request(app.getHttpServer())
+          .get('/godot-editor/engine.js')
+          .expect(200);
+        expect(first.headers['cache-control']).toBe('no-cache');
+        expect(first.headers.etag).toBeDefined();
+
+        await request(app.getHttpServer())
+          .get('/godot-editor/engine.js')
+          .set('If-None-Match', first.headers.etag)
+          .expect(304);
+
+        await request(app.getHttpServer())
+          .get('/godot-editor/engine.js')
+          .set('If-None-Match', `W/${first.headers.etag}, "stale"`)
+          .expect(304);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('keeps the standalone editor shell out of the cache', async () => {
+      const app = await createApp();
+
+      try {
+        const response = await request(app.getHttpServer())
+          .get('/godot-editor/godot.editor.html')
+          .expect(200);
+        expect(response.headers['cache-control']).toBe('no-store');
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('revalidates base project files, including html payloads', async () => {
+      const app = await createApp();
+
+      try {
+        for (const file of ['project.godot', 'index.html']) {
+          const first = await request(app.getHttpServer())
+            .get(`/${GODOT_PROJECT_ROUTE}/${file}`)
+            .expect(200);
+          expect(first.headers['cache-control']).toBe('no-cache');
+          expect(first.headers.etag).toBeDefined();
+
+          await request(app.getHttpServer())
+            .get(`/${GODOT_PROJECT_ROUTE}/${file}`)
+            .set('If-None-Match', first.headers.etag)
+            .expect(304);
+        }
       } finally {
         await app.close();
       }
