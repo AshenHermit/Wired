@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { createValidationPipe } from './common/validation';
+import { backfillEditorSidecars } from './common/editor-sidecar-backfill';
 import { AppConfigService } from './config/config.service';
 
 async function bootstrap() {
@@ -13,6 +14,11 @@ async function bootstrap() {
   // Ensures room runtime processes are stopped when the backend exits
   // (SIGINT/SIGTERM); RoomRuntimeService also terminates them gracefully.
   app.enableShutdownHooks();
+
+  // Old dev installs that never reran `fetch:editor` still get brotli: the
+  // missing `.br` sidecars are rebuilt in the background; until then the
+  // editor is served raw.
+  void backfillEditorSidecars(appConfig.godot.editorPath);
 
   const corsOrigin = appConfig.site.corsOrigin;
   app.enableCors({
