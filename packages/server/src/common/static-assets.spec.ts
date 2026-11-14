@@ -5,7 +5,11 @@ import { tmpdir } from 'os';
 import path from 'path';
 import { Readable } from 'stream';
 import { brotliCompressSync } from 'node:zlib';
-import { acceptsBrotli, serveStaticAsset, StaticAssetOptions } from './static-assets';
+import {
+  acceptsBrotli,
+  serveStaticAsset,
+  StaticAssetOptions,
+} from './static-assets';
 
 const RAW_BODY = 'raw-wasm-payload';
 const SIDECAR_BODY = brotliCompressSync(Buffer.from(RAW_BODY));
@@ -19,13 +23,14 @@ function fakeRequest(acceptEncoding?: string): Request {
 
 function fakeResponse() {
   const headers: Record<string, string> = {};
+  const status = jest.fn((): void => undefined);
   const res: { set: jest.Mock; status: jest.Mock } = {
     set: jest.fn((values: Record<string, string>) =>
       Object.assign(headers, values),
     ),
-    status: jest.fn(() => res),
+    status,
   };
-  return { res: res as unknown as Response, headers };
+  return { res: res as unknown as Response, headers, status };
 }
 
 async function readBody(file: StreamableFile): Promise<Buffer> {
@@ -188,7 +193,7 @@ describe('serveStaticAsset', () => {
         precompressed: true,
         revalidate: true,
       });
-      const file = (await first.result) as StreamableFile;
+      const file = first.result as StreamableFile;
       expect(first.headers['Content-Encoding']).toBe('br');
       const etag = first.headers.ETag;
       expect(etag).toBeDefined();
@@ -208,7 +213,7 @@ describe('serveStaticAsset', () => {
         { precompressed: true, revalidate: true },
       );
       expect(revalidated).toBeUndefined();
-      expect(second.res.status).toHaveBeenCalledWith(304);
+      expect(second.status).toHaveBeenCalledWith(304);
       expect(second.headers['Content-Encoding']).toBeUndefined();
     });
   });
@@ -217,13 +222,9 @@ describe('serveStaticAsset', () => {
     await withTempRoot(async (root) => {
       const { res } = fakeResponse();
       await expect(
-        serveStaticAsset(
-          root,
-          'missing.txt',
-          fakeRequest('br'),
-          res,
-          { precompressed: true },
-        ),
+        serveStaticAsset(root, 'missing.txt', fakeRequest('br'), res, {
+          precompressed: true,
+        }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
   });

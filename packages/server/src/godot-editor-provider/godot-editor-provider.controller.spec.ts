@@ -168,7 +168,9 @@ describe('GodotEditorProviderController', () => {
           name: 'Wired',
           baseUrl: `/${GODOT_PROJECT_ROUTE}/`,
         });
-        expect(response.body.filepaths).toContain('project.godot');
+        expect((response.body as { filepaths: string[] }).filepaths).toContain(
+          'project.godot',
+        );
 
         await request(app.getHttpServer())
           .get(`/${GODOT_PROJECT_ROUTE}/project.godot`)
