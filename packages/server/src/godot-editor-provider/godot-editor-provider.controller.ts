@@ -1,7 +1,6 @@
 import {
   Controller,
   Get,
-  NotFoundException,
   Param,
   Req,
   Res,
@@ -39,9 +38,14 @@ export class GodotEditorProviderController {
       wildcardPath(requestedPath),
       req,
       res,
-      // js/wasm must always revalidate so a cached script never pairs with a
-      // new engine build; the standalone shell page stays no-store.
-      { revalidate: true, noStoreShell: true },
+      {
+        // Browsers decompress brotli themselves and Godot's runtime never
+        // reads these files, so sidecars are safe here and only here.
+        precompressed: true,
+        // The editor tree is ~40 MB; revalidate instead of re-downloading.
+        revalidate: true,
+        noStoreShell: true,
+      },
     );
   }
 

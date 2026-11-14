@@ -31,7 +31,7 @@ Wired is a browser-based Godot game platform: Next.js frontend + NestJS API/asse
 
 ```bash
 pnpm install
-pnpm fetch:editor                        # pinned 4.8-beta2 web editor (gitignored)
+pnpm fetch:editor                        # pinned 4.8-beta2 web editor + .br sidecars (gitignored)
 pnpm fetch:runtime                       # pinned 4.8-beta2 native runtime for this OS (gitignored)
 pnpm fetch:templates                     # pinned 4.8-beta2 Web export templates (Godot user dir)
 pnpm dev:server                          # Nest watch; needs the Postgres in packages/server/.env
