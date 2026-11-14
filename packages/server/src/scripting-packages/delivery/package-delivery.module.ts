@@ -13,6 +13,10 @@ import { PackageStorageService } from '../storage/package-storage.service';
 import { AssetBakeCache } from './asset-bake-cache';
 import { AssetBakeService } from './asset-bake.service';
 import { ChildProcessBakeRunner } from './godot-bake.runner';
+import { GitCommand } from '../storage/git/git-command';
+import { PackageGitRepository } from '../storage/git/package-git-repository';
+import { PackageContentIndex } from '../storage/git/package-content-index';
+import { PackageGitStorageService } from '../storage/package-git-storage.service';
 
 @Module({
   imports: [
@@ -54,6 +58,10 @@ import { ChildProcessBakeRunner } from './godot-bake.runner';
     // Shared by the delivery controller so artifact builds are limited
     // process-wide instead of per hand-built instance.
     ArtifactBuildRateLimiter,
+    GitCommand,
+    PackageGitRepository,
+    PackageGitStorageService,
+    PackageContentIndex,
   ],
   controllers: [PackageDeliveryController],
   exports: [

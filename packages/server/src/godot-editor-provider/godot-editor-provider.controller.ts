@@ -1,7 +1,6 @@
 import {
   Controller,
   Get,
-  NotFoundException,
   Param,
   Req,
   Res,
@@ -39,6 +38,14 @@ export class GodotEditorProviderController {
       wildcardPath(requestedPath),
       req,
       res,
+      {
+        // Browsers decompress brotli themselves and Godot's runtime never
+        // reads these files, so sidecars are safe here and only here.
+        precompressed: true,
+        // The editor tree is ~40 MB; revalidate instead of re-downloading.
+        revalidate: true,
+        noStoreShell: true,
+      },
     );
   }
 
@@ -96,6 +103,9 @@ export class GodotEditorProviderController {
         contentType: () => 'application/octet-stream',
         // Not document responses: isolation headers would only add noise.
         crossOriginIsolation: false,
+        // There is no shell in the project tree: every file is a payload the
+        // editor FS fetches, so revalidate — never no-store.
+        revalidate: true,
       },
     );
   }

@@ -7,11 +7,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import type { Readable } from 'node:stream';
 import {
   CreatePackageRevisionPayload,
   PackageFileEntry,
   PackageManifest,
   PackageRevision,
+  PackageRevisionDraft,
 } from '@wired-io/shared';
 import { In, Repository } from 'typeorm';
 import { errorMessage } from 'src/common/errors';
@@ -28,6 +30,7 @@ import {
   walkPinnedClosure,
 } from './package-dependency-graph';
 import { sha256Hex } from '../storage/package-hash';
+import { PackageGitReconcileService } from './package-git-reconcile.service';
 import { validatePackageRevisionFiles } from '../storage/package-manifest';
 import { PackagePublishLockService } from './package-publish-lock.service';
 import {
@@ -70,6 +73,7 @@ export class PackageRevisionsService {
     private readonly dispatcher: PackageRevisionDispatcher,
     @InjectRepository(ScriptingPackage)
     private readonly packagesRepository: Repository<ScriptingPackage>,
+    private readonly reconcile: PackageGitReconcileService,
   ) {}
 
   /**
@@ -80,12 +84,13 @@ export class PackageRevisionsService {
   async createDraft(
     packageId: number,
     payload: CreatePackageRevisionPayload,
-  ): Promise<PackageRevision> {
+  ): Promise<PackageRevisionDraft> {
     await this.locks.assertNotPublishing(packageId);
 
     const pkg = await this.packagesService.findOne(packageId);
     const files = validatePackageRevisionFiles(payload?.files);
 
+    await this.reconcile.reconcilePackage(packageId);
     await this.discardDrafts(packageId);
 
     const maxRevision = await this.revisionsRepository.maximum('revision', {
@@ -102,7 +107,8 @@ export class PackageRevisionsService {
           files,
         }),
       );
-      return toRevision(saved, packageId);
+      const missing = await this.storage.missingFiles(packageId, saved.files);
+      return { ...toRevision(saved, packageId), missing };
     } catch (error) {
       // Two concurrent drafts compute the same revision number; the unique
       // index rejects one of them. Report a retryable conflict, not a 500.
@@ -152,6 +158,7 @@ export class PackageRevisionsService {
    * revision is safe: it returns the published revision without touching disk.
    */
   async publish(packageId: number, revision: number): Promise<PackageRevision> {
+    await this.reconcile.reconcilePackage(packageId);
     const row = await this.findRevision(packageId, revision);
 
     if (row.status === 'published') {
@@ -171,16 +178,28 @@ export class PackageRevisionsService {
     const pkg = await this.packagesService.findOne(packageId);
 
     // Reject uploads for this package while its bytes are verified and moved.
+    const authorUser = pkg.author as unknown as
+      | { name?: string; email?: string }
+      | undefined;
+    const author = {
+      name: authorUser?.name ?? 'wired',
+      email: authorUser?.email ?? 'packages@wired.local',
+    };
     await this.locks.runWithPublishLocks([packageId], async () => {
+      // A package published before git storage existed is converted on its
+      // first new publication, inside the lock that already guards its bytes.
+      await this.migratePackageLocked(packageId);
       await this.storage.publishRevision(
         packageId,
         revision,
         row.files,
-        async () => {
+        async (commitSha) => {
           row.status = 'published';
           row.publishedAt = new Date();
+          row.commitSha = commitSha;
           await this.revisionsRepository.save(row);
         },
+        author,
       );
     });
 
@@ -192,6 +211,61 @@ export class PackageRevisionsService {
     );
     await this.dispatchPublished(packageId, revision);
     return toRevision(row, packageId);
+  }
+
+  /**
+   * Converts every published revision of a package that only exists as a
+   * legacy directory into a git commit and records its sha on the row.
+   *
+   * Idempotent: rows that already carry a commit are skipped, and the legacy
+   * directories are left untouched so the package stays readable until the
+   * operator runs the cleanup command.
+   */
+  async migratePackage(packageId: number): Promise<number> {
+    return this.locks.runWithPublishLocks([packageId], () =>
+      this.migratePackageLocked(packageId),
+    );
+  }
+
+  /** Removes legacy revision directories whose rows already have a commit. */
+  async cleanupLegacyRevisions(packageId: number): Promise<number> {
+    return this.locks.runWithPublishLocks([packageId], async () => {
+      const rows = await this.revisionsRepository.find({
+        where: { package: { id: packageId }, status: 'published' },
+        order: { revision: 'ASC' },
+      });
+      return this.storage.cleanupLegacyRevisions(packageId, rows);
+    });
+  }
+
+  /** {@link migratePackage} without taking the lock; callers already hold it. */
+  private async migratePackageLocked(packageId: number): Promise<number> {
+    await this.reconcile.reconcilePackageLocked(packageId);
+    const rows = await this.revisionsRepository.find({
+      where: { package: { id: packageId }, status: 'published' },
+      order: { revision: 'ASC' },
+    });
+    const pending = rows.filter((row) => !row.commitSha);
+    if (pending.length === 0) {
+      return 0;
+    }
+    const commits = await this.storage.migratePackage(packageId, pending);
+    if (commits.size === 0) {
+      return 0;
+    }
+    await this.revisionsRepository.manager.transaction(async (manager) => {
+      for (const row of pending) {
+        const commitSha = commits.get(row.revision);
+        if (commitSha) {
+          await manager.update(
+            ScriptingPackageRevision,
+            { id: row.id },
+            { commitSha },
+          );
+        }
+      }
+    });
+    return commits.size;
   }
 
   /**
@@ -228,12 +302,17 @@ export class PackageRevisionsService {
 
     const files: PackageFileEntry[] = [];
     const contents: Array<{ filepath: string; data: Buffer }> = [];
+    const originals = await this.storage.readPublishedFiles(
+      sourcePackageId,
+      source.revision,
+      source.files.map((file) => file.filepath),
+      source.commitSha ?? null,
+    );
     for (const sourceFile of source.files) {
-      const original = await this.storage.readPublishedFile(
-        sourcePackageId,
-        source.revision,
-        sourceFile.filepath,
-      );
+      const original = originals.get(sourceFile.filepath);
+      if (!original) {
+        throw new ConflictException({ code: 'package_not_published' });
+      }
       const data = transformFile
         ? transformFile(sourceFile.filepath, original)
         : original;
@@ -282,13 +361,18 @@ export class PackageRevisionsService {
 
       // Reject uploads for the target while its bytes are verified and moved.
       await this.locks.runWithPublishLocks([targetPackageId], async () => {
+        // A copy into a package that still has legacy revisions must extend
+        // its history instead of writing a second root that leaves `main`
+        // pointing at an older commit.
+        await this.migratePackageLocked(targetPackageId);
         await this.storage.publishRevision(
           targetPackageId,
           revision,
           files,
-          async () => {
+          async (commitSha) => {
             saved.status = 'published';
             saved.publishedAt = new Date();
+            saved.commitSha = commitSha;
             await this.revisionsRepository.save(saved);
           },
         );
@@ -553,11 +637,22 @@ export class PackageRevisionsService {
   ): Promise<void> {
     try {
       const index = await this.slugIndex();
+      const textPaths = files
+        .filter((file) => isTextPackageFile(file.filepath))
+        .map((file) => file.filepath);
+      const texts =
+        textPaths.length > 0
+          ? await this.storage.readPublishedTextFiles(
+              packageId,
+              revision,
+              textPaths,
+            )
+          : new Map<string, string>();
       const referenced = await this.loadReferencedPackageIds(
         files,
         index,
         scopeRoomId,
-        (filepath) => this.readPublishedText(packageId, revision, filepath),
+        async (filepath) => texts.get(filepath) ?? null,
         packageId,
       );
 
@@ -665,27 +760,41 @@ export class PackageRevisionsService {
     revision: number,
     filepath: string,
   ): Promise<Buffer> {
-    await assertPublishedFile(
+    const row = await assertPublishedFile(
       this.revisionsRepository,
       packageId,
       revision,
       filepath,
     );
-    return this.storage.readPublishedFile(packageId, revision, filepath);
+    return this.storage.readPublishedFile(
+      packageId,
+      revision,
+      filepath,
+      row.commitSha,
+    );
   }
 
   async resolvePublishedFile(
     packageId: number,
     revision: number,
     filepath: string,
-  ): Promise<{ path: string; size: number }> {
-    await assertPublishedFile(
+  ): Promise<{ stream: Readable; size: number }> {
+    const row = await assertPublishedFile(
       this.revisionsRepository,
       packageId,
       revision,
       filepath,
     );
-    return this.storage.resolvePublishedFile(packageId, revision, filepath);
+    const entry = row.files.find(
+      (item: PackageFileEntry) => item.filepath === filepath,
+    );
+    return this.storage.resolvePublishedFile(
+      packageId,
+      revision,
+      filepath,
+      row.commitSha,
+      entry?.size,
+    );
   }
 
   async findRevision(
@@ -760,7 +869,7 @@ async function assertPublishedFile(
   packageId: number,
   revision: number,
   filepath: string,
-): Promise<void> {
+): Promise<ScriptingPackageRevision> {
   const row = await repository.findOne({
     where: { package: { id: packageId }, revision },
   });
@@ -781,4 +890,5 @@ async function assertPublishedFile(
       `File ${filepath} is not declared in revision ${revision}`,
     );
   }
+  return row;
 }

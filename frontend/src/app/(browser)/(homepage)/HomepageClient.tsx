@@ -1,16 +1,13 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { useState } from "react";
 import { LoginForm } from "../_components/LoginForm";
 import { useUserStore } from "@/store/user-store";
 import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -24,8 +21,15 @@ import {
 import { RoomsList } from "../_components/rooms/RoomsList";
 import { CurrentUserEditingButton } from "../_components/UserEditing";
 import { WorkshopBrowser } from "@/components/packages/WorkshopBrowser";
+import ForDevelopersTab from "@/components/docs/ForDevelopersTab";
+import type { DevlogMeta, DocMeta } from "@/lib/content";
 
-export function HomepageClient() {
+interface HomepageClientProps {
+  docs: DocMeta[];
+  latest: DevlogMeta[];
+}
+
+export function HomepageClient({ docs, latest }: HomepageClientProps) {
   const user = useUserStore((state) => state);
   const t = useTranslations("Home");
 
@@ -86,51 +90,7 @@ export function HomepageClient() {
                   <CardDescription>{t("docs.description")}</CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    <Link
-                      href="/docs?doc=getting-started"
-                      className="p-4 rounded border border-foreground/10 hover:bg-foreground/5 transition"
-                    >
-                      <div className="font-semibold">
-                        {t("docs.nav.gettingStarted")}
-                      </div>
-                    </Link>
-                    <Link
-                      href="/docs?doc=api-reference"
-                      className="p-4 rounded border border-foreground/10 hover:bg-foreground/5 transition"
-                    >
-                      <div className="font-semibold">
-                        {t("docs.nav.apiReference")}
-                      </div>
-                    </Link>
-                    <Link
-                      href="/docs?doc=entity-registration"
-                      className="p-4 rounded border border-foreground/10 hover:bg-foreground/5 transition"
-                    >
-                      <div className="font-semibold">
-                        {t("docs.nav.entityRegistration")}
-                      </div>
-                    </Link>
-                    <Link
-                      href="/docs?doc=multiplayer-guide"
-                      className="p-4 rounded border border-foreground/10 hover:bg-foreground/5 transition"
-                    >
-                      <div className="font-semibold">
-                        {t("docs.nav.multiplayerGuide")}
-                      </div>
-                    </Link>
-                  </div>
-                  <div>
-                    {t("docs.issues.description")}{" "}
-                    <a
-                      href="https://github.com/AshenHermit/Wired/issues/new"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="hover:underline text-[#ff617b]"
-                    >
-                      {t("docs.issues.link")}
-                    </a>
-                  </div>
+                  <ForDevelopersTab docs={docs} latest={latest} />
                 </CardContent>
               </TabsContent>
             </TabsContents>

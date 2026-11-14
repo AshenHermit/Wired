@@ -30,6 +30,13 @@ class_name ArtifactStore
 
 const STAGING_DIR := ".staging"
 const PREVIOUS_DIR := ".previous"
+## Written into an artifact directory after everything else, so a directory that
+## carries it is a completed apply and not a partially written one.
+const MARKER_FILE := ".wired-artifact.json"
+## Bumped whenever the marker fields change meaning. Version 2 verifies the
+## sha256 of every declared file instead of trusting its size alone, so an
+## artifact written by an older build is downloaded once more and then rewritten.
+const MARKER_FORMAT_VERSION := 2
 ## The backend slug contract. It becomes a path segment, so it is validated
 ## before it is joined to the packages root.
 const SLUG_PATTERN := "^[a-z0-9_]{1,64}$"
@@ -39,8 +46,26 @@ static var _slug_regex := RegEx.create_from_string(SLUG_PATTERN)
 var _packages_root: Callable
 
 
+## Identity every marker field has to match: the same numeric package, folder,
+## revision and closure key. Grouped so the writer and the verifier cannot drift
+## apart, and so a call site cannot transpose two adjacent integers.
+class ArtifactIdentity:
+	var package_id: int
+	var slug: String
+	var revision: int
+	var artifact_key: String
+
+	func _init(
+		id: int, package_slug: String, package_revision: int, key: String
+	) -> void:
+		package_id = id
+		slug = package_slug
+		revision = package_revision
+		artifact_key = key
+
+
 ## `packages_root` returns the room's packages directory
-## (`user://wired/rooms/<room>/packages`).
+## (`<storage root>/<room>/packages`; the Web build may mount it outside `user://`).
 func _init(packages_root: Callable) -> void:
 	_packages_root = packages_root
 
@@ -115,7 +140,14 @@ func stage(slug: String, files: Array) -> String:
 				% [slug, target, error_string(FileAccess.get_open_error())]
 			)
 		handle.store_buffer(file.body)
+		var write_error := handle.get_error()
 		handle.close()
+		if write_error != OK:
+			remove_tree(staging)
+			return (
+				"package %s: cannot write %s: %s"
+				% [slug, target, error_string(write_error)]
+			)
 	return ""
 
 
@@ -156,19 +188,162 @@ func swap(slug: String, revision: int, artifact_key: String) -> String:
 	return ""
 
 
+## Records the identity and the on-disk shape of a completed artifact. Written
+## after every other file, so its presence is what tells a later run that the
+## directory is whole.
+##
+## `stored_hashes` maps a manifest filepath to the sha256 of the bytes on disk;
+## `stored_sizes` maps it to the size on disk when the bytes were rewritten after
+## the manifest was published (a relocated `user://` prefix). An empty size map
+## is omitted, so a marker of an artifact written unchanged stays compact.
+## Returns an empty string on success.
+func write_marker(
+	dir: String,
+	identity: ArtifactIdentity,
+	derive_version: int,
+	stored_hashes: Dictionary,
+	stored_sizes: Dictionary = {},
+) -> String:
+	if dir.is_empty():
+		return "invalid marker directory"
+	var marker := {
+		"formatVersion": MARKER_FORMAT_VERSION,
+		"packageId": identity.package_id,
+		"slug": identity.slug,
+		"revision": identity.revision,
+		"artifactKey": identity.artifact_key,
+		"fileCount": stored_hashes.size(),
+		"deriveVersion": derive_version,
+	}
+	if not stored_hashes.is_empty():
+		marker["storedHashes"] = stored_hashes
+	if not stored_sizes.is_empty():
+		marker["storedSizes"] = stored_sizes
+	var path := dir.path_join(MARKER_FILE)
+	var handle := FileAccess.open(path, FileAccess.WRITE)
+	if handle == null:
+		return "cannot write %s: %s" % [path, error_string(FileAccess.get_open_error())]
+	handle.store_string(JSON.stringify(marker))
+	var write_error := handle.get_error()
+	handle.close()
+	if write_error != OK:
+		return "cannot write %s: %s" % [path, error_string(write_error)]
+	return ""
+
+
+## Whether `dir` already holds exactly what `files` describes: a marker of this
+## identity and format, a marker file count that matches the manifest, and every
+## file at the size and sha256 it was written with.
+##
+## Sizes are checked first because they are cheap; hashes catch a truncated or
+## bit-flipped file that kept its length, which a local read is far cheaper to
+## detect than a download. Every result carries `dir` (a miss has to be replaced
+## by an ordinary `swap`) and the recorded maps, so a marker rewrite keeps them.
+func reusable_artifact(
+	identity: ArtifactIdentity, files: Array, derive_version: int
+) -> Dictionary:
+	var result := {
+		"reusable": false,
+		"dir": "",
+		"derive_current": false,
+		"stored_sizes": {},
+		"stored_hashes": {},
+		"error": "",
+	}
+	if identity.artifact_key.is_empty():
+		result["error"] = "no_key"
+		return result
+	var dir := revision_dir(
+		identity.slug, identity.revision, identity.artifact_key
+	)
+	result["dir"] = dir
+	if dir.is_empty():
+		result["error"] = "invalid_slug"
+		return result
+	if not DirAccess.dir_exists_absolute(dir):
+		result["error"] = "missing"
+		return result
+	var marker_path := dir.path_join(MARKER_FILE)
+	if not FileAccess.file_exists(marker_path):
+		result["error"] = "marker_missing"
+		return result
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(marker_path))
+	if typeof(parsed) != TYPE_DICTIONARY:
+		result["error"] = "marker_invalid"
+		return result
+	var marker: Dictionary = parsed
+	if int(marker.get("formatVersion", 0)) != MARKER_FORMAT_VERSION:
+		result["error"] = "marker_format"
+		return result
+	if (
+		int(marker.get("packageId", 0)) != identity.package_id
+		or str(marker.get("slug", "")) != identity.slug
+		or int(marker.get("revision", 0)) != identity.revision
+		or str(marker.get("artifactKey", "")) != identity.artifact_key
+	):
+		result["error"] = "marker_mismatch"
+		return result
+	if int(marker.get("fileCount", -1)) != files.size():
+		result["error"] = "marker_count"
+		return result
+	# A malformed map is ignored: the manifest values then decide, and a marker
+	# whose records cannot be read must not make an artifact reusable.
+	var raw_sizes: Variant = marker.get("storedSizes", {})
+	var stored_sizes: Dictionary = (
+		raw_sizes if typeof(raw_sizes) == TYPE_DICTIONARY else {}
+	)
+	var raw_hashes: Variant = marker.get("storedHashes", {})
+	if typeof(raw_hashes) != TYPE_DICTIONARY:
+		result["error"] = "marker_hashes"
+		return result
+	var stored_hashes: Dictionary = raw_hashes
+	result["stored_sizes"] = stored_sizes
+	result["stored_hashes"] = stored_hashes
+	for file: Dictionary in files:
+		var filepath := str(file.get("filepath", ""))
+		if filepath.is_empty():
+			result["error"] = "file_size"
+			return result
+		var expected_size := int(
+			stored_sizes.get(filepath, int(file.get("size", -1)))
+		)
+		if _file_size(dir.path_join(filepath)) != expected_size:
+			result["error"] = "file_size"
+			return result
+		var expected_hash := str(stored_hashes.get(filepath, ""))
+		if expected_hash.is_empty():
+			result["error"] = "marker_hashes"
+			return result
+		if FileAccess.get_sha256(dir.path_join(filepath)) != expected_hash:
+			result["error"] = "file_hash"
+			return result
+	return {
+		"reusable": true,
+		"dir": dir,
+		"derive_current": int(marker.get("deriveVersion", 0)) == derive_version,
+		"stored_sizes": stored_sizes,
+		"stored_hashes": stored_hashes,
+		"error": "",
+	}
+
+
 ## Keeps the applied artifact and the newest other revision on disk. Older
 ## artifacts of the same revision are removed: their bytes belong to a closure
 ## that is no longer pinned. Deriving the previous revision from the directory
 ## instead of memory keeps it correct after a restart and after a same-revision
 ## refresh.
-func prune(slug: String, keep_revision: int, keep_dir_name: String) -> void:
+##
+## Returns how many directories were removed, so a caller that mirrors this tree
+## into IndexedDB only syncs when the pruning really changed bytes.
+func prune(slug: String, keep_revision: int, keep_dir_name: String) -> int:
 	var root := package_dir(slug)
 	if root.is_empty():
-		return
+		return 0
 	var keep_previous := highest_revision(slug, keep_revision)
 	var dir := DirAccess.open(root)
 	if dir == null:
-		return
+		return 0
+	var removed := 0
 	for name: String in dir.get_directories():
 		if name == STAGING_DIR or name == PREVIOUS_DIR:
 			continue
@@ -180,6 +355,8 @@ func prune(slug: String, keep_revision: int, keep_dir_name: String) -> void:
 		if value == keep_previous:
 			continue
 		remove_tree(root.path_join(name))
+		removed += 1
+	return removed
 
 
 ## Highest numeric revision directory of a package, ignoring `exclude`.
@@ -226,3 +403,13 @@ func remove_tree(path: String) -> void:
 		else:
 			DirAccess.remove_absolute(child)
 	DirAccess.remove_absolute(path)
+
+
+## Size of a file on disk, or -1 when it cannot be opened.
+static func _file_size(path: String) -> int:
+	var handle := FileAccess.open(path, FileAccess.READ)
+	if handle == null:
+		return -1
+	var size := handle.get_length()
+	handle.close()
+	return size

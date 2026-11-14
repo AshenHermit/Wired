@@ -21,7 +21,6 @@ import React from "react";
 import { useTranslations } from "next-intl";
 import { GameTab } from "./GameTab";
 import { useUserStore } from "@/store/user-store";
-import { LocaleSwitcher } from "@/components/i18n/LocaleSwitcher";
 import {
   ROOM_TABS_POSITION_KEY,
   useDraggablePanel,
@@ -135,7 +134,6 @@ export function RoomWorkspace({
               canManagePackages={canManagePackages}
               canCreatePackages={canCreatePackages}
               viewerId={viewerId}
-              roomId={room.id}
               room={room}
               onRoomSaved={onRoomSaved}
             />

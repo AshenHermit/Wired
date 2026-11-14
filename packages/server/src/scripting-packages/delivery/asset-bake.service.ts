@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import type { ResolvedClosure } from '../publish/package-closure-resolver';
-import type { PackageTextFile } from '../publish/package-runtime-references';
 import type { AssetBakeCache } from './asset-bake-cache';
 import { BAKED_SUFFIX, UNSUPPORTED_ASSET_EXTENSIONS } from './asset-bake.constants';
 import { Logger } from '@nestjs/common';

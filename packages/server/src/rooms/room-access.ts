@@ -35,6 +35,28 @@ function isContributor(
 }
 
 /**
+ * The shared tail of every access policy: `'all'` admits any authenticated
+ * user, `'users'` requires an exact match in the policy list, and `'author'`
+ * (or an unknown mode) adds nobody beyond the owners the caller already
+ * checked.
+ */
+function matchesAccess(
+  access: RoomAccessMode | null | undefined,
+  ids: number[] | null | undefined,
+  userId?: number | null,
+): boolean {
+  if (access === 'all') {
+    return userId != null;
+  }
+
+  if (access === 'users') {
+    return userId != null && (ids ?? []).includes(userId);
+  }
+
+  return false;
+}
+
+/**
  * Explicit membership: the room's author or one of its contributors.
  *
  * Distinct from `canViewRoom`, which also admits anyone to a public room. Use
@@ -74,27 +96,14 @@ export function canManageRoomPackages(
   room: RoomAccessSubject,
   userId?: number | null,
 ): boolean {
-  // Author is always allowed
-  if (isAuthor(room, userId)) {
-    return true;
-  }
-
-  const access = room.packageManagementAccess;
-
-  // 'all' allows any authenticated user
-  if (access === 'all') {
-    return userId != null;
-  }
-
-  // 'users' requires exact match in the access list
-  if (access === 'users') {
-    return (
-      userId != null && (room.packageManagementUserIds ?? []).includes(userId)
-    );
-  }
-
-  // 'author' mode only allows the author (already checked above)
-  return false;
+  return (
+    isAuthor(room, userId) ||
+    matchesAccess(
+      room.packageManagementAccess,
+      room.packageManagementUserIds,
+      userId,
+    )
+  );
 }
 
 /**
@@ -104,27 +113,14 @@ export function canCreateRoomPackages(
   room: RoomAccessSubject,
   userId?: number | null,
 ): boolean {
-  // Author is always allowed
-  if (isAuthor(room, userId)) {
-    return true;
-  }
-
-  const access = room.packageCreationAccess;
-
-  // 'all' allows any authenticated user
-  if (access === 'all') {
-    return userId != null;
-  }
-
-  // 'users' requires exact match in the access list
-  if (access === 'users') {
-    return (
-      userId != null && (room.packageCreationUserIds ?? []).includes(userId)
-    );
-  }
-
-  // 'author' mode only allows the author (already checked above)
-  return false;
+  return (
+    isAuthor(room, userId) ||
+    matchesAccess(
+      room.packageCreationAccess,
+      room.packageCreationUserIds,
+      userId,
+    )
+  );
 }
 
 /**
@@ -136,25 +132,8 @@ export function canReadRoom(
   room: RoomAccessSubject,
   userId?: number | null,
 ): boolean {
-  // Author is always allowed
-  if (isAuthor(room, userId)) {
-    return true;
-  }
-
-  const access = room.readAccess;
-
-  // 'all' allows any authenticated user
-  if (access === 'all') {
-    return userId != null;
-  }
-
-  // 'users' requires exact match in the access list
-  if (access === 'users') {
-    return (
-      userId != null && (room.readUserIds ?? []).includes(userId)
-    );
-  }
-
-  // 'author' mode (or anything else) only allows the author, already handled.
-  return false;
+  return (
+    isAuthor(room, userId) ||
+    matchesAccess(room.readAccess, room.readUserIds, userId)
+  );
 }

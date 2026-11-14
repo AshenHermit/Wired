@@ -32,7 +32,7 @@
       "rooms": "Rooms",
       "controls": "Controls",
       "packages": "Packages",
-      "docs": "Documentation"
+      "docs": "For Developers"
     },
     "rooms": {
       "title": "Rooms",
@@ -47,13 +47,12 @@
       "description": "Community packages. Search by name, slug, or tag"
     },
     "docs": {
-      "title": "Documentation",
-      "description": "The core wired-io API for writing scripts will be collected here, so you don't have to dig through the sources",
-      "nav": {
-        "gettingStarted": "Getting Started",
-        "apiReference": "API Reference",
-        "entityRegistration": "Entity Registration",
-        "multiplayerGuide": "Multiplayer Guide"
+      "title": "For Developers",
+      "description": "Documentation for package authors and the latest changes to the platform",
+      "devlog": {
+        "title": "Latest updates",
+        "all": "All updates",
+        "empty": "No entries yet"
       },
       "issues": {
         "description": "Report an issue or suggest a feature on the GitHub repository",
@@ -309,7 +308,7 @@
       "disabled": "Package disabled",
       "deleted": "Package deleted from the room",
       "adopted": "The existing directory is now connected to the package. Emit will publish its files.",
-      "emitPublished": "Published revision {revision}: {uploaded} file(s)."
+      "emitPublished": "Published revision {revision}: {files} file(s)."
     },
     "errors": {
       "loginRequired": "Sign in to create packages.",
@@ -413,5 +412,18 @@
     "bridgeMissing": "The editor bridge did not appear",
     "bridgeUnavailable": "The editor bridge is unavailable",
     "packagesUnavailable": "Packages are unavailable"
+  },
+  "Docs": {
+    "hubTitle": "Documentation",
+    "back": "Back to home"
+  },
+  "Devlog": {
+    "title": "Dev log",
+    "back": "All updates",
+    "empty": "No entries yet",
+    "versionLabel": "Version",
+    "prev": "Previous entry",
+    "next": "Next entry",
+    "notFound": "Entry not found"
   }
 }

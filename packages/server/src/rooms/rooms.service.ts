@@ -195,40 +195,11 @@ export class RoomsService implements OnApplicationBootstrap {
   ): Promise<Room> {
     const room = await this.findOne(id);
 
-    // Validate that all provided user IDs exist
-    const userIdsToValidate = new Set<number>();
-
-    if (
-      dto.packageManagementUserIds &&
-      dto.packageManagementUserIds.length > 0
-    ) {
-      dto.packageManagementUserIds.forEach((uid) => userIdsToValidate.add(uid));
-    }
-
-    if (dto.packageCreationUserIds && dto.packageCreationUserIds.length > 0) {
-      dto.packageCreationUserIds.forEach((uid) => userIdsToValidate.add(uid));
-    }
-
-    if (dto.readUserIds && dto.readUserIds.length > 0) {
-      dto.readUserIds.forEach((uid) => userIdsToValidate.add(uid));
-    }
-
-    if (userIdsToValidate.size > 0) {
-      const invalidIds: number[] = [];
-
-      for (const userId of userIdsToValidate) {
-        const userExists = await this.usersService.findById(userId);
-        if (!userExists) {
-          invalidIds.push(userId);
-        }
-      }
-
-      if (invalidIds.length > 0) {
-        throw new BadRequestException(
-          `The following user IDs do not exist: ${invalidIds.join(', ')}`,
-        );
-      }
-    }
+    await this.usersService.assertUsersExist([
+      ...(dto.packageManagementUserIds ?? []),
+      ...(dto.packageCreationUserIds ?? []),
+      ...(dto.readUserIds ?? []),
+    ]);
 
     // Update only the fields provided in the DTO
     if (dto.packageManagementAccess !== undefined) {

@@ -19,7 +19,11 @@ import {
   TriangleAlertIcon,
   UploadIcon,
 } from "lucide-react";
-import type { Room } from "@wired-io/shared";
+import type {
+  PackageRevisionSyncState,
+  PackageRuntimeSyncState,
+  Room,
+} from "@wired-io/shared";
 import { PreviewThumbnail } from "@/components/media/PreviewThumbnail";
 import { Button } from "@/components/ui/button";
 import { useAppMessage, type AppMessage, type MessageKey } from "@/i18n/message";
@@ -38,18 +42,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/animate-ui/components/radix/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  slugHintClass,
-  slugHintKey,
-} from "@/components/packages/slug";
-import { useSlugAvailability } from "@/components/packages/use-slug-availability";
 import { formatFileSize } from "@/utils/format-file-size";
+import { CreatePackageDialog } from "./dialogs/CreatePackageDialog";
 import {
   LocalChangesError,
   NewerRevisionError,
-  PackagesActionError,
   type PackageActionState,
   type RoomPackageEntry,
   type RoomPackageStatus,
@@ -79,7 +76,7 @@ const STATUS_CLASS: Record<RoomPackageStatus, string> = {
   disabled: "border-border/60 bg-transparent text-muted-foreground",
 };
 
-const BACKEND_LABEL_KEYS: Record<string, MessageKey> = {
+const BACKEND_LABEL_KEYS: Record<PackageRevisionSyncState, MessageKey> = {
   published: "Packages.backend.published",
   pending: "Packages.backend.pending",
   applied: "Packages.backend.applied",
@@ -88,7 +85,7 @@ const BACKEND_LABEL_KEYS: Record<string, MessageKey> = {
   stale: "Packages.backend.stale",
 };
 
-const RUNTIME_LABEL_KEYS: Record<string, MessageKey> = {
+const RUNTIME_LABEL_KEYS: Record<PackageRuntimeSyncState, MessageKey> = {
   pending: "Packages.runtime.pending",
   applied: "Packages.runtime.applied",
   failed: "Packages.runtime.failed",
@@ -446,17 +443,11 @@ function PackageCard({
           <span>
             {t("card.server")}{" "}
             <span className="text-foreground">
-              {BACKEND_LABEL_KEYS[entry.backendState]
-                ? rootT(BACKEND_LABEL_KEYS[entry.backendState])
-                : entry.backendState}
+              {rootT(BACKEND_LABEL_KEYS[entry.backendState])}
             </span>
           </span>
           {entry.runtimeState && (
-            <span>
-              {RUNTIME_LABEL_KEYS[entry.runtimeState]
-                ? rootT(RUNTIME_LABEL_KEYS[entry.runtimeState])
-                : entry.runtimeState}
-            </span>
+            <span>{rootT(RUNTIME_LABEL_KEYS[entry.runtimeState])}</span>
           )}
           {entry.clientsTotal > 0 && (
             <span>
@@ -533,7 +524,6 @@ export function PackagesTab({
   canManagePackages,
   canCreatePackages,
   viewerId,
-  roomId,
   room,
   onRoomSaved,
 }: {
@@ -544,7 +534,6 @@ export function PackagesTab({
   canCreatePackages: boolean;
   /** The signed-in user, for deciding whether a workshop record is theirs. */
   viewerId: number | null;
-  roomId: number;
   /** The full room, for the access settings dialog. */
   room: Room;
   /** Receives the room returned by the access settings save. */
@@ -552,6 +541,7 @@ export function PackagesTab({
 }) {
   const [createOpen, setCreateOpen] = React.useState(false);
   const [workshopOpen, setWorkshopOpen] = React.useState(false);
+  const openCreate = () => setCreateOpen(true);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [publishEntry, setPublishEntry] =
     React.useState<RoomPackageEntry | null>(null);
@@ -561,63 +551,11 @@ export function PackagesTab({
   const [editEntry, setEditEntry] = React.useState<RoomPackageEntry | null>(
     null,
   );
-  const [name, setName] = React.useState("");
-  const [slug, setSlug] = React.useState("");
-  const [version, setVersion] = React.useState("0.1.0");
   const t = useTranslations("Packages");
-  const common = useTranslations("Common");
   const settingsT = useTranslations("RoomAccess");
-  const slugT = useTranslations();
   const format = useAppMessage();
-  const [creating, setCreating] = React.useState(false);
-  const [createError, setCreateError] = React.useState<AppMessage | null>(null);
-
   const { confirm, dialog } = useConfirmDialog();
   const runConfirmed = useConfirmedAction(confirm);
-  const checkSlugAvailability = packages.checkSlugAvailability;
-
-  /**
-   * Availability is advisory: the server still rejects a taken slug on POST.
-   * A room slug is free even when the workshop already uses it, so the two
-   * scopes are reported separately.
-   */
-  const slugAvailability = useSlugAvailability({
-    slug,
-    enabled: createOpen,
-    check: (candidate) => checkSlugAvailability(candidate, roomId),
-    verdict: (result) => (result.available ? "available" : "taken"),
-  });
-  const slugState = slugAvailability.state;
-  const slugTakenInWorkshop = slugAvailability.result?.global.available === false;
-
-  const resetCreateForm = React.useCallback(() => {
-    setName("");
-    setSlug("");
-    setVersion("0.1.0");
-    setCreateError(null);
-  }, []);
-
-  const openCreate = () => {
-    resetCreateForm();
-    setCreating(false);
-    setCreateOpen(true);
-  };
-
-  const closeCreate = () => {
-    setCreateOpen(false);
-    resetCreateForm();
-  };
-
-  const canCreate =
-    canCreatePackages &&
-    packages.fsReady &&
-    name.trim().length > 0 &&
-    slugState === "available" &&
-    !creating;
-
-  const handleSlugChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setSlug(event.target.value.toLowerCase());
-  };
 
   const handleDownload = (entry: RoomPackageEntry) => {
     void runConfirmed(
@@ -701,39 +639,6 @@ export function PackagesTab({
     }
   };
 
-  const handleCreate = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!canCreatePackages) {
-      setCreateError({
-        key:
-          viewerId === null
-            ? "Packages.errors.loginRequired"
-            : "Packages.errors.notRoomMember",
-      });
-      return;
-    }
-    if (!canCreate) return;
-    setCreating(true);
-    setCreateError(null);
-    try {
-      await packages.createPackage({
-        name: name.trim(),
-        version: version.trim() || "0.1.0",
-        slug: slug.trim(),
-      });
-      closeCreate();
-    } catch (error) {
-      if (!(error instanceof PackagesActionError)) console.error(error);
-      setCreateError(
-        error instanceof PackagesActionError
-          ? error.appMessage
-          : { key: "Packages.errors.createFailed" },
-      );
-    } finally {
-      setCreating(false);
-    }
-  };
-
   return (
     <div className="absolute inset-0 overflow-y-auto bg-background p-6 text-foreground">
       <div className="mx-auto w-full max-w-4xl space-y-5">
@@ -802,115 +707,13 @@ export function PackagesTab({
           </div>
         )}
 
-        <Dialog
+        <CreatePackageDialog
           open={createOpen}
-          onOpenChange={(open) => {
-            setCreateOpen(open);
-            if (!open) resetCreateForm();
-          }}
-        >
-          <DialogContent showCloseButton={!creating}>
-            <form onSubmit={handleCreate} className="space-y-4">
-              <DialogHeader>
-                <DialogTitle>{t("createDialog.title")}</DialogTitle>
-                <DialogDescription>
-                  {t.rich("createDialog.description", {
-                    path: "packages/<slug>",
-                    code: (chunks) => (
-                      <span className="font-mono text-foreground">
-                        {chunks}
-                      </span>
-                    ),
-                  })}
-                </DialogDescription>
-              </DialogHeader>
-
-              <div className="space-y-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="package-create-name">
-                    {t("createDialog.name")}
-                  </Label>
-                  <Input
-                    id="package-create-name"
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    placeholder={t("createDialog.namePlaceholder")}
-                    autoFocus
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="package-create-version">
-                    {t("createDialog.version")}
-                  </Label>
-                  <Input
-                    id="package-create-version"
-                    value={version}
-                    onChange={(event) => setVersion(event.target.value)}
-                    placeholder={t("createDialog.versionPlaceholder")}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="package-create-slug">Slug</Label>
-                  <Input
-                    id="package-create-slug"
-                    value={slug}
-                    onChange={handleSlugChange}
-                    placeholder={t("createDialog.slugPlaceholder")}
-                    autoComplete="off"
-                    spellCheck={false}
-                    autoCapitalize="none"
-                  />
-                  {slugHintKey(slugState) && (
-                    <p className={`text-xs ${slugHintClass(slugState)}`}>
-                      {slugT(slugHintKey(slugState)!)}
-                    </p>
-                  )}
-                  {slugState === "available" && slugTakenInWorkshop && (
-                    <p className="text-xs text-muted-foreground">
-                      {t("createDialog.slugTakenInWorkshop")}
-                    </p>
-                  )}
-                  {slugState === "error" && (
-                    <Button
-                      type="button"
-                      variant="link"
-                      size="sm"
-                      className="h-auto px-0 text-xs"
-                      onClick={slugAvailability.retry}
-                    >
-                      {t("createDialog.checkAgain")}
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              {createError && (
-                <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive">
-                  {format(createError)}
-                </div>
-              )}
-
-              <DialogFooter>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={closeCreate}
-                  disabled={creating}
-                >
-                  {common("cancel")}
-                </Button>
-                <Button type="submit" disabled={!canCreate}>
-                  {creating ? (
-                    <Loader2Icon className="size-4 animate-spin" />
-                  ) : (
-                    <PlusIcon className="size-4" />
-                  )}
-                  {t("createDialog.create")}
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+          onOpenChange={setCreateOpen}
+          packages={packages}
+          canCreatePackages={canCreatePackages}
+          viewerId={viewerId}
+        />
 
         {packages.entries.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
@@ -987,7 +790,6 @@ export function PackagesTab({
             if (!open) setForkEntry(null);
           }}
           entry={forkEntry}
-          roomId={roomId}
           packages={packages}
         />
         <RoomAccessSettingsDialog

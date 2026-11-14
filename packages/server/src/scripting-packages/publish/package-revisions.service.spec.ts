@@ -75,6 +75,7 @@ describe('PackageRevisionsService', () => {
     findOne: jest.Mock;
     find: jest.Mock;
     delete: jest.Mock;
+    manager: { transaction: jest.Mock };
   };
   let packagesService: { findOne: jest.Mock };
   let packagesRepository: { find: jest.Mock };
@@ -83,10 +84,15 @@ describe('PackageRevisionsService', () => {
     publishRevision: jest.Mock;
     discardDraft: jest.Mock;
     readPublishedFile: jest.Mock;
+    readPublishedFiles: jest.Mock;
+    readPublishedTextFiles: jest.Mock;
     readDraftFile: jest.Mock;
     resolvePublishedFile: jest.Mock;
     writePinnedDependencies: jest.Mock;
     readPinnedDependencies: jest.Mock;
+    missingFiles: jest.Mock;
+    migratePackage: jest.Mock;
+    cleanupLegacyRevisions: jest.Mock;
   };
   let service: PackageRevisionsService;
   let dispatcher: { revisionPublished: jest.Mock };
@@ -103,6 +109,11 @@ describe('PackageRevisionsService', () => {
       findOne: jest.fn(async () => null),
       find: jest.fn(async () => []),
       delete: jest.fn(async () => ({ affected: 1 })),
+      manager: {
+        transaction: jest.fn(async (fn: (manager: unknown) => Promise<unknown>) =>
+          fn({ update: jest.fn(async () => undefined) }),
+        ),
+      },
     };
     packagesService = { findOne: jest.fn(async () => pkg) };
     packagesRepository = { find: jest.fn(async () => []) };
@@ -113,8 +124,11 @@ describe('PackageRevisionsService', () => {
         sha256: sha256Hex(data),
       })),
       publishRevision: jest.fn(async (_id, _rev, _files, commit) => commit()),
+      missingFiles: jest.fn(async () => []),
       discardDraft: jest.fn(async () => undefined),
       readPublishedFile: jest.fn(async () => Buffer.from('x')),
+      readPublishedFiles: jest.fn(async () => new Map()),
+      readPublishedTextFiles: jest.fn(async () => new Map()),
       readDraftFile: jest.fn(async () => ''),
       resolvePublishedFile: jest.fn(async () => ({
         path: '/tmp/a.txt',
@@ -122,6 +136,8 @@ describe('PackageRevisionsService', () => {
       })),
       writePinnedDependencies: jest.fn(async () => undefined),
       readPinnedDependencies: jest.fn(async () => null),
+      migratePackage: jest.fn(async () => new Map<number, string>()),
+      cleanupLegacyRevisions: jest.fn(async () => 0),
     };
     service = new PackageRevisionsService(
       repository as never,
@@ -130,6 +146,10 @@ describe('PackageRevisionsService', () => {
       new PackagePublishLockService(),
       dispatcher as unknown as PackageRevisionDispatcher,
       packagesRepository as never,
+      {
+        reconcilePackage: jest.fn(async () => undefined),
+        reconcilePackageLocked: jest.fn(async () => undefined),
+      } as never,
     );
   });
 
@@ -192,6 +212,18 @@ describe('PackageRevisionsService', () => {
       expect(repository.save).toHaveBeenCalledWith(
         expect.objectContaining({ revision: 5, status: 'draft' }),
       );
+    });
+
+    it('reports files the package git repository does not have yet', async () => {
+      repository.maximum.mockResolvedValue(4);
+      storage.missingFiles.mockResolvedValueOnce(['b.txt']);
+
+      const revision = await service.createDraft(7, {
+        files: [file('a.txt', 'a'), file('b.txt', 'b')],
+      });
+
+      expect(storage.missingFiles).toHaveBeenCalledWith(7, revision.files);
+      expect(revision.missing).toEqual(['b.txt']);
     });
 
     it('supersedes unfinished drafts of the same package', async () => {
@@ -276,10 +308,38 @@ describe('PackageRevisionsService', () => {
         3,
         declared,
         expect.any(Function),
+        expect.objectContaining({
+          name: expect.any(String),
+          email: expect.any(String),
+        }),
       );
       expect(published.status).toBe('published');
       expect(published.publishedAt).toEqual(expect.any(String));
       expect(dispatcher.revisionPublished).toHaveBeenCalledWith(7, 3);
+    });
+
+    it('stores the commit sha returned by the storage layer', async () => {
+      const declared = [file('a.txt', 'a')];
+      const row = draftRow(3, declared);
+      repository.findOne.mockResolvedValue(row);
+      repository.save.mockImplementation(async (value) => value);
+      storage.publishRevision.mockImplementationOnce(
+        async (
+          _id: number,
+          _rev: number,
+          _files: unknown,
+          commit: (sha: string | null) => Promise<void>,
+        ) => commit('abc123'),
+      );
+
+      await service.publish(7, 3);
+
+      expect(repository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'published',
+          commitSha: 'abc123',
+        }),
+      );
     });
 
     it('records the dependency revisions resolved at publish time', async () => {
@@ -306,8 +366,8 @@ describe('PackageRevisionsService', () => {
           return null;
         },
       );
-      storage.readPublishedFile.mockResolvedValue(
-        Buffer.from('preload("res://packages/6/lib.gd")'),
+      storage.readPublishedTextFiles.mockResolvedValue(
+        new Map([['main.gd', 'preload("res://packages/6/lib.gd")']]),
       );
 
       await service.publish(7, 3);
@@ -343,8 +403,8 @@ describe('PackageRevisionsService', () => {
           return null;
         },
       );
-      storage.readPublishedFile.mockResolvedValue(
-        Buffer.from('preload("res://packages/library/lib.gd")'),
+      storage.readPublishedTextFiles.mockResolvedValue(
+        new Map([['main.gd', 'preload("res://packages/library/lib.gd")']]),
       );
       packagesRepository.find.mockImplementation(
         async (opts?: { select?: unknown }) =>
@@ -433,8 +493,8 @@ describe('PackageRevisionsService', () => {
       repository.findOne.mockResolvedValue(
         draftRow(3, [file('main.gd', 'preload("res://packages/6/lib.gd")')]),
       );
-      storage.readPublishedFile.mockResolvedValue(
-        Buffer.from('preload("res://packages/6/lib.gd")'),
+      storage.readPublishedTextFiles.mockResolvedValue(
+        new Map([['main.gd', 'preload("res://packages/6/lib.gd")']]),
       );
       storage.writePinnedDependencies.mockRejectedValue(new Error('disk full'));
 
@@ -558,7 +618,13 @@ describe('PackageRevisionsService', () => {
       await expect(
         service.resolvePublishedFile(7, 3, 'a.txt'),
       ).resolves.toEqual({ path: '/tmp/a.txt', size: 1 });
-      expect(storage.resolvePublishedFile).toHaveBeenCalledWith(7, 3, 'a.txt');
+      expect(storage.resolvePublishedFile).toHaveBeenCalledWith(
+        7,
+        3,
+        'a.txt',
+        undefined,
+        1,
+      );
     });
 
     it('rejects files that are not declared in the revision', async () => {
@@ -654,6 +720,8 @@ describe('PackageRevisionsService', () => {
         new PackagePublishLockService(dataSource as unknown as DataSource),
         dispatcher as unknown as PackageRevisionDispatcher,
         packagesRepository as never,
+        { reconcilePackage: jest.fn(async () => undefined),
+          reconcilePackageLocked: jest.fn(async () => undefined) } as never,
       );
     }
 
@@ -742,6 +810,47 @@ describe('PackageRevisionsService', () => {
   });
 
   describe('publishCopiedRevision', () => {
+    it('converts legacy revisions of the copy target before publishing', async () => {
+      const targetPackageId = 12;
+      const script = Buffer.from('extends Node\n');
+      repository.findOne.mockResolvedValue(publishedRow(4, [entry('a.gd', script)]));
+      storage.readPublishedFiles.mockResolvedValue(
+        new Map([['a.gd', script]]),
+      );
+      repository.find.mockResolvedValue([
+        {
+          id: 77,
+          revision: 1,
+          status: 'published',
+          commitSha: null,
+          files: [entry('a.gd', script)],
+          publishedAt: new Date('2026-10-29T11:00:00.000Z'),
+          createdAt: new Date('2026-10-29T10:00:00.000Z'),
+        },
+      ]);
+      storage.migratePackage.mockResolvedValue(
+        new Map([[1, 'c'.repeat(64)]]),
+      );
+      packagesService.findOne.mockResolvedValue({
+        id: targetPackageId,
+        slug: 'hero-copy',
+        room: { id: 3 },
+      });
+
+      await service.publishCopiedRevision({
+        sourcePackageId: 5,
+        targetPackageId,
+      });
+
+      expect(storage.migratePackage).toHaveBeenCalledWith(
+        targetPackageId,
+        [expect.objectContaining({ revision: 1 })],
+      );
+      expect(
+        storage.migratePackage.mock.invocationCallOrder[0],
+      ).toBeLessThan(storage.publishRevision.mock.invocationCallOrder[0]);
+    });
+
     it('copies the latest published revision as revision 1', async () => {
       const sourcePackageId = 5;
       const targetPackageId = 12;
@@ -755,10 +864,7 @@ describe('PackageRevisionsService', () => {
       ]);
 
       repository.findOne.mockResolvedValue(publishedRow(sourceRevision, files));
-      storage.readPublishedFile.mockImplementation(
-        (_id: number, _rev: number, filepath: string) =>
-          contents.get(filepath)!,
-      );
+      storage.readPublishedFiles.mockResolvedValue(contents);
       packagesService.findOne.mockResolvedValue({
         id: targetPackageId,
         slug: 'hero-copy',
@@ -774,10 +880,11 @@ describe('PackageRevisionsService', () => {
         where: { package: { id: sourcePackageId }, status: 'published' },
         order: { revision: 'DESC' },
       });
-      expect(storage.readPublishedFile).toHaveBeenCalledWith(
+      expect(storage.readPublishedFiles).toHaveBeenCalledWith(
         sourcePackageId,
         sourceRevision,
-        'a.gd',
+        ['a.gd', 'b.bin'],
+        null,
       );
       expect(repository.save).toHaveBeenCalledWith(
         expect.objectContaining({ revision: 1, status: 'draft', files }),
@@ -816,6 +923,38 @@ describe('PackageRevisionsService', () => {
       });
     });
 
+    it('reads copied files in one batch', async () => {
+      const sourcePackageId = 5;
+      const targetPackageId = 12;
+      const files = [
+        entry('a.txt', Buffer.from('a')),
+        entry('b.txt', Buffer.from('b')),
+      ];
+      repository.findOne.mockResolvedValue(publishedRow(2, files));
+      storage.readPublishedFiles.mockResolvedValue(
+        new Map([
+          ['a.txt', Buffer.from('a')],
+          ['b.txt', Buffer.from('b')],
+        ]),
+      );
+      packagesService.findOne.mockResolvedValue({
+        id: targetPackageId,
+        slug: 'copy',
+        room: { id: 3 },
+      });
+
+      await service.publishCopiedRevision({
+        sourcePackageId,
+        targetPackageId,
+      });
+
+      expect(storage.readPublishedFiles).toHaveBeenCalledTimes(1);
+      expect(storage.readPublishedFiles.mock.calls[0][2]).toEqual([
+        'a.txt',
+        'b.txt',
+      ]);
+    });
+
     it('applies transformFile and recomputes sha256', async () => {
       const sourcePackageId = 5;
       const targetPackageId = 12;
@@ -834,8 +973,8 @@ describe('PackageRevisionsService', () => {
       repository.findOne.mockResolvedValue(
         publishedRow(2, [entry('main.gd', original)]),
       );
-      storage.readPublishedFile.mockImplementation((id: number) =>
-        id === sourcePackageId ? original : rewritten,
+      storage.readPublishedFiles.mockResolvedValue(
+        new Map([['main.gd', original]]),
       );
       storage.readDraftFile.mockResolvedValue(rewritten.toString('utf8'));
       packagesService.findOne.mockResolvedValue({
@@ -884,7 +1023,9 @@ describe('PackageRevisionsService', () => {
       repository.findOne.mockResolvedValue(
         publishedRow(1, [entry('main.gd', text)]),
       );
-      storage.readPublishedFile.mockResolvedValue(text);
+      storage.readPublishedFiles.mockResolvedValue(
+        new Map([['main.gd', text]]),
+      );
       storage.readDraftFile.mockResolvedValue(text.toString('utf8'));
       packagesService.findOne.mockResolvedValue({
         id: 12,
@@ -914,7 +1055,9 @@ describe('PackageRevisionsService', () => {
       repository.findOne.mockResolvedValue(
         publishedRow(2, [entry('a.gd', data)]),
       );
-      storage.readPublishedFile.mockResolvedValue(data);
+      storage.readPublishedFiles.mockResolvedValue(
+        new Map([['a.gd', data]]),
+      );
       packagesService.findOne.mockResolvedValue({
         id: 12,
         slug: 'hero-copy',
@@ -938,7 +1081,9 @@ describe('PackageRevisionsService', () => {
       repository.findOne.mockResolvedValue(
         publishedRow(2, [entry('a.gd', data)]),
       );
-      storage.readPublishedFile.mockResolvedValue(data);
+      storage.readPublishedFiles.mockResolvedValue(
+        new Map([['a.gd', data]]),
+      );
       packagesService.findOne.mockResolvedValue({
         id: 12,
         slug: 'hero-copy',

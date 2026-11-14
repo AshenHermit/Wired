@@ -641,6 +641,9 @@ func _apply_world_snapshot_owned(snapshot: Dictionary) -> void:
 		# run against the packages that are still downloading.
 		_pending_world_snapshot = snapshot
 		return
+	# The reconcile applied the batch that is on disk now; persisting per package
+	# would copy the whole tree into IndexedDB once per download.
+	_packages.flush_storage()
 	# The reconcile completed without a failed download: the backoff starts from
 	# the first delay again on the next unrelated failure.
 	_package_retry_attempts = 0
@@ -937,6 +940,10 @@ func _pump_package_ops() -> void:
 		"unload":
 			_apply_package_removal(package_id, bool(op.get("purge", false)))
 	_package_ops_busy = false
+	# The queue is settled, so this is the end of the batch: one browser
+	# file-system sync covers every apply and every purge it performed.
+	if _packages != null and _package_ops_queue.is_empty():
+		_packages.flush_storage()
 	# The mutex is free again: when nothing else is queued, this may have been
 	# the last package of the startup chain and the parked records can spawn.
 	_restore_dynamic_if_ready()
@@ -1048,6 +1055,9 @@ func _apply_package_revision(package_id: int, revision: int) -> void:
 		% [package_id, revision]
 	)
 	var result: Dictionary = await _packages.sync_package(package_id, revision)
+	# A live revision is applied outside any batch, so it is persisted here
+	# instead of waiting for a flush that this path never reaches.
+	_packages.flush_storage()
 	if not bool(result.get("ok", false)):
 		# PackagesManager already printed WIRED_PACKAGES_SYNC_FAILED with the
 		# requested revision; the backend owns retries.
@@ -1250,6 +1260,7 @@ func _run_client(cfg: Dictionary) -> void:
 				"WIRED_CLIENT_PACKAGE_PRELOAD_FAILED package=%d revision=%d error=%s"
 				% [package_id, revision, str(preload_result.get("error", ""))]
 			)
+	_packages.flush_storage()
 	print("WIRED_CLIENT_STARTING room=%s url=%s" % [cfg.room, cfg.url])
 	_bridge_status("connecting", str(cfg.url))
 	var err := net.start_client(
@@ -1386,6 +1397,9 @@ func _apply_client_package(package_id: int, revision: int) -> void:
 	# completion boundary: registry/static content and live player components
 	# have already been rebuilt before the acknowledgement below is sent.
 	var result: Dictionary = await _packages.sync_package(package_id, revision)
+	# A hot reload applies one package on its own, outside the startup or
+	# snapshot batch, so this is its own flush point.
+	_packages.flush_storage()
 	var ok := bool(result.get("ok", false))
 	var applied := int(result.get("revision", 0))
 	if applied <= 0:

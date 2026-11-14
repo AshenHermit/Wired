@@ -12,6 +12,9 @@ extends SceneTree
 ##     --script res://tests/artifact_store_smoke.gd --quit-after 600
 
 const ROOT := "user://artifact_store_smoke"
+## Explicit dependency: the store is referenced through its class name, which the
+## test runner cannot see, so preloading it also documents what this suite covers.
+const ArtifactStoreScript := preload("res://_wired/scripts/global/artifact_store.gd")
 
 var _failures: PackedStringArray = []
 var _checks := 0
@@ -33,7 +36,7 @@ func _run() -> void:
 
 
 func _test_paths_are_slug_based() -> void:
-	var store := ArtifactStore.new(func() -> String: return ROOT)
+	var store := ArtifactStoreScript.new(func() -> String: return ROOT)
 	_expect(store.package_dir("hero") == ROOT + "/hero", "package dir uses slug")
 	_expect(
 		store.revision_dir("hero", 2, "abc") == ROOT + "/hero/2-abc",
@@ -50,7 +53,7 @@ func _test_paths_are_slug_based() -> void:
 
 
 func _test_invalid_slug_is_rejected() -> void:
-	var store := ArtifactStore.new(func() -> String: return ROOT)
+	var store := ArtifactStoreScript.new(func() -> String: return ROOT)
 	# A sibling of the packages root must exist for the no-touch assertions.
 	DirAccess.make_dir_recursive_absolute(ROOT + "/hero/1-abc")
 	for slug: String in ["", "../escape", "Hero", "hero-one"]:
@@ -82,7 +85,7 @@ func _test_invalid_slug_is_rejected() -> void:
 
 func _test_stage_swap_and_prune() -> void:
 	_cleanup()
-	var store := ArtifactStore.new(func() -> String: return ROOT)
+	var store := ArtifactStoreScript.new(func() -> String: return ROOT)
 	var files: Array = [_file("scripts/hero.gd", "hero-v1")]
 	_expect(store.stage("hero", files) == "", "a valid slug must stage the artifact")
 	_expect(
@@ -117,7 +120,7 @@ func _test_stage_swap_and_prune() -> void:
 
 func _test_highest_revision_is_scoped_to_the_slug() -> void:
 	_cleanup()
-	var store := ArtifactStore.new(func() -> String: return ROOT)
+	var store := ArtifactStoreScript.new(func() -> String: return ROOT)
 	store.stage("hero", [_file("scripts/hero.gd", "hero-v1")])
 	store.swap("hero", 2, "aaa")
 	store.stage("weapon", [_file("scripts/weapon.gd", "weapon-v1")])
@@ -168,7 +171,7 @@ func _artifact_dirs(path: String) -> PackedStringArray:
 
 
 func _cleanup() -> void:
-	var store := ArtifactStore.new(func() -> String: return ROOT)
+	var store := ArtifactStoreScript.new(func() -> String: return ROOT)
 	store.remove_tree(ROOT)
 
 

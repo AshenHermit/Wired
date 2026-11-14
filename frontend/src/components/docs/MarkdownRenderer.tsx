@@ -9,22 +9,51 @@ interface MarkdownRendererProps {
   content: string;
 }
 
+interface MarkdownNode {
+  type: string;
+  value?: string;
+  position?: { start?: { line?: number } };
+  children?: MarkdownNode[];
+}
+
+function nodeText(node: MarkdownNode | undefined): string {
+  if (!node) {
+    return '';
+  }
+  if (node.type === 'text') {
+    return node.value ?? '';
+  }
+  return node.children?.map(nodeText).join('') ?? '';
+}
+
 export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
-  const headings = parseMarkdownHeadings(content);
-  const headingMap = new Map(headings.map(h => [h.text, h.id]));
+  // Sidebar anchors come from parseMarkdownHeadings, so rendered ids are looked
+  // up by the heading's source line instead of being accumulated in a Set during
+  // render: React may re-invoke render functions (Strict Mode), which turned
+  // every id into "<slug>-1" and broke hash navigation.
+  const idsByLine = new Map(
+    parseMarkdownHeadings(content).map((heading) => [heading.line, heading.id]),
+  );
+
+  const headingId = (node: MarkdownNode | undefined, children: unknown) => {
+    const line = node?.position?.start?.line;
+    const knownId = line === undefined ? undefined : idsByLine.get(line);
+    if (knownId) {
+      return knownId;
+    }
+    return slugify(nodeText(node) || String(children));
+  };
 
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        h2: ({ children }) => {
-          const text = String(children);
-          const id = headingMap.get(text) || slugify(text);
+        h2: ({ children, node }) => {
+          const id = headingId(node, children);
           return <h2 id={id} className="text-2xl font-bold mt-6 mb-4">{children}</h2>;
         },
-        h3: ({ children }) => {
-          const text = String(children);
-          const id = headingMap.get(text) || slugify(text);
+        h3: ({ children, node }) => {
+          const id = headingId(node, children);
           return <h3 id={id} className="text-xl font-semibold mt-4 mb-3">{children}</h3>;
         },
         p: ({ children }) => <p className="mb-4 leading-relaxed">{children}</p>,

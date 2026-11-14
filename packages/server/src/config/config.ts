@@ -106,7 +106,10 @@ const config: () => AppConfig = () => ({
       'GODOT_GAME_TICKET_RATE_WINDOW_MS',
       60_000,
     ),
-    stateSaveIntervalMs: intFromEnv('GODOT_ROOM_STATE_SAVE_INTERVAL_MS', 30_000),
+    stateSaveIntervalMs: intFromEnv(
+      'GODOT_ROOM_STATE_SAVE_INTERVAL_MS',
+      30_000,
+    ),
     // The runtime fetches package manifests from the backend over loopback.
     // GODOT_ROOM_API_URL is required when the backend port differs from PORT
     // (for example behind a proxy) or when it listens on another interface.
@@ -133,6 +136,17 @@ const config: () => AppConfig = () => ({
       process.env.WIRED_GAME_TICKET_SECRET ??
       '',
     readTtlSec: intFromEnv('WIRED_PACKAGE_READ_TTL_SEC', 900),
+    // Хранилище ревизий в git. Выкат: сначала образ с флагом 0, затем
+    // миграция отдельным процессом с `WIRED_PACKAGE_GIT_STORAGE=1`, после
+    // неё — 1 и перезапуск. Откат: `packages:git-export`, остановка и
+    // удаление repo.git; при флаге 0 существующий репозиторий всё равно
+    // читается, поэтому одного флага для отката недостаточно.
+    gitStorage: process.env.WIRED_PACKAGE_GIT_STORAGE === '1',
+    gitGcExpire: process.env.WIRED_PACKAGE_GIT_GC_EXPIRE ?? '2.weeks.ago',
+    gitGcIntervalMs: intFromEnv(
+      'WIRED_PACKAGE_GIT_GC_INTERVAL_MS',
+      24 * 60 * 60 * 1000,
+    ),
     artifactBuildRateLimit: intFromEnv('WIRED_ARTIFACT_BUILD_RATE_LIMIT', 10),
     artifactBuildRateWindowMs: intFromEnv(
       'WIRED_ARTIFACT_BUILD_RATE_WINDOW_MS',

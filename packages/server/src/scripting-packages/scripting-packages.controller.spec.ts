@@ -5,12 +5,12 @@ import {
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { Readable } from 'node:stream';
 import {
   PackageFileEntry,
   PackageManifest,
   PackageRevision,
 } from '@wired-io/shared';
-import { Response } from 'express';
 import request from 'supertest';
 import { APP_GUARD } from '@nestjs/core';
 import { createValidationPipe } from 'src/common/validation';
@@ -69,7 +69,7 @@ describe('ScriptingPackagesController revisions API', () => {
       getManifestForRevision: jest.fn(),
       readPublishedFile: jest.fn(async () => Buffer.from('abc')),
       resolvePublishedFile: jest.fn(async () => ({
-        path: __filename,
+        stream: Readable.from(Buffer.from('abc')),
         size: 3,
       })),
     };

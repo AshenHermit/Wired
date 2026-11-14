@@ -8,6 +8,7 @@ describe('config paths', () => {
   const originalReadSecret = process.env.WIRED_PACKAGE_READ_SECRET;
   const originalReadTtl = process.env.WIRED_PACKAGE_READ_TTL_SEC;
   const originalTicketSecret = process.env.WIRED_GAME_TICKET_SECRET;
+  const originalGitStorage = process.env.WIRED_PACKAGE_GIT_STORAGE;
 
   afterEach(() => {
     if (original === undefined) {
@@ -30,6 +31,11 @@ describe('config paths', () => {
     } else {
       process.env.WIRED_GAME_TICKET_SECRET = originalTicketSecret;
     }
+    if (originalGitStorage === undefined) {
+      delete process.env.WIRED_PACKAGE_GIT_STORAGE;
+    } else {
+      process.env.WIRED_PACKAGE_GIT_STORAGE = originalGitStorage;
+    }
   });
 
   it('reads the package read secret and ttl from the environment', () => {
@@ -41,7 +47,18 @@ describe('config paths', () => {
       readTtlSec: 120,
       artifactBuildRateLimit: 10,
       artifactBuildRateWindowMs: 60_000,
+      gitStorage: false,
+      gitGcExpire: '2.weeks.ago',
+      gitGcIntervalMs: 86_400_000,
     });
+  });
+
+  it('enables git storage only for the exact flag value', () => {
+    process.env.WIRED_PACKAGE_GIT_STORAGE = '1';
+    expect(config().packages.gitStorage).toBe(true);
+
+    process.env.WIRED_PACKAGE_GIT_STORAGE = 'true';
+    expect(config().packages.gitStorage).toBe(false);
   });
 
   it('falls back to WIRED_GAME_TICKET_SECRET for the read secret', () => {

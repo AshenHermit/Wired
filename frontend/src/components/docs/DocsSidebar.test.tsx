@@ -1,42 +1,24 @@
-import { render, screen, waitFor } from '@testing-library/react';
-import { vi } from 'vitest';
-import DocsSidebar from '@/components/docs/DocsSidebar';
+import { screen } from '@testing-library/react';
+import { renderWithIntl as render } from '@/test/render-with-intl';
+import DocsSidebar from './DocsSidebar';
 
-// Mock loadDoc to return test markdown
-vi.mock('@/lib/doc-loader', () => ({
-  loadDoc: vi.fn(async (docName: string) => {
-    const docs: Record<string, string> = {
-      'getting-started': `## Getting Started\n\n### Installation\n\n### Configuration`,
-      'api-reference': `## API Reference\n\n### Methods`,
-    };
-    return docs[docName] || '';
-  }),
-}));
-
-describe('DocsSidebar', () => {
-  test('renders as navigation element', () => {
-    render(<DocsSidebar currentDoc="getting-started" onDocChange={() => {}} />);
-    expect(screen.getByRole('navigation')).toBeInTheDocument();
-  });
-
-  test('expands current doc to show anchors', async () => {
-    render(<DocsSidebar currentDoc="getting-started" onDocChange={() => {}} />);
-    
-    // Wait for anchors to load
-    await waitFor(() => {
-      expect(screen.getByText('Installation')).toBeInTheDocument();
-    });
-  });
-
-  test('non-current docs do not show anchors', async () => {
-    render(<DocsSidebar currentDoc="getting-started" onDocChange={() => {}} />);
-    
-    // Getting Started anchors should load
-    await waitFor(() => {
-      expect(screen.getByText('Installation')).toBeInTheDocument();
-    });
-    
-    // API Reference anchors should NOT be visible
-    expect(screen.queryByText('Methods')).not.toBeInTheDocument();
-  });
+it('links every doc and anchors the current one', () => {
+  render(
+    <DocsSidebar
+      docs={[
+        { slug: 'getting-started', title: 'Начало работы', order: 1 },
+        { slug: 'api-reference', title: 'Справочник API', order: 2 },
+      ]}
+      currentSlug="api-reference"
+      headings={[{ id: 'chto-takoe-paket', level: 2, text: 'Что такое пакет' }]}
+    />,
+  );
+  expect(screen.getByRole('link', { name: 'Начало работы' })).toHaveProperty(
+    'href',
+    'http://localhost:3000/docs/getting-started',
+  );
+  expect(screen.getByRole('link', { name: 'Что такое пакет' })).toHaveProperty(
+    'href',
+    'http://localhost:3000/docs/api-reference#chto-takoe-paket',
+  );
 });

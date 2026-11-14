@@ -40,6 +40,7 @@ function makeClosure(options: ClosureOptions = {}): ResolvedClosure {
     nameByPackage: new Map([[5, 'Heroes']]),
     slugByPackage: options.slugByPackage ?? new Map([[5, 'hero']]),
     artifactKeys: new Map([[5, 'key']]),
+    commitByPackage: new Map([[5, null]]),
     rootFiles,
     bytes,
     rootTextFiles: options.textFiles ?? [],

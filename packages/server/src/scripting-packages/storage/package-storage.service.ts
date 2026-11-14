@@ -4,10 +4,12 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PackageFileEntry } from '@wired-io/shared';
 import { randomBytes } from 'node:crypto';
-import { existsSync } from 'fs';
+import { Readable } from 'node:stream';
+import { createReadStream, existsSync } from 'fs';
 import {
   copyFile,
   mkdir,
@@ -21,6 +23,13 @@ import {
 import path from 'path';
 import { AppConfigService } from 'src/config/config.service';
 import { sha256File, sha256Hex } from './package-hash';
+import { PackageGitStorageService } from './package-git-storage.service';
+import type { GitAuthor } from './git/package-git-types';
+
+const DEFAULT_GIT_AUTHOR: GitAuthor = {
+  name: 'wired',
+  email: 'packages@wired.local',
+};
 import { resolvePackagePath } from './package-path';
 import { errorMessage } from 'src/common/errors';
 
@@ -34,6 +43,18 @@ export type SavedDraftFile = {
   sha256: string;
 };
 
+/** A published revision whose bytes still live in a legacy directory. */
+export interface LegacyRevisionManifest {
+  revision: number;
+  files: PackageFileEntry[];
+  publishedAt: Date | null;
+}
+
+/** A published revision together with the commit replacing its directory. */
+export interface LegacyCleanupRow extends LegacyRevisionManifest {
+  commitSha: string | null;
+}
+
 /** Which revision directory a rewrite works on. */
 export type RevisionKind = 'published' | 'draft';
 
@@ -42,6 +63,8 @@ export interface RevisionTarget {
   packageId: number;
   revision: number;
   kind: RevisionKind;
+  /** Published git revision to rewrite; absent for legacy and draft targets. */
+  commitSha?: string | null;
 }
 
 /**
@@ -56,6 +79,8 @@ export interface RevisionRewrite {
   readonly results: Array<{
     target: RevisionTarget;
     files: PackageFileEntry[];
+    /** New commit for a git-backed published revision; `null` otherwise. */
+    commitSha?: string | null;
   }>;
   commit(): Promise<void>;
   abort(): Promise<void>;
@@ -79,7 +104,11 @@ export interface RevisionRewrite {
 export class PackageStorageService {
   private readonly logger = new Logger(PackageStorageService.name);
 
-  constructor(private readonly configService: AppConfigService) {}
+  constructor(
+    private readonly configService: AppConfigService,
+    @Optional()
+    private readonly gitStorage?: PackageGitStorageService,
+  ) {}
 
   private get rootDir(): string {
     return this.configService.storage.packagesFilesDir;
@@ -240,8 +269,25 @@ export class PackageStorageService {
     packageId: number,
     revision: number,
     declared: PackageFileEntry[],
-    commit: () => Promise<void>,
+    commit: (commitSha: string | null) => Promise<void>,
+    author: GitAuthor = DEFAULT_GIT_AUTHOR,
   ): Promise<void> {
+    if (
+      this.gitStorage &&
+      ((await this.gitStorage.isGitPackage(packageId)) ||
+        this.configService.packages.gitStorage)
+    ) {
+      await this.gitStorage.publish({
+        packageId,
+        revision,
+        declared,
+        stagedDir: this.draftRevisionDir(packageId, revision),
+        author,
+        commitDb: commit,
+      });
+      return;
+    }
+
     const draftDir = this.draftRevisionDir(packageId, revision);
 
     await this.assertMatchesManifest(draftDir, revision, declared);
@@ -272,10 +318,139 @@ export class PackageStorageService {
       // Uploads are rejected while publishing, but re-verify the bytes that
       // will actually be served: a verified draft is not a verified revision.
       await this.assertMatchesManifest(publishedDir, revision, declared);
-      await commit();
+      await commit(null);
     } catch (error) {
       await rename(publishedDir, draftDir).catch(() => undefined);
       throw error;
+    }
+  }
+
+  async missingFiles(
+    packageId: number,
+    files: PackageFileEntry[],
+  ): Promise<string[]> {
+    if (this.gitStorage && (await this.gitStorage.isGitPackage(packageId))) {
+      return this.gitStorage.missingFiles(packageId, files);
+    }
+    if (this.configService.packages.gitStorage) {
+      return files.map((file) => file.filepath);
+    }
+    return [];
+  }
+
+  /**
+   * Converts the given legacy published directories into git commits.
+   *
+   * Every directory is checked against its declared manifest first, so a
+   * half-written or tampered legacy revision is refused instead of being
+   * imported into the history. Legacy directories stay in place; call
+   * {@link cleanupLegacyRevisions} once the database rows carry the commits.
+   * Returns an empty map when git storage is not in use for this package.
+   */
+  async migratePackage(
+    packageId: number,
+    rows: readonly LegacyRevisionManifest[],
+  ): Promise<Map<number, string>> {
+    if (!this.gitStorage || rows.length === 0) {
+      return new Map();
+    }
+    if (
+      !this.configService.packages.gitStorage &&
+      !(await this.gitStorage.isGitPackage(packageId))
+    ) {
+      return new Map();
+    }
+    const items = [];
+    for (const row of [...rows].sort(
+      (left, right) => left.revision - right.revision,
+    )) {
+      const dir = this.publishedRevisionDir(packageId, row.revision);
+      if (!existsSync(dir)) {
+        throw new Error(
+          `Revision ${row.revision} of package ${packageId} has no legacy directory`,
+        );
+      }
+      await this.assertMatchesManifest(dir, row.revision, row.files);
+      items.push({
+        revision: row.revision,
+        files: row.files,
+        publishedAt: row.publishedAt,
+        dir,
+      });
+    }
+    return this.gitStorage.migrateRevisions(packageId, items);
+  }
+
+  /**
+   * Removes legacy `revisions/<n>` directories whose rows already point at a
+   * commit. Refuses to delete anything while a row has no commit: the bytes
+   * would become unreachable.
+   */
+  async cleanupLegacyRevisions(
+    packageId: number,
+    rows: readonly LegacyCleanupRow[],
+  ): Promise<number> {
+    const unconverted = rows.find((row) => !row.commitSha);
+    if (unconverted) {
+      throw new Error(
+        `Revision ${unconverted.revision} of package ${packageId} is not converted yet; run migrate first`,
+      );
+    }
+    if (rows.length > 0) {
+      if (!this.gitStorage) {
+        throw new Error(
+          `Package ${packageId} has git revisions but git storage is not available; refusing to delete its legacy files`,
+        );
+      }
+      await this.gitStorage.assertRevisionsStored(packageId, rows);
+    }
+    let removed = 0;
+    for (const row of rows) {
+      const dir = this.publishedRevisionDir(packageId, row.revision);
+      if (!existsSync(dir)) {
+        continue;
+      }
+      await this.removeDirectory(dir);
+      removed += 1;
+    }
+    return removed;
+  }
+
+  /**
+   * Writes a git-backed published revision back into the legacy layout.
+   *
+   * Used by the export command to make a package readable by a deployment
+   * without git storage. Every byte is read from the commit and verified
+   * against the declared manifest before the directory is created.
+   */
+  async exportPublishedRevision(
+    packageId: number,
+    revision: number,
+    files: PackageFileEntry[],
+    commitSha: string,
+  ): Promise<void> {
+    const contents = await this.readPublishedFiles(
+      packageId,
+      revision,
+      files.map((file) => file.filepath),
+      commitSha,
+    );
+    const dir = this.publishedRevisionDir(packageId, revision);
+    await this.removeDirectory(dir);
+    for (const file of files) {
+      const data = contents.get(file.filepath);
+      if (
+        !data ||
+        data.length !== file.size ||
+        sha256Hex(data) !== file.sha256.toLowerCase()
+      ) {
+        throw new Error(
+          `Revision ${revision} of package ${packageId} does not match its manifest at ${file.filepath}`,
+        );
+      }
+      const target = resolvePackagePath(dir, file.filepath);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, data);
     }
   }
 
@@ -347,6 +522,121 @@ export class PackageStorageService {
     packageId: number,
     revision: number,
     filepath: string,
+    commitSha: string | null = null,
+    declaredSize?: number,
+  ): Promise<{ stream: Readable; size: number }> {
+    const commit = await this.resolveGitCommit(packageId, revision, commitSha);
+    if (commit) {
+      // Size first: the blob stream must be consumed without awaiting other
+      // child processes in between, or libuv may drop the buffered pipe data.
+      const size =
+        declaredSize ??
+        (await this.gitStorage!.fileSize(
+          packageId,
+          revision,
+          filepath,
+          commit,
+        ));
+      const stream = await this.gitStorage!.openFile(
+        packageId,
+        revision,
+        filepath,
+        commit,
+      );
+      return { stream, size };
+    }
+    const file = await this.resolveLegacyPublishedFile(
+      packageId,
+      revision,
+      filepath,
+    );
+    return { stream: createReadStream(file.path), size: file.size };
+  }
+
+  async readPublishedFile(
+    packageId: number,
+    revision: number,
+    filepath: string,
+    commitSha: string | null = null,
+  ): Promise<Buffer> {
+    const commit = await this.resolveGitCommit(packageId, revision, commitSha);
+    if (commit) {
+      return this.gitStorage!.readFile(packageId, revision, filepath, commit);
+    }
+    const file = await this.resolveLegacyPublishedFile(
+      packageId,
+      revision,
+      filepath,
+    );
+    try {
+      return await readFile(file.path);
+    } catch {
+      throw new NotFoundException(`File ${filepath} is not published`);
+    }
+  }
+
+  async readPublishedFiles(
+    packageId: number,
+    revision: number,
+    filepaths: string[],
+    commitSha: string | null = null,
+  ): Promise<Map<string, Buffer>> {
+    if (filepaths.length === 0) {
+      return new Map();
+    }
+    const commit = await this.resolveGitCommit(packageId, revision, commitSha);
+    if (commit) {
+      return this.gitStorage!.readFiles(
+        packageId,
+        revision,
+        filepaths,
+        commit,
+      );
+    }
+    const result = new Map<string, Buffer>();
+    for (const filepath of filepaths) {
+      result.set(
+        filepath,
+        await this.readPublishedFile(packageId, revision, filepath, commitSha),
+      );
+    }
+    return result;
+  }
+
+  async readPublishedTextFiles(
+    packageId: number,
+    revision: number,
+    filepaths: string[],
+    commitSha: string | null = null,
+  ): Promise<Map<string, string>> {
+    const files = await this.readPublishedFiles(
+      packageId,
+      revision,
+      filepaths,
+      commitSha,
+    );
+    const result = new Map<string, string>();
+    for (const [filepath, data] of files) {
+      result.set(filepath, data.toString('utf8'));
+    }
+    return result;
+  }
+
+  private async resolveGitCommit(
+    packageId: number,
+    revision: number,
+    commitSha: string | null,
+  ): Promise<string | null> {
+    if (!this.gitStorage) {
+      return null;
+    }
+    return this.gitStorage.resolveCommit(packageId, revision, commitSha);
+  }
+
+  private async resolveLegacyPublishedFile(
+    packageId: number,
+    revision: number,
+    filepath: string,
   ): Promise<{ path: string; size: number }> {
     const fullPath = resolvePackagePath(
       this.publishedRevisionDir(packageId, revision),
@@ -362,19 +652,6 @@ export class PackageStorageService {
       if (error instanceof NotFoundException) {
         throw error;
       }
-      throw new NotFoundException(`File ${filepath} is not published`);
-    }
-  }
-
-  async readPublishedFile(
-    packageId: number,
-    revision: number,
-    filepath: string,
-  ): Promise<Buffer> {
-    const file = await this.resolvePublishedFile(packageId, revision, filepath);
-    try {
-      return await readFile(file.path);
-    } catch {
       throw new NotFoundException(`File ${filepath} is not published`);
     }
   }
@@ -412,18 +689,77 @@ export class PackageStorageService {
    * originals stay in place until `commit`, so a failure can restore them
    * instead of leaving a half-rewritten tree behind. A failure while rewriting
    * aborts whatever had already moved before the error leaves this method.
+   *
+   * A published revision that lives in git is rewritten as a new commit parked
+   * on `refs/pending/rewrite/<n>`; `commit` moves the tags and `main` onto it
+   * and `abort` drops the pending ref, so the published history is untouched
+   * until the database update succeeded. Legacy and draft revisions are
+   * rewritten in place beside their backup as before.
    */
   async beginRewrite(
     targets: readonly RevisionTarget[],
     transform: (filepath: string, data: Buffer) => Buffer,
   ): Promise<RevisionRewrite> {
-    const attempted: RevisionTarget[] = [];
     const results: RevisionRewrite['results'] = [];
+    const legacyAttempted: RevisionTarget[] = [];
+    const gitRewrites: Array<{ target: RevisionTarget; commitSha: string }> =
+      [];
+    // Old commit -> rewritten commit, so a batch keeps the original history
+    // shape even when only some revisions are rewritten.
+    const replacements = new Map<string, string>();
+
+    const gitTargets: RevisionTarget[] = [];
+    const legacyTargets: RevisionTarget[] = [];
+    for (const target of targets) {
+      if (target.kind === 'published' && this.gitStorage) {
+        gitTargets.push(target);
+      } else {
+        legacyTargets.push(target);
+      }
+    }
+    // Parents have to exist before their children in a rewritten history.
+    gitTargets.sort(
+      (left, right) =>
+        left.packageId - right.packageId || left.revision - right.revision,
+    );
+
     try {
-      for (const target of targets) {
+      for (const target of gitTargets) {
+        const rewritten = await this.gitStorage!.rewritePublishedRevision({
+          packageId: target.packageId,
+          revision: target.revision,
+          commitSha: target.commitSha ?? null,
+          transform,
+          author: DEFAULT_GIT_AUTHOR,
+          parentCommitSha: (previous) =>
+            previous ? (replacements.get(previous) ?? previous) : null,
+        });
+        if (!rewritten) {
+          // No git history for this revision: its published bytes are still a
+          // legacy directory.
+          legacyAttempted.push(target);
+          const files = await this.rewriteRevision(
+            target.packageId,
+            target.revision,
+            target.kind,
+            transform,
+          );
+          if (files) results.push({ target, files });
+          continue;
+        }
+        replacements.set(rewritten.sourceCommit, rewritten.commitSha);
+        gitRewrites.push({ target, commitSha: rewritten.commitSha });
+        results.push({
+          target,
+          files: rewritten.files,
+          commitSha: rewritten.commitSha,
+        });
+      }
+
+      for (const target of legacyTargets) {
         // Recorded before the rewrite so a target that fails part way through
         // still gets its backup restored.
-        attempted.push(target);
+        legacyAttempted.push(target);
         const files = await this.rewriteRevision(
           target.packageId,
           target.revision,
@@ -433,14 +769,45 @@ export class PackageStorageService {
         if (files) results.push({ target, files });
       }
     } catch (error) {
-      await this.abortRewrites(attempted);
+      await this.discardGitRewrites(gitRewrites);
+      await this.abortRewrites(legacyAttempted);
       throw error;
     }
     return {
       results,
-      commit: () => this.finishRewrites(attempted),
-      abort: () => this.abortRewrites(attempted),
+      commit: async () => {
+        await this.promoteGitRewrites(gitRewrites);
+        await this.finishRewrites(legacyAttempted);
+      },
+      abort: async () => {
+        await this.discardGitRewrites(gitRewrites);
+        await this.abortRewrites(legacyAttempted);
+      },
     };
+  }
+
+  /** Moves the tags and `main` of every package touched by the rewrite. */
+  private async promoteGitRewrites(
+    rewrites: ReadonlyArray<{ target: RevisionTarget; commitSha: string }>,
+  ): Promise<void> {
+    for (const [packageId, entries] of groupRewrites(rewrites)) {
+      await this.gitStorage!.promoteRewrites(packageId, entries);
+    }
+  }
+
+  /** Drops pending rewrite refs left by an aborted rename. */
+  private async discardGitRewrites(
+    rewrites: ReadonlyArray<{ target: RevisionTarget; commitSha: string }>,
+  ): Promise<void> {
+    for (const [packageId, entries] of groupRewrites(rewrites)) {
+      await this.gitStorage!
+        .discardRewrites(packageId, entries)
+        .catch((cause) =>
+          this.logger.warn(
+            `rewrite ref cleanup failed for package ${packageId}: ${errorMessage(cause)}`,
+          ),
+        );
+    }
   }
 
   /**
@@ -622,4 +989,20 @@ export class PackageStorageService {
     await walk(dir, '');
     return result.sort();
   }
+}
+
+/** One promotion list per package, in the order the fields were inserted. */
+function groupRewrites(
+  rewrites: ReadonlyArray<{ target: RevisionTarget; commitSha: string }>,
+): Map<number, Array<{ revision: number; commitSha: string }>> {
+  const grouped = new Map<
+    number,
+    Array<{ revision: number; commitSha: string }>
+  >();
+  for (const { target, commitSha } of rewrites) {
+    const entries = grouped.get(target.packageId) ?? [];
+    entries.push({ revision: target.revision, commitSha });
+    grouped.set(target.packageId, entries);
+  }
+  return grouped;
 }

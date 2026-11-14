@@ -56,7 +56,7 @@ export type { DependentRoomPackage };
 const MANIFEST_FILENAME = 'manifest.json';
 
 /** Bumped whenever the artifact layout or manifest shape changes. */
-const ARTIFACT_FORMAT_VERSION = 'v2';
+const ARTIFACT_FORMAT_VERSION = 'v3';
 
 /** How many historical artifacts stay on disk per package/room/revision. */
 const ARTIFACT_RETENTION = 3;

@@ -38,7 +38,11 @@ export const CORE_FILES = [
 ];
 const STALE_EDITOR_PREFIX = 'godot.editor.';
 
-function listFiles(dir, prefix = '') {
+/**
+ * Sorted relative file paths under `dir`, `/`-separated; reused by the
+ * sidecar builder.
+ */
+export function listFiles(dir, prefix = '') {
   const files = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const name = prefix ? `${prefix}/${entry.name}` : entry.name;

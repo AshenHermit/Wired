@@ -313,10 +313,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
     const canManageRoom =
       Boolean(pkg.room) && canManageRoomPackages(pkg.room!, user.id);
 
-    if (
-      !ScriptingPackagesService.ownsPackage(pkg, user) &&
-      !canManageRoom
-    ) {
+    if (!ScriptingPackagesService.ownsPackage(pkg, user) && !canManageRoom) {
       throw new ForbiddenException(
         'You are not allowed to publish this package',
       );
@@ -547,29 +544,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
   ): Promise<ScriptingPackage> {
     const pkg = await this.findOne(id);
 
-    // Validate that all provided user IDs exist
-    const userIdsToValidate = new Set<number>();
-
-    if (dto.editingUserIds && dto.editingUserIds.length > 0) {
-      dto.editingUserIds.forEach((uid) => userIdsToValidate.add(uid));
-    }
-
-    if (userIdsToValidate.size > 0) {
-      const invalidIds: number[] = [];
-
-      for (const userId of userIdsToValidate) {
-        const userExists = await this.usersService.findById(userId);
-        if (!userExists) {
-          invalidIds.push(userId);
-        }
-      }
-
-      if (invalidIds.length > 0) {
-        throw new BadRequestException(
-          `The following user IDs do not exist: ${invalidIds.join(', ')}`,
-        );
-      }
-    }
+    await this.usersService.assertUsersExist(dto.editingUserIds);
 
     // Update only the fields provided in the DTO
     if (dto.editingAccess !== undefined) {
@@ -686,25 +661,30 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
       );
     }
 
-    await outcome.rewrite?.commit();
-    for (const packageId of outcome.rewrittenIds) {
-      await this.delivery
-        .invalidatePackage(packageId)
-        .catch((cause) =>
+    try {
+      await outcome.rewrite?.commit();
+    } finally {
+      // The database already describes the rewritten files even when moving
+      // the refs failed; artifacts built from the old bytes must still go.
+      for (const packageId of outcome.rewrittenIds) {
+        await this.delivery
+          .invalidatePackage(packageId)
+          .catch((cause) =>
+            this.logger.warn(
+              `artifact invalidation failed: ${errorMessage(cause)}`,
+            ),
+          );
+      }
+      if (outcome.rewrittenIds.length > 0) {
+        try {
+          await this.dispatcher.packagesChanged(outcome.rewrittenIds);
+        } catch (cause) {
           this.logger.warn(
-            `artifact invalidation failed: ${errorMessage(cause)}`,
-          ),
-        );
-    }
-    if (outcome.rewrittenIds.length > 0) {
-      try {
-        await this.dispatcher.packagesChanged(outcome.rewrittenIds);
-      } catch (cause) {
-        this.logger.warn(
-          `Package ${pkg.id} was renamed but its room was not notified: ${String(
-            cause,
-          )}`,
-        );
+            `Package ${pkg.id} was renamed but its room was not notified: ${String(
+              cause,
+            )}`,
+          );
+        }
       }
     }
     if (outcome.enabledChanged) {
@@ -790,6 +770,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
               packageId: pkg.id,
               revision: row.revision,
               kind: row.status,
+              commitSha: row.commitSha ?? null,
             });
           }
         }
@@ -804,6 +785,7 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
               packageId: dependent.packageId,
               revision: row.revision,
               kind: 'published',
+              commitSha: row.commitSha ?? null,
             });
           }
         }
@@ -814,8 +796,11 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
             rewriteSlugReferences(filepath, data, oldSlug, nextSlug),
         );
         try {
-          const rewritten = new Map<number, PackageFileEntry[]>();
-          for (const { target, files } of rewrite.results) {
+          const rewritten = new Map<
+            number,
+            { files: PackageFileEntry[]; commitSha?: string }
+          >();
+          for (const { target, files, commitSha } of rewrite.results) {
             const row = await revisions.findOneOrFail({
               where: {
                 package: { id: target.packageId },
@@ -824,19 +809,25 @@ export class ScriptingPackagesService implements OnApplicationBootstrap {
             });
             // A draft declares only the files uploaded so far: keep that
             // set and refresh the hashes of the files that are on disk.
-            rewritten.set(
-              row.id,
-              target.kind === 'published'
-                ? files
-                : this.mergeRevisionFiles(row.files ?? [], files),
-            );
+            const update: { files: PackageFileEntry[]; commitSha?: string } = {
+              files:
+                target.kind === 'published'
+                  ? files
+                  : this.mergeRevisionFiles(row.files ?? [], files),
+            };
+            // Published bytes now live in a new commit; a draft stays
+            // commit-less and a legacy revision keeps its null sha.
+            if (target.kind === 'published' && commitSha) {
+              update.commitSha = commitSha;
+            }
+            rewritten.set(row.id, update);
           }
 
           const enabledChanged = await this.preparePackageUpdate(pkg, dto);
           pkg.slug = nextSlug;
           await packages.save(pkg);
-          for (const [id, files] of rewritten) {
-            await revisions.update({ id }, { files });
+          for (const [id, update] of rewritten) {
+            await revisions.update({ id }, update);
           }
           return {
             rewrite,

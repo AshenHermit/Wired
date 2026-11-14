@@ -4,12 +4,11 @@ import {
   PackageFileEntry,
   PackageManifest,
   PackageRevision,
+  PackageRevisionDraft,
   PackageSlugAvailability,
-  RoomCopyPayload,
   ScriptingPackage,
   UpdatePackageAccessPayload,
   UpdateScriptingPackagePayload,
-  WorkshopForkPayload,
   WorkshopListing,
   WorkshopPackageMetadata,
   WorkshopPackageSummary,
@@ -143,7 +142,7 @@ export function createPackageRevision(
   packageId: number,
   data: CreatePackageRevisionPayload
 ) {
-  return apiClient.post<PackageRevision>(
+  return apiClient.post<PackageRevisionDraft>(
     `scripting-packages/${packageId}/revisions`,
     data
   );

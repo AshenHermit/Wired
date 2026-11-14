@@ -32,7 +32,7 @@
       "rooms": "Комнаты",
       "controls": "Управление",
       "packages": "Пакеты",
-      "docs": "Документация"
+      "docs": "Для разработчиков"
     },
     "rooms": {
       "title": "Комнаты",
@@ -47,13 +47,12 @@
       "description": "Пакеты сообщества. Ищите по названию, slug или тегу"
     },
     "docs": {
-      "title": "Документация",
-      "description": "Здесь будет собрано основное api wired-io для разработки скриптов, чтобы не смотреть постоянно в исходники",
-      "nav": {
-        "gettingStarted": "Начало работы",
-        "apiReference": "Справка по API",
-        "entityRegistration": "Регистрация сущностей",
-        "multiplayerGuide": "Мультиплеер"
+      "title": "Для разработчиков",
+      "description": "Документация для авторов пакетов и последние изменения платформы",
+      "devlog": {
+        "title": "Последние обновления",
+        "all": "Все обновления",
+        "empty": "Записей пока нет"
       },
       "issues": {
         "description": "Сообщить о проблеме или о предложении можно на Issues в репозитории",
@@ -309,7 +308,7 @@
       "disabled": "Пакет отключён",
       "deleted": "Пакет удалён из комнаты",
       "adopted": "Существующий каталог подключён к пакету. Emit опубликует его файлы.",
-      "emitPublished": "Опубликована ревизия {revision}: {uploaded} файл(ов)."
+      "emitPublished": "Опубликована ревизия {revision}: {files} файл(ов)."
     },
     "errors": {
       "notRoomMember": "Only the room author and its contributors can change its packages.",
@@ -413,5 +412,18 @@
     "bridgeMissing": "Мост редактора не появился",
     "bridgeUnavailable": "Мост редактора недоступен",
     "packagesUnavailable": "Пакеты недоступны"
+  },
+  "Docs": {
+    "hubTitle": "Документация",
+    "back": "На главную"
+  },
+  "Devlog": {
+    "title": "Dev log",
+    "back": "Все обновления",
+    "empty": "Записей пока нет",
+    "versionLabel": "Версия",
+    "prev": "Предыдущая запись",
+    "next": "Следующая запись",
+    "notFound": "Запись не найдена"
   }
 }
