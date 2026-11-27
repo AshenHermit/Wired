@@ -328,19 +328,24 @@ git commit -m "feat(cura-registry): add hand weapon base component"
 
 - [ ] **Step 1: Падающие тесты**
 
-Stub `WiredPlayer`: `is_server_authority() == true`, `is_local_player() == true`, `register_action` (сохраняет handler), `request_action` (сохраняет payload), `components`, `get_anchor_position_3d()`. Stub weapon: наследует фикстурный `hand_weapon.gd`, в группе `cura_hand_weapon`, `package_id = "pkg.crate"`, `tool_id = "spawner"`, `requires_prop = true`, считает `wired_primary`. Stub персонажа — `Node` в группе `cura_player_character` со скриптом `var captured: bool`, `var replicated_yaw: float = 0.0`, `var replicated_pitch: float = 0.0`, `func is_look_captured() -> bool: return captured`; хелпер `_add_character(captured: bool)` добавляет его в дерево. Inner class `StubManager extends "res://tests/fixtures/cura_registry/tool_manager.gd"` с `var clock_msec: int = 0` и `func now_msec() -> int: return clock_msec`. Проверки:
+Stub `WiredPlayer`: `is_server_authority() == true`, `is_local_player() == true`, `register_action` (сохраняет handler), `request_action` (сохраняет payload), `components`, `get_anchor_position_3d()`. Stub weapon: наследует фикстурный `hand_weapon.gd`, в группе `cura_hand_weapon`, `package_id = "pkg.crate"`, `tool_id = "spawner"`, `requires_prop = true`, считает `wired_primary`. Stub персонажа — `Node` в группе `cura_player_character` со скриптом `var captured: bool`, `var replicated_yaw: float = 0.0`, `var replicated_pitch: float = 0.0`, `func is_look_captured() -> bool: return captured`; хелпер `_add_character(captured: bool) -> Node` добавляет его в дерево и возвращает. Inner class `StubManager extends "res://tests/fixtures/cura_registry/tool_manager.gd"` с `var clock_msec: int = 0`, `func now_msec() -> int: return clock_msec` и `var raycast_hit: Dictionary = {}`, `func server_raycast() -> Dictionary: return raycast_hit`. Проверки:
 
 ```gdscript
 func test_click_requires_capture_and_closed_panel() -> void:
 	var manager := _new_manager(true)  # is_server_authority() == true
 	manager.player = _stub_player()
+	_add_character(true)
+	manager._wired_unhandled_input(_lmb_press())  # без экипированного инструмента
+	_check(manager.player.sent_actions.is_empty(), "click without an equipped tool must not fire")
+	manager.set_active("pkg.crate/spawner", "pkg.crate/crate")
 	manager.panel_open = true
 	manager._wired_unhandled_input(_lmb_press())
 	_check(manager.player.sent_actions.is_empty(), "open panel must swallow clicks")
 	manager.panel_open = false
+	var character := _add_character(false)
 	manager._wired_unhandled_input(_lmb_press())  # без захвата
 	_check(manager.player.sent_actions.is_empty(), "uncaptured click must not fire")
-	_add_character(true)
+	character.captured = true
 	manager._wired_unhandled_input(_lmb_press())
 	_check(manager.player.sent_actions.size() == 1, "captured click must fire")
 
@@ -365,12 +370,16 @@ func test_missing_weapon_disables_fire() -> void:
 
 func test_valid_action_dispatches_trusted_context() -> void:
 	# зарегистрировать prop в stub registry, добавить weapon в player.components
+	var manager := StubManager.new()
+	manager.player = _stub_player()
+	var hit := {"position": Vector3(1, 1, 1), "normal": Vector3(0, 1, 0)}
+	manager.raycast_hit = hit
 	manager._on_use_tool(2, {"tool": "pkg.crate/spawner", "prop": "pkg.crate/crate", "hit": Vector3(99, 99, 99)})
 	_check(weapon.primary_calls == 1, "valid action must call wired_primary")
-	_check(
-		weapon.last_ctx["hit"]["position"] != Vector3(99, 99, 99),
-		"client hit must never be used as the authoritative hit",
-	)
+	_check(weapon.last_ctx["hit"] == hit, "client hit must never be used as the authoritative hit")
+	manager.raycast_hit = {}
+	manager._on_use_tool(2, {"tool": "pkg.crate/spawner", "prop": "pkg.crate/crate"})
+	_check(weapon.primary_calls == 1, "no server hit means no use")
 ```
 
 - [ ] **Step 2: Запустить, увидеть падение**
@@ -384,9 +393,9 @@ Expected: FAIL — менеджер не существует.
 - [ ] **Step 3: Реализовать менеджер**
 
 - `_wired_ready`: если `is_server()` → `register_action(ACTION_USE, _on_use_tool)`; если `is_local_player()` → найти панель в `player.components` по группе `cura_registry_panel`, подключиться к `prop_selected`/`tool_selected`.
-- `_wired_unhandled_input`: только `is_local_player()`; LMB pressed; `not panel_open`; `character.is_look_captured()` через группу `cura_player_character` (если персонажа нет — false); debounce 0.25 с; `request_action(ACTION_USE, {"tool": selected_tool, "prop": selected_prop, "hit": локальный raycast})`.
+- `_wired_unhandled_input`: только `is_local_player()`; LMB pressed; `not panel_open`; `active_tool_id` непустой (инструмент экипирован); `character.is_look_captured()` через группу `cura_player_character` (если персонажа нет — false); debounce 0.25 с; `request_action(ACTION_USE, {"tool": selected_tool, "prop": selected_prop, "hit": локальный raycast})`.
 - `set_active`: вернуть `selected_tool`/`selected_prop`, найти weapon в `player.components` по group + qualification `resolve_action(weapon.package_id, weapon.tool_id)`, установить `active_tool_id`, на сервере вызвать `wired_unequip()` старого и `wired_equip(ctx)` нового.
-- `_on_use_tool`: проверить `sender_peer == player.peer_id`, найти weapon по `payload.tool`, если `requires_prop` — проверить `find_entry("cura.prop", payload.prop)` и `find_dynamic_entity(payload.prop)`; построить `ctx = {"player": player, "manager": self, "hit": server_raycast(), "selected_prop": payload.prop, "payload": payload}` и вызвать `wired_primary(ctx)`.
+- `_on_use_tool`: проверить `sender_peer == player.peer_id`, найти weapon по `payload.tool`, если `requires_prop` — проверить `find_entry("cura.prop", payload.prop)` и `find_dynamic_entity(payload.prop)`; построить `hit = server_raycast()` и при пустом `hit` **не вызывать** инструмент (spec: No hit → no use); иначе `ctx = {"player": player, "manager": self, "hit": hit, "selected_prop": payload.prop, "payload": payload}` и вызвать `wired_primary(ctx)`.
 - `server_raycast()`: origin `player.get_anchor_position_3d() + Vector3(0, 1.6, 0)`, направление из `replicated_yaw`/`replicated_pitch` персонажа группы `cura_player_character`, `PhysicsDirectSpaceState3D.intersect_ray` с `max_distance = 64.0`, маска статика+динамика, исключить player bodies. Возвращать `{}` при промахе или отсутствии персонажа.
 - `now_msec() -> int`:(base) `return Time.get_ticks_msec()`; единственный источник времени для debounce 0.25 с в `_wired_unhandled_input`, чтобы тест мог подменить часы.
 - `spawn_prop`: `Global.dynamic_world.spawn_entity(qualified_type, {"position": position, "owner_player_id": player.peer_id})`.
