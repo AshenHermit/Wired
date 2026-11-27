@@ -490,6 +490,7 @@ git commit -m "feat(cura-registry): add Q panel driven by registered entries"
 **Files:**
 - Modify: `packages/server/godot_project/examples/cura_player/player/character.gd`
 - Modify: `packages/server/godot_project/examples/cura_player/player/player_character.tscn`
+- Create: `packages/server/godot_project/_wired/tests/fixtures/cura_player/character.gd` (копия), `character_model_stub.gd`, `player_model_ready.tscn` (фикстуры для smoke-теста)
 - Test: `packages/server/godot_project/_wired/tests/fps_controller_smoke.gd`
 
 **Interfaces:**
@@ -497,6 +498,8 @@ git commit -m "feat(cura-registry): add Q panel driven by registered entries"
 - Produces: `@export var tool_mount: Node3D`, `func equip_viewmodel(scene: PackedScene) -> Node`, `func clear_viewmodel() -> void`, `func get_first_person_camera() -> Camera3D`, `func is_look_captured() -> bool`.
 
 - [ ] **Step 1: Падающие тесты**
+
+Сцена `cura_player` ссылается на `res://packages/cura_player/...`, недоступный в базовом проекте, поэтому `_load_character()` в этом smoke подменяет только два `ext_resource` (скрипт → байт-идентичная фикстура, тяжёлый glb → лёгкая заглушка), сохраняя граф реальной сцены; иначе проверки молча пропускаются. Устаревшие ожидания smoke адаптируются под реальную структуру.
 
 Добавить в `_run()` и реализовать:
 
