@@ -355,6 +355,7 @@ func test_fire_rate_is_limited() -> void:
 	manager.player = _stub_player()
 	manager.panel_open = false
 	_add_character(true)
+	manager.set_active("pkg.crate/spawner", "pkg.crate/crate")
 	for i in 20:
 		manager.clock_msec = i * 50
 		manager._wired_unhandled_input(_lmb_press())
