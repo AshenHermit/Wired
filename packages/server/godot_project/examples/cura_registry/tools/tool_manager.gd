@@ -118,8 +118,14 @@ func set_active(tool_id: String, prop_id: String) -> void:
 		and previous_tool.has_method("wired_unequip")
 	):
 		previous_tool.call("wired_unequip")
+	# Ссылка на менеджер нужна вьюмодели на каждом пире, поэтому она
+	# назначается независимо от авторитетности серверных хуков.
+	if previous_tool != null and previous_tool != next_tool:
+		previous_tool.set("manager", null)
 	active_tool = next_tool
 	active_tool_id = tool_id if next_tool != null else ""
+	if next_tool != null:
+		next_tool.set("manager", self)
 	if is_server() and next_tool != null and next_tool.has_method("wired_equip"):
 		next_tool.call("wired_equip", {
 			"player": player,

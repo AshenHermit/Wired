@@ -126,6 +126,7 @@ func _run() -> void:
 	test_valid_action_dispatches_trusted_context()
 	test_action_dispatches_without_local_selection()
 	test_client_authoritative_prop_is_rejected()
+	test_set_active_links_weapon_manager()
 	test_spawn_prop_uses_dynamic_world()
 	_restore_services()
 	_free_owned()
@@ -365,6 +366,25 @@ func test_client_authoritative_prop_is_rejected() -> void:
 		weapon.primary_calls == 0,
 		"a prop without server authority must not be used",
 	)
+
+
+## Визуальный процесс инструмента читает `manager.active_tool_id`, поэтому
+## активный инструмент обязан хранить ссылку на менеджер, а снятый — терять её.
+func test_set_active_links_weapon_manager() -> void:
+	var manager := _new_manager(true)
+	manager.player = _stub_player()
+	var first := _add_weapon(manager.player)
+	var second := _add_weapon(manager.player)
+	second.tool_id = "other_tool"
+	manager.set_active(TOOL_ID, PROP_ID)
+	_check(
+		first.manager == manager,
+		"the active weapon must link its manager for viewmodel visuals",
+	)
+	_check(second.manager == null, "an inactive weapon must not link the manager")
+	manager.set_active("pkg.crate/other_tool", PROP_ID)
+	_check(first.manager == null, "the previous weapon must clear its manager")
+	_check(second.manager == manager, "the new active weapon must link its manager")
 
 
 func test_spawn_prop_uses_dynamic_world() -> void:
