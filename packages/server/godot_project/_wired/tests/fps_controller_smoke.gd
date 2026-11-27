@@ -8,6 +8,9 @@ extends SceneTree
 
 const EXAMPLE_DIR := "../examples/cura_player"
 const CHARACTER_PATH := "player/player_character.tscn"
+const FIXTURE_SCRIPT_PATH := "res://tests/fixtures/cura_player/character.gd"
+const FIXTURE_MODEL_PATH := "res://tests/fixtures/cura_player/player_model_ready.tscn"
+const GENERATED_SCENE_PATH := "user://cura_player_fixture/player_character.tscn"
 const EPSILON := 0.001
 
 
@@ -33,6 +36,7 @@ class StubPlayer extends WiredPlayer:
 var _failures: PackedStringArray = []
 var _instances: Array[Node] = []
 var _checks := 0
+var _fixture_scene_ready := false
 
 
 func _initialize() -> void:
@@ -52,6 +56,8 @@ func _run() -> void:
 	test_scene_is_fps_ready()
 	test_remote_avatar_visibility()
 	test_ready_registers_component_contract()
+	test_fixture_matches_example()
+	test_hand_weapon_mount_contract()
 	_finish()
 
 
@@ -133,8 +139,14 @@ func test_replication_uses_look_angles() -> void:
 	var properties: PackedStringArray = character._wired_replicated_properties()
 	_check(properties.has("Body:position"), "position must replicate")
 	_check(properties.has("Body:velocity"), "velocity must replicate")
-	_check(properties.has("replicated_yaw"), "yaw must replicate")
-	_check(properties.has("replicated_pitch"), "pitch must replicate")
+	_check(
+		properties.has("replicated_yaw") or properties.has(":replicated_yaw"),
+		"yaw must replicate",
+	)
+	_check(
+		properties.has("replicated_pitch") or properties.has(":replicated_pitch"),
+		"pitch must replicate",
+	)
 	_check(
 		not properties.has("Body:rotation") and not properties.has("Body/Camera:rotation"),
 		"body/camera rotation must not replicate over the owner's local look",
@@ -238,8 +250,16 @@ func test_scene_is_fps_ready() -> void:
 		return
 	_check(is_equal_approx(character.speed, 6.0), "speed must be 6 m/s")
 	var body: CharacterBody3D = character.get("body")
-	var camera: Camera3D = character.get("camera")
+	var camera_container: Node3D = character.get("camera_container")
+	var camera: Camera3D = null
 	_check(body != null, "the scene must expose the CharacterBody3D body")
+	_check(camera_container != null, "the scene must expose the camera container")
+	if camera_container != null:
+		character.setup_cameras()
+		for child: Node in camera_container.get_children():
+			if child is Camera3D:
+				camera = child as Camera3D
+				break
 	_check(camera != null, "the scene must expose the Camera3D camera")
 	if body != null:
 		var collider := body.get_node_or_null("CollisionShape3D") as CollisionShape3D
@@ -258,7 +278,10 @@ func test_scene_is_fps_ready() -> void:
 				_check(is_zero_approx(capsule_bottom), "the capsule must start at the body origin")
 				if camera != null:
 					_check(
-						is_equal_approx(camera.position.y - capsule_bottom, 1.6),
+						is_equal_approx(
+							camera_container.position.y + camera.position.y - capsule_bottom,
+							1.6,
+						),
 						"the camera must sit 1.6 m above the feet",
 					)
 		var avatar := body.get_node_or_null("Mesh") as MeshInstance3D
@@ -270,7 +293,10 @@ func test_scene_is_fps_ready() -> void:
 				"the avatar mesh must align with the collider",
 			)
 	if camera != null:
-		_check(is_equal_approx(camera.position.y, 1.6), "the camera must sit at eye height 1.6 m")
+		_check(
+			is_equal_approx(camera_container.position.y + camera.position.y, 1.6),
+			"the camera must sit at eye height 1.6 m",
+		)
 	var static_path := _example_path("static/static.tscn")
 	var static_text := FileAccess.get_file_as_string(static_path)
 	_check(not static_text.is_empty(), "the static scene must be readable")
@@ -337,6 +363,78 @@ func test_ready_registers_component_contract() -> void:
 	stub.free()
 
 
+## The real example script is loaded through a byte-identical fixture: the
+## example scene points at `res://packages/cura_player/...`, which is absent in
+## the base project. Without this guard the character would silently fail to
+## load and every controller check would be vacuous.
+func test_fixture_matches_example() -> void:
+	var example_script := FileAccess.get_file_as_string(
+		_example_path("player/character.gd")
+	)
+	var fixture_script := FileAccess.get_file_as_string(
+		ProjectSettings.globalize_path(FIXTURE_SCRIPT_PATH)
+	)
+	_check(not example_script.is_empty(), "the real character.gd must exist")
+	_check(not fixture_script.is_empty(), "the character fixture must exist")
+	_check(
+		example_script.replace("\r\n", "\n") == fixture_script.replace("\r\n", "\n"),
+		"the character fixture must be an exact copy of the real character.gd",
+	)
+	var scene_text := FileAccess.get_file_as_string(_example_path(CHARACTER_PATH))
+	_check(not scene_text.is_empty(), "the real player scene must be readable")
+
+
+## Контракт монтировки вьюмодели: камера, доступы и узел `ToolMount` внутри
+## вьюпорта рук. Проверяется на реальном графе сцены, только heavyweight-модель
+## заменена заглушкой.
+func test_hand_weapon_mount_contract() -> void:
+	var character: Variant = _load_character()
+	if character == null:
+		return
+	_check(character.has_method("get_first_person_camera"), "character must expose its camera")
+	_check(character.has_method("equip_viewmodel"), "character must accept a viewmodel")
+	_check(character.has_method("clear_viewmodel"), "character must clear a viewmodel")
+	_check(character.has_method("is_look_captured"), "character must expose capture state")
+	var mount: Node = character.get("tool_mount") as Node
+	_check(mount != null, "tool_mount must be exported and wired")
+	_check(
+		mount != null and mount.get_parent() == character.arm_camera_container,
+		"tool_mount must live inside arm_camera_container",
+	)
+	if not character.has_method("equip_viewmodel") or mount == null:
+		return
+	var template := Node3D.new()
+	var viewmodel_scene := PackedScene.new()
+	viewmodel_scene.pack(template)
+	template.free()
+	var first: Node = character.equip_viewmodel(viewmodel_scene)
+	_check(
+		first != null and first.get_parent() == mount,
+		"equip_viewmodel must instance the scene into tool_mount",
+	)
+	var second: Node = character.equip_viewmodel(viewmodel_scene)
+	_check(
+		second != null and second.get_parent() == mount,
+		"a second equip must install a new viewmodel",
+	)
+	_check(
+		not is_instance_valid(first),
+		"equipping again must free the previous viewmodel",
+	)
+	character.clear_viewmodel()
+	_check(
+		mount.get_child_count() == 0,
+		"clear_viewmodel must leave the mount empty",
+	)
+	character.setup_cameras()
+	var camera: Camera3D = character.get_first_person_camera()
+	_check(camera != null and camera == character.main_camera, "camera accessor must return the first-person camera")
+	character._look_captured = true
+	_check(character.is_look_captured(), "capture accessor must report a captured pointer")
+	character._look_captured = false
+	_check(not character.is_look_captured(), "capture accessor must report a released pointer")
+
+
 ## Reads a node's local translation Y directly from a `.tscn` so the static
 ## scene's texture does not have to be imported into this project.
 func _node_translation_y(scene_text: String, node_name: String) -> float:
@@ -362,7 +460,7 @@ func _node_translation_y(scene_text: String, node_name: String) -> float:
 
 
 func _load_character() -> Node:
-	var path := _example_path(CHARACTER_PATH)
+	var path := _fixture_scene_path()
 	var packed := load(path) as PackedScene
 	if packed == null:
 		_check(false, "the player scene must load from %s" % path)
@@ -377,6 +475,58 @@ func _load_character() -> Node:
 		return null
 	_instances.append(instance)
 	return instance
+
+
+## Переписывает только два `ext_resource` реальной сцены: скрипт берётся из
+## байт-идентичной фикстуры, а тяжёлая `.glb`-модель — из лёгкой заглушки.
+## Граф узлов, экспортированные пути и `ToolMount` остаются из настоящей сцены.
+func _fixture_scene_path() -> String:
+	if _fixture_scene_ready and FileAccess.file_exists(GENERATED_SCENE_PATH):
+		return GENERATED_SCENE_PATH
+	var source := FileAccess.get_file_as_string(_example_path(CHARACTER_PATH))
+	if source.is_empty():
+		_check(false, "the player scene must be readable")
+		return GENERATED_SCENE_PATH
+	var rewritten := (
+		source
+		.replace(
+			"res://packages/cura_player/player/character.gd",
+			FIXTURE_SCRIPT_PATH,
+		)
+		.replace(
+			"res://packages/cura_player/player/player_model_ready.tscn",
+			FIXTURE_MODEL_PATH,
+		)
+	)
+	# UID реальных ресурсов не соответствуют фикстурам, поэтому убираем их:
+	# загрузка идёт по текстовым путям.
+	var uid_regex := RegEx.new()
+	uid_regex.compile(" uid=\"uid://[^\"]+\"")
+	rewritten = uid_regex.sub(rewritten, "", true)
+	# `character.gd` ищет аватар по пути `Body/Mesh`; реальный glb-меш лежит
+	# глубже, поэтому фикстура добавляет ожидаемый капсульный меш.
+	var root_marker := "[node name=\"PlayerCharacter\" type=\"Node\""
+	rewritten = rewritten.replace(
+		root_marker,
+		"[sub_resource type=\"CapsuleMesh\" id=\"CapsuleMesh_stub\"]\n"
+			+ "radius = 0.4\nheight = 1.8\n\n" + root_marker,
+	)
+	rewritten += (
+		"\n[node name=\"Mesh\" type=\"MeshInstance3D\" parent=\"Body\"]\n"
+		+ "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)\n"
+		+ "mesh = SubResource(\"CapsuleMesh_stub\")\n"
+	)
+	var dir := DirAccess.open("user://")
+	if dir != null:
+		dir.make_dir_recursive("cura_player_fixture")
+	var file := FileAccess.open(GENERATED_SCENE_PATH, FileAccess.WRITE)
+	if file == null:
+		_check(false, "the generated player scene must be writable")
+		return GENERATED_SCENE_PATH
+	file.store_string(rewritten)
+	file.close()
+	_fixture_scene_ready = true
+	return GENERATED_SCENE_PATH
 
 
 func _example_path(relative_path: String) -> String:
