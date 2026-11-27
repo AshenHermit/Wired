@@ -671,6 +671,7 @@ git commit -m "feat(examples): add crate prop package for cura registry"
 - Create: `packages/server/godot_project/examples/cura_registry/wired_package.gd`
 - Create: `packages/server/godot_project/examples/cura_registry/README.md`
 - Create: `packages/server/godot_project/_wired/tests/fixtures/cura_registry/library_entry.gd` (фикстура entry)
+- Create: `packages/server/godot_project/_wired/tests/fixtures/cura_registry/library/wired_package.gd` (шима: `PackageEntryLoader` ищет entry только с именем `wired_package.gd`; корневой шим занят фикстурой Task 8)
 - Test: `packages/server/godot_project/_wired/tests/cura_registry_api_smoke.gd` + все smoke-тесты + ручной сценарий в Game tab
 
 **Interfaces:**
@@ -710,7 +711,7 @@ Expected: FAIL.
 
 - [ ] **Step 3: Написать entry и README**
 
-`wired_package.gd` по Interfaces, `extends WiredPackageRegistration`, `register(registry)` только через `Cura.*` и `add_player_component`. README на русском: подключение зависимости, `register_prop`, `register_tool`, пример кастомного hand weapon, правила authority и группы, ограничение 4 action/с.
+`wired_package.gd` по Interfaces, `extends WiredPackageRegistration`, `register(registry)` только через `Cura.*` и `add_player_component`. Фикстура entry — `library_entry.gd` плюс шим `library/wired_package.gd`, потому что `PackageEntryLoader` ищет файл с именем `wired_package.gd`, а корневой шим занят фикстурой Task 8. README на русском: подключение зависимости, `register_prop`, `register_tool`, пример кастомного hand weapon, правила authority и группы, ограничение 4 action/с; сценарий ручной проверки в Game tab помечать как ожидающий проверки человеком (в изолированном ворктри паблишинг пакетов недоступен).
 
 - [ ] **Step 4: Прогнать все smoke-тесты**
 
