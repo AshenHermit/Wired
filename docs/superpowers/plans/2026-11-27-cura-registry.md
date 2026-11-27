@@ -18,7 +18,7 @@
   & $GODOT --headless --path packages/server/godot_project/_wired --script res://tests/<name>.gd --quit-after 2
   ```
   Успех — `ALL TESTS PASSED` и exit code 0.
-- В пакетных скриптах **запрещены** `class_name` и прямые RPC;只有通过 `register_action`/`request_action`.
+- В пакетных скриптах **запрещены** `class_name` и прямые RPC; только через `register_action`/`request_action`.
 - Зависимости между пакетами пишутся как `res://packages/<slug>/...` и переписываются бэкендом; в smoke-тестах базового проекта таких путей нет, поэтому тесты используют копии-фикстуры в `tests/fixtures/cura_registry/` по образцу `example_package_contract_smoke.gd`. Фикстура и настоящий файл меняются в одной задаче. Реальные `res://packages/...` пути проверяются вручную после публикации.
 - Идентификаторы записей квалифицируются как `<package_id>/<id>` (`WiredPackageRegistry.resolve_action`).
 - Лимит `WiredPlayer.handle_action` — 20 actions/с на игрока; `cura_player` шлёт look ~15/с, поэтому темп стрельбы — **4 action/с** (debounce 0.25 с).
@@ -52,7 +52,7 @@
 
 - [ ] **Step 1: Добавить падающие тесты**
 
-В `_initialize()` thêm `_test_custom_entries()` и `_test_custom_entries_collision()`:
+В `_initialize()` добавить вызовы `_test_custom_entries()` и `_test_custom_entries_collision()`:
 
 ```gdscript
 func _test_custom_entries() -> void:
@@ -265,7 +265,7 @@ git commit -m "feat(cura-registry): add registration API for props and tools"
 
 - [ ] **Step 1: Падающий тест контракта**
 
-В smoke-тесте через `load(abs path)` инстанцировать базовый скрипт и fixtурый скрипт-наследник с переопределённым `wired_primary` (записывает ctx) и `wired_visual_equip` (считает вызовы). Проверки:
+В smoke-тесте через `load(abs path)` инстанцировать базовый скрипт и фикстурный скрипт-наследник с переопределённым `wired_primary` (записывает ctx) и `wired_visual_equip` (считает вызовы). Проверки:
 
 ```gdscript
 func test_primary_receives_context() -> void:
