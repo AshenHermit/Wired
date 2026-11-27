@@ -612,6 +612,7 @@ git commit -m "feat(cura-registry): add spawner hand weapon"
 - Create: `packages/server/godot_project/examples/crate_prop_example/dynamic/crate.tscn`
 - Create: `packages/server/godot_project/examples/crate_prop_example/README.md`
 - Create: `packages/server/godot_project/_wired/tests/fixtures/cura_registry/crate_entry.gd`
+- Create: `packages/server/godot_project/_wired/tests/fixtures/cura_registry/wired_package.gd` (однострочный shim `extends "res://tests/fixtures/cura_registry/crate_entry.gd"`: `PackageEntryLoader` ищет entry только по имени `wired_package.gd`)
 - Test: `packages/server/godot_project/_wired/tests/cura_prop_example_smoke.gd`
 
 **Interfaces:**
@@ -649,7 +650,7 @@ Expected: FAIL — entry/сцена отсутствуют.
 
 - [ ] **Step 3: Реализовать пакет**
 
-`wired_package.gd` с `const Cura = preload("res://packages/cura_registry/api.gd")` и вызовами по Interfaces. `crate.tscn`: `RigidBody3D` + `BoxShape3D` + `MeshInstance3D` с кубом, rootscript `extends WiredDynamicEntity`, `mass = 1`. README — минимальный пример вызова. Создать фикстурный entry с теми же вызовами, но `load(absolute api.gd)`.
+`wired_package.gd` с `const Cura = preload("res://packages/cura_registry/api.gd")` и вызовами по Interfaces. `crate.tscn`: `RigidBody3D` + `BoxShape3D` + `MeshInstance3D` с кубом, rootscript `extends WiredDynamicEntity`, `mass = 1` (инлайн-скрипт в сцене допустим). README — минимальный пример вызова. Создать фикстурный entry `crate_entry.gd` с теми же вызовами, но `load(absolute api.gd)`, и однострочный shim `wired_package.gd`, его расширяющий, — loader требует именно это имя файла.
 
 - [ ] **Step 4: Прогнать тест**
 
@@ -658,7 +659,7 @@ Run: как Step 2. Expected: `ALL TESTS PASSED`, exit 0.
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add packages/server/godot_project/examples/crate_prop_example packages/server/godot_project/_wired/tests/fixtures/cura_registry/crate_entry.gd packages/server/godot_project/_wired/tests/cura_prop_example_smoke.gd
+git add packages/server/godot_project/examples/crate_prop_example packages/server/godot_project/_wired/tests/fixtures/cura_registry/crate_entry.gd packages/server/godot_project/_wired/tests/fixtures/cura_registry/wired_package.gd packages/server/godot_project/_wired/tests/cura_prop_example_smoke.gd
 git commit -m "feat(examples): add crate prop package for cura registry"
 ```
 
