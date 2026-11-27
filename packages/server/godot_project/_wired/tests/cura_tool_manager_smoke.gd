@@ -95,9 +95,13 @@ class StubPanel extends WiredPlayerComponent:
 
 class StubManager extends "res://tests/fixtures/cura_registry/tool_manager.gd":
 	var clock_msec: int = 0
+	var raycast_hit: Dictionary = {}
 
 	func now_msec() -> int:
 		return clock_msec
+
+	func server_raycast() -> Dictionary:
+		return raycast_hit
 
 
 class StubDynamicWorld extends DynamicWorldContainer:
@@ -236,16 +240,22 @@ func test_action_registration_and_panel_selection() -> void:
 func test_click_requires_capture_and_closed_panel() -> void:
 	var manager := _new_manager(true)  # is_server_authority() == true
 	manager.player = _stub_player()
+	_add_weapon(manager.player)
+	_add_character(true)
+	manager._wired_unhandled_input(_lmb_press())  # без экипированного инструмента
+	_check(
+		manager.player.sent_actions.is_empty(),
+		"click without an equipped tool must not fire",
+	)
+	manager.set_active(TOOL_ID, PROP_ID)
 	manager.panel_open = true
 	manager._wired_unhandled_input(_lmb_press())
 	_check(manager.player.sent_actions.is_empty(), "open panel must swallow clicks")
 	manager.panel_open = false
+	var character := _add_character(false)
 	manager._wired_unhandled_input(_lmb_press())  # без захвата
 	_check(manager.player.sent_actions.is_empty(), "uncaptured click must not fire")
-	_add_character(false)
-	manager._wired_unhandled_input(_lmb_press())
-	_check(manager.player.sent_actions.is_empty(), "released look must not fire")
-	_add_character(true)
+	character.captured = true
 	manager._wired_unhandled_input(_lmb_press())
 	_check(manager.player.sent_actions.size() == 1, "captured click must fire")
 	if manager.player.sent_actions.size() == 1:
@@ -262,6 +272,10 @@ func test_fire_rate_is_limited() -> void:
 	manager.panel_open = false
 	root.add_child(manager)
 	_owned.append(manager)
+	# Темп измеряется для экипированного инструмента: без active_tool_id
+	# клик не становится action по требованиям spec.
+	_add_weapon(manager.player)
+	manager.set_active(TOOL_ID, PROP_ID)
 	_add_character(true)
 	for i in 20:
 		manager.clock_msec = i * 50
@@ -288,15 +302,20 @@ func test_valid_action_dispatches_trusted_context() -> void:
 	manager.set_active(TOOL_ID, PROP_ID)
 	_check(manager.active_tool_id == TOOL_ID, "a registered weapon must become active")
 	_check(weapon.equip_calls == 1, "set_active must equip the weapon on the server")
+	var hit := {"position": Vector3(1, 1, 1), "normal": Vector3(0, 1, 0)}
+	manager.raycast_hit = hit
 	manager._on_use_tool(
 		2, {"tool": TOOL_ID, "prop": PROP_ID, "hit": Vector3(99, 99, 99)}
 	)
 	_check(weapon.primary_calls == 1, "valid action must call wired_primary")
-	var hit: Dictionary = weapon.last_ctx.get("hit", {})
 	_check(
-		hit.get("position", null) != Vector3(99, 99, 99),
+		weapon.last_ctx["hit"] == hit,
 		"client hit must never be used as the authoritative hit",
 	)
+	manager.raycast_hit = {}
+	manager._on_use_tool(2, {"tool": TOOL_ID, "prop": PROP_ID})
+	_check(weapon.primary_calls == 1, "no server hit means no use")
+	manager.raycast_hit = hit
 	_check(
 		str(weapon.last_ctx.get("selected_prop", "")) == PROP_ID,
 		"the trusted context must carry the selected prop",

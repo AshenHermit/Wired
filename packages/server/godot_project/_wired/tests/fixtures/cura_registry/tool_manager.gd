@@ -82,6 +82,9 @@ func _wired_unhandled_input(event: InputEvent) -> void:
 	var panel := _find_panel()
 	if panel != null and panel.has_method("is_open") and bool(panel.call("is_open")):
 		return
+	# Без экипированного инструмента клик не становится действием.
+	if active_tool_id.is_empty():
+		return
 	var character := _find_character()
 	if character == null or not character.has_method("is_look_captured"):
 		return
@@ -152,10 +155,14 @@ func _on_use_tool(sender_peer: int, payload: Dictionary) -> void:
 			return
 		if registry.find_dynamic_entity(prop_id).is_empty():
 			return
+	var hit := server_raycast()
+	# Попадания нет — применения инструмента нет (spec: No hit → no use).
+	if hit.is_empty():
+		return
 	weapon.call("wired_primary", {
 		"player": player,
 		"manager": self,
-		"hit": server_raycast(),
+		"hit": hit,
 		"selected_prop": prop_id,
 		"payload": payload,
 	})
