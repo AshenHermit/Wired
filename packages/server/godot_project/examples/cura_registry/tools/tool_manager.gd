@@ -136,8 +136,10 @@ func _on_use_tool(sender_peer: int, payload: Dictionary) -> void:
 	if sender_peer != player.peer_id:
 		return
 	var tool_id := str(payload.get("tool", ""))
+	# Инструмент определяется сервером из payload: локальный выбор до сервера
+	# не доходит, поэтому сравнение с `active_tool` здесь недопустимо.
 	var weapon := _find_weapon(tool_id)
-	if weapon == null or weapon != active_tool:
+	if weapon == null:
 		return
 	if not weapon.has_method("wired_primary"):
 		return
@@ -153,12 +155,20 @@ func _on_use_tool(sender_peer: int, payload: Dictionary) -> void:
 	if bool(weapon.get("requires_prop")):
 		if registry.find_entry("cura.prop", prop_id).is_empty():
 			return
-		if registry.find_dynamic_entity(prop_id).is_empty():
+		var descriptor := registry.find_dynamic_entity(prop_id)
+		if (
+			descriptor.is_empty()
+			or str(descriptor.get("authority", "server")) != "server"
+		):
 			return
 	var hit := server_raycast()
 	# Попадания нет — применения инструмента нет (spec: No hit → no use).
 	if hit.is_empty():
 		return
+	# Экипируем на сервере по проверенному action: для удалённого игрока
+	# `set_active` из локальной панели никогда не вызывается.
+	if active_tool != weapon:
+		set_active(tool_id, prop_id)
 	weapon.call("wired_primary", {
 		"player": player,
 		"manager": self,

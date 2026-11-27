@@ -124,6 +124,8 @@ func _run() -> void:
 	test_fire_rate_is_limited()
 	test_missing_weapon_disables_fire()
 	test_valid_action_dispatches_trusted_context()
+	test_action_dispatches_without_local_selection()
+	test_client_authoritative_prop_is_rejected()
 	test_spawn_prop_uses_dynamic_world()
 	_restore_services()
 	_free_owned()
@@ -330,6 +332,41 @@ func test_valid_action_dispatches_trusted_context() -> void:
 	_check(weapon.primary_calls == 1, "untrusted actions must be rejected")
 
 
+## Серверная копия менеджера удалённого игрока не получает `set_active`:
+## выбор приходит только локальному компоненту, поэтому action обязан
+## найти инструмент по `payload.tool` и экипировать его на сервере сам.
+func test_action_dispatches_without_local_selection() -> void:
+	var manager := _new_manager(true)
+	manager.player = _stub_player()
+	var weapon := _add_weapon(manager.player)
+	_install_services()
+	manager.raycast_hit = {"position": Vector3(1, 1, 1), "normal": Vector3(0, 1, 0)}
+	_check(
+		manager.active_tool_id.is_empty(),
+		"the server manager must start without a locally selected tool",
+	)
+	manager._on_use_tool(2, {"tool": TOOL_ID, "prop": PROP_ID})
+	_check(
+		weapon.primary_calls == 1,
+		"a valid action must dispatch without a local set_active",
+	)
+	_check(weapon.equip_calls == 1, "the server must equip the weapon before use")
+
+
+func test_client_authoritative_prop_is_rejected() -> void:
+	var manager := _new_manager(true)
+	manager.player = _stub_player()
+	var weapon := _add_weapon(manager.player)
+	_install_services()
+	manager.set_active(TOOL_ID, PROP_ID)
+	manager.raycast_hit = {"position": Vector3(1, 1, 1), "normal": Vector3(0, 1, 0)}
+	manager._on_use_tool(2, {"tool": TOOL_ID, "prop": "pkg.crate/local_crate"})
+	_check(
+		weapon.primary_calls == 0,
+		"a prop without server authority must not be used",
+	)
+
+
 func test_spawn_prop_uses_dynamic_world() -> void:
 	var manager := _new_manager(true)
 	manager.player = _stub_player()
@@ -398,6 +435,10 @@ func _install_services() -> StubDynamicWorld:
 		registration.add_custom("cura.prop", "crate", {"label": "Crate"})
 		registration.add_dynamic_entity(
 			"crate", "dynamic/crate.tscn", {"authority": "server"}
+		)
+		registration.add_custom("cura.prop", "local_crate", {"label": "Local crate"})
+		registration.add_dynamic_entity(
+			"local_crate", "dynamic/local_crate.tscn", {"authority": "local"}
 		)
 		var registry := WiredPackageRegistry.new()
 		registry.add_registration(registration)
