@@ -66,7 +66,6 @@ var _dash_dir := Vector3.FORWARD
 var _jump_was_down := false
 
 func _wired_ready() -> void:
-	print(relative_path)
 	if body == null:
 		push_warning(
 			"WIRED_EXAMPLE_BODY_MISSING_NODE package=%s node=Body" % package_id

@@ -18,7 +18,6 @@ size = Vector3(10, 1, 10)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_u4rmc"]
 albedo_texture = ExtResource("1_rohop")
-metallic_specular = 0.0
 uv1_scale = Vector3(10, 10, 10)
 
 [sub_resource type="BoxMesh" id="BoxMesh_eun1s"]
