@@ -44,6 +44,9 @@ const KEY_AUTHORITY := "authority"
 const KEY_LOCAL_ONLY := "local_only"
 const KEY_QUALIFIED_TYPE := "qualified_type"
 const KEY_OPTIONS := "options"
+## Локальный id произвольной записи; полный id строится как `<package_id>/<id>`.
+const KEY_ID := "id"
+const KEY_QUALIFIED_ID := "qualified_id"
 
 # --- world snapshot envelope ----------------------------------------------
 

@@ -53,6 +53,10 @@ func add_registration(registration: WiredPackageRegistration) -> void:
 			descriptor["qualified_type"] = resolve_action(
 				registration.package_id, str(descriptor.get("local_type", ""))
 			)
+		if descriptor.has(WiredProtocol.KEY_ID):
+			descriptor[WiredProtocol.KEY_QUALIFIED_ID] = resolve_action(
+				registration.package_id, str(descriptor.get(WiredProtocol.KEY_ID, ""))
+			)
 		_entries.append(descriptor)
 
 
@@ -81,6 +85,19 @@ func get_dynamic_entities() -> Array[Dictionary]:
 
 func get_main_scenes() -> Array[Dictionary]:
 	return _sorted_descriptors(KIND_MAIN)
+
+
+## Дескрипторы произвольного вида в том же детерминированном порядке.
+func get_entries(kind: String) -> Array[Dictionary]:
+	return _sorted_descriptors(kind)
+
+
+## Дескриптор по полному id `<package_id>/<id>` или пустой словарь.
+func find_entry(kind: String, qualified_id: String) -> Dictionary:
+	for descriptor: Dictionary in get_entries(kind):
+		if str(descriptor.get(WiredProtocol.KEY_QUALIFIED_ID, "")) == qualified_id:
+			return descriptor
+	return {}
 
 
 func get_main_scene() -> Dictionary:
