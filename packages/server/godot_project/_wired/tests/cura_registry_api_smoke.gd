@@ -13,7 +13,10 @@ extends SceneTree
 
 const EXAMPLE_DIR := "../examples/cura_registry"
 const FIXTURE_PATH := "res://tests/fixtures/cura_registry/api.gd"
+const FIXTURE_ENTRY_PATH := "res://tests/fixtures/cura_registry/library_entry.gd"
+const FIXTURE_ENTRY_ROOT := "res://tests/fixtures/cura_registry/library"
 const PACKAGE_ID := "pkg.crate"
+const REAL_API_PATH := "res://packages/cura_registry/api.gd"
 
 var _failures: PackedStringArray = []
 var _checks := 0
@@ -25,6 +28,9 @@ func _initialize() -> void:
 
 func _run() -> void:
 	test_fixture_matches_example()
+	test_fixture_entry_matches_example()
+	test_library_entry_registers_ui_and_server_components()
+	test_library_entry_registers_categories_and_tool()
 	test_register_prop_writes_both_descriptors()
 	test_category_and_tool_entries()
 	test_custom_entries_are_qualified_by_registry()
@@ -45,6 +51,97 @@ func test_fixture_matches_example() -> void:
 		example_text.replace("\r\n", "\n") == fixture_text.replace("\r\n", "\n"),
 		"the fixture must be an exact copy of the example api.gd",
 	)
+
+
+## Entry-фикстура обязана повторять реальный entry, кроме пути к API: иначе
+## тест проверяет не тот код, который получают комнаты с библиотекой.
+func test_fixture_entry_matches_example() -> void:
+	var example_text := FileAccess.get_file_as_string(_example_path("wired_package.gd"))
+	var fixture_text := FileAccess.get_file_as_string(
+		ProjectSettings.globalize_path(FIXTURE_ENTRY_PATH)
+	)
+	_check(not example_text.is_empty(), "the real example entry must exist")
+	_check(not fixture_text.is_empty(), "the fixture library entry must exist")
+	if example_text.is_empty() or fixture_text.is_empty():
+		return
+	var normalized_fixture := fixture_text.replace("\r\n", "\n").replace(
+		FIXTURE_PATH, REAL_API_PATH
+	)
+	_check(
+		example_text.replace("\r\n", "\n") == normalized_fixture,
+		"the fixture entry must match the example apart from the API path",
+	)
+	for source: String in [example_text, fixture_text]:
+		for line: String in source.split("\n"):
+			var stripped := line.strip_edges()
+			_check(
+				not stripped.begins_with("class_name "),
+				"package scripts must not declare class_name",
+			)
+			_check(
+				not stripped.begins_with("@rpc")
+					and not stripped.begins_with("rpc(")
+					and not stripped.begins_with("rpc_id("),
+				"package scripts must not use direct RPC",
+			)
+
+
+## `PackageEntryLoader` грузит entry из фикстурного контекста; проверяем, что
+## библиотека регистрирует ровно три компонента игрока в нужном порядке.
+func test_library_entry_registers_ui_and_server_components() -> void:
+	var registry := WiredPackageRegistry.new()
+	var context := WiredPackageContext.new()
+	context.package_id = PACKAGE_ID
+	context.root_path = FIXTURE_ENTRY_ROOT
+	_check(
+		PackageEntryLoader.load_entry(PACKAGE_ID, 1, context, registry),
+		"the fixture library entry must load",
+	)
+	var components := registry.get_player_components()
+	_check(components.size() == 3, "panel, manager and spawner must be registered")
+	if components.size() != 3:
+		registry.free()
+		return
+	_check(
+		components[0]["path"] == "ui/registry_panel.tscn"
+			and bool(components[0]["local_only"])
+			and str(components[0]["authority"]) == "local",
+		"panel must be local-only",
+	)
+	_check(
+		components[1]["path"] == "tools/tool_manager.tscn"
+			and str(components[1]["authority"]) == "server",
+		"manager must be server-authority",
+	)
+	_check(str(components[2]["path"]) == "tools/spawner.tscn", "spawner weapon must be registered")
+	registry.free()
+
+
+func test_library_entry_registers_categories_and_tool() -> void:
+	var registry := WiredPackageRegistry.new()
+	var context := WiredPackageContext.new()
+	context.package_id = PACKAGE_ID
+	context.root_path = FIXTURE_ENTRY_ROOT
+	if not PackageEntryLoader.load_entry(PACKAGE_ID, 1, context, registry):
+		_check(false, "the fixture library entry must load")
+		registry.free()
+		return
+	var categories := registry.get_entries("cura.category")
+	var tools := registry.get_entries("cura.tool")
+	_check(categories.size() == 2, "props and tools categories must be registered")
+	if categories.size() == 2:
+		_check(
+			str(categories[0]["qualified_id"]) == "pkg.crate/props"
+				and str(categories[1]["qualified_id"]) == "pkg.crate/tools",
+			"categories must be qualified by the package id",
+		)
+	_check(
+		tools.size() == 1
+			and str(tools[0]["qualified_id"]) == "pkg.crate/spawner"
+			and str(tools[0]["options"].get("category", "")) == "tools",
+		"the built-in spawner tool must be registered in tools",
+	)
+	registry.free()
 
 
 func test_register_prop_writes_both_descriptors() -> void:
