@@ -383,6 +383,8 @@ func test_valid_action_dispatches_trusted_context() -> void:
 	_check(weapon.primary_calls == 1, "no server hit means no use")
 ```
 
+Дополнительно проверить в любом тесте с `set_active`: найденный weapon получил `manager == manager`, иначе `wired_visual_equip` никогда не сработает в реальной игре.
+
 - [ ] **Step 2: Запустить, увидеть падение**
 
 Run:
@@ -395,7 +397,7 @@ Expected: FAIL — менеджер не существует.
 
 - `_wired_ready`: если `is_server()` → `register_action(ACTION_USE, _on_use_tool)`; если `is_local_player()` → найти панель в `player.components` по группе `cura_registry_panel`, подключиться к `prop_selected`/`tool_selected`.
 - `_wired_unhandled_input`: только `is_local_player()`; LMB pressed; `not panel_open`; `active_tool_id` непустой (инструмент экипирован); `character.is_look_captured()` через группу `cura_player_character` (если персонажа нет — false); debounce 0.25 с; `request_action(ACTION_USE, {"tool": selected_tool, "prop": selected_prop, "hit": локальный raycast})`.
-- `set_active`: вернуть `selected_tool`/`selected_prop`, найти weapon в `player.components` по group + qualification `resolve_action(weapon.package_id, weapon.tool_id)`, установить `active_tool_id`, на сервере вызвать `wired_unequip()` старого и `wired_equip(ctx)` нового.
+- `set_active`: вернуть `selected_tool`/`selected_prop`, найти weapon в `player.components` по group + qualification `resolve_action(weapon.package_id, weapon.tool_id)`, установить `active_tool_id`, выставить `weapon.manager = self` у найденного инструмента (и сбросить `manager` у снятого), иначе `hand_weapon._wired_visual_process` не увидит активный tool и вьюмодель не появится; на сервере вызвать `wired_unequip()` старого и `wired_equip(ctx)` нового.
 - `_on_use_tool`: проверить `sender_peer == player.peer_id`, найти weapon по `payload.tool`, если `requires_prop` — проверить `find_entry("cura.prop", payload.prop)` и `find_dynamic_entity(payload.prop)`; построить `hit = server_raycast()` и при пустом `hit` **не вызывать** инструмент (spec: No hit → no use); иначе `ctx = {"player": player, "manager": self, "hit": hit, "selected_prop": payload.prop, "payload": payload}` и вызвать `wired_primary(ctx)`.
 - `server_raycast()`: origin `player.get_anchor_position_3d() + Vector3(0, 1.6, 0)`, направление из `replicated_yaw`/`replicated_pitch` персонажа группы `cura_player_character`, `PhysicsDirectSpaceState3D.intersect_ray` с `max_distance = 64.0`, маска статика+динамика, исключить player bodies. Возвращать `{}` при промахе или отсутствии персонажа.
 - `now_msec() -> int`:(base) `return Time.get_ticks_msec()`; единственный источник времени для debounce 0.25 с в `_wired_unhandled_input`, чтобы тест мог подменить часы.
