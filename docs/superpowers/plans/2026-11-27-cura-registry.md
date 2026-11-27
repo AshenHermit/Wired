@@ -71,7 +71,7 @@ func _test_custom_entries() -> void:
 		"custom descriptor must carry id, qualified id and options",
 	)
 	_check(
-		registry.find_entry("cura.tool", "pkg.a/spawner").size() == 1,
+		registry.find_entry("cura.tool", "pkg.a/spawner").get("qualified_id", "") == "pkg.a/spawner",
 		"find_entry must resolve a qualified custom id",
 	)
 	_check(
