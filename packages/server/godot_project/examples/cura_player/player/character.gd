@@ -35,6 +35,9 @@ const LOOK_SEND_INTERVAL_MSEC := 66
 @export var camera_container: Node3D = null
 @export var arm_camera_container: SubViewport = null
 
+## Узел монтировки вьюмодели инструмента внутри вьюпорта рук (слой 6).
+@export var tool_mount: Node3D = null
+
 @export var character_model: Node
 
 ## Horizontal speed above this counts as moving. Below it the replicated
@@ -103,6 +106,44 @@ func setup_cameras():
 	arms_camera = Camera3D.new()
 	arm_camera_container.add_child(arms_camera)
 	arms_camera.cull_mask = 32
+
+
+## Камера от первого лица: локальный игрок использует созданную `main_camera`,
+## остальные пиры — камеру внутри `camera_container`.
+func get_first_person_camera() -> Camera3D:
+	if is_instance_valid(main_camera):
+		return main_camera
+	if camera_container != null:
+		for child: Node in camera_container.get_children():
+			if child is Camera3D:
+				return child as Camera3D
+	return null
+
+
+## Инстанцирует вьюмодель в `tool_mount`, освобождая предыдущую.
+func equip_viewmodel(scene: PackedScene) -> Node:
+	if tool_mount == null or scene == null:
+		return null
+	clear_viewmodel()
+	var viewmodel := scene.instantiate()
+	if viewmodel == null:
+		return null
+	tool_mount.add_child(viewmodel)
+	return viewmodel
+
+
+func clear_viewmodel() -> void:
+	if tool_mount == null:
+		return
+	for child: Node in tool_mount.get_children():
+		child.free()
+
+
+## Состояние захвата указателя с учётом web-режима: браузер может сбросить
+## pointer lock без события Escape.
+func is_look_captured() -> bool:
+	return look_is_active(_look_captured, Input.mouse_mode, OS.has_feature("web"))
+
 
 ## Client only: capture the pointer on click, release it on Escape and turn
 ## mouse motion into an immediate local look update.

@@ -51,6 +51,8 @@ func _initialize() -> void:
 	_test_dynamic_entities()
 	_test_static_scenes()
 	_test_main_scenes()
+	_test_custom_entries()
+	_test_custom_entries_collision()
 	_test_context_paths()
 	_test_context_with_packages()
 	_finish()
@@ -313,6 +315,61 @@ func _test_main_scenes() -> void:
 	_check(
 		remaining.size() == 1 and remaining[0]["package_id"] == "pkg.b",
 		"clear_package must drop only that package's main scenes",
+	)
+	registry.free()
+
+
+func _test_custom_entries() -> void:
+	var registry := WiredPackageRegistry.new()
+	var entry := WiredPackageRegistration.new()
+	entry.package_id = "pkg.a"
+	entry.add_custom("cura.tool", "spawner", {"order": 20, "label": "Toolgun"})
+	entry.add_custom("cura.category", "tools", {"order": 10})
+	registry.add_registration(entry)
+	var tools := registry.get_entries("cura.tool")
+	_check(tools.size() == 1, "one custom tool expected")
+	_check(
+		tools[0]["id"] == "spawner"
+			and tools[0]["qualified_id"] == "pkg.a/spawner"
+			and tools[0]["options"]["label"] == "Toolgun",
+		"custom descriptor must carry id, qualified id and options",
+	)
+	_check(
+		registry.find_entry("cura.tool", "pkg.a/spawner").get("qualified_id", "")
+			== "pkg.a/spawner",
+		"find_entry must resolve a qualified custom id",
+	)
+	_check(
+		registry.get_entries("cura.category")[0]["id"] == "tools"
+			and int(registry.get_entries("cura.category")[0]["order"]) == 10,
+		"custom entries must use the existing deterministic sort",
+	)
+	_check(
+		registry.get_player_components().is_empty()
+			and registry.get_dynamic_entities().is_empty(),
+		"custom entries must not leak into the four core lists",
+	)
+	registry.clear_package("pkg.a")
+	_check(registry.get_entries("cura.tool").is_empty(), "clear_package must drop custom entries")
+	registry.free()
+
+
+func _test_custom_entries_collision() -> void:
+	var registry := WiredPackageRegistry.new()
+	var a := WiredPackageRegistration.new()
+	a.package_id = "pkg.a"
+	a.add_custom("cura.tool", "spawner", {})
+	var b := WiredPackageRegistration.new()
+	b.package_id = "pkg.b"
+	b.add_custom("cura.tool", "spawner", {})
+	registry.add_registration(a)
+	registry.add_registration(b)
+	var tools := registry.get_entries("cura.tool")
+	_check(tools.size() == 2, "same local id in two packages must produce two entries")
+	_check(
+		tools[0]["qualified_id"] == "pkg.a/spawner"
+			and tools[1]["qualified_id"] == "pkg.b/spawner",
+		"custom ids must be qualified by package",
 	)
 	registry.free()
 

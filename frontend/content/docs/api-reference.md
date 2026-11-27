@@ -22,7 +22,10 @@ func add_static_scene(relative_path: String, options: Dictionary = {}) -> void
 func add_player_component(relative_path: String, options: Dictionary = {}) -> void
 func add_main_scene(relative_path: String, options: Dictionary = {}) -> void
 func add_dynamic_entity(local_type: String, relative_path: String, options: Dictionary = {}) -> void
+func add_custom(kind: String, local_id: String, options: Dictionary = {}) -> void
 ```
+
+`add_custom` — нейтральный слот ядра для произвольных записей библиотек. `kind` — строка вида `"<namespace>.<вид>"`, `local_id` квалифицируется как `<package_id>/<local_id>`. Ядро не знает о конкретных режимах игры; записи `cura.prop`, `cura.tool`, `cura.category` создаёт пакет-библиотека `cura_registry`.
 
 Опции (общие):
 
@@ -52,13 +55,16 @@ func add_dynamic_entity(local_type: String, relative_path: String, options: Dict
 - `get_main_scenes() -> Array[Dictionary]`
 - `get_main_scene() -> Dictionary`
 - `find_dynamic_entity(qualified_type) -> Dictionary`
+- `get_entries(kind: String) -> Array[Dictionary]` — записи произвольного вида (кастомные).
+- `find_entry(kind: String, qualified_id: String) -> Dictionary` — поиск кастомной записи по `<package_id>/<id>`.
 - `get_context(package_id) -> WiredPackageContext`
 - `resolve_action(package_id, local_name) -> String` — квалификация имени.
 - `clear_package(package_id)` — убрать контент пакета.
 
 Дескриптор содержит ключи: `package_id`, `path`, `order`, `authority`,
 `local_only`, `options`, `registration_index`. Динамический дополнительно:
-`local_type`, `qualified_type`.
+`local_type`, `qualified_type`. Кастомные записи дополнительно содержат
+`id`, `qualified_id`.
 
 ## `WiredDynamicEntity`
 
@@ -143,7 +149,8 @@ func add_dynamic_entity(local_type: String, relative_path: String, options: Dict
 - `KEY_ENTITY_ID`, `KEY_TYPE_ID`, `KEY_OWNER_PLAYER_ID`, `KEY_STATE`,
   `KEY_RESTORE`, `KEY_SPAWN_DATA`;
 - `KEY_PACKAGE_ID`, `KEY_PATH`, `KEY_ORDER`, `KEY_AUTHORITY`,
-  `KEY_LOCAL_ONLY`, `KEY_QUALIFIED_TYPE`, `KEY_OPTIONS`;
+  `KEY_LOCAL_ONLY`, `KEY_QUALIFIED_TYPE`, `KEY_OPTIONS`, `KEY_ID`,
+  `KEY_QUALIFIED_ID`;
 - `META_PACKAGE_ID`, `META_PACKAGE_SCENE`, `META_PACKAGE_REVISION`,
   `META_PACKAGE_ARTIFACT_KEY`, `META_REGISTERED`, `META_ENTITY_ID`;
 - `KEY_PACKAGES`, `KEY_PLAYERS`, `KEY_DYNAMIC_WORLD`;

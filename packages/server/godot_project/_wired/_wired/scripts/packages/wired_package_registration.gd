@@ -49,6 +49,13 @@ func add_dynamic_entity(
 	_entries.append(entry)
 
 
+## Произвольный вид записи: `kind` — любая строка, нового `KIND_*` не требуется.
+func add_custom(kind: String, local_id: String, options: Dictionary = {}) -> void:
+	var entry := _entry(kind, "", options)
+	entry[WiredProtocol.KEY_ID] = local_id
+	_entries.append(entry)
+
+
 ## Builds the descriptor shared by every content kind. The package id and the
 ## qualified dynamic type are added by the registry, because the entry may be
 ## registered before `package_id` is known.

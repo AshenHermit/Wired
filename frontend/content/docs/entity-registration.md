@@ -15,6 +15,7 @@ order: 3
 | статика | `add_static_scene(path, options)` | Сцены, общие для всех клиентов (платформы, декорации) |
 | компонент игрока | `add_player_component(path, options)` | Часть каждого игрока (тело, камера, спавнер) |
 | динамическая сущность | `add_dynamic_entity(type, path, options)` | Серверно-заспавненные объекты (ящики, пули, NPC) |
+| кастомная запись | `add_custom(kind, local_id, options)` | Произвольные данные библиотек (пропы, инструменты, категории) |
 
 ## Статика
 
@@ -100,6 +101,33 @@ var crate := spawn_dynamic("crate", {
 ```
 
 `spawn_dynamic` сам квалифицирует локальное имя типа.
+
+### Реестр песочницы `cura_registry`
+
+Пакет-библиотека `cura_registry` поверх кастомных записей ядра даёт API
+`Cura.register_category`, `Cura.register_prop`, `Cura.register_tool`. Проп —
+обычная динамическая сущность с `authority: "server"` плюс запись `cura.prop`
+с метаданными для панели. Идентификаторы категорий, пропов и инструментов
+квалифицируются как `<package_id>/<id>`.
+
+```gdscript
+# wired_package.gd чужого пакета
+const Cura = preload("res://packages/cura_registry/api.gd")
+
+func register(registry: WiredPackageRegistry) -> void:
+    Cura.register_category(self, "props", {"label": "Props", "order": 10})
+    Cura.register_prop(self, "crate", "dynamic/crate.tscn", {
+        "category": "props", "label": "Ящик", "authority": "server",
+        "persist": true,
+    })
+```
+
+`spawn_dynamic()` квалифицирует тип через `package_id` вызывающего компонента,
+поэтому проп из другого пакета нельзя так заспавнить из `cura_player`. На
+сервере используйте полный тип:
+`Global.get_dynamic_world().spawn_entity("42/crate", {"position": pos})`.
+Инструменты — player-компоненты, наследующие `hand_weapon.gd` из `cura_registry`;
+свой инструмент регистрирует его собственный пакет через `add_player_component`.
 
 ## Main-сцена
 

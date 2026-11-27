@@ -1,0 +1,29 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://tests/fixtures/cura_registry/spawner.gd" id="1_spawner"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_body"]
+size = Vector3(0.09, 0.09, 0.28)
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_barrel"]
+top_radius = 0.035
+bottom_radius = 0.035
+height = 0.22
+
+[node name="Spawner" type="Node3D" groups=["cura_hand_weapon"]]
+script = ExtResource("1_spawner")
+tool_id = "spawner"
+viewmodel_path = "ViewModel"
+requires_prop = true
+
+[node name="ViewModel" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.22, -0.18, -0.45)
+
+[node name="Body" type="MeshInstance3D" parent="ViewModel"]
+mesh = SubResource("BoxMesh_body")
+layers = 32
+
+[node name="Barrel" type="MeshInstance3D" parent="ViewModel"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.045, -0.2)
+mesh = SubResource("CylinderMesh_barrel")
+layers = 32
