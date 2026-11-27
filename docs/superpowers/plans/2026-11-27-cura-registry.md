@@ -299,7 +299,7 @@ Expected: FAIL — скрипт/методы отсутствуют.
 
 - [ ] **Step 3: Реализовать базовый скрипт**
 
-`extends WiredPlayerComponent`. Все hooks по умолчанию пустые, `wired_save_state()` возвращает `{}`, `wired_load_state()` пустой. `_wired_save_state()`/`_wired_load_state()` делегируют в `wired_*`. `_wired_visual_process(delta)` сравнивает `manager.active_tool_id` с `WiredPackageRegistry.resolve_action(package_id, tool_id)` (если `manager` null — неактивно), вызывает `wired_visual_equip(true/false)` только при изменении и `wired_visual_update(delta, is_local_player())`, когда активно. `tool_id` в сцене — локальный (`"spawner"`), qualification делает менеджер. Скопировать в fixtures.
+`extends WiredPlayerComponent`. Все hooks по умолчанию пустые, `wired_save_state()` возвращает `{}`, `wired_load_state()` пустой. `_wired_save_state()`/`_wired_load_state()` делегируют в `wired_*`. `_wired_visual_process(delta)` сравнивает `manager.active_tool_id` с квалифицированным `package_id/tool_id` через экземпляр реестра (`resolve_action` не static: взять `Global.get_package_registry()`, при отсутствии — временный `WiredPackageRegistry.new()` с immediate `free()`); если `manager` null — неактивно. Вызывает `wired_visual_equip(true/false)` только при изменении и `wired_visual_update(delta, is_local_player())`, когда активно. `tool_id` в сцене — локальный (`"spawner"`), qualification делает менеджер. Скопировать в fixtures.
 
 - [ ] **Step 4: Прогнать тест**
 
