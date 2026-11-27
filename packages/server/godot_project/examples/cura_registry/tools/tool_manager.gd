@@ -41,6 +41,23 @@ var _last_shot_msec: int = -1
 func _wired_ready() -> void:
 	if is_server():
 		register_action(ACTION_USE, _on_use_tool)
+	# Реестр и компоненты игроков пересобираются в синхронном слушатере ядра,
+	# поэтому ответ откладывается в конец кадра. Подписка нужна и серверной
+	# копии менеджера удалённого игрока: выбор приходит не от неё.
+	var tree: SceneTree = get_tree() if is_inside_tree() else null
+	var global_node := tree.root.get_node_or_null("Global") if tree != null else null
+	if global_node != null:
+		var packages: Variant = global_node.get("packages")
+		if (
+			packages is Node
+			and (packages as Node).has_signal("package_applied")
+			and not (packages as Node).is_connected(
+				"package_applied", Callable(self, "_on_package_applied")
+			)
+		):
+			(packages as Node).connect(
+				"package_applied", Callable(self, "_on_package_applied")
+			)
 	if not is_local_player() or player == null:
 		return
 	for component: WiredPlayerComponent in player.components:
@@ -57,6 +74,41 @@ func _wired_ready() -> void:
 			and not component.is_connected("tool_selected", Callable(self, "_on_tool_selected"))
 		):
 			component.connect("tool_selected", Callable(self, "_on_tool_selected"))
+
+
+## `package_applied` приходит синхронно, пока ядро ещё пересобирает реестр и
+## компоненты игроков. Повторная проверка выбора выполняется в конце кадра.
+func _on_package_applied(
+	_package_id: int, _revision: int, _changed_files: PackedStringArray
+) -> void:
+	call_deferred("_reapply_selection")
+
+
+## Hot reload и reconnect пересоздают компоненты: сохранённый выбор нужно
+## проверить по новому реестру и заново связать активный инструмент с менеджером.
+func _reapply_selection() -> void:
+	_revalidate_selection()
+	set_active(selected_tool, selected_prop)
+
+
+## Выбор, чья запись исчезла из реестра, больше не должен экипироваться.
+func _revalidate_selection() -> void:
+	var global_node := get_node_or_null("/root/Global")
+	if global_node == null:
+		return
+	var registry := global_node.get("package_registry") as WiredPackageRegistry
+	if registry == null:
+		return
+	if (
+		not selected_tool.is_empty()
+		and registry.find_entry("cura.tool", selected_tool).is_empty()
+	):
+		selected_tool = ""
+	if (
+		not selected_prop.is_empty()
+		and registry.find_entry("cura.prop", selected_prop).is_empty()
+	):
+		selected_prop = ""
 
 
 func _on_prop_selected(qualified_type: String) -> void:
@@ -97,7 +149,7 @@ func _wired_unhandled_input(event: InputEvent) -> void:
 	request_action(ACTION_USE, {
 		"tool": selected_tool,
 		"prop": selected_prop,
-		"hit": _local_raycast(),
+		"hit": _preview_hit(),
 	})
 
 
@@ -226,6 +278,18 @@ func _local_raycast() -> Dictionary:
 	)
 
 
+## В намерение уходят только координаты и нормаль превью: результат raycast
+## содержит Object и RID, которые нельзя передать через RPC action.
+func _preview_hit() -> Dictionary:
+	var hit := _local_raycast()
+	if hit.is_empty():
+		return {}
+	return {
+		"position": hit.get("position", Vector3.ZERO),
+		"normal": hit.get("normal", Vector3.UP),
+	}
+
+
 func _raycast(from: Vector3, direction: Vector3) -> Dictionary:
 	var viewport := get_viewport()
 	if viewport == null:
@@ -300,6 +364,10 @@ func _wired_load_state(state: Dictionary) -> void:
 	selected_tool = str(state.get("selected_tool", ""))
 	selected_prop = str(state.get("selected_prop", ""))
 	active_tool_id = str(state.get("active_tool_id", ""))
+	# Hot reload и reconnect пересоздают компонент: сохранённый выбор проверяется
+	# по новому реестру, а активный инструмент заново ищется и экипируется.
+	_revalidate_selection()
+	set_active(selected_tool, selected_prop)
 
 
 ## Инструмент ищется только среди компонентов игрока в группе и по полному id.

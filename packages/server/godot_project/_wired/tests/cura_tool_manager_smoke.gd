@@ -127,6 +127,7 @@ func _run() -> void:
 	test_action_dispatches_without_local_selection()
 	test_client_authoritative_prop_is_rejected()
 	test_set_active_links_weapon_manager()
+	test_state_round_trip_rebinds_weapon()
 	test_spawn_prop_uses_dynamic_world()
 	_restore_services()
 	_free_owned()
@@ -188,6 +189,9 @@ func test_base_script_contract() -> void:
 		manager._wired_replicated_properties() == expected,
 		"manager must replicate selection and active tool",
 	)
+	manager.player = _stub_player()
+	var weapon := _add_weapon(manager.player)
+	_install_services()
 	manager.selected_tool = TOOL_ID
 	manager.selected_prop = PROP_ID
 	manager.active_tool_id = TOOL_ID
@@ -207,6 +211,10 @@ func test_base_script_contract() -> void:
 			and manager.selected_prop == PROP_ID
 			and manager.active_tool_id == TOOL_ID,
 		"manager must restore selection and active tool",
+	)
+	_check(
+		weapon.manager == manager,
+		"restoring state must re-link the weapon to its manager",
 	)
 	_check(
 		manager.server_raycast().is_empty(),
@@ -265,6 +273,16 @@ func test_click_requires_capture_and_closed_panel() -> void:
 		_check(
 			str(manager.player.sent_actions[0]["action"]) == "pkg.crate/use_tool",
 			"click must send the qualified use_tool action",
+		)
+		var payload: Dictionary = manager.player.sent_actions[0]["payload"]
+		var preview: Dictionary = payload.get("hit", {})
+		var preview_safe := true
+		for key: Variant in preview.keys():
+			if str(key) != "position" and str(key) != "normal":
+				preview_safe = false
+		_check(
+			preview_safe,
+			"the client hit preview must carry only position and normal",
 		)
 
 
@@ -385,6 +403,41 @@ func test_set_active_links_weapon_manager() -> void:
 	manager.set_active("pkg.crate/other_tool", PROP_ID)
 	_check(first.manager == null, "the previous weapon must clear its manager")
 	_check(second.manager == manager, "the new active weapon must link its manager")
+
+
+## Состояние переживает пересборку компонента: новый менеджер находит оружие
+## по полному id и заново экипирует его, а выбор с исчезнувшей записью реестра
+## отбрасывает.
+func test_state_round_trip_rebinds_weapon() -> void:
+	var manager := _new_manager(true)
+	manager.player = _stub_player()
+	var weapon := _add_weapon(manager.player)
+	_install_services()
+	manager.set_active(TOOL_ID, PROP_ID)
+	var state := manager._wired_save_state()
+	var reloaded := _new_manager(true)
+	reloaded.player = manager.player
+	reloaded._wired_load_state(state)
+	_check(reloaded.selected_tool == TOOL_ID, "reload must restore the tool selection")
+	_check(reloaded.selected_prop == PROP_ID, "reload must restore the prop selection")
+	_check(
+		weapon.manager == reloaded,
+		"reload must re-link the active weapon to its manager",
+	)
+	_check(weapon.equip_calls == 2, "reload must re-equip the active weapon on the server")
+	var stale := state.duplicate(true)
+	stale["selected_prop"] = "pkg.crate/gone"
+	var cleaned := _new_manager(true)
+	cleaned.player = manager.player
+	cleaned._wired_load_state(stale)
+	_check(
+		cleaned.selected_prop.is_empty(),
+		"a selection whose registry entry is gone must be dropped on reload",
+	)
+	_check(
+		cleaned.active_tool_id == TOOL_ID,
+		"the surviving tool selection must stay equipped after dropping a stale prop",
+	)
 
 
 func test_spawn_prop_uses_dynamic_world() -> void:
